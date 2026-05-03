@@ -12,7 +12,7 @@
     "build:game-preload": "esbuild src/game-preload/gamePreload.ts --bundle --platform=node --format=cjs --external:electron --outfile=dist/game-preload/gamePreload.cjs",
     "build": "npm run build:electron && npm run build:game-preload && vite build",
     "electron:build": "npm run build && electron-builder --win nsis",
-    "electron:build:mac": "npm run build && electron-builder --mac dmg zip --x64 --arm64",
+    "electron:build:mac": "npm run build && electron-builder --mac dmg zip --x64 --arm64 --publish never",
     "lint": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "preview": "vite preview --host 127.0.0.1"
