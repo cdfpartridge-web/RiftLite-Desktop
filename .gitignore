@@ -1,0 +1,12 @@
+node_modules/
+dist/
+release/
+.vite/
+*.log
+*.err.log
+*.out.log
+electron-*.log
+vite-dev.log
+debug.log
+*.jsonl
+.atlas-inspect/

@@ -1,0 +1,1092 @@
+{
+  "tcga": {
+    "ok": true,
+    "title": "TCG Arena",
+    "href": "https://tcg-arena.fr/",
+    "counts": {
+      ".PLAYER-COUNTER": 0,
+      "h5.pseudo": 0,
+      ".game-card.Legend": 0,
+      ".game-card.Battlefields": 0,
+      "[data-zone-owner=\"opponent\"]": 0,
+      "[data-drop-zone=\"legend\"]": 0,
+      "[data-drop-zone=\"champion\"]": 0,
+      "ul li": 0,
+      "[role=\"log\"] li": 0,
+      "[class*=\"log\"] li": 0,
+      "button": 2,
+      "input": 0,
+      "select": 0
+    },
+    "text": "TCGrena Games You don't have any games loaded yet. Add some here. Decks Play Preferences Custom games - BETA Discord Support Login America server is now available. An easy to use simulator for all your favorite TCGs Build decks and play with up to 3 other players. Features Play Play with your friends for free to any game made by the community on a Chrome or Firefox browser, no accounts needed! Up to 4 players. Create games Can't find the game you want to play ? TCG Arena is not built around a specific game. It loads highly customizable game files that anybody can make and share with their friends. Build Build decks with our deckbuilder or quickly import them from your favorite deckbuilding tool. Our deckbuilder is run locally with all the latest cards data, allowing search filters to be built automatically on the go and always up to date. Automatization The app is not made to implement card effects. But games can use mutliple options to automatize some core actions like paying ressource cost or placing cards played in the right area. Keep track Visual links between cards, pinging your opponent cards, ... Lots of features to help you show your opponents what you want to do, just like you would do when playing around a table. Support The app is and will always remain free to use. If you want to help with the server cost, you can support TCG Arena on KoFi. Supporters have access to the sleeves customization that let you wrap cards in a colorful background and an image of your choice. TCG Arena is not affiliated with, endorsed, sponsored, or specifically approved by any TCG playable on it. No artworks or game material used by games on this platform belong to TCG Arena. No TCGs are hosted on this platform, the Game tab is only here to offer you a quick acces to the link hosting files for those games. If you have made files using the game builder and want a link to them on this page let me know on Discord. More in our Privacy policy. This is a free educational tool, it does not include tournaments or rankings. All features are accessible for free and are not intended for commercial use. This app is still a work in progress, if you have issues or suggestions, feel free to reach me on Discord. Current version 1.27.1 App icon by Md Tanvirul Haque, other icons by Freepik. Homepage and login image by Zishan Liu. Cards 1 and 5 from the homepage by wia.",
+    "buttons": [
+      {
+        "tag": "A",
+        "text": "TCGrena",
+        "cls": "current-page text-nowrap nav-link",
+        "href": "#"
+      },
+      {
+        "tag": "BUTTON",
+        "text": "",
+        "cls": "navbar-toggler collapsed",
+        "href": ""
+      },
+      {
+        "tag": "A",
+        "text": "GamesYou don't have any games loaded yet. Add some here.",
+        "cls": " text-nowrap nav-link",
+        "href": "#"
+      },
+      {
+        "tag": "A",
+        "text": "Decks",
+        "cls": " text-nowrap nav-link",
+        "href": "#"
+      },
+      {
+        "tag": "A",
+        "text": "Play",
+        "cls": " text-nowrap nav-link disabled",
+        "href": ""
+      },
+      {
+        "tag": "A",
+        "text": "Preferences",
+        "cls": " text-nowrap nav-link",
+        "href": "#"
+      },
+      {
+        "tag": "A",
+        "text": "Custom games - BETA",
+        "cls": " text-nowrap nav-link",
+        "href": "#"
+      },
+      {
+        "tag": "A",
+        "text": "Discord",
+        "cls": "ms-auto nav-link",
+        "href": "https://discord.gg/H6DA35zxPB"
+      },
+      {
+        "tag": "A",
+        "text": "Support",
+        "cls": "nav-link",
+        "href": "https://ko-fi.com/D1D11JDNEW"
+      },
+      {
+        "tag": "BUTTON",
+        "text": "Login",
+        "cls": "btn btn-blurry",
+        "href": ""
+      },
+      {
+        "tag": "A",
+        "text": "",
+        "cls": "mt-auto",
+        "href": "https://ko-fi.com/D1D11JDNEW"
+      },
+      {
+        "tag": "A",
+        "text": "Privacy policy",
+        "cls": "",
+        "href": "https://tcg-arena.fr/legal"
+      }
+    ],
+    "scripts": [
+      "https://tcg-arena.fr/assets/index-BEjinW3e.js",
+      "https://www.googletagmanager.com/gtag/js?l=dataLayer&id=G-WMYM4BGK36"
+    ],
+    "storageKeys": {
+      "local": [
+        "player_data"
+      ],
+      "session": []
+    },
+    "requests": [
+      {
+        "method": "GET",
+        "url": "https://tcg-arena.fr/",
+        "type": "document"
+      },
+      {
+        "method": "GET",
+        "url": "https://tcg-arena.fr/assets/index-BEjinW3e.js",
+        "type": "script"
+      },
+      {
+        "method": "GET",
+        "url": "https://tcg-arena.fr/assets/index-U-fU4rvK.css",
+        "type": "stylesheet"
+      },
+      {
+        "method": "GET",
+        "url": "blob:https://tcg-arena.fr/4e3fb579-5724-4b50-845a-ac8d284a2df9",
+        "type": "script"
+      },
+      {
+        "method": "GET",
+        "url": "https://firebase.googleapis.com/v1alpha/projects/-/apps/1:1094783707846:web:7039da757ea8c6646f85c7/webConfig",
+        "type": "fetch"
+      },
+      {
+        "method": "GET",
+        "url": "https://tcg-arena.fr/assets/Slide1-DQX9CPvJ.wav",
+        "type": "media"
+      },
+      {
+        "method": "GET",
+        "url": "https://tcg-arena.fr/assets/PickFromBoard-D9KogxKe.wav",
+        "type": "media"
+      },
+      {
+        "method": "GET",
+        "url": "https://tcg-arena.fr/assets/PickFromHand-y7RGGFvN.wav",
+        "type": "media"
+      },
+      {
+        "method": "GET",
+        "url": "https://tcg-arena.fr/assets/Drop3-krEDDb68.wav",
+        "type": "media"
+      },
+      {
+        "method": "GET",
+        "url": "https://tcg-arena.fr/assets/Drop4-BdJnju8N.wav",
+        "type": "media"
+      },
+      {
+        "method": "GET",
+        "url": "https://tcg-arena.fr/assets/Drop5-BLcXMNSP.wav",
+        "type": "media"
+      },
+      {
+        "method": "GET",
+        "url": "https://tcg-arena.fr/assets/ToHand1-JC14fmLh.wav",
+        "type": "media"
+      },
+      {
+        "method": "GET",
+        "url": "https://tcg-arena.fr/assets/Slide1-DQX9CPvJ.wav",
+        "type": "media"
+      },
+      {
+        "method": "GET",
+        "url": "https://tcg-arena.fr/assets/ToHand1-JC14fmLh.wav",
+        "type": "media"
+      },
+      {
+        "method": "GET",
+        "url": "https://tcg-arena.fr/assets/ToHand2-B_gTbRmA.wav",
+        "type": "media"
+      },
+      {
+        "method": "GET",
+        "url": "https://tcg-arena.fr/assets/Tap4-Dh-yZgjI.wav",
+        "type": "media"
+      },
+      {
+        "method": "GET",
+        "url": "https://tcg-arena.fr/assets/Flip2-BqQHnIg9.wav",
+        "type": "media"
+      },
+      {
+        "method": "GET",
+        "url": "https://tcg-arena.fr/assets/Shuffle1-D-XZ5f4f.wav",
+        "type": "media"
+      },
+      {
+        "method": "GET",
+        "url": "https://tcg-arena.fr/assets/Shuffle2-DZJpnYTj.wav",
+        "type": "media"
+      },
+      {
+        "method": "GET",
+        "url": "https://tcg-arena.fr/assets/Draw2-Ch7KT87z.wav",
+        "type": "media"
+      },
+      {
+        "method": "GET",
+        "url": "https://tcg-arena.fr/assets/Draw3-DcfzJxQx.wav",
+        "type": "media"
+      },
+      {
+        "method": "GET",
+        "url": "https://tcg-arena.fr/assets/player_join-B2ud9ouk.mp3",
+        "type": "media"
+      },
+      {
+        "method": "GET",
+        "url": "https://tcg-arena.fr/assets/appicon-D52HDG-x.png",
+        "type": "image"
+      },
+      {
+        "method": "GET",
+        "url": "https://tcg-arena.fr/assets/kofi-qpNHRFRP.png",
+        "type": "image"
+      },
+      {
+        "method": "GET",
+        "url": "https://tcg-arena.fr/assets/homepage_card_1-VIS0ez8-.jpg",
+        "type": "image"
+      },
+      {
+        "method": "GET",
+        "url": "https://tcg-arena.fr/assets/homepage_card_2-D8iFsyff.jpg",
+        "type": "image"
+      },
+      {
+        "method": "GET",
+        "url": "https://tcg-arena.fr/assets/homepage_card_3-DFx9ZBwS.jpg",
+        "type": "image"
+      },
+      {
+        "method": "GET",
+        "url": "https://tcg-arena.fr/assets/homepage_card_4-DU1ZMAjv.jpg",
+        "type": "image"
+      },
+      {
+        "method": "GET",
+        "url": "https://tcg-arena.fr/assets/homepage_card_5-Ce8J45Yj.jpg",
+        "type": "image"
+      },
+      {
+        "method": "GET",
+        "url": "https://tcg-arena.fr/assets/play-K3d_E-CL.jpg",
+        "type": "image"
+      },
+      {
+        "method": "GET",
+        "url": "https://tcg-arena.fr/assets/create-DMWS9qlW.jpg",
+        "type": "image"
+      },
+      {
+        "method": "GET",
+        "url": "https://tcg-arena.fr/assets/deckbuilder-BJVQMMnK.jpg",
+        "type": "image"
+      },
+      {
+        "method": "GET",
+        "url": "https://tcg-arena.fr/assets/automatization-CU382Jne.jpg",
+        "type": "image"
+      },
+      {
+        "method": "GET",
+        "url": "https://tcg-arena.fr/assets/keep-track-CsmlXy1F.jpg",
+        "type": "image"
+      },
+      {
+        "method": "GET",
+        "url": "https://tcg-arena.fr/assets/background-BzojG5ET.jpg",
+        "type": "image"
+      },
+      {
+        "method": "POST",
+        "url": "https://firebaseinstallations.googleapis.com/v1/projects/tcg-arena-62f15/installations",
+        "type": "fetch"
+      },
+      {
+        "method": "POST",
+        "url": "https://region1.google-analytics.com/g/collect?v=2&tid=G-WMYM4BGK36&gtm=45je64m2v9230800781za200zd9230800781&_p=1777026873730&gcd=13l3l3l3l1l1&npa=0&dma=0&_fid=c58v2jTKlQp7Uh3y9oFWlj&are=1&cid=300386650.1777026874&frm=0&pscdl=noapi&rcb=3&sr=1440x920&uaa=x86&ua",
+        "type": "fetch"
+      },
+      {
+        "method": "POST",
+        "url": "https://firebaseremoteconfig.googleapis.com/v1/projects/tcg-arena-62f15/namespaces/firebase:fetch?key=AIzaSyDr7Fphz6AsZZsAZ7YBD_EzWmmOWDSN-dM",
+        "type": "fetch"
+      }
+    ],
+    "responses": [
+      {
+        "status": 200,
+        "url": "https://tcg-arena.fr/"
+      },
+      {
+        "status": 200,
+        "url": "https://tcg-arena.fr/assets/index-U-fU4rvK.css"
+      },
+      {
+        "status": 200,
+        "url": "https://tcg-arena.fr/assets/index-BEjinW3e.js"
+      },
+      {
+        "status": 200,
+        "url": "blob:https://tcg-arena.fr/4e3fb579-5724-4b50-845a-ac8d284a2df9"
+      },
+      {
+        "status": 206,
+        "url": "https://tcg-arena.fr/assets/PickFromBoard-D9KogxKe.wav"
+      },
+      {
+        "status": 206,
+        "url": "https://tcg-arena.fr/assets/Slide1-DQX9CPvJ.wav"
+      },
+      {
+        "status": 206,
+        "url": "https://tcg-arena.fr/assets/Slide1-DQX9CPvJ.wav"
+      },
+      {
+        "status": 206,
+        "url": "https://tcg-arena.fr/assets/PickFromHand-y7RGGFvN.wav"
+      },
+      {
+        "status": 206,
+        "url": "https://tcg-arena.fr/assets/Drop3-krEDDb68.wav"
+      },
+      {
+        "status": 206,
+        "url": "https://tcg-arena.fr/assets/ToHand2-B_gTbRmA.wav"
+      },
+      {
+        "status": 206,
+        "url": "https://tcg-arena.fr/assets/Drop4-BdJnju8N.wav"
+      },
+      {
+        "status": 206,
+        "url": "https://tcg-arena.fr/assets/Tap4-Dh-yZgjI.wav"
+      },
+      {
+        "status": 200,
+        "url": "https://firebase.googleapis.com/v1alpha/projects/-/apps/1:1094783707846:web:7039da757ea8c6646f85c7/webConfig"
+      },
+      {
+        "status": 200,
+        "url": "https://tcg-arena.fr/assets/homepage_card_2-D8iFsyff.jpg"
+      },
+      {
+        "status": 200,
+        "url": "https://tcg-arena.fr/assets/background-BzojG5ET.jpg"
+      },
+      {
+        "status": 206,
+        "url": "https://tcg-arena.fr/assets/Drop5-BLcXMNSP.wav"
+      },
+      {
+        "status": 206,
+        "url": "https://tcg-arena.fr/assets/ToHand1-JC14fmLh.wav"
+      },
+      {
+        "status": 206,
+        "url": "https://tcg-arena.fr/assets/ToHand1-JC14fmLh.wav"
+      },
+      {
+        "status": 200,
+        "url": "https://tcg-arena.fr/assets/appicon-D52HDG-x.png"
+      },
+      {
+        "status": 200,
+        "url": "https://tcg-arena.fr/assets/homepage_card_5-Ce8J45Yj.jpg"
+      },
+      {
+        "status": 200,
+        "url": "https://tcg-arena.fr/assets/homepage_card_3-DFx9ZBwS.jpg"
+      },
+      {
+        "status": 200,
+        "url": "https://tcg-arena.fr/assets/kofi-qpNHRFRP.png"
+      },
+      {
+        "status": 200,
+        "url": "https://tcg-arena.fr/assets/homepage_card_4-DU1ZMAjv.jpg"
+      },
+      {
+        "status": 200,
+        "url": "https://tcg-arena.fr/assets/homepage_card_1-VIS0ez8-.jpg"
+      },
+      {
+        "status": 206,
+        "url": "https://tcg-arena.fr/assets/Flip2-BqQHnIg9.wav"
+      },
+      {
+        "status": 206,
+        "url": "https://tcg-arena.fr/assets/Shuffle1-D-XZ5f4f.wav"
+      },
+      {
+        "status": 206,
+        "url": "https://tcg-arena.fr/assets/Shuffle2-DZJpnYTj.wav"
+      },
+      {
+        "status": 206,
+        "url": "https://tcg-arena.fr/assets/Draw2-Ch7KT87z.wav"
+      },
+      {
+        "status": 206,
+        "url": "https://tcg-arena.fr/assets/Draw3-DcfzJxQx.wav"
+      },
+      {
+        "status": 206,
+        "url": "https://tcg-arena.fr/assets/player_join-B2ud9ouk.mp3"
+      },
+      {
+        "status": 200,
+        "url": "https://tcg-arena.fr/assets/play-K3d_E-CL.jpg"
+      },
+      {
+        "status": 200,
+        "url": "https://tcg-arena.fr/assets/create-DMWS9qlW.jpg"
+      },
+      {
+        "status": 204,
+        "url": "https://region1.google-analytics.com/g/collect?v=2&tid=G-WMYM4BGK36&gtm=45je64m2v9230800781za200zd9230800781&_p=1777026873730&gcd=13l3l3l3l1l1&npa=0&dma=0&_fid=c58v2jTKlQp7Uh3y9oFWlj&are=1&cid=300386650.1777026874&frm=0&pscdl=noapi&rcb=3&sr=1440x920&uaa=x86&ua"
+      },
+      {
+        "status": 200,
+        "url": "https://tcg-arena.fr/assets/deckbuilder-BJVQMMnK.jpg"
+      },
+      {
+        "status": 200,
+        "url": "https://tcg-arena.fr/assets/automatization-CU382Jne.jpg"
+      },
+      {
+        "status": 200,
+        "url": "https://tcg-arena.fr/assets/keep-track-CsmlXy1F.jpg"
+      },
+      {
+        "status": 200,
+        "url": "https://firebaseinstallations.googleapis.com/v1/projects/tcg-arena-62f15/installations"
+      },
+      {
+        "status": 200,
+        "url": "https://firebaseremoteconfig.googleapis.com/v1/projects/tcg-arena-62f15/namespaces/firebase:fetch?key=AIzaSyDr7Fphz6AsZZsAZ7YBD_EzWmmOWDSN-dM"
+      }
+    ],
+    "consoleMessages": [
+      {
+        "type": "log",
+        "text": "No old system detected"
+      },
+      {
+        "type": "log",
+        "text": "No playerId saved"
+      }
+    ]
+  },
+  "atlas": {
+    "ok": true,
+    "title": "Play.Riftatlas",
+    "href": "https://play.riftatlas.com/",
+    "counts": {
+      ".PLAYER-COUNTER": 0,
+      "h5.pseudo": 0,
+      ".game-card.Legend": 0,
+      ".game-card.Battlefields": 0,
+      "[data-zone-owner=\"opponent\"]": 0,
+      "[data-drop-zone=\"legend\"]": 0,
+      "[data-drop-zone=\"champion\"]": 0,
+      "ul li": 0,
+      "[role=\"log\"] li": 0,
+      "[class*=\"log\"] li": 0,
+      "button": 12,
+      "input": 3,
+      "select": 0
+    },
+    "text": "MAINTENANCE NOTICE Maintenance starts in 4 hours 25 minutes. New games, deck creation, and deck editing will be disabled 30 minutes before that time, and running games may disconnect during the maintenance window. PLAY.RIFTATLAS Lobby Paste your deck first, then host or join with a room code. Sign in Sign up Contact Join the Discord Buy me a coffee LEGEND 0/1 CHAMPION 0/1 MAIN DECK 0/39 BATTLEFIELDS 0/3 RUNES 0/12 SIDEBOARD 0/0 Paste a deck LEGEND No legend. CHAMPION No champion. MAIN DECK No main deck cards. SIDEBOARD No sideboard. BATTLEFIELDS No battlefields. RUNES No runes. IMPORT DECK NEW DECK CHOOSE DECK SAVE DECK PLAYER Shown to opponents PLAY MODE CONSTRUCTED UNLEASHED PRE-RIFT MATCH FORMAT BEST OF 1 BEST OF 3 QUICK MATCH FIND RANDOM MATCH Include Unleashed decks CREATE ROOM HOST ROOM JOIN WITH CODE JOIN ROOM Play.Riftatlas is an unofficial fan project for Riftbound: League of Legends Trading Card Game. It uses Riot Games-owned IP under Riot Games' \"Legal Jibber Jabber\" policy. Riot Games does not endorse or sponsor this project. Privacy Policy Terms of Service Contact",
+    "buttons": [
+      {
+        "tag": "BUTTON",
+        "text": "",
+        "cls": "inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-[0.38rem] text-[#e6c797] transition-[background-color,c",
+        "href": ""
+      },
+      {
+        "tag": "A",
+        "text": "Sign in",
+        "cls": "border border-[rgba(132,150,184,0.36)] bg-[rgba(10,16,26,0.65)] px-3 py-1.5 text-xs font-medium text-text-main transitio",
+        "href": "/sign-in?redirect_url=%2F"
+      },
+      {
+        "tag": "A",
+        "text": "Sign up",
+        "cls": "border border-[rgba(111,216,193,0.5)] bg-[rgba(22,68,46,0.62)] px-3 py-1.5 text-xs font-medium text-[#d8fff1] transition",
+        "href": "/sign-up?redirect_url=%2F"
+      },
+      {
+        "tag": "A",
+        "text": "Contact",
+        "cls": "group relative hidden h-9 w-9 items-center justify-center rounded-full border transition-colors duration-200 sm:inline-f",
+        "href": "https://riftatlas.com/contact"
+      },
+      {
+        "tag": "A",
+        "text": "Join the Discord",
+        "cls": "group relative hidden h-9 w-9 items-center justify-center rounded-full border border-transparent bg-transparent transiti",
+        "href": "https://discord.gg/8vfhVuUXmT"
+      },
+      {
+        "tag": "A",
+        "text": "Buy me a coffee",
+        "cls": "group relative hidden h-9 w-9 items-center justify-center rounded-full border border-[#0B083D]/20 bg-[#FFF8C4] shadow-[0",
+        "href": "https://buymeacoffee.com/riftatlas"
+      },
+      {
+        "tag": "BUTTON",
+        "text": "Import Deck",
+        "cls": "inline-flex h-11 min-w-[10.5rem] items-center justify-center gap-2 border border-[rgba(194,162,255,0.34)] bg-[linear-gra",
+        "href": ""
+      },
+      {
+        "tag": "BUTTON",
+        "text": "New Deck",
+        "cls": "inline-flex h-11 min-w-[10.5rem] items-center justify-center gap-2 border border-[rgba(194,162,255,0.34)] bg-[linear-gra",
+        "href": ""
+      },
+      {
+        "tag": "BUTTON",
+        "text": "Choose Deck",
+        "cls": "inline-flex h-11 min-w-[10.5rem] items-center justify-center gap-2 border border-[rgba(194,162,255,0.34)] bg-[linear-gra",
+        "href": ""
+      },
+      {
+        "tag": "BUTTON",
+        "text": "Save Deck",
+        "cls": "inline-flex h-11 min-w-[10.5rem] items-center justify-center gap-2 border border-[rgba(194,162,255,0.34)] bg-[linear-gra",
+        "href": ""
+      },
+      {
+        "tag": "BUTTON",
+        "text": "Constructed",
+        "cls": "inline-flex min-h-5 items-center justify-center gap-1.5 border px-3 text-[0.76rem] font-semibold uppercase tracking-wide",
+        "href": ""
+      },
+      {
+        "tag": "BUTTON",
+        "text": "Unleashed Pre-Rift",
+        "cls": "inline-flex min-h-5 items-center justify-center gap-1.5 border px-3 text-[0.76rem] font-semibold uppercase tracking-wide",
+        "href": ""
+      },
+      {
+        "tag": "BUTTON",
+        "text": "Best of 1",
+        "cls": "inline-flex min-h-5 items-center justify-center gap-1.5 border px-3 text-[0.76rem] font-semibold uppercase tracking-wide",
+        "href": ""
+      },
+      {
+        "tag": "BUTTON",
+        "text": "Best of 3",
+        "cls": "inline-flex min-h-5 items-center justify-center gap-1.5 border px-3 text-[0.76rem] font-semibold uppercase tracking-wide",
+        "href": ""
+      },
+      {
+        "tag": "BUTTON",
+        "text": "Find Random Match",
+        "cls": "inline-flex h-12 w-full items-center justify-center border border-[rgba(116,239,255,0.54)] bg-[linear-gradient(180deg,rg",
+        "href": ""
+      },
+      {
+        "tag": "BUTTON",
+        "text": "Host Room",
+        "cls": "inline-flex h-12 w-full items-center justify-center border border-[rgba(116,239,255,0.54)] bg-[linear-gradient(180deg,rg",
+        "href": ""
+      },
+      {
+        "tag": "BUTTON",
+        "text": "Join Room",
+        "cls": "inline-flex h-11 w-full items-center justify-center border border-[rgba(236,193,111,0.4)] bg-[linear-gradient(180deg,rgb",
+        "href": ""
+      },
+      {
+        "tag": "A",
+        "text": "Privacy Policy",
+        "cls": "transition-colors hover:text-text-main",
+        "href": "https://riftatlas.com/privacy-policy"
+      },
+      {
+        "tag": "A",
+        "text": "Terms of Service",
+        "cls": "transition-colors hover:text-text-main",
+        "href": "https://riftatlas.com/terms-of-service"
+      },
+      {
+        "tag": "A",
+        "text": "Contact",
+        "cls": "transition-colors hover:text-text-main",
+        "href": "https://riftatlas.com/contact"
+      }
+    ],
+    "scripts": [
+      "https://play.riftatlas.com/_next/static/chunks/0jf0wg3bfrsu0.js?dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd",
+      "https://play.riftatlas.com/_next/static/chunks/0wod06t4a7c8q.js?dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd",
+      "https://play.riftatlas.com/_next/static/chunks/038otgdu40qq~.js?dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd",
+      "https://play.riftatlas.com/_next/static/chunks/0sl_49shcxtp6.js?dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd",
+      "https://play.riftatlas.com/_next/static/chunks/11-j.neady1e8.js?dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd",
+      "https://play.riftatlas.com/_next/static/chunks/03vvmf8cnlo9k.js?dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd",
+      "https://play.riftatlas.com/_next/static/chunks/turbopack-0d~m65r9sljya.js?dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd",
+      "https://play.riftatlas.com/_next/static/chunks/17zyg.f1v4x16.js?dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd",
+      "https://play.riftatlas.com/_next/static/chunks/0~w4w5k0be4.3.js?dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd",
+      "https://play.riftatlas.com/_next/static/chunks/1186u2ths0_qq.js?dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd",
+      "https://play.riftatlas.com/_next/static/chunks/0iuy7e5829ogd.js?dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd",
+      "https://play.riftatlas.com/_next/static/chunks/027w82.~ujfid.js?dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd",
+      "https://play.riftatlas.com/_next/static/chunks/0wa4o.~v-r2b4.js?dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd",
+      "https://play.riftatlas.com/_next/static/chunks/0u4mx36hb5pfx.js?dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd",
+      "https://play.riftatlas.com/_next/static/chunks/01.w-p1zjzjd5.js?dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd",
+      "https://play.riftatlas.com/_next/static/chunks/053~gjaxsd12p.js?dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd",
+      "https://clerk.riftatlas.com/npm/@clerk/clerk-js@6/dist/clerk.browser.js",
+      "https://play.riftatlas.com/_next/static/chunks/03~yq9q893hmn.js?dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd",
+      "https://play.riftatlas.com/_next/static/chunks/0.c.6xn~3g5pb.js?dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd",
+      "https://play.riftatlas.com/ef2ff0b6c922f50e/script.js",
+      "https://play.riftatlas.com/_next/static/chunks/0azed268mcxet.js?dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd"
+    ],
+    "storageKeys": {
+      "local": [
+        "__clerk_environment",
+        "riftbound_matchmaking_client_id_v1",
+        "riftbound_simulator_play_mode"
+      ],
+      "session": []
+    },
+    "requests": [
+      {
+        "method": "GET",
+        "url": "https://play.riftatlas.com/",
+        "type": "document"
+      },
+      {
+        "method": "GET",
+        "url": "https://play.riftatlas.com/_next/static/media/002ba41204ab122f-s.p.0ux5kq67xsli-.woff2?dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd",
+        "type": "font"
+      },
+      {
+        "method": "GET",
+        "url": "https://play.riftatlas.com/_next/static/media/017d9bea37084d9b-s.p.179.vsfvxa6t5.woff2?dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd",
+        "type": "font"
+      },
+      {
+        "method": "GET",
+        "url": "https://play.riftatlas.com/_next/static/media/3a17eb8ee29221c2-s.p.0rtokxh33xf7c.woff2?dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd",
+        "type": "font"
+      },
+      {
+        "method": "GET",
+        "url": "https://play.riftatlas.com/_next/static/media/9961582d6c850e2c-s.p.0re0gaezlypo..woff2?dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd",
+        "type": "font"
+      },
+      {
+        "method": "GET",
+        "url": "https://play.riftatlas.com/_next/static/media/Geist_Variable-s.p.0-te~ja_gpvcf.woff2?dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd",
+        "type": "font"
+      },
+      {
+        "method": "GET",
+        "url": "https://play.riftatlas.com/_next/static/chunks/0f0s0d-929qx5.css?dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd",
+        "type": "stylesheet"
+      },
+      {
+        "method": "GET",
+        "url": "https://play.riftatlas.com/_next/static/chunks/0-srp7gjxm2wj.css?dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd",
+        "type": "stylesheet"
+      },
+      {
+        "method": "GET",
+        "url": "https://play.riftatlas.com/_next/static/chunks/0azed268mcxet.js?dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd",
+        "type": "script"
+      },
+      {
+        "method": "GET",
+        "url": "https://play.riftatlas.com/_next/static/chunks/0jf0wg3bfrsu0.js?dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd",
+        "type": "script"
+      },
+      {
+        "method": "GET",
+        "url": "https://play.riftatlas.com/_next/static/chunks/0wod06t4a7c8q.js?dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd",
+        "type": "script"
+      },
+      {
+        "method": "GET",
+        "url": "https://play.riftatlas.com/_next/static/chunks/038otgdu40qq~.js?dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd",
+        "type": "script"
+      },
+      {
+        "method": "GET",
+        "url": "https://play.riftatlas.com/_next/static/chunks/0sl_49shcxtp6.js?dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd",
+        "type": "script"
+      },
+      {
+        "method": "GET",
+        "url": "https://play.riftatlas.com/_next/static/chunks/11-j.neady1e8.js?dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd",
+        "type": "script"
+      },
+      {
+        "method": "GET",
+        "url": "https://play.riftatlas.com/_next/static/chunks/03vvmf8cnlo9k.js?dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd",
+        "type": "script"
+      },
+      {
+        "method": "GET",
+        "url": "https://play.riftatlas.com/_next/static/chunks/turbopack-0d~m65r9sljya.js?dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd",
+        "type": "script"
+      },
+      {
+        "method": "GET",
+        "url": "https://play.riftatlas.com/_next/static/chunks/17zyg.f1v4x16.js?dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd",
+        "type": "script"
+      },
+      {
+        "method": "GET",
+        "url": "https://play.riftatlas.com/_next/static/chunks/0~w4w5k0be4.3.js?dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd",
+        "type": "script"
+      },
+      {
+        "method": "GET",
+        "url": "https://play.riftatlas.com/_next/static/chunks/1186u2ths0_qq.js?dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd",
+        "type": "script"
+      },
+      {
+        "method": "GET",
+        "url": "https://play.riftatlas.com/_next/static/chunks/0iuy7e5829ogd.js?dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd",
+        "type": "script"
+      },
+      {
+        "method": "GET",
+        "url": "https://play.riftatlas.com/_next/static/chunks/027w82.~ujfid.js?dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd",
+        "type": "script"
+      },
+      {
+        "method": "GET",
+        "url": "https://play.riftatlas.com/_next/static/chunks/0wa4o.~v-r2b4.js?dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd",
+        "type": "script"
+      },
+      {
+        "method": "GET",
+        "url": "https://play.riftatlas.com/_next/static/chunks/0u4mx36hb5pfx.js?dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd",
+        "type": "script"
+      },
+      {
+        "method": "GET",
+        "url": "https://play.riftatlas.com/_next/static/chunks/01.w-p1zjzjd5.js?dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd",
+        "type": "script"
+      },
+      {
+        "method": "GET",
+        "url": "https://play.riftatlas.com/_next/static/chunks/053~gjaxsd12p.js?dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd",
+        "type": "script"
+      },
+      {
+        "method": "GET",
+        "url": "https://clerk.riftatlas.com/npm/@clerk/clerk-js@6/dist/clerk.browser.js",
+        "type": "script"
+      },
+      {
+        "method": "GET",
+        "url": "https://clerk.riftatlas.com/npm/@clerk/ui@1/dist/ui.browser.js",
+        "type": "script"
+      },
+      {
+        "method": "GET",
+        "url": "https://clerk.riftatlas.com/npm/@clerk/ui@1.6.5/dist/ui.browser.js",
+        "type": "script"
+      },
+      {
+        "method": "GET",
+        "url": "https://clerk.riftatlas.com/npm/@clerk/clerk-js@6.7.5/dist/clerk.browser.js",
+        "type": "script"
+      },
+      {
+        "method": "GET",
+        "url": "https://play.riftatlas.com/_next/image?url=%2Fappicon.png&w=96&q=75&dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd",
+        "type": "image"
+      },
+      {
+        "method": "GET",
+        "url": "https://play.riftatlas.com/_next/static/chunks/0.c.6xn~3g5pb.js?dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd",
+        "type": "script"
+      },
+      {
+        "method": "GET",
+        "url": "https://play.riftatlas.com/_next/image?url=%2FDiscord-Symbol-White.png&w=32&q=75&dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd",
+        "type": "image"
+      },
+      {
+        "method": "GET",
+        "url": "https://play.riftatlas.com/_next/image?url=%2Fbmc-logo-no-background.png&w=32&q=75&dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd",
+        "type": "image"
+      },
+      {
+        "method": "GET",
+        "url": "https://play.riftatlas.com/api/version",
+        "type": "fetch"
+      },
+      {
+        "method": "GET",
+        "url": "https://play.riftatlas.com/ef2ff0b6c922f50e/script.js",
+        "type": "script"
+      },
+      {
+        "method": "GET",
+        "url": "blob:https://play.riftatlas.com/a5bcacd9-3783-48e4-b24d-39f27cc39f10",
+        "type": "script"
+      },
+      {
+        "method": "GET",
+        "url": "https://clerk.riftatlas.com/v1/environment?__clerk_api_version=2025-11-10&_clerk_js_version=6.7.5",
+        "type": "fetch"
+      },
+      {
+        "method": "GET",
+        "url": "https://clerk.riftatlas.com/v1/client?__clerk_api_version=2025-11-10&_clerk_js_version=6.7.5",
+        "type": "fetch"
+      },
+      {
+        "method": "GET",
+        "url": "https://play.riftatlas.com/sign-up?redirect_url=%2F&_rsc=1r34m",
+        "type": "fetch"
+      },
+      {
+        "method": "GET",
+        "url": "https://play.riftatlas.com/sign-in?redirect_url=%2F&_rsc=1r34m",
+        "type": "fetch"
+      },
+      {
+        "method": "GET",
+        "url": "https://play.riftatlas.com/sounds/game_start.mp3",
+        "type": "media"
+      },
+      {
+        "method": "GET",
+        "url": "https://play.riftatlas.com/sign-up?redirect_url=%2F&_rsc=p37cr",
+        "type": "fetch"
+      },
+      {
+        "method": "GET",
+        "url": "https://play.riftatlas.com/sign-up?_rsc=1r34m",
+        "type": "fetch"
+      },
+      {
+        "method": "GET",
+        "url": "https://play.riftatlas.com/sign-in?redirect_url=%2F&_rsc=p37cr",
+        "type": "fetch"
+      },
+      {
+        "method": "GET",
+        "url": "https://play.riftatlas.com/sign-in?_rsc=1r34m",
+        "type": "fetch"
+      },
+      {
+        "method": "GET",
+        "url": "blob:https://play.riftatlas.com/b65614df-da50-4594-96f8-7b273d48ff4c",
+        "type": "script"
+      },
+      {
+        "method": "GET",
+        "url": "https://clerk.riftatlas.com/npm/@clerk/ui@1.6.5/dist/framework_ui_537db9_1.6.5.js",
+        "type": "script"
+      },
+      {
+        "method": "GET",
+        "url": "https://clerk.riftatlas.com/npm/@clerk/ui@1.6.5/dist/ui-common_ui_537db9_1.6.5.js",
+        "type": "script"
+      },
+      {
+        "method": "GET",
+        "url": "https://clerk.riftatlas.com/npm/@clerk/ui@1.6.5/dist/vendors_ui_537db9_1.6.5.js",
+        "type": "script"
+      },
+      {
+        "method": "GET",
+        "url": "https://clerk.riftatlas.com/npm/@clerk/ui@1.6.5/dist/subscriptionDetails_ui_537db9_1.6.5.js",
+        "type": "script"
+      }
+    ],
+    "responses": [
+      {
+        "status": 200,
+        "url": "https://play.riftatlas.com/"
+      },
+      {
+        "status": 307,
+        "url": "https://clerk.riftatlas.com/npm/@clerk/ui@1/dist/ui.browser.js"
+      },
+      {
+        "status": 307,
+        "url": "https://clerk.riftatlas.com/npm/@clerk/clerk-js@6/dist/clerk.browser.js"
+      },
+      {
+        "status": 200,
+        "url": "https://play.riftatlas.com/_next/static/media/002ba41204ab122f-s.p.0ux5kq67xsli-.woff2?dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd"
+      },
+      {
+        "status": 200,
+        "url": "https://play.riftatlas.com/_next/static/media/Geist_Variable-s.p.0-te~ja_gpvcf.woff2?dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd"
+      },
+      {
+        "status": 200,
+        "url": "https://play.riftatlas.com/_next/static/media/017d9bea37084d9b-s.p.179.vsfvxa6t5.woff2?dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd"
+      },
+      {
+        "status": 200,
+        "url": "https://play.riftatlas.com/_next/static/media/9961582d6c850e2c-s.p.0re0gaezlypo..woff2?dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd"
+      },
+      {
+        "status": 200,
+        "url": "https://clerk.riftatlas.com/npm/@clerk/ui@1.6.5/dist/ui.browser.js"
+      },
+      {
+        "status": 200,
+        "url": "https://play.riftatlas.com/_next/static/chunks/0wod06t4a7c8q.js?dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd"
+      },
+      {
+        "status": 200,
+        "url": "https://play.riftatlas.com/_next/static/chunks/0f0s0d-929qx5.css?dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd"
+      },
+      {
+        "status": 200,
+        "url": "https://play.riftatlas.com/_next/static/chunks/0-srp7gjxm2wj.css?dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd"
+      },
+      {
+        "status": 200,
+        "url": "https://play.riftatlas.com/_next/static/media/3a17eb8ee29221c2-s.p.0rtokxh33xf7c.woff2?dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd"
+      },
+      {
+        "status": 200,
+        "url": "https://play.riftatlas.com/_next/static/chunks/0jf0wg3bfrsu0.js?dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd"
+      },
+      {
+        "status": 200,
+        "url": "https://play.riftatlas.com/_next/static/chunks/03vvmf8cnlo9k.js?dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd"
+      },
+      {
+        "status": 200,
+        "url": "https://play.riftatlas.com/_next/static/chunks/0sl_49shcxtp6.js?dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd"
+      },
+      {
+        "status": 200,
+        "url": "https://play.riftatlas.com/_next/static/chunks/0iuy7e5829ogd.js?dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd"
+      },
+      {
+        "status": 200,
+        "url": "https://play.riftatlas.com/_next/static/chunks/0azed268mcxet.js?dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd"
+      },
+      {
+        "status": 200,
+        "url": "https://play.riftatlas.com/_next/static/chunks/027w82.~ujfid.js?dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd"
+      },
+      {
+        "status": 200,
+        "url": "https://play.riftatlas.com/_next/static/chunks/0wa4o.~v-r2b4.js?dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd"
+      },
+      {
+        "status": 200,
+        "url": "https://play.riftatlas.com/_next/static/chunks/0u4mx36hb5pfx.js?dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd"
+      },
+      {
+        "status": 200,
+        "url": "https://play.riftatlas.com/_next/static/chunks/038otgdu40qq~.js?dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd"
+      },
+      {
+        "status": 200,
+        "url": "https://play.riftatlas.com/_next/static/chunks/turbopack-0d~m65r9sljya.js?dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd"
+      },
+      {
+        "status": 200,
+        "url": "https://play.riftatlas.com/_next/static/chunks/0~w4w5k0be4.3.js?dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd"
+      },
+      {
+        "status": 200,
+        "url": "https://play.riftatlas.com/_next/static/chunks/17zyg.f1v4x16.js?dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd"
+      },
+      {
+        "status": 200,
+        "url": "https://play.riftatlas.com/_next/static/chunks/1186u2ths0_qq.js?dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd"
+      },
+      {
+        "status": 200,
+        "url": "https://play.riftatlas.com/_next/static/chunks/11-j.neady1e8.js?dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd"
+      },
+      {
+        "status": 200,
+        "url": "https://play.riftatlas.com/_next/static/chunks/053~gjaxsd12p.js?dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd"
+      },
+      {
+        "status": 200,
+        "url": "https://clerk.riftatlas.com/npm/@clerk/clerk-js@6.7.5/dist/clerk.browser.js"
+      },
+      {
+        "status": 200,
+        "url": "https://play.riftatlas.com/_next/static/chunks/01.w-p1zjzjd5.js?dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd"
+      },
+      {
+        "status": 200,
+        "url": "https://play.riftatlas.com/_next/image?url=%2Fappicon.png&w=96&q=75&dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd"
+      },
+      {
+        "status": 200,
+        "url": "https://play.riftatlas.com/_next/image?url=%2Fbmc-logo-no-background.png&w=32&q=75&dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd"
+      },
+      {
+        "status": 200,
+        "url": "https://play.riftatlas.com/_next/image?url=%2FDiscord-Symbol-White.png&w=32&q=75&dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd"
+      },
+      {
+        "status": 200,
+        "url": "https://play.riftatlas.com/_next/static/chunks/0.c.6xn~3g5pb.js?dpl=dpl_77hKyzNvrkzLBMGhY16Q4MjbZtpd"
+      },
+      {
+        "status": 200,
+        "url": "https://play.riftatlas.com/ef2ff0b6c922f50e/script.js"
+      },
+      {
+        "status": 200,
+        "url": "blob:https://play.riftatlas.com/a5bcacd9-3783-48e4-b24d-39f27cc39f10"
+      },
+      {
+        "status": 206,
+        "url": "https://play.riftatlas.com/sounds/game_start.mp3"
+      },
+      {
+        "status": 200,
+        "url": "https://clerk.riftatlas.com/v1/environment?__clerk_api_version=2025-11-10&_clerk_js_version=6.7.5"
+      },
+      {
+        "status": 200,
+        "url": "https://play.riftatlas.com/api/version"
+      },
+      {
+        "status": 200,
+        "url": "https://play.riftatlas.com/sign-up?redirect_url=%2F&_rsc=1r34m"
+      },
+      {
+        "status": 200,
+        "url": "https://play.riftatlas.com/sign-in?redirect_url=%2F&_rsc=1r34m"
+      },
+      {
+        "status": 200,
+        "url": "https://clerk.riftatlas.com/v1/client?__clerk_api_version=2025-11-10&_clerk_js_version=6.7.5"
+      },
+      {
+        "status": 200,
+        "url": "blob:https://play.riftatlas.com/b65614df-da50-4594-96f8-7b273d48ff4c"
+      },
+      {
+        "status": 200,
+        "url": "https://clerk.riftatlas.com/npm/@clerk/ui@1.6.5/dist/ui-common_ui_537db9_1.6.5.js"
+      },
+      {
+        "status": 200,
+        "url": "https://clerk.riftatlas.com/npm/@clerk/ui@1.6.5/dist/framework_ui_537db9_1.6.5.js"
+      },
+      {
+        "status": 200,
+        "url": "https://play.riftatlas.com/sign-in?_rsc=1r34m"
+      },
+      {
+        "status": 200,
+        "url": "https://play.riftatlas.com/sign-up?_rsc=1r34m"
+      },
+      {
+        "status": 200,
+        "url": "https://play.riftatlas.com/sign-up?redirect_url=%2F&_rsc=p37cr"
+      },
+      {
+        "status": 200,
+        "url": "https://play.riftatlas.com/sign-in?redirect_url=%2F&_rsc=p37cr"
+      },
+      {
+        "status": 200,
+        "url": "https://clerk.riftatlas.com/npm/@clerk/ui@1.6.5/dist/subscriptionDetails_ui_537db9_1.6.5.js"
+      },
+      {
+        "status": 200,
+        "url": "https://clerk.riftatlas.com/npm/@clerk/ui@1.6.5/dist/vendors_ui_537db9_1.6.5.js"
+      }
+    ],
+    "consoleMessages": []
+  }
+}

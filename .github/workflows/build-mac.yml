@@ -1,0 +1,76 @@
+name: Build Mac Installer
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "mac-v*"
+
+permissions:
+  contents: write
+
+jobs:
+  mac:
+    runs-on: macos-latest
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Create macOS icon
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_png="../resources/riftlite-logo-ui.png"
+          if [ ! -f "$source_png" ]; then
+            source_png="resources/riftlite-logo-ui.png"
+          fi
+          mkdir -p build/icon.iconset
+          sips -z 16 16 "$source_png" --out build/icon.iconset/icon_16x16.png
+          sips -z 32 32 "$source_png" --out build/icon.iconset/icon_16x16@2x.png
+          sips -z 32 32 "$source_png" --out build/icon.iconset/icon_32x32.png
+          sips -z 64 64 "$source_png" --out build/icon.iconset/icon_32x32@2x.png
+          sips -z 128 128 "$source_png" --out build/icon.iconset/icon_128x128.png
+          sips -z 256 256 "$source_png" --out build/icon.iconset/icon_128x128@2x.png
+          sips -z 256 256 "$source_png" --out build/icon.iconset/icon_256x256.png
+          sips -z 512 512 "$source_png" --out build/icon.iconset/icon_256x256@2x.png
+          sips -z 512 512 "$source_png" --out build/icon.iconset/icon_512x512.png
+          sips -z 1024 1024 "$source_png" --out build/icon.iconset/icon_512x512@2x.png
+          iconutil -c icns build/icon.iconset -o build/icon.icns
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test -- --run
+
+      - name: Build macOS installers
+        run: npm run electron:build:mac
+
+      - name: Upload macOS installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: riftlite-mac-installers
+          path: |
+            release/RiftLiteBetaInstall-*.dmg
+            release/RiftLiteBetaInstall-*.zip
+            release/latest-mac.yml
+
+      - name: Attach installers to GitHub release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release/RiftLiteBetaInstall-*.dmg
+            release/RiftLiteBetaInstall-*.zip
+            release/latest-mac.yml

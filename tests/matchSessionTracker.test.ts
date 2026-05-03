@@ -1,0 +1,1315 @@
+import { describe, expect, it } from "vitest";
+import { MatchSessionTracker } from "../src/main/services/matchSessionTracker";
+import type { CaptureEvent, UserSettings } from "../src/shared/types";
+
+const settings: UserSettings = {
+  username: "ConfiguredUser",
+  firstRunComplete: true,
+  syncMode: "community-and-hubs",
+  communitySyncEnabled: true,
+  firebaseUid: "",
+  firebaseRefreshToken: "",
+  debugMode: false,
+  confirmationEnabled: true,
+  replayCaptureEnabled: true,
+  replayKeyframesEnabled: true,
+  autoSaveAfterSeconds: 45,
+  overlaySessionStartedAt: "",
+  overlayDisplay: {
+    profile: "grind",
+    showBranding: true,
+    showWebsite: true,
+    showSession: true,
+    showLatestMatch: true,
+    showResult: true,
+    showOpponentName: true,
+    showScore: true,
+    showPlatform: true,
+    showDeck: true,
+    showLegendWinRate: true,
+    showMatchupWinRate: true,
+    showActiveDeckStats: true,
+    showDeckSessionStats: true,
+    showDeckMatchups: true,
+    showFooter: true
+  },
+  screenshotDirectory: "",
+  screenshotHotkey: "F9",
+  screenshotHotkeyEnabled: true,
+  activeDeckId: "",
+  activeHubs: [{ id: "test-hub", name: "Test Hub", sync: true }]
+};
+
+function event(kind: CaptureEvent["kind"], payload: Record<string, unknown>, at = "2026-04-24T10:00:00.000Z", platform: CaptureEvent["platform"] = "tcga"): CaptureEvent {
+  return {
+    id: `${kind}-${at}`,
+    platform,
+    kind,
+    capturedAt: at,
+    url: platform === "atlas" ? "https://play.riftatlas.com" : "https://tcg-arena.fr",
+    payload
+  };
+}
+
+describe("MatchSessionTracker", () => {
+  it("keeps sticky identity when final inactive payload is sparse", () => {
+    const tracker = new MatchSessionTracker();
+    tracker.ingest(event("match-start", {
+      active: true,
+      myName: "ConfiguredUser",
+      opponentName: "Rival",
+      myChampion: "Jinx",
+      opponentChampion: "Ahri",
+      score: { me: "8", opp: "3" }
+    }));
+    tracker.ingest(event("match-snapshot", {
+      active: true,
+      score: { me: "10", opp: "4" },
+      selectedDeck: { selected_uuid: "tcga-deck-1", selected_label: "Jinx Burn" }
+    }, "2026-04-24T10:02:00.000Z"));
+
+    const end = event("match-end", { active: false, score: { me: "", opp: "" } }, "2026-04-24T10:04:00.000Z");
+    const draft = tracker.buildDraft("tcga", end, settings);
+
+    expect(draft.result).toBe("Win");
+    expect(draft.score).toBe("1-0");
+    expect(draft.opponentName).toBe("Rival");
+    expect(draft.myChampion).toBe("Jinx");
+    expect(draft.opponentChampion).toBe("Ahri");
+    expect(draft.deckName).toBe("Jinx Burn");
+    expect(draft.deckSourceId).toBe("tcga-deck-1");
+    expect(draft.games[0].myPoints).toBe(10);
+    expect(draft.games[0].oppPoints).toBe(4);
+  });
+
+  it("marks blank captures incomplete and keeps sync intent", () => {
+    const tracker = new MatchSessionTracker();
+    const end = event("match-end", { active: false }, "2026-04-24T11:00:00.000Z");
+    const draft = tracker.buildDraft("tcga", end, settings);
+
+    expect(draft.status).toBe("incomplete");
+    expect(draft.result).toBe("Incomplete");
+    expect(draft.notes).toContain("Incomplete capture");
+    expect(draft.sync.community).toBe("pending");
+    expect(draft.sync.hubs["test-hub"]).toBe("pending");
+  });
+
+  it("keeps private hub sync away from public community sync", () => {
+    const tracker = new MatchSessionTracker();
+    const privateSettings = {
+      ...settings,
+      syncMode: "private-hubs-only" as const,
+      communitySyncEnabled: false
+    };
+    const end = event("match-end", { active: false }, "2026-04-24T11:10:00.000Z");
+    const draft = tracker.buildDraft("tcga", end, privateSettings);
+
+    expect(draft.sync.community).toBe("disabled");
+    expect(draft.sync.hubs["test-hub"]).toBe("pending");
+  });
+
+  it("applies resolved TCGA image evidence when text fields are absent", () => {
+    const tracker = new MatchSessionTracker();
+    const start = event("match-start", {
+      active: true,
+      opponentName: "Rival",
+      score: { me: "4", opp: "10" },
+      myChampionImage: "https://cdn.example/cards/OGN-001/card.png"
+    });
+    tracker.ingest(start);
+    const draft = tracker.buildDraft("tcga", event("match-end", { active: false }), settings, {
+      myChampion: "Jinx",
+      opponentChampion: "Ahri",
+      myBattlefield: "Minefield",
+      opponentBattlefield: "Sunken Temple"
+    });
+
+    expect(draft.result).toBe("Loss");
+    expect(draft.myChampion).toBe("Jinx");
+    expect(draft.opponentChampion).toBe("Ahri");
+    expect(draft.myBattlefield).toBe("Minefield");
+    expect(draft.opponentBattlefield).toBe("Sunken Temple");
+  });
+
+  it("uses configured RiftLite username as the local player", () => {
+    const tracker = new MatchSessionTracker();
+    tracker.ingest(event("match-start", {
+      active: true,
+      playerData: { profile: { pseudo: "LocalTcgaName" } },
+      opponentName: "Rival",
+      score: { me: "7", opp: "2" }
+    }));
+
+    const draft = tracker.buildDraft("tcga", event("match-end", { active: false }), settings);
+
+    expect(draft.myName).toBe("ConfiguredUser");
+    expect(draft.result).toBe("Win");
+  });
+
+  it("starts a fresh TCGA session when a new opponent appears after a played game", () => {
+    const tracker = new MatchSessionTracker();
+    tracker.ingest(event("match-start", {
+      active: true,
+      opponentName: "First Opponent",
+      score: { me: "8", opp: "5" }
+    }, "2026-04-24T10:00:00.000Z"));
+    tracker.ingest(event("match-snapshot", {
+      active: true,
+      opponentName: "Next Opponent",
+      score: { me: "0", opp: "0" }
+    }, "2026-04-24T10:05:00.000Z"));
+    tracker.ingest(event("match-snapshot", {
+      active: true,
+      opponentName: "Next Opponent",
+      score: { me: "8", opp: "3" }
+    }, "2026-04-24T10:12:00.000Z"));
+
+    const draft = tracker.buildDraft("tcga", event("match-end", { active: false }, "2026-04-24T10:13:00.000Z"), settings);
+
+    expect(draft.opponentName).toBe("Next Opponent");
+    expect(draft.format).toBe("Bo1");
+    expect(draft.score).toBe("1-0");
+    expect(draft.games).toHaveLength(1);
+    expect(draft.games[0].myPoints).toBe(8);
+    expect(draft.games[0].oppPoints).toBe(3);
+  });
+
+  it("uses score updates captured from network events during an active match", () => {
+    const tracker = new MatchSessionTracker();
+    tracker.ingest(event("match-start", {
+      active: true,
+      opponentName: "Rival",
+      myChampion: "Vex, Gloomist",
+      opponentChampion: "Ahri"
+    }));
+    tracker.ingest(event("network-websocket", {
+      requestUrl: "wss://example.test/live",
+      score: { me: "8", opp: "0", source: "network-json" }
+    }, "2026-04-24T10:02:00.000Z"));
+
+    const draft = tracker.buildDraft("tcga", event("match-end", { active: false }, "2026-04-24T10:03:00.000Z"), settings);
+
+    expect(draft.result).toBe("Win");
+    expect(draft.score).toBe("1-0");
+    expect(draft.games[0].myPoints).toBe(8);
+    expect(draft.games[0].oppPoints).toBe(0);
+    expect(draft.myChampion).toBe("Vex");
+  });
+
+  it("normalizes subtitle-only legend names from capture payloads", () => {
+    const tracker = new MatchSessionTracker();
+    tracker.ingest(event("match-start", {
+      active: true,
+      opponentName: "Rival",
+      myChampion: "Gloomist",
+      opponentChampion: "Bloodharbor Ripper",
+      score: { me: "4", opp: "2" }
+    }));
+
+    const draft = tracker.buildDraft("tcga", event("match-end", { active: false }), settings);
+
+    expect(draft.myChampion).toBe("Vex");
+    expect(draft.opponentChampion).toBe("Pyke");
+  });
+
+  it("resolves TCGA opponent and score from named counter players", () => {
+    const tracker = new MatchSessionTracker();
+    const bmuSettings = { ...settings, username: "BMU" };
+    tracker.ingest(event("match-start", {
+      active: true,
+      myName: "Bubba",
+      opponentName: "BMU",
+      localPlayerName: "BMU",
+      counterPlayers: [
+        { name: "Bubba", score: "5" },
+        { name: "BMU", score: "7" }
+      ],
+      playerData: { lastOpponentPeerData: { name: "Bubba" } },
+      score: { me: "5", opp: "7", source: "tcga-counter-order" }
+    }));
+
+    const draft = tracker.buildDraft("tcga", event("match-end", { active: false }), bmuSettings);
+
+    expect(draft.myName).toBe("BMU");
+    expect(draft.opponentName).toBe("Bubba");
+    expect(draft.result).toBe("Win");
+    expect(draft.games[0].myPoints).toBe(7);
+    expect(draft.games[0].oppPoints).toBe(5);
+  });
+
+  it("uses TCGA pseudo instead of the saved game name when pairing scores", () => {
+    const tracker = new MatchSessionTracker();
+    const noConfiguredName = { ...settings, username: "" };
+    tracker.ingest(event("match-start", {
+      active: true,
+      localPlayerName: "Riftbound",
+      playerData: {
+        games: [
+          {
+            name: "Riftbound",
+            image: "https://tcg-arena.fr/assets/games/riftbound.jpg",
+            url: "/games/riftbound"
+          }
+        ],
+        preferences: { pseudo: "NotNewGenesis" },
+        lastOpponentPeerData: { name: "BMU" }
+      },
+      counterPlayers: [
+        { name: "BMU", score: "6" },
+        { name: "NotNewGenesis", score: "7" }
+      ],
+      score: { me: "", opp: "6", source: "tcga-counter-player" }
+    }));
+
+    const draft = tracker.buildDraft("tcga", event("match-end", { active: false }), noConfiguredName);
+
+    expect(draft.myName).toBe("NotNewGenesis");
+    expect(draft.opponentName).toBe("BMU");
+    expect(draft.result).toBe("Win");
+    expect(draft.games[0].myPoints).toBe(7);
+    expect(draft.games[0].oppPoints).toBe(6);
+  });
+
+  it("ignores TCGA zero-zero setup snapshots before a scored BO1", () => {
+    const tracker = new MatchSessionTracker();
+    tracker.ingest(event("match-start", {
+      active: true,
+      myName: "NotNewGenesis",
+      opponentName: "Demonmik",
+      score: { me: "0", opp: "0", source: "tcga-counter-player" },
+      myBattlefieldImage: "https://cdn.example/OGN-001-setup.png",
+      opponentBattlefieldImage: "https://cdn.example/OGN-002-setup.png"
+    }));
+    tracker.ingest(event("match-snapshot", {
+      active: true,
+      myName: "NotNewGenesis",
+      opponentName: "Demonmik",
+      score: { me: "0", opp: "0", source: "tcga-counter-player" },
+      myBattlefieldImage: "https://cdn.example/OGN-296-void-gate.png",
+      opponentBattlefieldImage: "https://cdn.example/OGN-297-forge.png"
+    }, "2026-04-24T10:01:00.000Z"));
+    tracker.ingest(event("match-snapshot", {
+      active: true,
+      myName: "NotNewGenesis",
+      opponentName: "Demonmik",
+      score: { me: "8", opp: "7", source: "tcga-counter-player" },
+      myBattlefieldImage: "https://cdn.example/OGN-296-void-gate.png",
+      opponentBattlefieldImage: "https://cdn.example/OGN-297-forge.png"
+    }, "2026-04-24T10:02:00.000Z"));
+
+    const draft = tracker.buildDraft("tcga", event("match-end", { active: false, score: { me: "", opp: "", source: "none" } }, "2026-04-24T10:03:00.000Z"), { ...settings, username: "NotNewGenesis" });
+
+    expect(draft.format).toBe("Bo1");
+    expect(draft.result).toBe("Win");
+    expect(draft.score).toBe("1-0");
+    expect(draft.games).toHaveLength(1);
+    expect(draft.games[0].myPoints).toBe(8);
+    expect(draft.games[0].oppPoints).toBe(7);
+    expect(draft.games[0].myBattlefieldImage).toContain("void-gate");
+  });
+
+  it("does not turn a post-game zero reset into an extra BO3 game", () => {
+    const tracker = new MatchSessionTracker();
+    tracker.ingest(event("match-start", {
+      active: true,
+      opponentName: "Rival",
+      score: { me: "8", opp: "7", source: "tcga-counter-player" },
+      myBattlefieldImage: "https://cdn.example/OGN-296-void-gate.png",
+      opponentBattlefieldImage: "https://cdn.example/OGN-297-forge.png"
+    }));
+    tracker.ingest(event("match-snapshot", {
+      active: true,
+      score: { me: "0", opp: "0", source: "tcga-counter-player" },
+      myBattlefieldImage: "https://cdn.example/OGN-294-lobby.png",
+      opponentBattlefieldImage: "https://cdn.example/OGN-295-lobby.png"
+    }, "2026-04-24T10:03:00.000Z"));
+
+    const end = event("match-end", { active: false, reason: "inactive-debounce" }, "2026-04-24T10:04:00.000Z");
+    tracker.ingest(end);
+    expect(tracker.shouldHoldForBo3("tcga", end)).toBe(false);
+    const draft = tracker.buildDraft("tcga", end, settings);
+
+    expect(draft.format).toBe("Bo1");
+    expect(draft.score).toBe("1-0");
+    expect(draft.games).toHaveLength(1);
+    expect(draft.games[0].myPoints).toBe(8);
+    expect(draft.games[0].oppPoints).toBe(7);
+  });
+
+  it("does not accept partial TCGA counter scores when the local row cannot be matched", () => {
+    const tracker = new MatchSessionTracker();
+    const noConfiguredName = { ...settings, username: "" };
+    tracker.ingest(event("match-start", {
+      active: true,
+      localPlayerName: "UnknownLocal",
+      counterPlayers: [
+        { name: "BMU", score: "6" },
+        { name: "NotNewGenesis", score: "7" }
+      ],
+      score: { me: "", opp: "6", source: "tcga-counter-player" }
+    }));
+
+    const draft = tracker.buildDraft("tcga", event("match-end", { active: false }), noConfiguredName);
+
+    expect(draft.result).toBe("Incomplete");
+    expect(draft.games[0].myPoints).toBeUndefined();
+    expect(draft.games[0].oppPoints).toBeUndefined();
+  });
+
+  it("marks equal-score TCGA concedes incomplete when no result screen is captured", () => {
+    const tracker = new MatchSessionTracker();
+    tracker.ingest(event("match-start", {
+      active: true,
+      myName: "Coufil",
+      opponentName: "magoshin",
+      counterPlayers: [
+        { name: "magoshin", score: "7" },
+        { name: "Coufil", score: "7" }
+      ],
+      playerData: { preferences: { pseudo: "Coufil" } },
+      score: { me: "7", opp: "7", source: "tcga-counter-player" }
+    }));
+
+    const draft = tracker.buildDraft("tcga", event("match-end", {
+      active: false,
+      reason: "inactive-debounce",
+      score: { me: "", opp: "", source: "none" }
+    }, "2026-04-24T10:08:00.000Z"), { ...settings, username: "Coufil" });
+
+    expect(draft.status).toBe("incomplete");
+    expect(draft.result).toBe("Incomplete");
+    expect(draft.opponentName).toBe("magoshin");
+    expect(draft.games[0].myPoints).toBe(7);
+    expect(draft.games[0].oppPoints).toBe(7);
+    expect(draft.games[0].result).toBe("Incomplete");
+  });
+
+  it("does not start ghost sessions from inactive menu snapshots", () => {
+    const tracker = new MatchSessionTracker();
+    const session = tracker.ingest(event("match-snapshot", {
+      active: false,
+      myName: "Coufil",
+      score: { me: "", opp: "", source: "none" }
+    }));
+
+    expect(session).toBeUndefined();
+    expect(tracker.get("tcga")).toBeUndefined();
+  });
+
+  it("holds TCGA BO3 inactive gaps until the match is complete", () => {
+    const tracker = new MatchSessionTracker();
+    tracker.ingest(event("match-start", {
+      active: true,
+      format: "Bo3",
+      opponentName: "Rival",
+      score: { me: "7", opp: "5" },
+      myBattlefield: "Grove of the God-Willow",
+      opponentBattlefield: "Hall of Legends"
+    }, "2026-04-24T12:00:00.000Z"));
+
+    const gameOneEnd = event("match-end", { active: false, reason: "inactive-debounce" }, "2026-04-24T12:08:00.000Z");
+    tracker.ingest(gameOneEnd);
+    expect(tracker.shouldHoldForBo3("tcga", gameOneEnd)).toBe(true);
+    tracker.holdCurrentGame("tcga");
+
+    tracker.ingest(event("match-update", {
+      active: true,
+      reason: "active-returned",
+      format: "Bo3",
+      score: { me: "3", opp: "8" },
+      myBattlefield: "Minefield",
+      opponentBattlefield: "Sunken Temple"
+    }, "2026-04-24T12:10:00.000Z"));
+    const gameTwoEnd = event("match-end", { active: false, reason: "inactive-debounce" }, "2026-04-24T12:18:00.000Z");
+    tracker.ingest(gameTwoEnd);
+    expect(tracker.shouldHoldForBo3("tcga", gameTwoEnd)).toBe(true);
+    tracker.holdCurrentGame("tcga");
+
+    tracker.ingest(event("match-update", {
+      active: true,
+      reason: "active-returned",
+      format: "Bo3",
+      score: { me: "10", opp: "4" },
+      myBattlefield: "Back-Alley Bar",
+      opponentBattlefield: "Power Nexus"
+    }, "2026-04-24T12:20:00.000Z"));
+    const finalEnd = event("match-end", { active: false, reason: "inactive-debounce" }, "2026-04-24T12:29:00.000Z");
+    tracker.ingest(finalEnd);
+
+    expect(tracker.shouldHoldForBo3("tcga", finalEnd)).toBe(false);
+    const draft = tracker.buildDraft("tcga", finalEnd, settings);
+    expect(draft.format).toBe("Bo3");
+    expect(draft.result).toBe("Win");
+    expect(draft.score).toBe("2-1");
+    expect(draft.games).toHaveLength(3);
+    expect(draft.games[0].myBattlefield).toBe("Grove of the God-Willow");
+    expect(draft.games[1].oppPoints).toBe(8);
+    expect(draft.games[2].myPoints).toBe(10);
+  });
+
+  it("releases an unfinished 1-1 BO3 when no third game starts", () => {
+    const tracker = new MatchSessionTracker();
+    tracker.ingest(event("match-start", {
+      active: true,
+      format: "Bo3",
+      opponentName: "Rival",
+      score: { me: "7", opp: "5" },
+      myBattlefield: "The Papertree",
+      opponentBattlefield: "Sunken Temple"
+    }, "2026-04-24T12:00:00.000Z"));
+
+    const gameOneEnd = event("match-end", { active: false, reason: "inactive-debounce" }, "2026-04-24T12:08:00.000Z");
+    tracker.ingest(gameOneEnd);
+    expect(tracker.shouldHoldForBo3("tcga", gameOneEnd)).toBe(true);
+    tracker.holdCurrentGame("tcga");
+
+    tracker.ingest(event("match-update", {
+      active: true,
+      reason: "active-returned",
+      format: "Bo3",
+      score: { me: "4", opp: "8" },
+      myBattlefield: "Grove of the God-Willow",
+      opponentBattlefield: "Valley of Idols"
+    }, "2026-04-24T12:10:00.000Z"));
+    const gameTwoEnd = event("match-end", { active: false, reason: "inactive-debounce" }, "2026-04-24T12:18:00.000Z");
+    tracker.ingest(gameTwoEnd);
+    expect(tracker.shouldHoldForBo3("tcga", gameTwoEnd)).toBe(true);
+    tracker.holdCurrentGame("tcga");
+
+    const abandonedEnd = event("match-end", { active: false, reason: "inactive-debounce" }, "2026-04-24T12:28:00.000Z");
+    tracker.ingest(abandonedEnd);
+
+    expect(tracker.shouldHoldForBo3("tcga", abandonedEnd)).toBe(false);
+    const draft = tracker.buildDraft("tcga", abandonedEnd, settings);
+    expect(draft.format).toBe("Bo3");
+    expect(draft.result).toBe("Incomplete");
+    expect(draft.status).toBe("incomplete");
+    expect(draft.score).toBe("1-1");
+    expect(draft.games).toHaveLength(2);
+  });
+
+  it("starts a new TCGA game when battlefield evidence changes even if format text is absent", () => {
+    const tracker = new MatchSessionTracker();
+    tracker.ingest(event("match-start", {
+      active: true,
+      opponentName: "Rival",
+      score: { me: "6", opp: "3" },
+      myBattlefieldImage: "https://cdn.example/cards/OGN-101/game-one.png",
+      opponentBattlefieldImage: "https://cdn.example/cards/OGN-102/game-one-opp.png"
+    }, "2026-04-24T13:00:00.000Z"));
+    tracker.ingest(event("match-snapshot", {
+      active: true,
+      score: { me: "2", opp: "7" },
+      myBattlefieldImage: "https://cdn.example/cards/OGN-201/game-two.png",
+      opponentBattlefieldImage: "https://cdn.example/cards/OGN-202/game-two-opp.png"
+    }, "2026-04-24T13:12:00.000Z"));
+
+    const draft = tracker.buildDraft("tcga", event("match-end", { active: false }, "2026-04-24T13:20:00.000Z"), settings);
+
+    expect(draft.format).toBe("Bo3");
+    expect(draft.score).toBe("1-1");
+    expect(draft.games).toHaveLength(2);
+    expect(draft.games[0].myBattlefieldImage).toContain("OGN-101");
+    expect(draft.games[1].myBattlefieldImage).toContain("OGN-201");
+  });
+
+  it("ignores Baron Pit generated battlefield evidence during a live game", () => {
+    const tracker = new MatchSessionTracker();
+    tracker.ingest(event("match-start", {
+      active: true,
+      opponentName: "Rival",
+      score: { me: "5", opp: "2" },
+      myBattlefield: "The Papertree",
+      opponentBattlefield: "Sunken Temple",
+      battlefieldCandidates: [
+        { side: "me", text: "The Papertree", image: "https://cdn.example/OGN-294-papertree.png", hidden: false },
+        { side: "opponent", text: "Sunken Temple", image: "https://cdn.example/OGN-289-sunken-temple.png", hidden: false }
+      ]
+    }, "2026-04-24T13:30:00.000Z"));
+    tracker.ingest(event("match-snapshot", {
+      active: true,
+      score: { me: "6", opp: "2" },
+      myBattlefield: "Baron Pit",
+      battlefieldCandidates: [
+        { side: "me", text: "The Papertree", image: "https://cdn.example/OGN-294-papertree.png", hidden: false },
+        { side: "me", text: "Baron Pit", image: "https://cdn.example/e44f173629322a4e0c32d3f8902c294d4482ef42-baron-pit.png", hidden: false },
+        { side: "opponent", text: "Sunken Temple", image: "https://cdn.example/OGN-289-sunken-temple.png", hidden: false }
+      ]
+    }, "2026-04-24T13:34:00.000Z"));
+
+    const draft = tracker.buildDraft("tcga", event("match-end", { active: false }, "2026-04-24T13:38:00.000Z"), settings);
+
+    expect(draft.format).toBe("Bo1");
+    expect(draft.games).toHaveLength(1);
+    expect(draft.games[0].myPoints).toBe(6);
+    expect(draft.games[0].myBattlefield).toBe("The Papertree");
+    expect(draft.games[0].oppBattlefield).toBe("Sunken Temple");
+    expect(draft.games[0].myBattlefieldImage).toContain("papertree");
+    expect(draft.games[0].myBattlefieldImage).not.toContain("baron");
+  });
+
+  it("preserves per-game battlefield candidate images across BO3 score resets", () => {
+    const tracker = new MatchSessionTracker();
+    tracker.ingest(event("match-start", {
+      active: true,
+      format: "Bo3",
+      counterPlayers: [
+        { name: "BMU", score: "8" },
+        { name: "NotNewGenesis", score: "6" }
+      ],
+      configuredUsername: "BMU",
+      battlefieldCandidates: [
+        { side: "me", image: "https://cdn.example/OGN-294-papertree.png", hidden: false },
+        { side: "opponent", image: "https://cdn.example/OGN-289-targon.png", hidden: false }
+      ]
+    }, "2026-04-24T14:00:00.000Z"));
+    tracker.ingest(event("match-update", {
+      active: true,
+      format: "Bo3",
+      counterPlayers: [
+        { name: "BMU", score: "2" },
+        { name: "NotNewGenesis", score: "7" }
+      ],
+      configuredUsername: "BMU",
+      battlefieldCandidates: [
+        { side: "me", image: "https://cdn.example/OGN-292-grove.png", hidden: false },
+        { side: "opponent", image: "https://cdn.example/OGN-293-sunspire.png", hidden: false }
+      ]
+    }, "2026-04-24T14:09:00.000Z"));
+    tracker.ingest(event("match-update", {
+      active: true,
+      format: "Bo3",
+      counterPlayers: [
+        { name: "BMU", score: "7" },
+        { name: "NotNewGenesis", score: "5" }
+      ],
+      configuredUsername: "BMU",
+      battlefieldCandidates: [
+        { side: "me", image: "https://cdn.example/OGN-295-vilemaw.png", hidden: false },
+        { side: "opponent", image: "https://cdn.example/OGN-289-targon.png", hidden: false }
+      ]
+    }, "2026-04-24T14:18:00.000Z"));
+
+    const draft = tracker.buildDraft("tcga", event("match-end", { active: false }, "2026-04-24T14:25:00.000Z"), { ...settings, username: "BMU" });
+
+    expect(draft.format).toBe("Bo3");
+    expect(draft.score).toBe("2-1");
+    expect(draft.games).toHaveLength(3);
+    expect(draft.games[0].myBattlefieldImage).toContain("papertree");
+    expect(draft.games[1].myBattlefieldImage).toContain("grove");
+    expect(draft.games[2].myBattlefieldImage).toContain("vilemaw");
+    expect(draft.games[1].oppBattlefieldImage).toContain("sunspire");
+  });
+
+  it("freezes TCGA game battlefields before the first BO3 zero reset can overwrite them", () => {
+    const tracker = new MatchSessionTracker();
+    const bmuSettings = { ...settings, username: "BMU" };
+
+    tracker.ingest(event("match-start", {
+      active: true,
+      counterPlayers: [
+        { name: "BMU", score: "7" },
+        { name: "TinoDLuffy", score: "3" }
+      ],
+      configuredUsername: "BMU",
+      battlefieldCandidates: [
+        { side: "me", image: "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/c395b94a4f78b4e8b0590b56787c33600b18e358-1039x744.png", hidden: false },
+        { side: "opponent", image: "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/06f6d17929d19000006cf281d013ecbe1543af0e-1039x744.png", hidden: false }
+      ]
+    }, "2026-04-27T12:25:00.000Z"));
+
+    tracker.ingest(event("match-snapshot", {
+      active: true,
+      counterPlayers: [
+        { name: "BMU", score: "0" },
+        { name: "TinoDLuffy", score: "0" }
+      ],
+      configuredUsername: "BMU",
+      battlefieldCandidates: [
+        { side: "me", image: "https://cdn.rgpub.io/public/live/map/riftbound/latest/OGN/cards/OGN-295/full-desktop-2x.avif", hidden: false },
+        { side: "opponent", image: "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/0497a44ab302ea055b6f1f0d00a36c8023ed2344-1039x744.png", hidden: false }
+      ]
+    }, "2026-04-27T12:37:20.000Z"));
+
+    tracker.ingest(event("match-snapshot", {
+      active: true,
+      counterPlayers: [
+        { name: "BMU", score: "4" },
+        { name: "TinoDLuffy", score: "5" }
+      ],
+      configuredUsername: "BMU",
+      battlefieldCandidates: [
+        { side: "me", image: "https://cdn.rgpub.io/public/live/map/riftbound/latest/OGN/cards/OGN-295/full-desktop-2x.avif", hidden: false },
+        { side: "opponent", image: "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/0497a44ab302ea055b6f1f0d00a36c8023ed2344-1039x744.png", hidden: false }
+      ]
+    }, "2026-04-27T12:40:30.000Z"));
+
+    tracker.ingest(event("match-snapshot", {
+      active: true,
+      counterPlayers: [
+        { name: "BMU", score: "0" },
+        { name: "TinoDLuffy", score: "0" }
+      ],
+      configuredUsername: "BMU",
+      battlefieldCandidates: [
+        { side: "me", image: "https://cdn.rgpub.io/public/live/map/riftbound/latest/OGN/cards/OGN-280/full-desktop-2x.avif", hidden: false },
+        { side: "opponent", image: "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/4191aa2fda9e754a7f5421edc94bd829f5795650-1039x744.png", hidden: false }
+      ]
+    }, "2026-04-27T12:48:36.000Z"));
+
+    tracker.ingest(event("match-snapshot", {
+      active: true,
+      counterPlayers: [
+        { name: "BMU", score: "8" },
+        { name: "TinoDLuffy", score: "4" }
+      ],
+      configuredUsername: "BMU",
+      battlefieldCandidates: [
+        { side: "me", image: "https://cdn.rgpub.io/public/live/map/riftbound/latest/OGN/cards/OGN-280/full-desktop-2x.avif", hidden: false },
+        { side: "opponent", image: "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/4191aa2fda9e754a7f5421edc94bd829f5795650-1039x744.png", hidden: false }
+      ]
+    }, "2026-04-27T12:59:00.000Z"));
+
+    const draft = tracker.buildDraft("tcga", event("match-end", { active: false }, "2026-04-27T13:00:00.000Z"), bmuSettings);
+
+    expect(draft.format).toBe("Bo3");
+    expect(draft.score).toBe("2-1");
+    expect(draft.games).toHaveLength(3);
+    expect(draft.games[0].myBattlefieldImage).toContain("c395b94a4f78b4e8b0590b56787c33600b18e358");
+    expect(draft.games[0].oppBattlefieldImage).toContain("06f6d17929d19000006cf281d013ecbe1543af0e");
+    expect(draft.games[1].myBattlefieldImage).toContain("OGN-295");
+    expect(draft.games[1].oppBattlefieldImage).toContain("0497a44ab302ea055b6f1f0d00a36c8023ed2344");
+    expect(draft.games[2].myBattlefieldImage).toContain("OGN-280");
+    expect(draft.games[2].oppBattlefieldImage).toContain("4191aa2fda9e754a7f5421edc94bd829f5795650");
+  });
+
+  it("creates a conservative TCGA visual replay stream from board evidence", () => {
+    const tracker = new MatchSessionTracker();
+    tracker.ingest(event("match-start", {
+      active: true,
+      tcgaPhase: "mulligan",
+      score: { me: "0", opp: "0", source: "tcga-counter-player" },
+      battlefieldCandidates: [
+        { side: "me", code: "OGN-296", image: "https://cdn.example/void-gate.png", hidden: false },
+        { side: "opponent", code: "OGN-297", image: "https://cdn.example/forge.png", hidden: false }
+      ]
+    }, "2026-04-24T14:30:00.000Z"));
+    tracker.ingest(event("match-snapshot", {
+      active: true,
+      tcgaPhase: "playing",
+      turnText: "Your turn",
+      score: { me: "0", opp: "0", source: "tcga-counter-player" },
+      battlefieldCandidates: [
+        { side: "me", code: "OGN-296", image: "https://cdn.example/void-gate.png", hidden: false },
+        { side: "opponent", code: "OGN-297", image: "https://cdn.example/forge.png", hidden: false }
+      ]
+    }, "2026-04-24T14:31:00.000Z"));
+    tracker.ingest(event("match-snapshot", {
+      active: true,
+      tcgaPhase: "playing",
+      turnText: "Your turn",
+      score: { me: "0", opp: "0", source: "tcga-counter-player" },
+      battlefieldCandidates: [
+        { side: "me", text: "ErrorTap" },
+        { side: "opponent", text: "Ping" }
+      ]
+    }, "2026-04-24T14:31:10.000Z"));
+    tracker.ingest(event("match-snapshot", {
+      active: true,
+      tcgaPhase: "playing",
+      score: { me: "3", opp: "1", source: "tcga-counter-player" }
+    }, "2026-04-24T14:33:00.000Z"));
+    tracker.ingest(event("match-snapshot", {
+      active: true,
+      tcgaPhase: "playing",
+      score: { me: "0", opp: "0", source: "tcga-counter-player" }
+    }, "2026-04-24T14:33:10.000Z"));
+    tracker.ingest(event("match-end", {
+      active: false,
+      endText: "You win",
+      score: { me: "8", opp: "5", source: "tcga-counter-player" }
+    }, "2026-04-24T14:40:00.000Z"));
+
+    const replayEvents = tracker.getReplayEvents("tcga");
+
+    expect(replayEvents.map((item) => item.type)).toEqual([
+      "setup",
+      "battlefield",
+      "scoreboard",
+      "setup",
+      "turn-start",
+      "scoreboard",
+      "scoreboard",
+      "result"
+    ]);
+    expect(replayEvents[0].text).toBe("Before mulligan.");
+    expect(replayEvents.find((item) => item.text === "After mulligan.")).toBeTruthy();
+    expect(replayEvents.filter((item) => item.type === "turn-start")).toHaveLength(1);
+    expect(replayEvents.filter((item) => item.text === "Score 0-0")).toHaveLength(1);
+    expect(replayEvents.some((item) => /Ping|ErrorTap/.test(item.text))).toBe(false);
+    expect(replayEvents.find((item) => item.type === "battlefield")?.battlefields?.map((battlefield) => battlefield.code)).toEqual(["OGN-296", "OGN-297"]);
+    expect(replayEvents.at(-1)?.text).toBe("You win");
+  });
+
+  it("infers TCGA card plays and moves from visible card snapshot changes", () => {
+    const tracker = new MatchSessionTracker();
+    tracker.ingest(event("match-start", {
+      active: true,
+      tcgaPhase: "playing",
+      turnText: "Your turn",
+      score: { me: "0", opp: "0", source: "tcga-counter-player" },
+      cards: [
+        { cardId: "legend", text: "Vex", code: "OGN-001", zone: "legend", classes: "game-card Legend" },
+        { cardId: "hidden", text: "", code: "", zone: "hand", classes: "game-card card-hidden-yes" }
+      ]
+    }, "2026-04-24T14:30:00.000Z"));
+    tracker.ingest(event("match-snapshot", {
+      active: true,
+      tcgaPhase: "playing",
+      turnText: "Your turn",
+      score: { me: "0", opp: "0", source: "tcga-counter-player" },
+      cards: [
+        { cardId: "legend", text: "Vex", code: "OGN-001", zone: "legend", classes: "game-card Legend" },
+        { cardId: "unit-1", text: "Watchful Sentry", code: "OGN-123", zone: "base", zoneOwner: "self", classes: "game-card Unit" }
+      ]
+    }, "2026-04-24T14:31:00.000Z"));
+    tracker.ingest(event("match-snapshot", {
+      active: true,
+      tcgaPhase: "playing",
+      turnText: "Your turn",
+      score: { me: "0", opp: "0", source: "tcga-counter-player" },
+      cards: [
+        { cardId: "unit-1", text: "Watchful Sentry", code: "OGN-123", zone: "B1", zoneOwner: "self", classes: "game-card Unit B1" },
+        { cardId: "opp-1", text: "Sneaky Deckhand", code: "OGN-124", zone: "base", zoneOwner: "opponent", classes: "game-card Unit opponent-card" },
+        { cardId: "side-1", text: "Tap", code: "OGN-028", zone: "", zoneOwner: "self", classes: "game-card Sideboard card-hidden-no" },
+        { cardId: "mana-1", text: "Untap", code: "OGN-166", zone: "", zoneOwner: "self", classes: "game-card Mana card-hidden-no" }
+      ]
+    }, "2026-04-24T14:32:00.000Z"));
+
+    const cardEvents = tracker.getReplayEvents("tcga").filter((item) => item.type === "play" || item.type === "move");
+
+    expect(cardEvents.map((item) => item.text)).toEqual([
+      "Played Watchful Sentry to base.",
+      "Moved Watchful Sentry to battlefield.",
+      "Played Sneaky Deckhand to base."
+    ]);
+    expect(cardEvents.map((item) => item.side)).toEqual(["me", "me", "opponent"]);
+  });
+
+  it("holds Atlas BO3 game result screens until the match is complete", () => {
+    const tracker = new MatchSessionTracker();
+    tracker.ingest(event("match-start", {
+      active: true,
+      format: "Auto",
+      myName: "BMU",
+      opponentName: "Rival",
+      score: { me: "7", opp: "5" },
+      myBattlefield: "The Papertree"
+    }, "2026-04-24T15:00:00.000Z", "atlas"));
+
+    const gameOneEnd = event("match-end", {
+      active: true,
+      reason: "result-text-detected",
+      format: "Auto",
+      atlasResultKind: "game-result",
+      endText: "Confirm Game 1 Winner",
+      score: { me: "7", opp: "5" },
+      myBattlefield: "The Papertree"
+    }, "2026-04-24T15:08:00.000Z", "atlas");
+    tracker.ingest(gameOneEnd);
+    expect(tracker.shouldHoldForBo3("atlas", gameOneEnd)).toBe(true);
+    tracker.holdCurrentGame("atlas", gameOneEnd);
+    tracker.ingest(event("match-snapshot", {
+      active: true,
+      reason: "safety-heartbeat",
+      format: "Auto",
+      atlasResultKind: "game-result",
+      endText: "Confirm Game 1 Winner",
+      score: { me: "7", opp: "5" },
+      myBattlefield: "The Papertree"
+    }, "2026-04-24T15:08:02.000Z", "atlas"));
+
+    tracker.ingest(event("match-start", {
+      active: true,
+      format: "Bo3",
+      myName: "BMU",
+      opponentName: "Rival",
+      score: { me: "4", opp: "8" },
+      myBattlefield: "Grove of the God-Willow"
+    }, "2026-04-24T15:10:00.000Z", "atlas"));
+    const gameTwoEnd = event("match-end", {
+      active: true,
+      reason: "result-text-detected",
+      format: "Bo3",
+      atlasResultKind: "game-result",
+      endText: "You lose 4-8",
+      score: { me: "4", opp: "8" },
+      myBattlefield: "Grove of the God-Willow"
+    }, "2026-04-24T15:18:00.000Z", "atlas");
+    tracker.ingest(gameTwoEnd);
+    expect(tracker.shouldHoldForBo3("atlas", gameTwoEnd)).toBe(true);
+    tracker.holdCurrentGame("atlas", gameTwoEnd);
+
+    tracker.ingest(event("match-start", {
+      active: true,
+      format: "Bo3",
+      myName: "BMU",
+      opponentName: "Rival",
+      score: { me: "9", opp: "6" },
+      myBattlefield: "Vilemaw's Lair"
+    }, "2026-04-24T15:20:00.000Z", "atlas"));
+    const finalEnd = event("match-end", {
+      active: true,
+      reason: "result-text-detected",
+      format: "Bo3",
+      atlasResultKind: "game-result",
+      endText: "Confirm Game 3 Winner",
+      score: { me: "9", opp: "6" },
+      myBattlefield: "Vilemaw's Lair"
+    }, "2026-04-24T15:28:00.000Z", "atlas");
+    tracker.ingest(finalEnd);
+
+    expect(tracker.shouldHoldForBo3("atlas", finalEnd)).toBe(false);
+
+    const draft = tracker.buildDraft("atlas", finalEnd, { ...settings, username: "BMU" });
+    expect(draft.format).toBe("Bo3");
+    expect(draft.score).toBe("2-1");
+    expect(draft.games).toHaveLength(3);
+    expect(draft.games[0].myBattlefield).toBe("The Papertree");
+    expect(draft.games[1].myBattlefield).toBe("Grove of the God-Willow");
+    expect(draft.games[2].myBattlefield).toBe("Vilemaw's Lair");
+  });
+
+  it("freezes Atlas game battlefields before BO3 score resets can overwrite them", () => {
+    const tracker = new MatchSessionTracker();
+    const bmuSettings = { ...settings, username: "BMU" };
+
+    tracker.ingest(event("match-start", {
+      active: true,
+      myName: "BMU",
+      opponentName: "Rival",
+      score: { me: "7", opp: "3" },
+      myBattlefield: "The Papertree",
+      opponentBattlefield: "Sunken Temple"
+    }, "2026-04-24T15:00:00.000Z", "atlas"));
+
+    tracker.ingest(event("match-snapshot", {
+      active: true,
+      myName: "BMU",
+      opponentName: "Rival",
+      score: { me: "0", opp: "0" },
+      myBattlefield: "Vilemaw's Lair",
+      opponentBattlefield: "Gardens of Becoming"
+    }, "2026-04-24T15:09:00.000Z", "atlas"));
+
+    tracker.ingest(event("match-snapshot", {
+      active: true,
+      myName: "BMU",
+      opponentName: "Rival",
+      score: { me: "4", opp: "5" },
+      myBattlefield: "Vilemaw's Lair",
+      opponentBattlefield: "Gardens of Becoming"
+    }, "2026-04-24T15:16:00.000Z", "atlas"));
+
+    tracker.ingest(event("match-snapshot", {
+      active: true,
+      myName: "BMU",
+      opponentName: "Rival",
+      score: { me: "0", opp: "0" },
+      myBattlefield: "Grove of the God-Willow",
+      opponentBattlefield: "Valley of Idols"
+    }, "2026-04-24T15:20:00.000Z", "atlas"));
+
+    tracker.ingest(event("match-snapshot", {
+      active: true,
+      myName: "BMU",
+      opponentName: "Rival",
+      score: { me: "8", opp: "4" },
+      myBattlefield: "Grove of the God-Willow",
+      opponentBattlefield: "Valley of Idols"
+    }, "2026-04-24T15:28:00.000Z", "atlas"));
+
+    const draft = tracker.buildDraft("atlas", event("match-end", { active: false }, "2026-04-24T15:30:00.000Z", "atlas"), bmuSettings);
+
+    expect(draft.format).toBe("Bo3");
+    expect(draft.score).toBe("2-1");
+    expect(draft.games).toHaveLength(3);
+    expect(draft.games[0].myBattlefield).toBe("The Papertree");
+    expect(draft.games[0].oppBattlefield).toBe("Sunken Temple");
+    expect(draft.games[1].myBattlefield).toBe("Vilemaw's Lair");
+    expect(draft.games[1].oppBattlefield).toBe("Gardens of Becoming");
+    expect(draft.games[2].myBattlefield).toBe("Grove of the God-Willow");
+    expect(draft.games[2].oppBattlefield).toBe("Valley of Idols");
+  });
+
+  it("clears suspicious duplicated BO3 battlefield pairs instead of trusting copied data", () => {
+    const tracker = new MatchSessionTracker();
+    const bmuSettings = { ...settings, username: "BMU" };
+
+    tracker.ingest(event("match-start", {
+      active: true,
+      format: "Bo3",
+      myName: "BMU",
+      opponentName: "Rival",
+      score: { me: "7", opp: "3" },
+      myBattlefield: "The Papertree",
+      opponentBattlefield: "Sunken Temple"
+    }, "2026-04-24T15:00:00.000Z", "atlas"));
+    const gameOneEnd = event("match-end", {
+      active: true,
+      reason: "result-text-detected",
+      format: "Bo3",
+      atlasResultKind: "game-result",
+      endText: "Confirm Game 1 Winner",
+      score: { me: "7", opp: "3" },
+      myBattlefield: "The Papertree",
+      opponentBattlefield: "Sunken Temple"
+    }, "2026-04-24T15:08:00.000Z", "atlas");
+    tracker.ingest(gameOneEnd);
+    tracker.holdCurrentGame("atlas", gameOneEnd);
+
+    tracker.ingest(event("match-start", {
+      active: true,
+      format: "Bo3",
+      score: { me: "0", opp: "0" }
+    }, "2026-04-24T15:09:00.000Z", "atlas"));
+    const gameTwoEnd = event("match-end", {
+      active: true,
+      reason: "result-text-detected",
+      format: "Bo3",
+      atlasResultKind: "game-result",
+      endText: "Confirm Game 2 Winner",
+      score: { me: "4", opp: "5" },
+      myBattlefield: "The Papertree",
+      opponentBattlefield: "Sunken Temple"
+    }, "2026-04-24T15:18:00.000Z", "atlas");
+    tracker.ingest(gameTwoEnd);
+    tracker.holdCurrentGame("atlas", gameTwoEnd);
+
+    tracker.ingest(event("match-start", {
+      active: true,
+      format: "Bo3",
+      score: { me: "0", opp: "0" }
+    }, "2026-04-24T15:19:00.000Z", "atlas"));
+    const finalEnd = event("match-end", {
+      active: true,
+      reason: "result-text-detected",
+      format: "Bo3",
+      atlasResultKind: "game-result",
+      endText: "Confirm Game 3 Winner",
+      score: { me: "8", opp: "4" },
+      myBattlefield: "Grove of the God-Willow",
+      opponentBattlefield: "Valley of Idols"
+    }, "2026-04-24T15:28:00.000Z", "atlas");
+    tracker.ingest(finalEnd);
+
+    const draft = tracker.buildDraft("atlas", finalEnd, bmuSettings);
+    expect(draft.score).toBe("2-1");
+    expect(draft.games[0].myBattlefield).toBe("The Papertree");
+    expect(draft.games[0].oppBattlefield).toBe("Sunken Temple");
+    expect(draft.games[1].myBattlefield).toBe("");
+    expect(draft.games[1].oppBattlefield).toBe("");
+    expect(draft.games[2].myBattlefield).toBe("Grove of the God-Willow");
+    expect(draft.games[2].oppBattlefield).toBe("Valley of Idols");
+  });
+
+  it("uses Atlas result-screen scores exactly when the score track briefly flickers", () => {
+    const tracker = new MatchSessionTracker();
+    tracker.ingest(event("match-start", {
+      active: true,
+      format: "Auto",
+      score: { me: "2", opp: "3" },
+      myBattlefieldImage: "https://assets.riftatlas-workers.com/riftbound/cards/original/OGN-298.webp",
+      opponentBattlefieldImage: "https://assets.riftatlas-workers.com/riftbound/cards/original/UNL-208.webp"
+    }, "2026-05-02T11:46:18.077Z", "atlas"));
+
+    const gameEnd = event("match-end", {
+      active: true,
+      reason: "result-text-detected",
+      format: "Auto",
+      atlasResultKind: "game-result",
+      endText: "Confirm Game 1 Winner",
+      score: { me: "3", opp: "2" },
+      myBattlefieldImage: "https://assets.riftatlas-workers.com/riftbound/cards/original/OGN-298.webp",
+      opponentBattlefieldImage: "https://assets.riftatlas-workers.com/riftbound/cards/original/UNL-208.webp"
+    }, "2026-05-02T11:47:03.970Z", "atlas");
+    tracker.ingest(gameEnd);
+
+    const draft = tracker.buildDraft("atlas", gameEnd, { ...settings, username: "BMU" });
+    expect(draft.games[0].myPoints).toBe(3);
+    expect(draft.games[0].oppPoints).toBe(2);
+    expect(draft.games[0].result).toBe("Win");
+  });
+
+  it("keeps Atlas held-result echoes from shifting BO3 battlefield buckets", () => {
+    const tracker = new MatchSessionTracker();
+    const bmuSettings = { ...settings, username: "BMU" };
+    const gameOneMine = "https://assets.riftatlas-workers.com/riftbound/cards/original/OGN-298.webp";
+    const gameOneOpponent = "https://assets.riftatlas-workers.com/riftbound/cards/original/UNL-208.webp";
+    const gameTwoMine = "https://assets.riftatlas-workers.com/riftbound/cards/original/OGN-289.webp";
+    const gameTwoOpponent = "https://assets.riftatlas-workers.com/riftbound/cards/original/OGN-290.webp";
+    const gameThreeMine = "https://assets.riftatlas-workers.com/riftbound/cards/original/UNL-205.webp";
+    const gameThreeOpponent = "https://assets.riftatlas-workers.com/riftbound/cards/original/UNL-215.webp";
+
+    tracker.ingest(event("match-start", {
+      active: true,
+      format: "Auto",
+      configuredUsername: "BMU",
+      opponentName: "4fun gamer",
+      score: { me: "2", opp: "3" },
+      myBattlefieldImage: gameOneMine,
+      opponentBattlefieldImage: gameOneOpponent
+    }, "2026-05-02T11:46:18.077Z", "atlas"));
+
+    const gameOneEnd = event("match-end", {
+      active: true,
+      reason: "result-text-detected",
+      format: "Auto",
+      atlasResultKind: "game-result",
+      endText: "Confirm Game 1 Winner",
+      score: { me: "3", opp: "2" },
+      myBattlefieldImage: gameOneMine,
+      opponentBattlefieldImage: gameOneOpponent
+    }, "2026-05-02T11:47:03.970Z", "atlas");
+    tracker.ingest(gameOneEnd);
+    expect(tracker.shouldHoldForBo3("atlas", gameOneEnd)).toBe(true);
+    tracker.holdCurrentGame("atlas", gameOneEnd);
+    tracker.ingest(event("match-snapshot", {
+      active: true,
+      reason: "mutation",
+      format: "Auto",
+      atlasResultKind: "game-result",
+      endText: "Confirm Game 1 Winner",
+      score: { me: "3", opp: "2" },
+      myBattlefieldImage: gameOneMine,
+      opponentBattlefieldImage: gameOneOpponent
+    }, "2026-05-02T11:47:03.971Z", "atlas"));
+
+    tracker.ingest(event("match-start", {
+      active: true,
+      format: "Auto",
+      score: { me: "0", opp: "0" }
+    }, "2026-05-02T11:47:10.615Z", "atlas"));
+    tracker.ingest(event("match-snapshot", {
+      active: true,
+      format: "Auto",
+      score: { me: "5", opp: "8" },
+      myBattlefieldImage: gameTwoMine,
+      opponentBattlefieldImage: gameTwoOpponent
+    }, "2026-05-02T11:57:27.941Z", "atlas"));
+    const gameTwoEnd = event("match-end", {
+      active: true,
+      reason: "result-text-detected",
+      format: "Auto",
+      atlasResultKind: "game-result",
+      endText: "Confirm Game 2 Winner",
+      score: { me: "5", opp: "8" },
+      myBattlefieldImage: gameTwoMine,
+      opponentBattlefieldImage: gameTwoOpponent
+    }, "2026-05-02T11:57:34.609Z", "atlas");
+    tracker.ingest(gameTwoEnd);
+    expect(tracker.shouldHoldForBo3("atlas", gameTwoEnd)).toBe(true);
+    tracker.holdCurrentGame("atlas", gameTwoEnd);
+
+    tracker.ingest(event("match-start", {
+      active: true,
+      format: "Auto",
+      score: { me: "0", opp: "0" }
+    }, "2026-05-02T11:57:37.959Z", "atlas"));
+    const finalEnd = event("match-end", {
+      active: true,
+      reason: "result-text-detected",
+      format: "Auto",
+      atlasResultKind: "game-result",
+      endText: "Confirm Game 3 Winner",
+      opponentName: "4fun gamer",
+      score: { me: "6", opp: "7" },
+      myBattlefieldImage: gameThreeMine,
+      opponentBattlefieldImage: gameThreeOpponent
+    }, "2026-05-02T12:11:19.254Z", "atlas");
+    tracker.ingest(finalEnd);
+
+    const draft = tracker.buildDraft("atlas", finalEnd, bmuSettings);
+    expect(draft.games.map((game) => `${game.myPoints}-${game.oppPoints}`)).toEqual(["3-2", "5-8", "6-7"]);
+    expect(draft.games.map((game) => game.myBattlefieldImage)).toEqual([gameOneMine, gameTwoMine, gameThreeMine]);
+    expect(draft.games.map((game) => game.oppBattlefieldImage)).toEqual([gameOneOpponent, gameTwoOpponent, gameThreeOpponent]);
+  });
+
+  it("keeps Atlas BO3 game results even when score is blank", () => {
+    const tracker = new MatchSessionTracker();
+    tracker.ingest(event("match-start", {
+      active: true,
+      format: "Bo3",
+      myName: "BMU",
+      opponentName: "Rival",
+      myBattlefieldImage: "https://cdn.example/cards/SFD-219-papertree.png"
+    }, "2026-04-24T17:00:00.000Z", "atlas"));
+
+    const gameOneEnd = event("match-end", {
+      active: true,
+      reason: "result-text-detected",
+      format: "Bo3",
+      atlasResultKind: "game-result",
+      endText: "You win"
+    }, "2026-04-24T17:08:00.000Z", "atlas");
+    tracker.ingest(gameOneEnd);
+    expect(tracker.shouldHoldForBo3("atlas", gameOneEnd)).toBe(true);
+    tracker.holdCurrentGame("atlas", gameOneEnd);
+
+    tracker.ingest(event("match-start", {
+      active: true,
+      format: "Bo3",
+      myName: "BMU",
+      opponentName: "Rival",
+      myBattlefieldImage: "https://cdn.example/cards/UNL-210-waste.png"
+    }, "2026-04-24T17:10:00.000Z", "atlas"));
+    const gameTwoEnd = event("match-end", {
+      active: true,
+      reason: "result-text-detected",
+      format: "Bo3",
+      atlasResultKind: "game-result",
+      endText: "You win"
+    }, "2026-04-24T17:18:00.000Z", "atlas");
+    tracker.ingest(gameTwoEnd);
+
+    expect(tracker.shouldHoldForBo3("atlas", gameTwoEnd)).toBe(false);
+    const draft = tracker.buildDraft("atlas", gameTwoEnd, { ...settings, username: "BMU" });
+    expect(draft.format).toBe("Bo3");
+    expect(draft.result).toBe("Win");
+    expect(draft.score).toBe("2-0");
+    expect(draft.games).toHaveLength(2);
+    expect(draft.games[0].result).toBe("Win");
+    expect(draft.games[0].myPoints).toBeUndefined();
+    expect(draft.games[1].myBattlefieldImage).toContain("waste");
+  });
+
+  it("does not hold Atlas terminal match-end screens", () => {
+    const tracker = new MatchSessionTracker();
+    tracker.ingest(event("match-start", {
+      active: true,
+      format: "Bo3",
+      score: { me: "7", opp: "3" }
+    }, "2026-04-24T16:00:00.000Z", "atlas"));
+    const end = event("match-end", {
+      active: true,
+      reason: "result-text-detected",
+      format: "Bo3",
+      atlasResultKind: "match-terminal",
+      endText: "Opponent left the game"
+    }, "2026-04-24T16:06:00.000Z", "atlas");
+    tracker.ingest(end);
+
+    expect(tracker.shouldHoldForBo3("atlas", end)).toBe(false);
+  });
+
+  it("creates a structured Atlas replay stream from new log rows and score changes", () => {
+    const tracker = new MatchSessionTracker();
+    tracker.ingest(event("match-start", {
+      active: true,
+      configuredUsername: "BMU",
+      opponentName: "Nova",
+      score: { me: "0", opp: "0" },
+      rows: [
+        { key: "chat", text: "BMU at 12:00: testing" },
+        { key: "turn", text: "12:01BMU's turn" }
+      ],
+      battlefieldCandidates: [
+        { side: "me", code: "OGN-295", image: "https://cdn.example/OGN-295.webp" },
+        { side: "opponent", code: "UNL-209", image: "https://cdn.example/UNL-209.webp" }
+      ]
+    }, "2026-04-24T18:00:00.000Z", "atlas"));
+    tracker.ingest(event("match-snapshot", {
+      active: true,
+      configuredUsername: "BMU",
+      opponentName: "Nova",
+      score: { me: "1", opp: "0" },
+      rows: [
+        { key: "turn", text: "12:01BMU's turn" },
+        { key: "score", text: "12:04Conquered Grove of the God-Willow and scored 1.\u21ba" }
+      ]
+    }, "2026-04-24T18:04:00.000Z", "atlas"));
+
+    const replayEvents = tracker.getReplayEvents("atlas");
+    expect(replayEvents.map((item) => item.type)).toEqual(["scoreboard", "battlefield", "turn-start", "scoreboard", "score"]);
+    expect(replayEvents.some((item) => /testing/.test(item.text))).toBe(false);
+    expect(replayEvents.at(-1)?.battlefield).toBe("Grove of the God-Willow");
+    expect(replayEvents.find((item) => item.type === "battlefield")?.battlefields?.map((battlefield) => battlefield.code)).toEqual(["OGN-295", "UNL-209"]);
+
+    const scoreEvent = replayEvents.find((item) => item.type === "score");
+    expect(scoreEvent).toBeTruthy();
+    tracker.attachReplayScreenshot("atlas", scoreEvent?.id ?? "", {
+      path: "C:\\Screens\\RiftLite_score.jpg",
+      url: "file:///C:/Screens/RiftLite_score.jpg",
+      label: "Score 1-0",
+      capturedAt: "2026-04-24T18:04:00.000Z",
+      source: "replay-keyframe"
+    });
+    expect(tracker.getReplayEvents("atlas").find((item) => item.id === scoreEvent?.id)?.screenshot?.label).toBe("Score 1-0");
+  });
+
+  it("keeps repeated Atlas turn-end rows as separate replay events", () => {
+    const tracker = new MatchSessionTracker();
+    tracker.ingest(event("match-start", {
+      active: true,
+      configuredUsername: "BMU",
+      opponentName: "Nova",
+      rows: [
+        { text: "20:38Drew 1 card.\u21ba" },
+        { text: "20:37Ended their turn.\u21ba" },
+        { text: "20:36Played Stalwart Poro to base.\u21ba" },
+        { text: "20:35Ended their turn.\u21ba" },
+        { text: "20:35Both mulligans are complete. Starting the game.\u21ba" },
+        { text: "20:35Chose BMU to take the first turn. Both players now mulligan up to 2 cards.\u21ba" }
+      ]
+    }, "2026-04-24T19:38:00.000Z", "atlas"));
+
+    const replayEvents = tracker.getReplayEvents("atlas");
+    expect(replayEvents.filter((item) => item.type === "turn-end")).toHaveLength(2);
+    expect(replayEvents[0].text).toContain("Chose BMU");
+    expect(replayEvents.at(-1)?.text).toBe("Drew 1 card.");
+  });
+
+  it("orders same-minute Atlas rows so actions stay before the turn end", () => {
+    const tracker = new MatchSessionTracker();
+    tracker.ingest(event("match-start", {
+      active: true,
+      configuredUsername: "BMU",
+      opponentName: "Nova",
+      rows: [
+        { text: "20:35Ended their turn.\u21ba" },
+        { text: "20:35Conquered Grove of the God-Willow and scored 1.\u21ba" },
+        { text: "20:35Played Watchful Sentry to base.\u21ba" },
+        { text: "20:35BMU's turn\u21ba" }
+      ]
+    }, "2026-04-24T19:35:30.000Z", "atlas"));
+
+    expect(tracker.getReplayEvents("atlas").map((item) => item.text)).toEqual([
+      "BMU's turn",
+      "Conquered Grove of the God-Willow and scored 1.",
+      "Played Watchful Sentry to base.",
+      "Ended their turn."
+    ]);
+  });
+
+  it("filters low-value Atlas replay noise and treats setup draw text as setup", () => {
+    const tracker = new MatchSessionTracker();
+    tracker.ingest(event("match-start", {
+      active: true,
+      rows: [
+        { text: "20:35Must choose who starts. Both players draw 4 cards once mulligan begins.\u21ba" },
+        { text: "20:35Rolled a d20.\u21ba" },
+        { text: "20:36Exhausted 2runes.\u21ba" },
+        { text: "20:36Recycled 1Order rune.\u21ba" },
+        { text: "20:37Played Watchful Sentry to base.\u21ba" }
+      ]
+    }, "2026-04-24T19:38:00.000Z", "atlas"));
+
+    const replayEvents = tracker.getReplayEvents("atlas");
+    expect(replayEvents.map((item) => item.text)).toEqual([
+      "Must choose who starts. Both players draw 4 cards once mulligan begins.",
+      "Played Watchful Sentry to base."
+    ]);
+    expect(replayEvents[0].type).toBe("setup");
+    expect(replayEvents[1].type).toBe("play");
+  });
+});
