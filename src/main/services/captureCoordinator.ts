@@ -129,7 +129,9 @@ export class CaptureCoordinator {
     if (this.shouldEmitRendererEvent(trackedEvent)) {
       this.emit("capture:event", compactCaptureEvent(trackedEvent));
     }
-    this.emitHealth(event.kind === "match-start" || event.kind === "match-end");
+    if (event.kind !== "match-end") {
+      this.emitHealth(event.kind === "match-start");
+    }
 
     const session = this.tracker.ingest(trackedEvent);
     if (session && event.kind !== "capture-ready") {
@@ -166,29 +168,75 @@ export class CaptureCoordinator {
         this.emitHealth(true);
         return;
       }
+      const finalEvent = this.withRetainedEndEvidence(trackedEvent, session);
       this.closingPlatforms.add(trackedEvent.platform);
-      if (this.tracker.shouldHoldForBo3(trackedEvent.platform, trackedEvent)) {
-        this.tracker.holdCurrentGame(trackedEvent.platform, trackedEvent);
+      try {
+        if (this.tracker.shouldHoldForBo3(finalEvent.platform, finalEvent)) {
+          this.tracker.holdCurrentGame(finalEvent.platform, finalEvent);
+          this.health = {
+            ...this.health,
+            state: "match-detected",
+            message: `${label(event.platform)} BO3 game captured, waiting for next game`
+          };
+          this.emitHealth(true);
+          return;
+        }
+        const draft = await this.createDraftFromEvent(finalEvent);
+        const replayEvents = this.tracker.getReplayEvents(finalEvent.platform);
+        const savedDraft = await this.saveDraftForReview(draft, finalEvent);
+        this.emit("match:draft", savedDraft);
+        this.emitHealth(true);
+        void this.notifyDraft(savedDraft);
+        this.tracker.clear(finalEvent.platform);
+        void this.finalizeReplayForDraft(savedDraft, finalEvent, replayEvents, settings).catch(() => undefined);
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
         this.health = {
           ...this.health,
-          state: "match-detected",
-          message: `${label(event.platform)} BO3 game captured, waiting for next game`
+          state: "error",
+          message: `${label(event.platform)} match review failed: ${errorMessage}. Force review can retry from retained data.`
         };
         this.emitHealth(true);
-        this.closingPlatforms.delete(trackedEvent.platform);
-        return;
-      }
-      try {
-        const draft = await this.createDraftFromEvent(trackedEvent);
-        const replayEvents = this.tracker.getReplayEvents(trackedEvent.platform);
-        const savedDraft = await this.store.saveMatch(draft);
-        this.emit("match:draft", savedDraft);
-        void this.notifyDraft(savedDraft);
-        this.tracker.clear(trackedEvent.platform);
-        void this.finalizeReplayForDraft(savedDraft, trackedEvent, replayEvents, settings).catch(() => undefined);
+        void this.diagnostics.record({
+          id: randomUUID(),
+          platform: trackedEvent.platform,
+          kind: "debug",
+          capturedAt: new Date().toISOString(),
+          url: trackedEvent.url,
+          payload: {
+            reason: "match-end-review-error",
+            errorMessage
+          }
+        }).catch(() => undefined);
       } finally {
         this.closingPlatforms.delete(trackedEvent.platform);
       }
+    }
+  }
+
+  private async saveDraftForReview(draft: MatchDraft, event: CaptureEvent): Promise<MatchDraft> {
+    try {
+      return await this.store.saveMatch(draft);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      void this.diagnostics.record({
+        id: randomUUID(),
+        platform: event.platform,
+        kind: "debug",
+        capturedAt: new Date().toISOString(),
+        url: event.url,
+        payload: {
+          reason: "match-draft-storage-warning",
+          errorMessage
+        }
+      }).catch(() => undefined);
+      this.health = {
+        ...this.health,
+        platform: event.platform,
+        state: "review-needed",
+        message: `${label(event.platform)} review opened; local storage will retry when you save.`
+      };
+      return draft;
     }
   }
 
@@ -234,7 +282,12 @@ export class CaptureCoordinator {
 
   async forceReview(platform: GamePlatform): Promise<MatchDraft | null> {
     await this.platformEventQueues.get(platform)?.catch(() => undefined);
-    const session = this.tracker.get(platform);
+    const targetPlatform = this.tracker.getLatestSessionPlatform(platform);
+    if (targetPlatform && targetPlatform !== platform) {
+      await this.platformEventQueues.get(targetPlatform)?.catch(() => undefined);
+    }
+    const activePlatform = targetPlatform ?? platform;
+    const session = this.tracker.get(activePlatform);
     if (!session) {
       this.health = {
         ...this.health,
@@ -245,16 +298,16 @@ export class CaptureCoordinator {
       this.emitHealth(true);
       return null;
     }
-    if (this.closingPlatforms.has(platform)) {
+    if (this.closingPlatforms.has(activePlatform)) {
       return null;
     }
 
-    this.closingPlatforms.add(platform);
+    this.closingPlatforms.add(activePlatform);
     const capturedAt = new Date().toISOString();
     const latestEvidence = session.evidence[session.evidence.length - 1];
     const forcedEnd: CaptureEvent = {
       id: randomUUID(),
-      platform,
+      platform: activePlatform,
       kind: "match-end",
       capturedAt,
       url: latestEvidence?.url ?? "",
@@ -267,24 +320,24 @@ export class CaptureCoordinator {
     };
 
     try {
-      const replayEvents = this.tracker.getReplayEvents(platform);
+      const replayEvents = this.tracker.getReplayEvents(activePlatform);
       const draft = await this.createDraftFromEvent(forcedEnd);
-      const savedDraft = await this.store.saveMatch(draft);
+      const savedDraft = await this.saveDraftForReview(draft, forcedEnd);
       this.emit("match:draft", savedDraft);
       void this.notifyDraft(savedDraft);
-      this.tracker.clear(platform);
+      this.tracker.clear(activePlatform);
       this.health = {
         ...this.health,
-        platform,
+        platform: activePlatform,
         state: "review-needed",
-        message: `${label(platform)} review opened from retained capture data`,
+        message: `${label(activePlatform)} review opened from retained capture data`,
         lastEventAt: capturedAt
       };
       this.emitHealth(true);
       void this.finalizeReplayForDraft(savedDraft, forcedEnd, replayEvents, await this.store.getSettings().catch(() => null)).catch(() => undefined);
       return savedDraft;
     } finally {
-      this.closingPlatforms.delete(platform);
+      this.closingPlatforms.delete(activePlatform);
     }
   }
 
@@ -383,6 +436,16 @@ export class CaptureCoordinator {
     const draft = this.tracker.buildDraft(event.platform, event, settings, resolved);
     const resolvedDraft = await this.resolveDraftGameBattlefields(event.platform, draft).catch(() => draft);
     return this.deckService.attachBestDeck(resolvedDraft, snapshot, settings).catch(() => resolvedDraft);
+  }
+
+  private withRetainedEndEvidence(
+    endEvent: CaptureEvent,
+    session: NonNullable<ReturnType<MatchSessionTracker["get"]>>
+  ): CaptureEvent {
+    return {
+      ...endEvent,
+      payload: mergeRetainedPayload(session.sticky, endEvent.payload)
+    };
   }
 
   private async notifyDraft(draft: MatchDraft): Promise<void> {
@@ -755,7 +818,65 @@ export class CaptureCoordinator {
 }
 
 function label(platform: GamePlatform): string {
-  return platform === "tcga" ? "TCGA" : "Atlas";
+  if (platform === "tcga") {
+    return "TCGA";
+  }
+  if (platform === "sim") {
+    return "Riftbound Sim";
+  }
+  return "Atlas";
+}
+
+function mergeRetainedPayload(
+  retained: Record<string, unknown>,
+  latest: Record<string, unknown>
+): Record<string, unknown> {
+  const merged: Record<string, unknown> = { ...retained };
+  for (const [key, value] of Object.entries(latest)) {
+    if (key === "active" || key === "reason" || key === "forceReview" || key === "atlasResultKind") {
+      if (value !== undefined) {
+        merged[key] = value;
+      }
+      continue;
+    }
+    if (key === "score") {
+      if (scorePayloadHasValue(value)) {
+        merged[key] = value;
+      }
+      continue;
+    }
+    if (key === "counterPlayers") {
+      if (counterPlayersHaveScores(value)) {
+        merged[key] = value;
+      }
+      continue;
+    }
+    if (hasPayloadValue(value)) {
+      merged[key] = value;
+    }
+  }
+  merged.active = latest.active === false ? false : merged.active;
+  return merged;
+}
+
+function scorePayloadHasValue(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return hasPayloadValue(value);
+  }
+  const score = value as Record<string, unknown>;
+  return hasPayloadValue(score.me) || hasPayloadValue(score.opp);
+}
+
+function counterPlayersHaveScores(value: unknown): boolean {
+  if (!Array.isArray(value)) {
+    return false;
+  }
+  return value.some((item) => {
+    const row = item && typeof item === "object" && !Array.isArray(item)
+      ? item as Record<string, unknown>
+      : {};
+    return hasPayloadValue(row.name) && hasPayloadValue(row.score);
+  });
 }
 
 function compactCaptureEvent(event: CaptureEvent): CaptureEvent {
@@ -813,6 +934,22 @@ function compactPayload(payload: Record<string, unknown> = {}): Record<string, u
     "source",
     "sourceName",
     "codec",
+    "recorderMimeType",
+    "fileMimeType",
+    "requestedWidth",
+    "requestedHeight",
+    "requestedFps",
+    "actualWidth",
+    "actualHeight",
+    "actualFps",
+    "sourceWidth",
+    "sourceHeight",
+    "sourceFps",
+    "bitrateKbps",
+    "actualBitrateKbps",
+    "chunkMs",
+    "resampled",
+    "constantFps",
     "message",
     "name",
     "targetAlreadyPrepared"

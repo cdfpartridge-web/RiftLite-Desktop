@@ -82,6 +82,25 @@ describe("MatchSessionTracker", () => {
     expect(draft.games[0].oppPoints).toBe(4);
   });
 
+  it("does not treat TCGA's generic Riftbound deck selector as a logged deck", () => {
+    const tracker = new MatchSessionTracker();
+    tracker.ingest(event("match-start", {
+      active: true,
+      myName: "ConfiguredUser",
+      opponentName: "Rival",
+      myChampion: "Azir",
+      opponentChampion: "Irelia",
+      selectedDeck: { selected_uuid: "Riftbound", selected_label: "Riftbound" },
+      score: { me: "8", opp: "3" }
+    }));
+
+    const draft = tracker.buildDraft("tcga", event("match-end", { active: false }, "2026-04-24T10:04:00.000Z"), settings);
+
+    expect(draft.deckName).toBe("");
+    expect(draft.deckSourceId).toBe("");
+    expect(draft.deckSourceKey).toBe("");
+  });
+
   it("marks blank captures incomplete and keeps sync intent", () => {
     const tracker = new MatchSessionTracker();
     const end = event("match-end", { active: false }, "2026-04-24T11:00:00.000Z");
@@ -408,6 +427,7 @@ describe("MatchSessionTracker", () => {
     }, "2026-04-24T12:00:00.000Z"));
 
     const gameOneEnd = event("match-end", { active: false, reason: "inactive-debounce" }, "2026-04-24T12:08:00.000Z");
+    gameOneEnd.url = "https://tcg-arena.fr/play";
     tracker.ingest(gameOneEnd);
     expect(tracker.shouldHoldForBo3("tcga", gameOneEnd)).toBe(true);
     tracker.holdCurrentGame("tcga");
@@ -421,6 +441,7 @@ describe("MatchSessionTracker", () => {
       opponentBattlefield: "Sunken Temple"
     }, "2026-04-24T12:10:00.000Z"));
     const gameTwoEnd = event("match-end", { active: false, reason: "inactive-debounce" }, "2026-04-24T12:18:00.000Z");
+    gameTwoEnd.url = "https://tcg-arena.fr/play";
     tracker.ingest(gameTwoEnd);
     expect(tracker.shouldHoldForBo3("tcga", gameTwoEnd)).toBe(true);
     tracker.holdCurrentGame("tcga");
@@ -459,6 +480,7 @@ describe("MatchSessionTracker", () => {
     }, "2026-04-24T12:00:00.000Z"));
 
     const gameOneEnd = event("match-end", { active: false, reason: "inactive-debounce" }, "2026-04-24T12:08:00.000Z");
+    gameOneEnd.url = "https://tcg-arena.fr/play";
     tracker.ingest(gameOneEnd);
     expect(tracker.shouldHoldForBo3("tcga", gameOneEnd)).toBe(true);
     tracker.holdCurrentGame("tcga");
@@ -472,6 +494,7 @@ describe("MatchSessionTracker", () => {
       opponentBattlefield: "Valley of Idols"
     }, "2026-04-24T12:10:00.000Z"));
     const gameTwoEnd = event("match-end", { active: false, reason: "inactive-debounce" }, "2026-04-24T12:18:00.000Z");
+    gameTwoEnd.url = "https://tcg-arena.fr/play";
     tracker.ingest(gameTwoEnd);
     expect(tracker.shouldHoldForBo3("tcga", gameTwoEnd)).toBe(true);
     tracker.holdCurrentGame("tcga");
@@ -486,6 +509,61 @@ describe("MatchSessionTracker", () => {
     expect(draft.status).toBe("incomplete");
     expect(draft.score).toBe("1-1");
     expect(draft.games).toHaveLength(2);
+  });
+
+  it("releases an unfinished TCGA BO3 when game two ends and the player leaves play", () => {
+    const tracker = new MatchSessionTracker();
+    const coufilSettings = { ...settings, username: "Coufil" };
+    tracker.ingest(event("match-start", {
+      active: true,
+      myName: "Coufil",
+      opponentName: "Truitemorte",
+      counterPlayers: [
+        { name: "Truitemorte", score: "8" },
+        { name: "Coufil", score: "7" }
+      ],
+      score: { me: "7", opp: "8", source: "tcga-counter-player" }
+    }, "2026-05-05T13:14:51.000Z"));
+
+    tracker.ingest(event("match-snapshot", {
+      active: true,
+      myName: "Coufil",
+      opponentName: "Truitemorte",
+      counterPlayers: [
+        { name: "Truitemorte", score: "0" },
+        { name: "Coufil", score: "0" }
+      ],
+      score: { me: "0", opp: "0", source: "tcga-counter-player" }
+    }, "2026-05-05T13:14:54.000Z"));
+
+    tracker.ingest(event("match-snapshot", {
+      active: true,
+      myName: "Coufil",
+      opponentName: "Truitemorte",
+      counterPlayers: [
+        { name: "Truitemorte", score: "3" },
+        { name: "Coufil", score: "8" }
+      ],
+      score: { me: "8", opp: "3", source: "tcga-counter-player" }
+    }, "2026-05-05T13:49:58.000Z"));
+
+    const leavePlayEnd = event("match-end", {
+      active: false,
+      reason: "inactive-debounce",
+      score: { me: "", opp: "", source: "none" }
+    }, "2026-05-05T13:50:04.000Z");
+    leavePlayEnd.url = "https://tcg-arena.fr/";
+    tracker.ingest(leavePlayEnd);
+
+    expect(tracker.shouldHoldForBo3("tcga", leavePlayEnd)).toBe(false);
+    const draft = tracker.buildDraft("tcga", leavePlayEnd, coufilSettings);
+    expect(draft.format).toBe("Bo3");
+    expect(draft.result).toBe("Incomplete");
+    expect(draft.status).toBe("incomplete");
+    expect(draft.score).toBe("1-1");
+    expect(draft.games).toHaveLength(2);
+    expect(draft.games[0].result).toBe("Loss");
+    expect(draft.games[1].result).toBe("Win");
   });
 
   it("starts a new TCGA game when battlefield evidence changes even if format text is absent", () => {

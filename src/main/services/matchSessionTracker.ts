@@ -1,4 +1,4 @@
-import type { CaptureEvent, GamePlatform, MatchDraft, MatchGame, ReplayStructuredEvent, UserSettings } from "../../shared/types.js";
+import type { CaptureEvent, GamePlatform, MatchDraft, MatchGame, ReplayStructuredEvent, RiftboundSimEvent, UserSettings } from "../../shared/types.js";
 import { normalizeLegendName } from "../../shared/legendNames.js";
 import { privateHubSyncEnabled, publicCommunitySyncEnabled } from "../../shared/syncPolicy.js";
 import { readTcgaLocalPlayerName, readTcgaProfileName } from "../../shared/tcgaIdentity.js";
@@ -91,7 +91,7 @@ export class MatchSessionTracker {
       return false;
     }
     const games = previewGames(session);
-    if (shouldReleaseUnfinishedBo3(session, reason, games)) {
+    if (shouldReleaseUnfinishedBo3(session, endEvent, games)) {
       return false;
     }
     if (isAtlasGameResultHold(session, endEvent.payload)) {
@@ -127,6 +127,14 @@ export class MatchSessionTracker {
 
   get(platform: GamePlatform): SessionState | undefined {
     return this.sessions.get(platform);
+  }
+
+  getLatestSessionPlatform(preferred?: GamePlatform): GamePlatform | undefined {
+    if (preferred && this.sessions.has(preferred)) {
+      return preferred;
+    }
+    return [...this.sessions.values()]
+      .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())[0]?.platform;
   }
 
   getReplayEvents(platform: GamePlatform): ReplayStructuredEvent[] {
@@ -356,7 +364,9 @@ function updateCurrentGame(session: SessionState, payload: Record<string, unknow
 
 function updateReplayStream(session: SessionState, event: CaptureEvent): void {
   const score = readScore(event.payload);
-  if (session.platform === "atlas") {
+  if (session.platform === "sim") {
+    addSimReplayEvent(session, event);
+  } else if (session.platform === "atlas") {
     addReplayScoreEvent(session, event, score);
     addReplayBattlefieldEvent(session, event);
     addReplayRows(session, event, score);
@@ -372,6 +382,49 @@ function updateReplayStream(session: SessionState, event: CaptureEvent): void {
   if (session.replayEvents.length > 420) {
     session.replayEvents = session.replayEvents.slice(-420);
   }
+}
+
+function addSimReplayEvent(session: SessionState, event: CaptureEvent): void {
+  const simEvent = readSimEvent(event.payload.simEvent);
+  if (!simEvent) {
+    return;
+  }
+  const signature = replayRowSignature(`sim:${simEvent.id}`);
+  if (session.replaySeenRows.has(signature)) {
+    return;
+  }
+  session.replaySeenRows.add(signature);
+  const score = simEvent.score ? { me: simEvent.score.me, opponent: simEvent.score.opponent } : undefined;
+  const visibleCard = simEvent.visibility === "hidden" || simEvent.visibility === "private-opponent" ? undefined : simEvent.card ?? simEvent.cards?.[0];
+  pushReplayEvent(session, {
+    id: simEvent.id,
+    sourceEventId: event.id,
+    gameNumber: simEvent.gameNumber,
+    capturedAt: simEvent.emittedAt || event.capturedAt,
+    labelTime: replayTimeLabel(simEvent.emittedAt || event.capturedAt),
+    type: simReplayType(simEvent.type),
+    side: simReplaySide(simEvent.actor),
+    text: cleanReplayText(simEvent.text),
+    cardName: visibleCard?.name ?? "",
+    cardId: visibleCard?.id,
+    cardCount: simEvent.cardCount,
+    destination: simEvent.destination || simEvent.toZone || "",
+    fromZone: simEvent.fromZone,
+    toZone: simEvent.toZone,
+    visibility: simEvent.visibility,
+    actionId: simEvent.actionId,
+    undoOf: simEvent.undoOf,
+    battlefield: simEvent.battlefield ?? "",
+    pointsScored: simEvent.pointsScored,
+    scoreReason: simEvent.scoreReason,
+    score,
+    mulligan: simEvent.visibility === "hidden" || simEvent.visibility === "private-opponent" ? undefined : simEvent.mulligan,
+    resource: simEvent.resource,
+    counter: simEvent.counter,
+    token: simEvent.token,
+    combat: simEvent.combat,
+    snapshot: simEvent.snapshot
+  });
 }
 
 function addTcgaSetupEvents(session: SessionState, event: CaptureEvent, score: { me?: number; opp?: number }): void {
@@ -915,6 +968,39 @@ function replaySideFromText(value: string, payload: Record<string, unknown>): Re
   return "system";
 }
 
+function readSimEvent(value: unknown): RiftboundSimEvent | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const type = readString(value.type);
+  const id = readString(value.id);
+  const matchId = readString(value.matchId);
+  if (!type || !id || !matchId) {
+    return null;
+  }
+  return value as unknown as RiftboundSimEvent;
+}
+
+function simReplayType(type: RiftboundSimEvent["type"]): ReplayStructuredEvent["type"] {
+  if (type === "turn-start") return "turn-start";
+  if (type === "turn-end") return "turn-end";
+  if (type === "draw") return "draw";
+  if (type === "play" || type === "token-create") return "play";
+  if (type === "move" || type === "recycle") return "move";
+  if (type === "score") return "score";
+  if (type === "combat") return "combat";
+  if (type === "match-end") return "result";
+  if (type === "match-start" || type === "game-start" || type === "setup") {
+    return "setup";
+  }
+  if (type === "mulligan-options" || type === "mulligan-choice" || type === "mulligan-redraw") return "mulligan";
+  return "action";
+}
+
+function simReplaySide(side: RiftboundSimEvent["actor"]): ReplayStructuredEvent["side"] {
+  return side === "me" || side === "opponent" || side === "system" ? side : "unknown";
+}
+
 function replayScore(score: { me?: number; opp?: number }): ReplayStructuredEvent["score"] {
   if (typeof score.me !== "number" && typeof score.opp !== "number") {
     return undefined;
@@ -1293,24 +1379,26 @@ function readScoreFromCounterPlayers(payload: Record<string, unknown>): { me?: n
 
 function readDeckName(sticky: Record<string, unknown>): string {
   const direct = readString(sticky.deckName);
-  if (direct) {
+  if (isMeaningfulDeckValue(direct)) {
     return direct;
   }
   const selectedDeck = sticky.selectedDeck;
   if (selectedDeck && typeof selectedDeck === "object") {
-    return readString((selectedDeck as Record<string, unknown>).selected_label);
+    const selectedLabel = readString((selectedDeck as Record<string, unknown>).selected_label);
+    return isMeaningfulDeckValue(selectedLabel) ? selectedLabel : "";
   }
   return "";
 }
 
 function readDeckSourceId(sticky: Record<string, unknown>): string {
   const direct = readString(sticky.deckSourceId);
-  if (direct) {
+  if (isMeaningfulDeckValue(direct)) {
     return direct;
   }
   const selectedDeck = sticky.selectedDeck;
   if (selectedDeck && typeof selectedDeck === "object") {
-    return readString((selectedDeck as Record<string, unknown>).selected_uuid);
+    const selectedUuid = readString((selectedDeck as Record<string, unknown>).selected_uuid);
+    return isMeaningfulDeckValue(selectedUuid) ? selectedUuid : "";
   }
   return "";
 }
@@ -1318,9 +1406,17 @@ function readDeckSourceId(sticky: Record<string, unknown>): string {
 function readDeckSourceUrl(sticky: Record<string, unknown>): string {
   const selectedDeck = sticky.selectedDeck;
   if (selectedDeck && typeof selectedDeck === "object") {
-    return readString((selectedDeck as Record<string, unknown>).source_url);
+    const record = selectedDeck as Record<string, unknown>;
+    const sourceUrl = readString(record.source_url);
+    const selectedUuid = readString(record.selected_uuid);
+    return sourceUrl && isMeaningfulDeckValue(selectedUuid || sourceUrl.replace(/^tcga:\/\/deck\//i, "")) ? sourceUrl : "";
   }
   return "";
+}
+
+function isMeaningfulDeckValue(value: unknown): boolean {
+  const cleaned = readString(value).toLowerCase().replace(/^tcga:/, "").replace(/\s+/g, " ");
+  return Boolean(cleaned) && !/^(riftbound|tcga deck|deck pending|no deck|no deck logged|unknown)$/.test(cleaned);
 }
 
 function readMyName(sticky: Record<string, unknown>, settingsUsername: string): string {
@@ -1379,11 +1475,40 @@ function previewGames(session: SessionState): MatchGame[] {
   return isWorthKeeping(finalGame) ? [...session.completedGames, finalGame] : [...session.completedGames];
 }
 
-function shouldReleaseUnfinishedBo3(session: SessionState, reason: string, games: MatchGame[]): boolean {
-  if (reason !== "inactive-debounce" || session.completedGames.length < 2 || isBo3Complete(games)) {
+function shouldReleaseUnfinishedBo3(session: SessionState, endEvent: CaptureEvent, games: MatchGame[]): boolean {
+  const reason = readString(endEvent.payload.reason);
+  if (reason !== "inactive-debounce" || isBo3Complete(games)) {
+    return false;
+  }
+  const playedGames = games.filter(gameHasNonZeroScore);
+  if (!playedGames.length) {
+    return false;
+  }
+  if (!isGameSurfaceUrl(session.platform, endEvent.url)) {
+    return true;
+  }
+  if (session.completedGames.length < 2) {
     return false;
   }
   return !isWorthKeeping(finishCurrentGame(session.currentGame));
+}
+
+function isGameSurfaceUrl(platform: GamePlatform, value: string): boolean {
+  if (!value) {
+    return true;
+  }
+  try {
+    const url = new URL(value);
+    if (platform === "tcga") {
+      return url.pathname.startsWith("/play");
+    }
+    if (platform === "atlas") {
+      return /\/(?:play|game|room|lobby)\b/i.test(url.pathname);
+    }
+  } catch {
+    return true;
+  }
+  return true;
 }
 
 function isBo3Complete(games: MatchGame[]): boolean {

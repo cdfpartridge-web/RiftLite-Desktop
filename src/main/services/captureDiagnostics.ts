@@ -51,7 +51,7 @@ export class CaptureDiagnostics {
   async summarize(): Promise<CaptureDiagnosticsSummary> {
     const events = await this.readEvents();
     const byKind: Record<string, number> = {};
-    const byPlatform: Record<GamePlatform, number> = { tcga: 0, atlas: 0 };
+    const byPlatform: Record<GamePlatform, number> = { tcga: 0, atlas: 0, sim: 0 };
     const latest = new Map<GamePlatform, CapturePlatformEvidence>();
 
     for (const event of events) {
@@ -66,7 +66,7 @@ export class CaptureDiagnostics {
       lastEventAt: events.at(-1)?.capturedAt ?? "",
       byKind,
       byPlatform,
-      latest: ["tcga", "atlas"].map((platform) => latest.get(platform as GamePlatform)).filter(Boolean) as CapturePlatformEvidence[]
+      latest: ["tcga", "atlas", "sim"].map((platform) => latest.get(platform as GamePlatform)).filter(Boolean) as CapturePlatformEvidence[]
     };
   }
 

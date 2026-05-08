@@ -4,6 +4,7 @@ export type ReplaySide = "me" | "opponent" | "system" | "unknown";
 
 export type ReplayEventType =
   | "setup"
+  | "mulligan"
   | "turn-start"
   | "turn-end"
   | "play"
@@ -46,7 +47,14 @@ export interface ReplayTimelineEvent {
   side: ReplaySide;
   text: string;
   cardName: string;
+  cardId?: string;
+  cardCount?: number;
   destination: string;
+  fromZone?: string;
+  toZone?: string;
+  visibility?: ReplayStructuredEvent["visibility"];
+  actionId?: string;
+  undoOf?: string;
   battlefield: string;
   battlefields?: ReplayBattlefieldReference[];
   score?: {
@@ -54,6 +62,12 @@ export interface ReplayTimelineEvent {
     opponent?: number;
   };
   pointsScored?: number;
+  scoreReason?: ReplayStructuredEvent["scoreReason"];
+  resource?: ReplayStructuredEvent["resource"];
+  counter?: ReplayStructuredEvent["counter"];
+  token?: ReplayStructuredEvent["token"];
+  combat?: ReplayStructuredEvent["combat"];
+  snapshot?: ReplayStructuredEvent["snapshot"];
   screenshot?: ReplayScreenshotKeyframe;
 }
 
@@ -144,7 +158,7 @@ export function buildAtlasReplay(replay: ReplayRecord, match?: MatchDraft): Atla
     replay,
     match,
     title: replay.title || titleFromMatch(match) || "Captured replay",
-    platformLabel: replay.platform === "atlas" ? "RiftAtlas" : "TCGA",
+    platformLabel: replayPlatformLabel(replay.platform),
     capturedAt: replay.capturedAt,
     players: replay.players,
     evidenceCount: replay.events.length,
@@ -158,6 +172,16 @@ export function buildAtlasReplay(replay: ReplayRecord, match?: MatchDraft): Atla
     battlefields,
     isAtlas: replay.platform === "atlas"
   };
+}
+
+function replayPlatformLabel(platform: ReplayRecord["platform"]): string {
+  if (platform === "atlas") {
+    return "RiftAtlas";
+  }
+  if (platform === "sim") {
+    return "Riftbound Sim";
+  }
+  return "TCGA";
 }
 
 function mergeInferredHoldEvents(
@@ -198,10 +222,23 @@ function buildStructuredEvents(
       side: event.side,
       text: event.text,
       cardName: event.cardName,
+      cardId: event.cardId,
+      cardCount: event.cardCount,
       destination: event.destination,
+      fromZone: event.fromZone,
+      toZone: event.toZone,
+      visibility: event.visibility,
+      actionId: event.actionId,
+      undoOf: event.undoOf,
       battlefield: event.battlefield,
       battlefields: event.battlefields,
       pointsScored: event.pointsScored,
+      scoreReason: event.scoreReason,
+      resource: event.resource,
+      counter: event.counter,
+      token: event.token,
+      combat: event.combat,
+      snapshot: event.snapshot,
       score: event.score,
       screenshot: event.screenshot,
       replayOrder

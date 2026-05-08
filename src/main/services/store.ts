@@ -1,5 +1,5 @@
 import { app } from "electron";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { randomUUID } from "node:crypto";
@@ -19,10 +19,21 @@ const require = createRequire(import.meta.url);
 const DEFAULT_SETTINGS: UserSettings = {
   username: "",
   firstRunComplete: false,
+  lastSeenVersion: "",
   syncMode: "community-and-hubs",
   communitySyncEnabled: true,
   firebaseUid: "",
   firebaseRefreshToken: "",
+  accountUid: "",
+  accountEmail: "",
+  accountHandle: "",
+  accountDisplayName: "",
+  accountProfilePublic: false,
+  anonymousDiagnosticsEnabled: true,
+  anonymousInstallId: "",
+  anonymousInstallCreatedAt: "",
+  anonymousUsageLastHeartbeatAt: "",
+  anonymousUsageLastHeartbeatVersion: "",
   debugMode: false,
   confirmationEnabled: true,
   replayCaptureEnabled: true,
@@ -37,6 +48,7 @@ const DEFAULT_SETTINGS: UserSettings = {
   overlaySessionStartedAt: "",
   overlayDisplay: defaultOverlayDisplay(),
   screenshotDirectory: "",
+  replayDirectory: "",
   screenshotHotkey: "F9",
   screenshotHotkeyEnabled: true,
   scorepadDeviceId: "",
@@ -46,12 +58,63 @@ const DEFAULT_SETTINGS: UserSettings = {
   activeHubs: []
 };
 
-function normalizeReplayVideoMode(value: unknown): UserSettings["replayVideoMode"] {
-  return value === "system-window" ? "system-window" : "game-frame";
+function normalizeReplayVideoMode(_value: unknown): UserSettings["replayVideoMode"] {
+  return "game-frame";
 }
 
 function normalizeReplayFramePreset(value: unknown): UserSettings["replayFramePreset"] {
   return value === "light" || value === "detailed" ? value : "standard";
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function parseJsonToken<T>(token: string): T | undefined {
+  try {
+    return JSON.parse(token) as T;
+  } catch {
+    return undefined;
+  }
+}
+
+function recoverSettingsFromCorruptJson(value: string): Partial<UserSettings> {
+  const recovered: Record<string, unknown> = {};
+  const keys = Object.keys(DEFAULT_SETTINGS) as Array<keyof UserSettings>;
+  for (const key of keys) {
+    if (key === "overlayDisplay" || key === "activeHubs") {
+      continue;
+    }
+    const pattern = new RegExp(
+      `"${escapeRegExp(String(key))}"\\s*:\\s*("(?:\\\\.|[^"\\\\])*"|true|false|null|-?\\d+(?:\\.\\d+)?)`
+    );
+    const match = value.match(pattern);
+    if (!match) {
+      continue;
+    }
+    const parsed = parseJsonToken<unknown>(match[1]);
+    if (parsed !== undefined) {
+      recovered[key] = parsed;
+    }
+  }
+
+  const activeHubsMatch = value.match(/"activeHubs"\s*:\s*(\[[^\]]*\])/);
+  if (activeHubsMatch) {
+    const parsed = parseJsonToken<unknown>(activeHubsMatch[1]);
+    if (Array.isArray(parsed)) {
+      recovered.activeHubs = parsed;
+    }
+  }
+
+  const overlayMatch = value.match(/"overlayDisplay"\s*:\s*(\{[^{}]*\})/);
+  if (overlayMatch) {
+    const parsed = parseJsonToken<unknown>(overlayMatch[1]);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      recovered.overlayDisplay = parsed;
+    }
+  }
+
+  return recovered as Partial<UserSettings>;
 }
 
 export class RiftLiteStore {
@@ -86,8 +149,32 @@ export class RiftLiteStore {
     }
     const db = await this.database();
     const row = db.exec("SELECT value_json FROM settings WHERE key='settings'")[0]?.values[0]?.[0];
-    const parsed = typeof row === "string" ? JSON.parse(row) as Partial<UserSettings> : {};
-    this.settingsCache = {
+    let parsed: Partial<UserSettings> = {};
+    let repairedCorruptSettings = false;
+    if (typeof row === "string") {
+      try {
+        parsed = JSON.parse(row) as Partial<UserSettings>;
+      } catch (error) {
+        repairedCorruptSettings = true;
+        parsed = recoverSettingsFromCorruptJson(row);
+        console.warn("RiftLite settings JSON was corrupt and has been repaired", error);
+        await this.backupCorruptSettings(row);
+      }
+    }
+    this.settingsCache = this.normalizeSettings(parsed);
+    if (repairedCorruptSettings) {
+      db.run("INSERT OR REPLACE INTO settings (key, value_json, updated_at) VALUES (?, ?, ?)", [
+        "settings",
+        JSON.stringify(this.settingsCache),
+        Date.now()
+      ]);
+      await this.persist();
+    }
+    return this.settingsCache;
+  }
+
+  private normalizeSettings(parsed: Partial<UserSettings>): UserSettings {
+    return {
       ...DEFAULT_SETTINGS,
       ...parsed,
       replayVideoMode: normalizeReplayVideoMode((parsed as { replayVideoMode?: unknown }).replayVideoMode),
@@ -95,7 +182,11 @@ export class RiftLiteStore {
       overlayDisplay: { ...DEFAULT_SETTINGS.overlayDisplay, ...parsed.overlayDisplay },
       activeHubs: Array.isArray(parsed.activeHubs) ? parsed.activeHubs : []
     };
-    return this.settingsCache;
+  }
+
+  private async backupCorruptSettings(value: string): Promise<void> {
+    const backupPath = join(dirname(this.dbPath), `riftlite-settings-corrupt-${Date.now()}.json`);
+    await writeFile(backupPath, value, "utf8").catch(() => undefined);
   }
 
   async saveSettings(patch: Partial<UserSettings>): Promise<UserSettings> {
@@ -144,13 +235,15 @@ export class RiftLiteStore {
     const db = await this.database();
     const now = new Date().toISOString();
     const next = compactMatchForStorage(normalizeStoredMatch({ ...draft, updatedAt: now }));
-    db.run(
-      `INSERT OR REPLACE INTO matches
-       (id, platform, status, result, captured_at, updated_at, data_json)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [next.id, next.platform, next.status, next.result, next.capturedAt, next.updatedAt, JSON.stringify(next)]
-    );
-    await this.persist();
+    await this.withDatabaseRepair("save-match", async () => {
+      db.run(
+        `INSERT OR REPLACE INTO matches
+         (id, platform, status, result, captured_at, updated_at, data_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [next.id, next.platform, next.status, next.result, next.capturedAt, next.updatedAt, JSON.stringify(next)]
+      );
+      await this.persist();
+    });
     return next;
   }
 
@@ -294,13 +387,15 @@ export class RiftLiteStore {
   async saveReplay(replay: ReplayRecord): Promise<ReplayRecord> {
     const db = await this.database();
     const next = compactReplayForStorage(replay);
-    db.run(
-      `INSERT OR REPLACE INTO replays
-       (id, match_id, platform, captured_at, data_json)
-       VALUES (?, ?, ?, ?, ?)`,
-      [next.id, next.matchId, next.platform, next.capturedAt, JSON.stringify(next)]
-    );
-    await this.persist();
+    await this.withDatabaseRepair("save-replay", async () => {
+      db.run(
+        `INSERT OR REPLACE INTO replays
+         (id, match_id, platform, captured_at, data_json)
+         VALUES (?, ?, ?, ?, ?)`,
+        [next.id, next.matchId, next.platform, next.capturedAt, JSON.stringify(next)]
+      );
+      await this.persist();
+    });
     return next;
   }
 
@@ -415,10 +510,12 @@ export class RiftLiteStore {
     this.sql = await initSqlJs({ locateFile: () => wasmPath });
     const bytes = existsSync(this.dbPath) ? await readFile(this.dbPath) : null;
     this.db = bytes?.length ? new this.sql.Database(bytes) : new this.sql.Database();
+    await this.repairDatabaseIfNeeded("startup-integrity-check");
     this.migrateSchema();
     await this.migrateLegacyJson();
     await this.importLegacyData().catch(() => undefined);
     this.compactStoredPayloads();
+    await this.repairDatabaseIfNeeded("post-migration-integrity-check");
     await this.persist();
   }
 
@@ -560,6 +657,60 @@ export class RiftLiteStore {
     await mkdir(dirname(this.dbPath), { recursive: true });
     await writeFile(this.dbPath, Buffer.from(this.db.export()));
   }
+
+  private async withDatabaseRepair<T>(context: string, action: () => Promise<T>): Promise<T> {
+    try {
+      return await action();
+    } catch (error) {
+      if (!isDatabaseMalformedError(error)) {
+        throw error;
+      }
+      await this.repairDatabase(context);
+      return action();
+    }
+  }
+
+  private async repairDatabaseIfNeeded(context: string): Promise<void> {
+    const issue = this.databaseIntegrityIssue();
+    if (issue) {
+      await this.repairDatabase(context, issue);
+    }
+  }
+
+  private databaseIntegrityIssue(): string {
+    if (!this.db) {
+      return "";
+    }
+    try {
+      const value = String(this.db.exec("PRAGMA integrity_check")[0]?.values?.[0]?.[0] ?? "");
+      return value && value.toLowerCase() !== "ok" ? value : "";
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  private async repairDatabase(context: string, knownIssue = ""): Promise<void> {
+    if (!this.db) {
+      return;
+    }
+    await this.backupDatabase(context);
+    this.db.run("VACUUM");
+    const issue = this.databaseIntegrityIssue();
+    if (issue) {
+      throw new Error(`RiftLite database repair failed: ${knownIssue || issue}`);
+    }
+    await mkdir(dirname(this.dbPath), { recursive: true });
+    await writeFile(this.dbPath, Buffer.from(this.db.export()));
+  }
+
+  private async backupDatabase(context: string): Promise<void> {
+    if (!existsSync(this.dbPath)) {
+      return;
+    }
+    const safeContext = context.replace(/[^a-z0-9-]+/gi, "-").slice(0, 40) || "repair";
+    const backupPath = join(dirname(this.dbPath), `riftlite-v06-${safeContext}-backup-${Date.now()}.sqlite`);
+    await copyFile(this.dbPath, backupPath).catch(() => undefined);
+  }
 }
 
 function defaultOverlayDisplay(): OverlayDisplayOptions {
@@ -680,8 +831,21 @@ function compactReplayForStorage(replay: ReplayRecord): ReplayRecord {
     events: compactCaptureEvents(replay.events ?? [], 24),
     structuredEvents: replay.structuredEvents?.slice(-300),
     visualFrames: replay.visualFrames ?? [],
+    video: compactReplayVideoAsset(replay.video),
     matchSnapshot: replay.matchSnapshot ? compactMatchForStorage(replay.matchSnapshot) : undefined
   };
+}
+
+function compactReplayVideoAsset(video: ReplayRecord["video"]): ReplayRecord["video"] {
+  if (!video) {
+    return undefined;
+  }
+  const clean: Record<string, unknown> = { ...video };
+  delete clean.data;
+  delete clean.asset;
+  delete clean.sourcePath;
+  delete clean.sourceUrl;
+  return clean as unknown as ReplayRecord["video"];
 }
 
 function compactCaptureEvents(events: CaptureEvent[], limit: number): CaptureEvent[] {
@@ -786,6 +950,11 @@ function truncateStoredValue(value: unknown, limit: number): string {
     return String(value);
   }
   return typeof value === "string" ? value.slice(0, limit) : "";
+}
+
+function isDatabaseMalformedError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /database disk image is malformed|database corruption|malformed database|file is not a database/i.test(message);
 }
 
 function savedDeckFromRow(row: unknown[]): SavedDeck {

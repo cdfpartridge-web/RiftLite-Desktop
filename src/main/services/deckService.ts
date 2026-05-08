@@ -17,6 +17,7 @@ const SECTION_ALIASES: Record<string, string[]> = {
   mainDeck: ["mainDeck", "main_deck", "main", "cards", "deck"],
   sideboard: ["sideboard", "side_board"]
 };
+type PiltoverPayload = Record<string, unknown>;
 
 export class DeckService {
   constructor(private readonly store: RiftLiteStore) {}
@@ -34,6 +35,19 @@ export class DeckService {
       legend: payload.legend,
       snapshotJson: JSON.stringify(payload.snapshot),
       lastRefreshStatus: "ok",
+      lastRefreshError: ""
+    });
+  }
+
+  async importDeckText(text: string): Promise<SavedDeck> {
+    const payload = parsePiltoverDeckText(text);
+    return this.store.upsertSavedDeck({
+      sourceUrl: payload.sourceUrl,
+      sourceKey: payload.sourceKey,
+      title: payload.title,
+      legend: payload.legend,
+      snapshotJson: JSON.stringify(payload.snapshot),
+      lastRefreshStatus: "text-import",
       lastRefreshError: ""
     });
   }
@@ -94,7 +108,7 @@ export class DeckService {
     if (!snapshot) {
       return null;
     }
-    const sourceKey = readString(snapshot.source_key);
+    const sourceKey = sanitizeDeckSourceId(readString(snapshot.source_key));
     const existing = sourceKey ? await this.store.getSavedDeckBySourceKey(sourceKey) : null;
     if (existing) {
       return existing;
@@ -166,6 +180,10 @@ function parsePiltoverDeckHtml(html: string, sourceUrl: string, sourceKey: strin
   if (lines.includes("Private Deck") || lines.includes("Deck Unavailable")) {
     throw new Error("That Piltover deck is private or unavailable.");
   }
+  const structured = parsePiltoverStructuredPayload(html, sourceUrl, sourceKey);
+  if (structured) {
+    return structured;
+  }
   const title = extractTitle(html) || lines.find((line) => !SECTION_HEADERS.includes(line) && !line.includes(" - ") && line.length > 3) || "";
   const imageMap = extractImageMap(html);
   const legend = parseSingleName(findSection(lines, "Legend"));
@@ -190,12 +208,209 @@ function parsePiltoverDeckHtml(html: string, sourceUrl: string, sourceKey: strin
   return { sourceUrl, sourceKey, title, legend, snapshot };
 }
 
+function parsePiltoverStructuredPayload(html: string, sourceUrl: string, sourceKey: string): {
+  sourceUrl: string;
+  sourceKey: string;
+  title: string;
+  legend: string;
+  snapshot: Record<string, unknown>;
+} | null {
+  const payload = extractPiltoverPayload(html, sourceKey);
+  if (!payload) {
+    return null;
+  }
+  const legendPayload = payload.legend && typeof payload.legend === "object" ? payload.legend as PiltoverPayload : {};
+  const legendCard = legendPayload.card && typeof legendPayload.card === "object" ? legendPayload.card as PiltoverPayload : {};
+  const rawLegend = readString(legendCard.name || legendPayload.name || payload.legendName);
+  const legend = normalizeLegendName(rawLegend) || rawLegend;
+  const title = readString(payload.name || payload.title) || extractTitle(html);
+  const runes = coercePiltoverPayloadEntries(payload.runes);
+  const battlefields = coercePiltoverPayloadEntries(payload.battlefields);
+  const mainDeck = [
+    ...coercePiltoverPayloadEntries(payload.champions),
+    ...coercePiltoverPayloadEntries(payload.maindeck || payload.mainDeck || payload.main_deck)
+  ];
+  const sideboard = coercePiltoverPayloadEntries(payload.sideboard);
+  if (!title || !legend || !mainDeck.length) {
+    return null;
+  }
+  const snapshot = buildSnapshot({
+    title,
+    legend,
+    sourceUrl,
+    sourceKey,
+    legendEntry: piltoverLegendEntry(legend, legendPayload, legendCard),
+    runes,
+    battlefields,
+    mainDeck,
+    sideboard
+  });
+  return { sourceUrl, sourceKey, title, legend, snapshot };
+}
+
+function extractPiltoverPayload(html: string, sourceKey: string): PiltoverPayload | null {
+  const escaped = extractEscapedJsonObject(html, `{\\\"id\\\":\\\"${sourceKey}\\\"`);
+  if (!escaped) {
+    return null;
+  }
+  try {
+    const jsonText = JSON.parse(`"${escaped}"`) as string;
+    const parsed = JSON.parse(jsonText) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as PiltoverPayload : null;
+  } catch {
+    return null;
+  }
+}
+
+function extractEscapedJsonObject(html: string, needle: string): string {
+  const start = html.indexOf(needle);
+  if (start < 0) {
+    return "";
+  }
+  let depth = 0;
+  let inEscapedString = false;
+  for (let index = start; index < html.length; index += 1) {
+    const char = html[index];
+    if (char === "\"") {
+      let slashCount = 0;
+      for (let cursor = index - 1; cursor >= 0 && html[cursor] === "\\"; cursor -= 1) {
+        slashCount += 1;
+      }
+      if (slashCount % 2 === 1) {
+        inEscapedString = !inEscapedString;
+      }
+    }
+    if (inEscapedString) {
+      continue;
+    }
+    if (char === "{") {
+      depth += 1;
+    } else if (char === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        return html.slice(start, index + 1);
+      }
+    }
+  }
+  return "";
+}
+
+function piltoverLegendEntry(legend: string, legendPayload: PiltoverPayload, legendCard: PiltoverPayload): DeckEntry {
+  return {
+    qty: 1,
+    name: legend,
+    cardId: readString(legendPayload.variantNumber || legendPayload.cardId || legendCard.id),
+    card_id: readString(legendPayload.variantNumber || legendPayload.cardId || legendCard.id),
+    imageUrl: readString(legendPayload.imageUrl || legendPayload.image_url),
+    image_url: readString(legendPayload.imageUrl || legendPayload.image_url)
+  } as DeckEntry;
+}
+
+function parsePiltoverDeckText(text: string): {
+  sourceUrl: string;
+  sourceKey: string;
+  title: string;
+  legend: string;
+  snapshot: Record<string, unknown>;
+} {
+  const lines = text
+    .replace(/\r/g, "")
+    .split("\n")
+    .map((line) => cleanItemName(line))
+    .filter(Boolean);
+  if (!lines.length) {
+    throw new Error("Paste a deck list first.");
+  }
+
+  const title = inferTextDeckTitle(lines);
+  const legendEntry = parseTextLegend(lines);
+  const legend = normalizeLegendName(legendEntry.name) || legendEntry.name;
+  const runes = parseQuantitySection(findTextSection(lines, "runes"), {});
+  const battlefields = parseQuantitySection(findTextSection(lines, "battlefields"), {});
+  const mainDeck = parseQuantitySection(findTextSection(lines, "mainDeck"), {});
+  const sideboard = parseQuantitySection(findTextSection(lines, "sideboard"), {});
+
+  if (!legend || !mainDeck.length) {
+    throw new Error("Could not parse that deck text. Use Piltover format with Legend, Runes, Battlefields, Main Deck, and optional Sideboard sections.");
+  }
+
+  const snapshot = buildSnapshot({
+    title: title || `${legend} text deck`,
+    legend,
+    sourceUrl: "",
+    sourceKey: "",
+    legendEntry: { ...legendEntry, name: legend },
+    runes,
+    battlefields,
+    mainDeck,
+    sideboard
+  });
+  const sourceKey = `text:${sha1(snapshotFingerprint(snapshot))}`;
+  snapshot.source_key = sourceKey;
+  snapshot.sourceKey = sourceKey;
+  snapshot.source_url = `text://riftlite/${sourceKey.slice(5)}`;
+  snapshot.sourceUrl = snapshot.source_url;
+  return {
+    sourceUrl: String(snapshot.sourceUrl),
+    sourceKey,
+    title: String(snapshot.title),
+    legend,
+    snapshot
+  };
+}
+
+function inferTextDeckTitle(lines: string[]): string {
+  const firstSection = lines.findIndex((line) => Boolean(textSectionKey(line)));
+  const beforeFirstSection = firstSection > 0 ? lines.slice(0, firstSection) : [];
+  return beforeFirstSection.find((line) => !isNoiseLine(line) && !SAME_LINE_QUANTITY_RE.test(line)) ?? "";
+}
+
+function parseTextLegend(lines: string[]): DeckEntry {
+  const legendEntries = parseQuantitySection(findTextSection(lines, "legend"), {});
+  const entry = legendEntries[0];
+  if (entry?.name) {
+    return { ...entry, qty: 1 };
+  }
+  const raw = parseSingleName(findTextSection(lines, "legend"));
+  const sameLine = raw.match(SAME_LINE_QUANTITY_RE);
+  return buildEntry(sameLine?.[2] ?? raw, 1, {});
+}
+
+function findTextSection(lines: string[], section: string): string[] {
+  const start = lines.findIndex((line) => textSectionKey(line) === section);
+  if (start < 0) {
+    return [];
+  }
+  const result: string[] = [];
+  for (const line of lines.slice(start + 1)) {
+    if (textSectionKey(line)) {
+      break;
+    }
+    if (!isNoiseLine(line)) {
+      result.push(line);
+    }
+  }
+  return result;
+}
+
+function textSectionKey(line: string): string {
+  const key = normalizeLookupKey(line);
+  if (key === "legend" || key === "legends" || key === "champion" || key === "champions") return "legend";
+  if (key === "runes" || key === "runedeck") return "runes";
+  if (key === "battlefield" || key === "battlefields") return "battlefields";
+  if (key === "maindeck" || key === "main" || key === "cards" || key === "deck") return "mainDeck";
+  if (key === "sideboard" || key === "side") return "sideboard";
+  if (key === "deckguide" || key === "matchhistory" || key === "versionhistory") return "ignore";
+  return "";
+}
+
 function buildTcgaSnapshot(selectedDeck: Record<string, unknown>): Record<string, unknown> | null {
   const deckList = selectedDeck.deckList && typeof selectedDeck.deckList === "object"
     ? selectedDeck.deckList as Record<string, unknown>
     : {};
-  const selectedUuid = readString(selectedDeck.selected_uuid || selectedDeck.id || selectedDeck.deck_uuid || selectedDeck.uuid);
-  const title = readString(selectedDeck.title || selectedDeck.name || selectedDeck.selected_label) || "TCGA Deck";
+  const selectedUuid = sanitizeDeckSourceId(readString(selectedDeck.selected_uuid || selectedDeck.id || selectedDeck.deck_uuid || selectedDeck.uuid));
+  const rawTitle = readString(selectedDeck.title || selectedDeck.name || selectedDeck.selected_label);
+  const title = isGenericDeckValue(rawTitle) ? "TCGA Deck" : rawTitle || "TCGA Deck";
   const legendEntries = coerceSectionEntries(sectionValue(deckList, "legend"), "legend");
   if (!legendEntries.length) {
     return null;
@@ -227,6 +442,16 @@ function buildTcgaSnapshot(selectedDeck: Record<string, unknown>): Record<string
     baseSnapshot.sourceKey = baseSnapshot.source_key;
   }
   return baseSnapshot;
+}
+
+function sanitizeDeckSourceId(value: unknown): string {
+  const cleaned = readString(value);
+  return cleaned && !isGenericDeckValue(cleaned) ? cleaned : "";
+}
+
+function isGenericDeckValue(value: unknown): boolean {
+  const cleaned = readString(value).toLowerCase().replace(/^tcga:/, "").replace(/\s+/g, " ");
+  return !cleaned || /^(riftbound|tcga deck|deck pending|no deck|no deck logged|unknown)$/.test(cleaned);
 }
 
 function buildSnapshot(input: {
@@ -409,6 +634,62 @@ function coerceSectionEntries(value: unknown, section: string): DeckEntry[] {
       cost_power: Number(record.cost_power ?? record.costPower ?? 0) || 0
     } as DeckEntry;
   }).filter((entry) => entry.name);
+}
+
+function coercePiltoverPayloadEntries(value: unknown): DeckEntry[] {
+  const rawEntries = Array.isArray(value)
+    ? value
+    : value && typeof value === "object"
+      ? Object.values(value as Record<string, unknown>)
+      : [];
+  return rawEntries.map((entry) => {
+    const record = entry && typeof entry === "object" ? entry as PiltoverPayload : {};
+    const card = record.card && typeof record.card === "object" ? record.card as PiltoverPayload : record;
+    const variant = preferredPiltoverVariant(card, readString(record.variantId || record.variant_id));
+    const name = cleanItemName(readString(card.name || record.name || record.cardName || record.title));
+    const qty = Number(record.quantity ?? record.qty ?? record.count ?? record.copies ?? 1) || 1;
+    const cardId = readString(
+      variant.variantNumber ||
+      variant.cardCode ||
+      record.variantNumber ||
+      record.cardId ||
+      record.card_id ||
+      card.id
+    );
+    const imageUrl = readString(
+      variant.imageUrl ||
+      variant.image_url ||
+      record.imageUrl ||
+      record.image_url ||
+      card.imageUrl ||
+      card.image_url
+    );
+    return {
+      qty: Math.max(1, Math.trunc(qty)),
+      name,
+      cardId,
+      card_id: cardId,
+      imageUrl,
+      image_url: imageUrl,
+      costEnergy: Number(card.energy ?? record.energy ?? 0) || 0,
+      cost_energy: Number(card.energy ?? record.energy ?? 0) || 0,
+      costPower: Number(card.power ?? record.power ?? 0) || 0,
+      cost_power: Number(card.power ?? record.power ?? 0) || 0
+    } as DeckEntry;
+  }).filter((entry) => entry.name);
+}
+
+function preferredPiltoverVariant(card: PiltoverPayload, variantId: string): PiltoverPayload {
+  const variants = Array.isArray(card.cardVariants) ? card.cardVariants : [];
+  const match = variants.find((variant) => {
+    const record = variant && typeof variant === "object" ? variant as PiltoverPayload : {};
+    return variantId && readString(record.id) === variantId;
+  });
+  if (match && typeof match === "object") {
+    return match as PiltoverPayload;
+  }
+  const first = variants.find((variant) => variant && typeof variant === "object");
+  return first && typeof first === "object" ? first as PiltoverPayload : {};
 }
 
 function sectionValue(deckList: Record<string, unknown>, section: string): unknown {

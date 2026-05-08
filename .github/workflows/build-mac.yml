@@ -22,7 +22,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: "24"
           cache: npm
 
       - name: Install dependencies
@@ -54,6 +54,15 @@ jobs:
 
       - name: Test
         run: npm test -- --run
+
+      - name: Use Mac update feed
+        run: |
+          node <<'NODE'
+          const fs = require("fs");
+          const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+          pkg.build.publish = [{ provider: "github", owner: "cdfpartridge-web", repo: "RiftLite-Desktop-Mac" }];
+          fs.writeFileSync("package.json", `${JSON.stringify(pkg, null, 2)}\n`);
+          NODE
 
       - name: Build macOS installers
         run: npm run electron:build:mac

@@ -10,6 +10,7 @@ const SNAPSHOT_DEBOUNCE_MS = 800;
 const ACTIVE_HEARTBEAT_MS = 5_000;
 const IDLE_HEARTBEAT_MS = 12_000;
 const DEBUG_MODE_REFRESH_MS = 10_000;
+const ATLAS_INTERACTION_QUIET_MS = 900;
 const BATTLEFIELD_NAMES = [
   { name: "Ravensbloom Conservatory", canonical: "Ravenbloom Conservatory" },
   { name: "Grove of the God-Willow", canonical: "Grove of the God-Willow" },
@@ -93,6 +94,9 @@ let eventCounter = 0;
 let debugEnabled = false;
 let lastDebugMutationAt = 0;
 let lastSnapshotPublishedAt = 0;
+let atlasInteractionQuietUntil = 0;
+let atlasInteractionSettleTimer: number | undefined;
+let atlasDeferredMutationSnapshot = false;
 
 type CounterPlayer = {
   name: string;
@@ -463,7 +467,7 @@ function readAtlasScoreTrackCandidates(): AtlasScoreCandidate[] {
     "[class*='track-outline' i]",
     "[class*='track-ring' i]"
   ];
-  const elements = uniqueElements(selectors.flatMap((selector) => Array.from(document.querySelectorAll(selector)))).slice(0, 80);
+  const elements = uniqueElements(selectors.flatMap((selector) => Array.from(document.querySelectorAll(selector)))).slice(0, 48);
   const candidates = elements
     .map(readAtlasScoreTrackCandidate)
     .filter((candidate): candidate is AtlasScoreCandidate => Boolean(candidate && candidate.value !== ""));
@@ -1319,18 +1323,89 @@ function normalizeVisibleResultKey(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/g, " ").slice(0, 500);
 }
 
+function atlasInteractionIsQuiet(): boolean {
+  return platform === "atlas" && Date.now() < atlasInteractionQuietUntil;
+}
+
+function markAtlasInteraction(delay = ATLAS_INTERACTION_QUIET_MS): void {
+  if (platform !== "atlas") {
+    return;
+  }
+  atlasInteractionQuietUntil = Date.now() + delay;
+  if (atlasInteractionSettleTimer) {
+    window.clearTimeout(atlasInteractionSettleTimer);
+  }
+  atlasInteractionSettleTimer = window.setTimeout(() => {
+    if (atlasDeferredMutationSnapshot) {
+      atlasDeferredMutationSnapshot = false;
+      scheduleSnapshot("interaction-settled");
+    }
+  }, delay + 150);
+}
+
+function installAtlasInteractionThrottle(): void {
+  if (platform !== "atlas") {
+    return;
+  }
+  const active = () => markAtlasInteraction();
+  const settling = () => markAtlasInteraction(250);
+  window.addEventListener("pointerdown", active, { capture: true, passive: true });
+  window.addEventListener("pointermove", active, { capture: true, passive: true });
+  window.addEventListener("dragstart", active, { capture: true });
+  window.addEventListener("dragover", active, { capture: true, passive: true });
+  window.addEventListener("touchmove", active, { capture: true, passive: true });
+  window.addEventListener("pointerup", settling, { capture: true, passive: true });
+  window.addEventListener("pointercancel", settling, { capture: true, passive: true });
+  window.addEventListener("drop", settling, { capture: true });
+}
+
+function mutationText(mutation: MutationRecord): string {
+  const target = mutation.target as Element;
+  const targetText = `${target.nodeName} ${target.id ?? ""} ${target.className ?? ""}`;
+  const addedText = Array.from(mutation.addedNodes)
+    .slice(0, 6)
+    .map((node) => {
+      if (!(node instanceof Element)) {
+        return node.nodeName;
+      }
+      return `${node.nodeName} ${node.id ?? ""} ${node.className ?? ""} ${textOf(node).slice(0, 80)}`;
+    })
+    .join(" ");
+  return `${targetText} ${addedText}`;
+}
+
+function isMeaningfulDomMutation(mutation: MutationRecord): boolean {
+  const haystack = mutationText(mutation);
+  if (platform === "atlas") {
+    if (/modal|dialog|result|winner|victory|defeat|concede|report|toast|log|history|score|track|counter|mulligan|sideboard|turn|battlefield/i.test(haystack)) {
+      return true;
+    }
+    if (/card|zone|drop|drag|sortable|piece|token/i.test(haystack)) {
+      return !atlasInteractionIsQuiet();
+    }
+    return /game|battle/i.test(haystack);
+  }
+  return /PLAYER-COUNTER|log|game|battle|card|modal|dialog|result|zone|drop/i.test(haystack);
+}
+
 function installDomObserver(): void {
   const start = () => {
     if (!document.body) {
       window.setTimeout(start, 100);
       return;
     }
+    installAtlasInteractionThrottle();
     const observer = new MutationObserver((mutations) => {
-      const meaningful = mutations.some((mutation) => {
-        const target = mutation.target as Element;
-        const targetText = `${target.nodeName} ${target.id ?? ""} ${target.className ?? ""}`;
-        return /PLAYER-COUNTER|log|game|battle|card|modal|dialog|result|zone|drop/i.test(targetText);
-      });
+      if (platform === "atlas" && atlasInteractionIsQuiet()) {
+        const critical = mutations.some((mutation) =>
+          /modal|dialog|result|winner|victory|defeat|concede|report|toast|log|history|score|track|counter|mulligan|sideboard|turn|battlefield/i.test(mutationText(mutation))
+        );
+        if (!critical) {
+          atlasDeferredMutationSnapshot = true;
+          return;
+        }
+      }
+      const meaningful = mutations.some(isMeaningfulDomMutation);
       if (meaningful) {
         const current = Date.now();
         if (current - lastDebugMutationAt > 3000) {

@@ -27,7 +27,15 @@ const OVERLAY_TEXT_FILES = {
   latestResult: "latest-result.txt",
   sessionRecord: "session-record.txt",
   sessionSummary: "session-summary.txt",
-  activeDeck: "active-deck.txt"
+  currentMatch: "current-match.txt",
+  legendWinRate: "legend-winrate.txt",
+  matchupWinRate: "matchup-winrate.txt",
+  sessionWins: "session-wins.txt",
+  sessionLosses: "session-losses.txt",
+  activeDeck: "active-deck.txt",
+  activeDeckWinRate: "active-deck-winrate.txt",
+  activeDeckBestMatchup: "active-deck-best-matchup.txt",
+  activeDeckWorstMatchup: "active-deck-worst-matchup.txt"
 } as const;
 type OverlayLayout = "landscape" | "portrait";
 type OverlayTextFileKey = keyof typeof OVERLAY_TEXT_FILES;
@@ -341,6 +349,8 @@ function overlayTextValues(payload: Record<string, unknown>): Record<OverlayText
   const latest = objectValue(payload.latest);
   const source = live ?? latest;
   const session = objectValue(payload.session);
+  const legendStats = objectValue(payload.legendStats);
+  const matchupStats = objectValue(payload.matchupStats);
   const activeDeckStats = objectValue(payload.activeDeckStats);
   const isLive = Boolean(live);
   const myLegend = textValue(source?.myChampion);
@@ -354,6 +364,10 @@ function overlayTextValues(payload: Record<string, unknown>): Record<OverlayText
   const battlefields = joinVs(myBattlefield, opponentBattlefield);
   const sessionRecord = textValue(session?.record);
   const sessionTotal = textValue(session?.total);
+  const sessionWins = textValue(session?.wins);
+  const sessionLosses = textValue(session?.losses);
+  const legendWinRate = winRateText(legendStats);
+  const matchupWinRate = winRateText(matchupStats);
   const activeDeck = [textValue(activeDeckStats?.title), textValue(activeDeckStats?.record), textValue(activeDeckStats?.winRate)]
     .filter(Boolean)
     .join(" | ");
@@ -372,8 +386,28 @@ function overlayTextValues(payload: Record<string, unknown>): Record<OverlayText
     latestResult: latest ? [textValue(latest.result), textValue(latest.score)].filter(Boolean).join(" ") : "",
     sessionRecord,
     sessionSummary: sessionRecord ? `${sessionRecord}${sessionTotal ? ` (${sessionTotal} matches)` : ""}` : "",
-    activeDeck
+    currentMatch: [matchup, opponentName ? `Opponent ${opponentName}` : "", score ? `Score ${score}` : ""].filter(Boolean).join(" | "),
+    legendWinRate,
+    matchupWinRate,
+    sessionWins,
+    sessionLosses,
+    activeDeck,
+    activeDeckWinRate: textValue(activeDeckStats?.winRate),
+    activeDeckBestMatchup: textValue(activeDeckStats?.bestMatchup),
+    activeDeckWorstMatchup: textValue(activeDeckStats?.worstMatchup)
   };
+}
+
+function winRateText(stats: Record<string, unknown> | null): string {
+  if (!stats) {
+    return "";
+  }
+  const winRate = textValue(stats.winRate);
+  const record = textValue(stats.record);
+  if (!winRate && !record) {
+    return "";
+  }
+  return [winRate ? `${winRate}%` : "", record].filter(Boolean).join(" | ");
 }
 
 function summaryLine(

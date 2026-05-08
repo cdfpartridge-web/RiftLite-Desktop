@@ -2,7 +2,22 @@ import type { BrowserWindow } from "electron";
 import { createHash } from "node:crypto";
 import { normalizeLegendName } from "../../shared/legendNames.js";
 import { publicCommunitySyncEnabled } from "../../shared/syncPolicy.js";
-import type { CommunityMatch, HubActionResult, PrivateHub, MatchDraft, UserSettings } from "../../shared/types.js";
+import type {
+  AccountLinkSession,
+  AccountLinkStatus,
+  AccountProfile,
+  AccountProfileBackfillResult,
+  CommunityMatch,
+  HubActionResult,
+  HubInboxItem,
+  HubInvite,
+  HubMember,
+  HubMessage,
+  PrivateHub,
+  PublicProfileSearchResult,
+  MatchDraft,
+  UserSettings
+} from "../../shared/types.js";
 import { RiftLiteStore } from "./store.js";
 
 const FIREBASE_API_KEY = "AIzaSyBNqEY-i_CggjhDKVltoPQFrSOEfHF7fBA";
@@ -11,6 +26,22 @@ const COMMUNITY_API_BASE = "https://www.riftlite.com";
 const COMMUNITY_API_BASES = ["https://www.riftlite.com", "https://riftlite.com"];
 const COMMUNITY_FIRESTORE_FALLBACK_LIMIT = 500;
 const TOKEN_FRESH_SECONDS = 300;
+const GENERIC_DISPLAY_NAMES = new Set([
+  "riftlite player",
+  "riftlite user",
+  "a riftlite player",
+  "player",
+  "member",
+  "owner"
+]);
+const GENERIC_DECK_NAMES = new Set([
+  "riftbound",
+  "tcga deck",
+  "deck pending",
+  "no deck",
+  "no deck logged",
+  "unknown"
+]);
 
 interface AuthState {
   uid: string;
@@ -128,11 +159,11 @@ export class FirebaseSyncService {
   }
 
   async getCommunityMatches(forceRefresh = false, limit = COMMUNITY_FIRESTORE_FALLBACK_LIMIT): Promise<CommunityMatch[]> {
+    const settings = await this.store.getSettings();
     const webMatches = await this.getCommunityMatchesFromWebsite(forceRefresh);
     if (webMatches) {
-      return webMatches;
+      return repairCommunityMatchesForSettings(webMatches, settings);
     }
-    const settings = await this.store.getSettings();
     const auth = await this.getAuth(settings);
     const response = await this.firestoreRunQuery("", auth.idToken, {
       structuredQuery: {
@@ -141,7 +172,7 @@ export class FirebaseSyncService {
         limit
       }
     });
-    return response.map((doc) => fromFirestoreDoc(doc, "community"));
+    return repairCommunityMatchesForSettings(response.map((doc) => fromFirestoreDoc(doc, "community")), settings);
   }
 
   private async getCommunityMatchesFromWebsite(forceRefresh: boolean): Promise<CommunityMatch[] | null> {
@@ -205,24 +236,302 @@ export class FirebaseSyncService {
     }
   }
 
+  async startAccountLink(): Promise<AccountLinkSession> {
+    const payload = await this.authenticatedWebsiteRequest("/api/auth/link/start", { method: "POST" });
+    return {
+      sessionId: readString(payload.sessionId),
+      code: readString(payload.code),
+      loginUrl: readString(payload.loginUrl),
+      expiresAt: readNumber(payload.expiresAt)
+    };
+  }
+
+  async getAccountLinkStatus(sessionId: string): Promise<AccountLinkStatus> {
+    const query = new URLSearchParams({ sessionId });
+    const payload = await this.authenticatedWebsiteRequest(`/api/auth/link/status?${query}`, { method: "GET" });
+    const status = readString(payload.status) as AccountLinkStatus["status"];
+    const customToken = readString(payload.customToken);
+    if (status === "complete" && customToken) {
+      this.auth = await this.signInWithCustomToken(customToken);
+      const currentSettings = await this.store.getSettings();
+      const displayName = bestLocalAccountDisplayName(currentSettings, undefined, readString(payload.displayName));
+      const settings = await this.store.saveSettings({
+        firebaseUid: this.auth.uid,
+        firebaseRefreshToken: this.auth.refreshToken,
+        accountUid: this.auth.uid,
+        accountEmail: readString(payload.email),
+        accountDisplayName: displayName
+      });
+      await this.getAccountProfile().catch(async () => {
+        await this.store.saveSettings({
+          accountUid: settings.accountUid || this.auth?.uid || "",
+          accountEmail: settings.accountEmail,
+          accountDisplayName: settings.accountDisplayName
+        });
+      });
+    }
+    return {
+      status: status === "complete" || status === "expired" || status === "error" ? status : "pending",
+      uid: readString(payload.uid),
+      email: readString(payload.email),
+      displayName: readString(payload.displayName),
+      message: readString(payload.message)
+    };
+  }
+
+  async getAccountProfile(): Promise<AccountProfile | null> {
+    try {
+      const payload = await this.authenticatedWebsiteRequest("/api/account/profile", { method: "GET" });
+      const settings = await this.store.getSettings();
+      const profile = await this.repairGenericAccountProfile(normalizeAccountProfile(payload.profile), settings);
+      await this.store.saveSettings({
+        accountUid: profile.uid,
+        accountEmail: profile.email || settings.accountEmail,
+        accountHandle: profile.handle,
+        accountDisplayName: bestLocalAccountDisplayName(settings, profile),
+        accountProfilePublic: profile.publicProfile
+      });
+      return profile;
+    } catch {
+      return null;
+    }
+  }
+
+  async saveAccountProfile(patch: Partial<AccountProfile>): Promise<AccountProfile> {
+    const currentSettings = await this.store.getSettings();
+    const safePatch = { ...patch };
+    if (Object.prototype.hasOwnProperty.call(safePatch, "displayName")) {
+      safePatch.displayName = bestLocalAccountDisplayName(currentSettings, undefined, readString(safePatch.displayName), readString(safePatch.handle));
+    }
+    const payload = await this.authenticatedWebsiteRequest("/api/account/profile", {
+      method: "PATCH",
+      body: safePatch
+    });
+    const profile = normalizeAccountProfile(payload.profile);
+    await this.store.saveSettings({
+      accountUid: profile.uid,
+      accountEmail: profile.email || currentSettings.accountEmail,
+      accountHandle: profile.handle,
+      accountDisplayName: bestLocalAccountDisplayName(currentSettings, profile),
+      accountProfilePublic: profile.publicProfile,
+      username: isGenericDisplayName(profile.displayName) ? currentSettings.username : profile.displayName || currentSettings.username
+    });
+    return profile;
+  }
+
+  async refreshAccountProfileMatches(): Promise<AccountProfileBackfillResult> {
+    const payload = await this.authenticatedWebsiteRequest("/api/account/profile/backfill", { method: "POST" });
+    const aggregate = isRecord(payload.aggregate) ? payload.aggregate : {};
+    return {
+      ok: Boolean(payload.ok),
+      skipped: Boolean(payload.skipped),
+      message: readString(payload.message),
+      totalMatches: readNumber(aggregate.totalMatches),
+      wins: readNumber(aggregate.wins),
+      losses: readNumber(aggregate.losses),
+      draws: readNumber(aggregate.draws),
+      winRate: readNumber(aggregate.winRate)
+    };
+  }
+
+  async getAccountExportData(): Promise<Record<string, unknown>> {
+    return this.authenticatedWebsiteRequest("/api/account/export", { method: "GET" });
+  }
+
+  async unlinkAccount(): Promise<UserSettings> {
+    this.auth = null;
+    return this.store.saveSettings({
+      firebaseUid: "",
+      firebaseRefreshToken: "",
+      accountUid: "",
+      accountEmail: "",
+      accountHandle: "",
+      accountDisplayName: "",
+      accountProfilePublic: false
+    });
+  }
+
+  async searchPublicProfiles(query: string): Promise<PublicProfileSearchResult[]> {
+    const params = new URLSearchParams({ q: query });
+    const response = await fetch(`${COMMUNITY_API_BASE}/api/user/search?${params}`, {
+      headers: { "Content-Type": "application/json" }
+    });
+    if (!response.ok) return [];
+    const payload = await response.json() as Record<string, unknown>;
+    return Array.isArray(payload.profiles)
+      ? payload.profiles.filter(isRecord).map((profile) => ({
+        uid: readString(profile.uid),
+        handle: readString(profile.handle),
+        displayName: readString(profile.displayName)
+      }))
+      : [];
+  }
+
+  async claimHub(hubId: string, passwordHash?: string): Promise<void> {
+    const settings = await this.store.getSettings();
+    const hub = settings.activeHubs.find((item) => item.id === hubId);
+    const hash = passwordHash || hub?.passwordHash || "";
+    const profile = await this.getAccountProfile().catch(() => null);
+    await this.authenticatedWebsiteRequest("/api/hubs/claim", {
+      method: "POST",
+      body: {
+        hubId,
+        passwordHash: hash,
+        displayName: bestLocalAccountDisplayName(settings, profile)
+      }
+    });
+    if (hub) {
+      await this.store.saveSettings({
+        activeHubs: settings.activeHubs.map((item) => item.id === hubId ? { ...item, role: "owner", claimed: true } : item)
+      });
+    }
+  }
+
+  private async repairGenericAccountProfile(profile: AccountProfile, settings: UserSettings): Promise<AccountProfile> {
+    const preferred = bestLocalAccountDisplayName(settings, profile);
+    if (!preferred || !isGenericDisplayName(profile.displayName) || sameName(profile.displayName, preferred)) {
+      return profile;
+    }
+    const payload = await this.authenticatedWebsiteRequest("/api/account/profile", {
+      method: "PATCH",
+      body: { displayName: preferred }
+    });
+    return normalizeAccountProfile(payload.profile);
+  }
+
+  async getHubInbox(): Promise<HubInboxItem[]> {
+    const payload = await this.authenticatedWebsiteRequest("/api/inbox?limit=50", { method: "GET" });
+    return Array.isArray(payload.items) ? payload.items.filter(isRecord).map(normalizeHubInboxItem) : [];
+  }
+
+  async acceptHubInvite(inviteId: string): Promise<HubActionResult | null> {
+    const payload = await this.authenticatedWebsiteRequest("/api/hubs/invites/accept", {
+      method: "POST",
+      body: { inviteId }
+    });
+    const rawHub = isRecord(payload.hub) ? payload.hub : {};
+    const hubId = readString(rawHub.id) || readString(payload.hubId);
+    if (!hubId) {
+      return null;
+    }
+    const settings = await this.store.getSettings();
+    const hub: PrivateHub = {
+      id: hubId,
+      name: readString(rawHub.name) || hubId,
+      sync: true,
+      role: "member",
+      claimed: true,
+      joinedAt: new Date().toISOString()
+    };
+    const nextSettings = await this.store.saveSettings({
+      activeHubs: upsertHub(settings.activeHubs, hub),
+      syncMode: publicCommunitySyncEnabled(settings) ? "community-and-hubs" : "private-hubs-only",
+      communitySyncEnabled: publicCommunitySyncEnabled(settings)
+    });
+    return { hub, settings: nextSettings };
+  }
+
+  async declineHubInvite(inviteId: string): Promise<void> {
+    await this.authenticatedWebsiteRequest("/api/hubs/invites/decline", {
+      method: "POST",
+      body: { inviteId }
+    });
+  }
+
+  async getHubMembers(hubId: string): Promise<HubMember[]> {
+    const payload = await this.authenticatedWebsiteRequest(`/api/hubs/${encodeURIComponent(hubId)}/members`, { method: "GET" });
+    return Array.isArray(payload.members) ? payload.members.filter(isRecord).map(normalizeHubMember) : [];
+  }
+
+  async createHubInvite(hubId: string, targetHandle = ""): Promise<HubInvite> {
+    const payload = await this.authenticatedWebsiteRequest(`/api/hubs/${encodeURIComponent(hubId)}/invites`, {
+      method: "POST",
+      body: { targetHandle }
+    });
+    const invite = isRecord(payload.invite) ? payload.invite : {};
+    return {
+      inviteId: readString(invite.inviteId),
+      hubId: readString(invite.hubId) || hubId,
+      hubName: readString(invite.hubName),
+      targetHandle: readString(invite.targetHandle),
+      targetUid: readString(invite.targetUid),
+      senderHandle: readString(invite.senderHandle),
+      senderDisplayName: readString(invite.senderDisplayName),
+      delivered: Boolean(invite.delivered),
+      inviteUrl: readString(payload.inviteUrl),
+      expiresAt: readNumber(invite.expiresAt)
+    };
+  }
+
+  async getHubMessages(hubId: string): Promise<HubMessage[]> {
+    const payload = await this.authenticatedWebsiteRequest(`/api/hubs/${encodeURIComponent(hubId)}/messages`, { method: "GET" });
+    return Array.isArray(payload.messages) ? payload.messages.filter(isRecord).map(normalizeHubMessage) : [];
+  }
+
+  async postHubMessage(hubId: string, text: string): Promise<HubMessage> {
+    const payload = await this.authenticatedWebsiteRequest(`/api/hubs/${encodeURIComponent(hubId)}/messages`, {
+      method: "POST",
+      body: { text }
+    });
+    return normalizeHubMessage(isRecord(payload.message) ? payload.message : {});
+  }
+
+  async deleteHubMessage(hubId: string, messageId: string): Promise<void> {
+    await this.authenticatedWebsiteRequest(`/api/hubs/${encodeURIComponent(hubId)}/messages/${encodeURIComponent(messageId)}`, {
+      method: "DELETE"
+    });
+  }
+
   private async uploadPublicMatch(match: MatchDraft, settings: UserSettings): Promise<string> {
     const auth = await this.getAuth(settings);
-    const doc = buildPublicDoc(match, settings, auth.uid);
-    const response = await this.firestoreRequest("matches", auth.idToken, {
-      method: "POST",
-      body: { fields: toFirestoreFields(doc) }
-    });
+    const doc = buildSyncDoc(match, settings, auth.uid, { includeFlags: false });
+    const existingDocId = await this.findPublicMatchDocId(match.id, auth.idToken, auth.uid);
+    const response = existingDocId
+      ? await this.firestoreRequest(`matches/${encodeURIComponent(existingDocId)}`, auth.idToken, {
+        method: "PATCH",
+        body: { fields: toFirestoreFields(doc) }
+      })
+      : await this.firestoreRequest("matches", auth.idToken, {
+        method: "POST",
+        body: { fields: toFirestoreFields(doc) }
+      });
     const name = typeof response.name === "string" ? response.name : "";
-    const docId = name.split("/").pop() ?? "";
+    const docId = existingDocId || name.split("/").pop() || "";
     if (docId) {
       await this.appendCommunityAggregate(docId, doc, auth.idToken).catch(() => undefined);
     }
     return docId;
   }
 
+  private async findPublicMatchDocId(localMatchId: string, idToken: string, uid: string): Promise<string> {
+    if (!localMatchId) return "";
+    const docs = await this.firestoreRunQuery("", idToken, {
+      structuredQuery: {
+        from: [{ collectionId: "matches" }],
+        where: {
+          fieldFilter: {
+            field: { fieldPath: "local_match_id" },
+            op: "EQUAL",
+            value: { stringValue: localMatchId }
+          }
+        },
+        limit: 5
+      }
+    }).catch(() => []);
+
+    for (const doc of docs) {
+      const fields = isRecord(doc.fields) ? doc.fields : {};
+      if (readFirestoreString(fields.uid) !== uid) continue;
+      const name = readString(doc.name);
+      const id = name.split("/").pop() ?? "";
+      if (id) return id;
+    }
+    return "";
+  }
+
   private async uploadHubMatch(hubId: string, match: MatchDraft, settings: UserSettings): Promise<string> {
     const auth = await this.getAuth(settings);
-    const doc = buildPublicDoc(match, settings, auth.uid);
+    const doc = buildSyncDoc(match, settings, auth.uid, { includeFlags: true });
     const safeHubId = encodeURIComponent(hubId);
     const safeMatchId = encodeURIComponent(match.id);
     const response = await this.firestoreRequest(`hubs/${safeHubId}/matches/${safeMatchId}`, auth.idToken, {
@@ -298,6 +607,52 @@ export class FirebaseSyncService {
       refreshToken: payload.refresh_token ?? "",
       expiresAt: Math.floor(Date.now() / 1000) + Number.parseInt(payload.expires_in ?? "3600", 10)
     };
+  }
+
+  private async signInWithCustomToken(customToken: string): Promise<AuthState> {
+    const response = await fetch(
+      `https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=${FIREBASE_API_KEY}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: customToken, returnSecureToken: true })
+      }
+    );
+    if (!response.ok) {
+      throw new Error(`Firebase custom token sign-in failed: ${response.status}`);
+    }
+    const payload = await response.json() as Record<string, string>;
+    return {
+      uid: payload.localId ?? "",
+      idToken: payload.idToken ?? "",
+      refreshToken: payload.refreshToken ?? "",
+      expiresAt: Math.floor(Date.now() / 1000) + Number.parseInt(payload.expiresIn ?? "3600", 10)
+    };
+  }
+
+  private async authenticatedWebsiteRequest(path: string, options: { method: "GET" | "DELETE"; body?: never } | { method: "POST" | "PATCH"; body?: unknown }): Promise<Record<string, unknown>> {
+    const settings = await this.store.getSettings();
+    const auth = await this.getAuth(settings);
+    const response = await fetch(`${COMMUNITY_API_BASE}${path}`, {
+      method: options.method,
+      headers: {
+        "Authorization": `Bearer ${auth.idToken}`,
+        "Content-Type": "application/json"
+      },
+      body: options.method === "GET" || options.method === "DELETE" ? undefined : JSON.stringify(options.body ?? {})
+    });
+    const text = await response.text();
+    let payload: Record<string, unknown> = {};
+    try {
+      payload = text ? JSON.parse(text) as Record<string, unknown> : {};
+    } catch {
+      const preview = text.replace(/\s+/g, " ").slice(0, 120);
+      throw new Error(`RiftLite website returned ${response.status} ${response.statusText || "non-JSON response"} for ${path}${preview ? `: ${preview}` : ""}`);
+    }
+    if (!response.ok) {
+      throw new Error(readString(payload.error) || `RiftLite API ${response.status}`);
+    }
+    return payload;
   }
 
   private async firestoreRequest(path: string, idToken: string, options: { method: "GET" | "DELETE"; body?: never } | { method: "POST" | "PATCH"; body: unknown }): Promise<Record<string, unknown>> {
@@ -382,10 +737,13 @@ function readFirestoreString(value: unknown): string {
 function fromWebMatch(match: Record<string, unknown>, scope: CommunityMatch["scope"], hubId?: string): CommunityMatch {
   const games = readString(match.games_json) || (Array.isArray(match.games) ? JSON.stringify(match.games) : "");
   const snapshot = readString(match.my_deck_snapshot_json) || (match.deckSnapshot ? JSON.stringify(match.deckSnapshot) : "");
+  const uid = readString(match.uid) || readString(match.owner_uid) || readString(match.ownerUid);
+  const deckSourceUrl = sanitizeDeckSourceUrl(readString(match.my_deck_source_url) || readString(match.deckSourceUrl));
+  const deckSourceKey = sanitizeDeckSourceKey(readString(match.my_deck_source_key) || readString(match.deckSourceKey));
   return {
     id: readString(match.id),
-    uid: readString(match.uid),
-    username: readString(match.username),
+    uid,
+    username: resolveCommunityUsername(match, uid),
     date: readString(match.date),
     result: readString(match.result),
     myChampion: normalizeLegendName(readString(match.my_champion) || readString(match.myChampion)),
@@ -398,9 +756,9 @@ function fromWebMatch(match: Record<string, unknown>, scope: CommunityMatch["sco
     opponentBattlefield: readString(match.opp_battlefield) || readString(match.oppBattlefield),
     flags: readString(match.flags),
     gamesJson: games,
-    deckName: readString(match.my_deck_name) || readString(match.deckName),
-    deckSourceUrl: readString(match.my_deck_source_url) || readString(match.deckSourceUrl),
-    deckSourceKey: readString(match.my_deck_source_key) || readString(match.deckSourceKey),
+    deckName: sanitizeDeckName(readString(match.my_deck_name) || readString(match.deckName)),
+    deckSourceUrl,
+    deckSourceKey,
     deckSnapshotJson: snapshot,
     createdAt: readNumber(match.created_at ?? match.createdAt),
     scope,
@@ -449,6 +807,25 @@ function dedupeCommunityMatches(matches: CommunityMatch[]): CommunityMatch[] {
   return unique.sort((a, b) => communityMatchTime(b) - communityMatchTime(a));
 }
 
+function repairCommunityMatchesForSettings(matches: CommunityMatch[], settings: UserSettings): CommunityMatch[] {
+  const knownUids = new Set([settings.accountUid, settings.firebaseUid].map(readString).filter(Boolean));
+  const localName = bestLocalAccountDisplayName(settings, undefined, settings.username, settings.accountHandle);
+  if (!knownUids.size || !localName) {
+    return matches;
+  }
+  return matches.map((match) => {
+    if (!knownUids.has(match.uid) || !isPlaceholderCommunityName(match.username)) {
+      return match;
+    }
+    return { ...match, username: localName };
+  });
+}
+
+function isPlaceholderCommunityName(value: unknown): boolean {
+  const cleaned = readString(value).toLowerCase().replace(/\s+/g, " ");
+  return isGenericDisplayName(cleaned) || /^player(?:[ #_-]|$)/i.test(cleaned);
+}
+
 function communityMatchTime(match: CommunityMatch): number {
   const dateTime = new Date(match.date).getTime();
   if (!Number.isNaN(dateTime)) {
@@ -460,10 +837,18 @@ function communityMatchTime(match: CommunityMatch): number {
 function fromFirestoreDoc(doc: Record<string, unknown>, scope: CommunityMatch["scope"], hubId?: string): CommunityMatch {
   const fields = isRecord(doc.fields) ? doc.fields : {};
   const name = readString(doc.name);
+  const uid = readFirestoreString(fields.uid) || readFirestoreString(fields.owner_uid);
+  const deckSourceUrl = sanitizeDeckSourceUrl(readFirestoreString(fields.my_deck_source_url));
+  const deckSourceKey = sanitizeDeckSourceKey(readFirestoreString(fields.my_deck_source_key));
   return {
     id: name.split("/").pop() ?? "",
-    uid: readFirestoreString(fields.uid),
-    username: readFirestoreString(fields.username),
+    uid,
+    username: bestDisplayNameCandidate(
+      readFirestoreString(fields.username),
+      readFirestoreString(fields.owner_display_name),
+      readFirestoreString(fields.owner_handle),
+      fallbackAccountName(uid)
+    ),
     date: readFirestoreString(fields.date),
     result: readFirestoreString(fields.result),
     myChampion: normalizeLegendName(readFirestoreString(fields.my_champion)),
@@ -476,9 +861,9 @@ function fromFirestoreDoc(doc: Record<string, unknown>, scope: CommunityMatch["s
     opponentBattlefield: readFirestoreString(fields.opp_battlefield),
     flags: readFirestoreString(fields.flags),
     gamesJson: readFirestoreString(fields.games_json),
-    deckName: readFirestoreString(fields.my_deck_name),
-    deckSourceUrl: readFirestoreString(fields.my_deck_source_url),
-    deckSourceKey: readFirestoreString(fields.my_deck_source_key),
+    deckName: sanitizeDeckName(readFirestoreString(fields.my_deck_name)),
+    deckSourceUrl,
+    deckSourceKey,
     deckSnapshotJson: readFirestoreString(fields.my_deck_snapshot_json),
     createdAt: readFirestoreNumber(fields.created_at),
     scope,
@@ -496,6 +881,79 @@ function readFirestoreNumber(value: unknown): number {
 
 function readString(value: unknown): string {
   return String(value ?? "").trim();
+}
+
+function isGenericDisplayName(value: unknown): boolean {
+  const cleaned = readString(value).toLowerCase().replace(/\s+/g, " ");
+  return !cleaned || GENERIC_DISPLAY_NAMES.has(cleaned) || /^player(?:[ #_-]|$)/.test(cleaned);
+}
+
+function fallbackAccountName(uid = ""): string {
+  const suffix = uid.replace(/[^a-zA-Z0-9]/g, "").slice(0, 6);
+  return suffix ? `Player ${suffix}` : "";
+}
+
+function bestDisplayNameCandidate(...values: unknown[]): string {
+  for (const value of values) {
+    const cleaned = readString(value).replace(/\s+/g, " ").slice(0, 40);
+    if (cleaned && !isGenericDisplayName(cleaned)) {
+      return cleaned;
+    }
+  }
+  return "";
+}
+
+function bestLocalAccountDisplayName(settings: UserSettings, profile?: AccountProfile | null, ...candidates: unknown[]): string {
+  return bestDisplayNameCandidate(
+    ...candidates,
+    profile?.displayName,
+    settings.accountDisplayName,
+    settings.username,
+    profile?.handle,
+    settings.accountHandle,
+    fallbackAccountName(profile?.uid || settings.accountUid || settings.firebaseUid)
+  );
+}
+
+function resolveCommunityUsername(match: Record<string, unknown>, uid: string): string {
+  return bestDisplayNameCandidate(
+    match.username,
+    match.owner_display_name,
+    match.ownerDisplayName,
+    match.displayName,
+    match.owner_handle,
+    match.ownerHandle,
+    match.accountHandle,
+    fallbackAccountName(uid)
+  );
+}
+
+function normalizedDeckValue(value: unknown): string {
+  return readString(value).toLowerCase().replace(/^tcga:/, "").replace(/\s+/g, " ");
+}
+
+function isGenericDeckValue(value: unknown): boolean {
+  const cleaned = normalizedDeckValue(value);
+  return !cleaned || GENERIC_DECK_NAMES.has(cleaned);
+}
+
+function sanitizeDeckName(value: unknown): string {
+  const cleaned = readString(value).replace(/\s+/g, " ").slice(0, 80);
+  return cleaned && !isGenericDeckValue(cleaned) ? cleaned : "";
+}
+
+function sanitizeDeckSourceKey(value: unknown): string {
+  const cleaned = readString(value);
+  return cleaned && !isGenericDeckValue(cleaned) ? cleaned : "";
+}
+
+function sanitizeDeckSourceUrl(value: unknown): string {
+  const cleaned = readString(value);
+  if (!cleaned) {
+    return "";
+  }
+  const tcgaDeckKey = cleaned.match(/^tcga:\/\/deck\/(.+)$/i)?.[1] ?? "";
+  return tcgaDeckKey && isGenericDeckValue(tcgaDeckKey) ? "" : cleaned;
 }
 
 function readNumber(value: unknown): number {
@@ -518,11 +976,20 @@ function isFirestoreMissing(error: unknown): boolean {
   return error instanceof Error && error.message.includes("Firestore 404");
 }
 
-function buildPublicDoc(match: MatchDraft, settings: UserSettings, uid: string): Record<string, unknown> {
-  const username = settings.username || match.myName;
+function buildSyncDoc(match: MatchDraft, settings: UserSettings, uid: string, options: { includeFlags: boolean }): Record<string, unknown> {
+  const username = bestLocalAccountDisplayName(settings, undefined, match.myName);
   const opponentName = sameName(match.opponentName, username) ? "" : match.opponentName;
+  const deckName = sanitizeDeckName(match.deckName);
+  const deckSourceKey = sanitizeDeckSourceKey(match.deckSourceKey || match.deckSourceId);
+  const deckSourceUrl = sanitizeDeckSourceUrl(match.deckSourceUrl);
+  const hasDeckAttachment = Boolean(deckName || deckSourceUrl || deckSourceKey || match.deckSnapshotJson?.trim());
   return {
     uid,
+    owner_uid: settings.accountUid || uid,
+    owner_handle: settings.accountHandle,
+    owner_display_name: username,
+    profile_public: settings.accountProfilePublic,
+    visibility: settings.accountProfilePublic ? "public-profile" : "community",
     local_match_id: match.id,
     username,
     date: match.capturedAt,
@@ -535,12 +1002,12 @@ function buildPublicDoc(match: MatchDraft, settings: UserSettings, uid: string):
     went_first: match.games[0]?.wentFirst ?? "",
     my_battlefield: match.myBattlefield,
     opp_battlefield: match.opponentBattlefield,
-    flags: normalizeFlags(match.flags),
+    flags: options.includeFlags ? normalizeFlags(match.flags) : "",
     games_json: JSON.stringify(match.games),
-    my_deck_name: match.deckName,
-    my_deck_source_url: match.deckSourceUrl ?? "",
-    my_deck_source_key: match.deckSourceKey || match.deckSourceId,
-    my_deck_snapshot_json: match.deckSnapshotJson ?? "",
+    my_deck_name: hasDeckAttachment ? deckName : "",
+    my_deck_source_url: hasDeckAttachment ? deckSourceUrl : "",
+    my_deck_source_key: hasDeckAttachment ? deckSourceKey : "",
+    my_deck_snapshot_json: hasDeckAttachment ? match.deckSnapshotJson ?? "" : "",
     platform: match.platform,
     created_at: Math.floor(new Date(match.capturedAt).getTime() / 1000) || Math.floor(Date.now() / 1000)
   };
@@ -581,4 +1048,81 @@ function sameName(left: string, right: string): boolean {
   const a = left.trim().toLowerCase().replace(/\s+/g, " ");
   const b = right.trim().toLowerCase().replace(/\s+/g, " ");
   return Boolean(a && b && a === b);
+}
+
+function normalizeAccountProfile(value: unknown): AccountProfile {
+  const profile = isRecord(value) ? value : {};
+  return {
+    uid: readString(profile.uid),
+    email: readString(profile.email),
+    handle: readString(profile.handle),
+    handleLower: readString(profile.handleLower),
+    displayName: readString(profile.displayName),
+    searchable: Boolean(profile.searchable),
+    publicProfile: Boolean(profile.publicProfile),
+    showStats: profile.showStats !== false,
+    showMatches: profile.showMatches !== false,
+    showDecks: profile.showDecks !== false,
+    showHubBadges: Boolean(profile.showHubBadges),
+    marketingConsent: Boolean(profile.marketingConsent),
+    marketingConsentAt: readNumber(profile.marketingConsentAt),
+    marketingConsentUpdatedAt: readNumber(profile.marketingConsentUpdatedAt),
+    marketingConsentVersion: readString(profile.marketingConsentVersion),
+    marketingConsentSource: readString(profile.marketingConsentSource),
+    createdAt: readNumber(profile.createdAt),
+    updatedAt: readNumber(profile.updatedAt)
+  };
+}
+
+function normalizeHubMember(value: Record<string, unknown>): HubMember {
+  const role = readString(value.role);
+  const uid = readString(value.uid) || readString(value.id);
+  const handle = readString(value.handle);
+  return {
+    id: readString(value.id) || uid,
+    uid,
+    handle,
+    displayName: bestDisplayNameCandidate(value.displayName, handle, fallbackAccountName(uid)),
+    role: role === "owner" || role === "admin" ? role : "member",
+    joinedAt: readNumber(value.joinedAt),
+    updatedAt: readNumber(value.updatedAt)
+  };
+}
+
+function normalizeHubInboxItem(value: Record<string, unknown>): HubInboxItem {
+  const status = readString(value.status);
+  const senderUid = readString(value.senderUid);
+  const senderHandle = readString(value.senderHandle);
+  return {
+    id: readString(value.id) || readString(value.inviteId),
+    type: "hub-invite",
+    inviteId: readString(value.inviteId) || readString(value.id),
+    hubId: readString(value.hubId),
+    hubName: readString(value.hubName) || readString(value.hubId),
+    senderUid,
+    senderHandle,
+    senderDisplayName: bestDisplayNameCandidate(value.senderDisplayName, senderHandle, fallbackAccountName(senderUid)),
+    targetHandle: readString(value.targetHandle),
+    status: status === "accepted" || status === "declined" || status === "expired" ? status : "open",
+    createdAt: readNumber(value.createdAt),
+    expiresAt: readNumber(value.expiresAt),
+    readAt: readNumber(value.readAt)
+  };
+}
+
+function normalizeHubMessage(value: Record<string, unknown>): HubMessage {
+  const uid = readString(value.uid);
+  const handle = readString(value.handle);
+  return {
+    id: readString(value.id),
+    uid,
+    handle,
+    displayName: bestDisplayNameCandidate(value.displayName, handle, fallbackAccountName(uid)),
+    text: readString(value.text),
+    mentions: Array.isArray(value.mentions) ? value.mentions.map(readString).filter(Boolean) : [],
+    pinned: Boolean(value.pinned),
+    deleted: Boolean(value.deleted),
+    createdAt: readNumber(value.createdAt),
+    updatedAt: readNumber(value.updatedAt)
+  };
 }

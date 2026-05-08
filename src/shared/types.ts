@@ -1,4 +1,4 @@
-export type GamePlatform = "tcga" | "atlas";
+export type GamePlatform = "tcga" | "atlas" | "sim";
 
 export type MatchSource = "capture" | "scorepad" | "manual";
 
@@ -147,7 +147,10 @@ export interface PrivateHub {
   sync: boolean;
   passwordHash?: string;
   joinedAt?: string;
-  role?: "owner" | "member";
+  role?: "owner" | "admin" | "member";
+  claimed?: boolean;
+  imageDataUrl?: string;
+  imageUpdatedAt?: string;
 }
 
 export interface HubActionResult {
@@ -165,6 +168,7 @@ export interface PrivateHubSyncResult {
 
 export type ReplayStructuredEventType =
   | "setup"
+  | "mulligan"
   | "turn-start"
   | "turn-end"
   | "play"
@@ -187,9 +191,51 @@ export interface ReplayStructuredEvent {
   side: "me" | "opponent" | "system" | "unknown";
   text: string;
   cardName: string;
+  cardId?: string;
+  cardCount?: number;
   destination: string;
+  fromZone?: string;
+  toZone?: string;
+  visibility?: "public" | "private-local" | "private-opponent" | "hidden";
+  actionId?: string;
+  undoOf?: string;
   battlefield: string;
   pointsScored?: number;
+  scoreReason?: "hold" | "conquer" | "manual" | "card-effect";
+  mulligan?: {
+    options?: ReplayStructuredCard[];
+    kept?: ReplayStructuredCard[];
+    redrawn?: ReplayStructuredCard[];
+    redrawCount?: number;
+  };
+  resource?: {
+    energy?: number;
+    power?: number;
+    xp?: number;
+    runesReady?: number;
+    runesExhausted?: number;
+    runes?: string[];
+    mode?: "gain" | "pay" | "set" | "ready-rune" | "exhaust-rune";
+    after?: ReplayStructuredResourceState;
+  };
+  counter?: {
+    name: string;
+    delta: number;
+    value?: number;
+    targetCardId?: string;
+  };
+  token?: {
+    name: string;
+    type: string;
+    might?: number;
+  };
+  combat?: {
+    battlefield?: string;
+    winner?: "me" | "opponent" | "draw" | "unresolved";
+    attackers?: ReplayStructuredCard[];
+    defenders?: ReplayStructuredCard[];
+  };
+  snapshot?: ReplayStructuredSnapshot;
   score?: {
     me?: number;
     opponent?: number;
@@ -207,6 +253,134 @@ export interface ReplayStructuredEvent {
     capturedAt: string;
     source: string;
   };
+}
+
+export interface ReplayStructuredCard {
+  id: string;
+  name: string;
+  code: string;
+  type: string;
+  imageUrl: string;
+}
+
+export interface ReplayStructuredResourceState {
+  energy: number;
+  power: number;
+  xp: number;
+  runesReady: number;
+  runesExhausted: number;
+}
+
+export interface ReplayStructuredSnapshot {
+  resources: {
+    me: ReplayStructuredResourceState;
+    opponent: ReplayStructuredResourceState;
+  };
+  zones: {
+    me: Record<string, number>;
+    opponent: Record<string, number>;
+  };
+  knownOpponentCards: ReplayStructuredCard[];
+}
+
+export interface RiftboundSimEvent {
+  id: string;
+  matchId: string;
+  gameNumber: number;
+  sequence: number;
+  actionId: string;
+  undoOf?: string;
+  type:
+    | "match-start"
+    | "game-start"
+    | "setup"
+    | "mulligan-options"
+    | "mulligan-choice"
+    | "mulligan-redraw"
+    | "draw"
+    | "play"
+    | "move"
+    | "reveal"
+    | "recycle"
+    | "ready"
+    | "exhaust"
+    | "token-create"
+    | "counter-change"
+    | "resource-pay"
+    | "resource-change"
+    | "combat"
+    | "score"
+    | "turn-start"
+    | "turn-end"
+    | "undo"
+    | "match-end"
+    | "state-snapshot";
+  emittedAt: string;
+  actor: "me" | "opponent" | "system";
+  visibility: "public" | "private-local" | "private-opponent" | "hidden";
+  text: string;
+  format: "Bo1" | "Bo3" | "Auto";
+  players: {
+    me: {
+      name: string;
+      legend: string;
+      deckName: string;
+    };
+    opponent: {
+      name: string;
+      legend: string;
+      deckName: string;
+    };
+  };
+  card?: ReplayStructuredCard;
+  cards?: ReplayStructuredCard[];
+  cardCount?: number;
+  fromZone?: string;
+  toZone?: string;
+  destination?: string;
+  battlefield?: string;
+  pointsScored?: number;
+  scoreReason?: "hold" | "conquer" | "manual" | "card-effect";
+  score?: {
+    me: number;
+    opponent: number;
+  };
+  mulligan?: {
+    options?: ReplayStructuredCard[];
+    kept?: ReplayStructuredCard[];
+    redrawn?: ReplayStructuredCard[];
+    redrawCount?: number;
+  };
+  resource?: {
+    energy?: number;
+    power?: number;
+    xp?: number;
+    runesReady?: number;
+    runesExhausted?: number;
+    runes?: string[];
+    mode?: "gain" | "pay" | "set" | "ready-rune" | "exhaust-rune";
+    after?: ReplayStructuredResourceState;
+  };
+  counter?: {
+    name: string;
+    delta: number;
+    value?: number;
+    targetCardId?: string;
+  };
+  token?: {
+    name: string;
+    type: string;
+    might?: number;
+  };
+  combat?: {
+    battlefield?: string;
+    winner?: "me" | "opponent" | "draw" | "unresolved";
+    attackers?: ReplayStructuredCard[];
+    defenders?: ReplayStructuredCard[];
+  };
+  snapshot?: ReplayStructuredSnapshot;
+  active: boolean;
+  result?: MatchDraft["result"];
 }
 
 export interface ReplayRecord {
@@ -326,7 +500,7 @@ export interface ReplayScreenshotFrame {
   hash?: string;
 }
 
-export type ReplayVideoQuality = "compact" | "balanced" | "sharp" | "sharp30";
+export type ReplayVideoQuality = "compact" | "balanced" | "sharp" | "sharp30" | "youtube";
 export type ReplayVideoCaptureMode = "game-frame" | "system-window";
 export type ReplayVideoMimeType = "video/webm" | "video/mp4";
 export type ReplayFramePreset = "light" | "standard" | "detailed";
@@ -351,6 +525,7 @@ export interface ReplayVideoAsset {
   actualBitrateKbps?: number;
   codec: string;
   quality: ReplayVideoQuality;
+  containerFinalized?: boolean;
 }
 
 export interface ReplayVideoSession {
@@ -384,6 +559,12 @@ export interface ReplayVideoFinalizeOptions {
   quality: ReplayVideoQuality;
   mimeType: ReplayVideoMimeType;
   source: "game-frame-direct" | "system-window-crop";
+}
+
+export interface ReplayVideoMergeOptions {
+  platform: GamePlatform;
+  title: string;
+  quality: ReplayVideoQuality;
 }
 
 export interface ReplayVideoKeyframeOptions {
@@ -466,6 +647,12 @@ export interface CommunityMatch {
   hubId?: string;
 }
 
+export interface MatchHistoryCsvExportPayload {
+  scope: "personal" | "hub";
+  label?: string;
+  matches: Array<MatchDraft | CommunityMatch>;
+}
+
 export interface BattlefieldOption {
   name: string;
   aliases: string[];
@@ -502,11 +689,22 @@ export interface OverlayDisplayOptions {
 export interface UserSettings {
   username: string;
   firstRunComplete: boolean;
+  lastSeenVersion: string;
   syncMode: "community-and-hubs" | "community-only" | "private-hubs-only" | "local-only" | "custom";
-  communitySyncEnabled: boolean;
-  firebaseUid: string;
-  firebaseRefreshToken: string;
-  debugMode: boolean;
+    communitySyncEnabled: boolean;
+    firebaseUid: string;
+    firebaseRefreshToken: string;
+    accountUid: string;
+    accountEmail: string;
+    accountHandle: string;
+  accountDisplayName: string;
+  accountProfilePublic: boolean;
+  anonymousDiagnosticsEnabled: boolean;
+  anonymousInstallId: string;
+  anonymousInstallCreatedAt: string;
+  anonymousUsageLastHeartbeatAt: string;
+  anonymousUsageLastHeartbeatVersion: string;
+    debugMode: boolean;
   confirmationEnabled: boolean;
   replayCaptureEnabled: boolean;
   replayKeyframesEnabled: boolean;
@@ -520,6 +718,7 @@ export interface UserSettings {
   overlaySessionStartedAt: string;
   overlayDisplay: OverlayDisplayOptions;
   screenshotDirectory: string;
+  replayDirectory: string;
   screenshotHotkey: string;
   screenshotHotkeyEnabled: boolean;
   scorepadDeviceId: string;
@@ -540,6 +739,8 @@ export interface OverlayInfo {
   landscapeUrl: string;
   portraitUrl: string;
   port: number;
+  simEventReceiverUrl?: string;
+  simEventReceiverPort?: number;
   textDirectory: string;
   textFiles: Record<string, string>;
 }
@@ -577,6 +778,111 @@ export interface SpotlightClickPayload {
   source: string;
 }
 
+export interface AccountProfile {
+  uid: string;
+  email: string;
+  handle: string;
+  handleLower: string;
+  displayName: string;
+  searchable: boolean;
+  publicProfile: boolean;
+  showStats: boolean;
+  showMatches: boolean;
+  showDecks: boolean;
+  showHubBadges: boolean;
+  marketingConsent: boolean;
+  marketingConsentAt: number;
+  marketingConsentUpdatedAt: number;
+  marketingConsentVersion: string;
+  marketingConsentSource: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface AccountProfileBackfillResult {
+  ok: boolean;
+  skipped: boolean;
+  message: string;
+  totalMatches: number;
+  wins: number;
+  losses: number;
+  draws: number;
+  winRate: number;
+}
+
+export interface AccountLinkSession {
+  sessionId: string;
+  code: string;
+  loginUrl: string;
+  expiresAt: number;
+}
+
+export interface AccountLinkStatus {
+  status: "pending" | "complete" | "expired" | "error";
+  uid?: string;
+  email?: string;
+  displayName?: string;
+  message?: string;
+}
+
+export interface PublicProfileSearchResult {
+  uid: string;
+  handle: string;
+  displayName: string;
+}
+
+export interface HubMember {
+  id: string;
+  uid: string;
+  handle: string;
+  displayName: string;
+  role: "owner" | "admin" | "member";
+  joinedAt: number;
+  updatedAt: number;
+}
+
+export interface HubInvite {
+  inviteId: string;
+  hubId: string;
+  hubName?: string;
+  targetHandle: string;
+  targetUid?: string;
+  senderHandle?: string;
+  senderDisplayName?: string;
+  delivered?: boolean;
+  inviteUrl: string;
+  expiresAt: number;
+}
+
+export interface HubInboxItem {
+  id: string;
+  type: "hub-invite";
+  inviteId: string;
+  hubId: string;
+  hubName: string;
+  senderUid: string;
+  senderHandle: string;
+  senderDisplayName: string;
+  targetHandle: string;
+  status: "open" | "accepted" | "declined" | "expired";
+  createdAt: number;
+  expiresAt: number;
+  readAt: number;
+}
+
+export interface HubMessage {
+  id: string;
+  uid: string;
+  handle: string;
+  displayName: string;
+  text: string;
+  mentions: string[];
+  pinned: boolean;
+  deleted: boolean;
+  createdAt: number;
+  updatedAt: number;
+}
+
 export interface UpdateStatus {
   state: "idle" | "checking" | "available" | "not-available" | "downloading" | "downloaded" | "error";
   currentVersion: string;
@@ -607,8 +913,10 @@ export interface RiftLiteApi {
   deleteMatch(id: string): Promise<void>;
   restoreMatch(id: string): Promise<MatchDraft | null>;
   purgeMatch(id: string): Promise<void>;
+  exportMatchHistoryCsv(payload: MatchHistoryCsvExportPayload): Promise<string>;
   getDecks(): Promise<SavedDeck[]>;
   importDeck(url: string): Promise<SavedDeck>;
+  importDeckText(text: string): Promise<SavedDeck>;
   refreshDeck(id: string): Promise<SavedDeck>;
   deleteDeck(id: string): Promise<void>;
   setActiveDeck(id: string): Promise<UserSettings>;
@@ -627,6 +935,7 @@ export interface RiftLiteApi {
   getReplayWindowCaptureSource(): Promise<ReplayWindowCaptureSource | null>;
   appendReplayVideoChunk(sessionId: string, chunk: ArrayBuffer): Promise<void>;
   finishReplayVideoCapture(sessionId: string, options: ReplayVideoFinalizeOptions): Promise<ReplayVideoAsset>;
+  mergeReplayVideos(segments: ReplayVideoAsset[], options: ReplayVideoMergeOptions): Promise<ReplayVideoAsset>;
   attachReplayVideo(matchId: string, video: ReplayVideoAsset): Promise<ReplayRecord | null>;
   discardReplayVideo(video: ReplayVideoAsset): Promise<void>;
   deleteReplayVideoByMatch(matchId: string): Promise<void>;
@@ -640,6 +949,23 @@ export interface RiftLiteApi {
   syncPrivateHubs(): Promise<PrivateHubSyncResult>;
   syncMatchesToHubs(matchIds: string[], hubIds: string[]): Promise<PrivateHubSyncResult>;
   deleteHubMatch(hubId: string, matchId: string): Promise<void>;
+  startAccountLink(): Promise<AccountLinkSession>;
+  getAccountLinkStatus(sessionId: string): Promise<AccountLinkStatus>;
+  getAccountProfile(): Promise<AccountProfile | null>;
+  saveAccountProfile(profile: Partial<AccountProfile>): Promise<AccountProfile>;
+  refreshAccountProfileMatches(): Promise<AccountProfileBackfillResult>;
+  exportAccountData(): Promise<string>;
+  unlinkAccount(): Promise<UserSettings>;
+  searchPublicProfiles(query: string): Promise<PublicProfileSearchResult[]>;
+  claimHub(hubId: string, passwordHash?: string): Promise<void>;
+  getHubInbox(): Promise<HubInboxItem[]>;
+  acceptHubInvite(inviteId: string): Promise<HubActionResult | null>;
+  declineHubInvite(inviteId: string): Promise<void>;
+  getHubMembers(hubId: string): Promise<HubMember[]>;
+  createHubInvite(hubId: string, targetHandle?: string): Promise<HubInvite>;
+  getHubMessages(hubId: string): Promise<HubMessage[]>;
+  postHubMessage(hubId: string, text: string): Promise<HubMessage>;
+  deleteHubMessage(hubId: string, messageId: string): Promise<void>;
   getUpdateStatus(): Promise<UpdateStatus>;
   checkForUpdates(): Promise<UpdateStatus>;
   downloadUpdate(): Promise<UpdateStatus>;
@@ -658,7 +984,10 @@ export interface RiftLiteApi {
   takeScreenshot(): Promise<ScreenshotResult>;
   chooseScreenshotDirectory(): Promise<UserSettings>;
   openScreenshotDirectory(): Promise<void>;
+  chooseReplayDirectory(): Promise<UserSettings>;
+  openReplayDirectory(): Promise<void>;
   openExternalResource(url: string): Promise<void>;
+  setWindowFullscreen(enabled: boolean): Promise<boolean>;
   trackSpotlightClick(payload: SpotlightClickPayload): Promise<void>;
   onCaptureEvent(callback: (event: CaptureEvent) => void): () => void;
   onCaptureHealth(callback: (health: CaptureHealth) => void): () => void;

@@ -10,3 +10,10 @@ vite-dev.log
 debug.log
 *.jsonl
 .atlas-inspect/
+*-inspection.json
+tmp-*.json
+capture-lab-check.png
+electron-renderer-check.png
+full-product-check.png
+live-atlas.png
+live-tcga.png

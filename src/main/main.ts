@@ -1,12 +1,17 @@
 import { app, BrowserWindow, desktopCapturer, dialog, globalShortcut, ipcMain, Menu, nativeImage, session as electronSession, shell } from "electron";
 import type { NativeImage, OpenDialogOptions, SaveDialogOptions, WebContents } from "electron";
-import { appendFile, mkdir, readFile, readdir, stat, unlink, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { access, appendFile, mkdir, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { promisify } from "node:util";
+import ffmpegStaticPath from "ffmpeg-static";
 import type {
   BattlefieldOption,
   CaptureEvent,
+  CommunityMatch,
   GamePlatform,
+  MatchHistoryCsvExportPayload,
   MatchDraft,
   ReplayBundleFrame,
   ReplayBundleVideo,
@@ -17,6 +22,7 @@ import type {
   ReplayVideoCaptureMode,
   ReplayVideoFinalizeOptions,
   ReplayVideoKeyframeOptions,
+  ReplayVideoMergeOptions,
   ReplayVideoSession,
   ReplayVideoStartOptions,
   ReplayWindowCaptureSource,
@@ -26,12 +32,14 @@ import type {
   UserSettings
 } from "../shared/types.js";
 import { detectBrowsers } from "./services/browserDetection.js";
+import { scheduleAppUsageHeartbeat } from "./services/appUsageAnalytics.js";
 import { CaptureCoordinator } from "./services/captureCoordinator.js";
 import { CaptureDiagnostics } from "./services/captureDiagnostics.js";
 import { DeckService } from "./services/deckService.js";
 import { FirebaseSyncService } from "./services/firebaseSync.js";
 import { OverlayServer } from "./services/overlayServer.js";
 import { RiftLiteStore } from "./services/store.js";
+import { SimEventReceiver } from "./services/simEventReceiver.js";
 import { TcgaResolver } from "./services/tcgaResolver.js";
 import { UpdaterService } from "./services/updaterService.js";
 
@@ -56,6 +64,7 @@ let tcgaResolver: TcgaResolver;
 let syncService: FirebaseSyncService;
 let deckService: DeckService;
 let overlayServer: OverlayServer;
+let simEventReceiver: SimEventReceiver | null = null;
 let diagnostics: CaptureDiagnostics;
 let updater: UpdaterService;
 let registeredScreenshotHotkey = "";
@@ -70,6 +79,8 @@ const REPLAY_FRAME_DEDUPE_THRESHOLD = 0.012;
 const REPLAY_FRAME_DIRECTORY_CACHE_MS = 30_000;
 const REPLAY_FRAME_JPEG_QUALITY = 58;
 const REPLAY_VIDEO_DISPLAY_TARGET_MS = 120_000;
+const MAX_REPLAY_KEYFRAME_DATA_URL_BYTES = 16 * 1024 * 1024;
+const execFileAsync = promisify(execFile);
 
 type ScreenshotOptions = {
   platform?: GamePlatform;
@@ -77,11 +88,24 @@ type ScreenshotOptions = {
   silent?: boolean;
 };
 
-function assetPath(relativePath: string): string {
+function resourcesRoot(): string {
   if (app.isPackaged) {
-    return join(process.resourcesPath, "resources", relativePath);
+    return join(process.resourcesPath, "resources");
   }
-  return resolve(__dirname, "..", "..", "..", "resources", relativePath);
+  return resolve(__dirname, "..", "..", "..", "resources");
+}
+
+function assetPath(relativePath: string): string {
+  return join(resourcesRoot(), relativePath);
+}
+
+function safeAssetPath(relativePath: string): string {
+  const root = resourcesRoot();
+  const filePath = resolve(root, relativePath);
+  if (!pathInside(filePath, root)) {
+    throw new Error("Asset path is outside RiftLite resources.");
+  }
+  return filePath;
 }
 
 function preloadPath(name: "appPreload" | "gamePreload"): string {
@@ -89,7 +113,7 @@ function preloadPath(name: "appPreload" | "gamePreload"): string {
 }
 
 async function assetDataUrl(relativePath: string): Promise<string> {
-  const filePath = assetPath(relativePath);
+  const filePath = safeAssetPath(relativePath);
   const bytes = await readFile(filePath);
   return `data:${mimeType(relativePath)};base64,${bytes.toString("base64")}`;
 }
@@ -124,24 +148,36 @@ function screenshotDirectory(settings: UserSettings): string {
   return settings.screenshotDirectory?.trim() || defaultScreenshotDirectory();
 }
 
-function replayFrameCaptureDirectory(settings: UserSettings): string {
-  return join(screenshotDirectory(settings), "Replay Frames");
-}
-
-function replayBundleDirectory(): string {
+function defaultReplayDirectory(): string {
   return join(app.getPath("documents"), "RiftLite", "Replay Bundles");
 }
 
-function replayVideoDirectory(): string {
+function replayDirectory(settings: UserSettings): string {
+  return settings.replayDirectory?.trim() || defaultReplayDirectory();
+}
+
+function replayFrameCaptureDirectory(settings: UserSettings): string {
+  return join(replayDirectory(settings), "Timed Frames");
+}
+
+function replayBundleDirectory(settings?: UserSettings): string {
+  return settings ? replayDirectory(settings) : defaultReplayDirectory();
+}
+
+function legacyReplayVideoDirectory(): string {
   return join(app.getPath("documents"), "RiftLite", "Replay Videos");
 }
 
-function replayFrameDirectory(replayId: string): string {
-  return join(replayBundleDirectory(), "Imported Frames", safeFileComponent(replayId, "replay"));
+function replayVideoDirectory(settings?: UserSettings): string {
+  return join(replayBundleDirectory(settings), "Video");
 }
 
-function replayVideoImportDirectory(): string {
-  return join(replayVideoDirectory(), "Imported");
+function replayFrameDirectory(replayId: string, settings?: UserSettings): string {
+  return join(replayBundleDirectory(settings), "Imported Frames", safeFileComponent(replayId, "replay"));
+}
+
+function replayVideoImportDirectory(settings?: UserSettings): string {
+  return join(replayVideoDirectory(settings), "Imported");
 }
 
 function screenshotFilename(label = "", extension = "png"): string {
@@ -156,6 +192,93 @@ function screenshotFilename(label = "", extension = "png"): string {
 
 function replayVideoExtension(mimeType: string | undefined): "mp4" | "webm" {
   return mimeType === "video/mp4" ? "mp4" : "webm";
+}
+
+async function pathExists(filePath: string): Promise<boolean> {
+  try {
+    await access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function replayVideoSeekableMarkerPath(filePath: string): string {
+  return `${filePath}.seekable`;
+}
+
+async function markReplayVideoSeekable(filePath: string): Promise<void> {
+  await writeFile(replayVideoSeekableMarkerPath(filePath), new Date().toISOString()).catch(() => undefined);
+}
+
+function replayVideoFfmpegPath(): string | null {
+  if (app.isPackaged) {
+    return join(process.resourcesPath, "ffmpeg", process.platform === "win32" ? "ffmpeg.exe" : "ffmpeg");
+  }
+  return typeof ffmpegStaticPath === "string" && ffmpegStaticPath ? ffmpegStaticPath : null;
+}
+
+async function makeReplayVideoSeekable(filePath: string, mimeType: string | undefined): Promise<boolean> {
+  if (replayVideoExtension(mimeType) !== "mp4") {
+    return true;
+  }
+  if (!await replayVideoPathAllowed(filePath)) {
+    return false;
+  }
+  if (await pathExists(replayVideoSeekableMarkerPath(filePath))) {
+    return true;
+  }
+
+  const ffmpegPath = replayVideoFfmpegPath();
+  if (!ffmpegPath || !(await pathExists(ffmpegPath))) {
+    return false;
+  }
+
+  const extension = replayVideoExtension(mimeType);
+  const tempPath = `${filePath}.seekable.${extension}`;
+  await unlink(tempPath).catch(() => undefined);
+  const args = [
+    "-y",
+    "-hide_banner",
+    "-loglevel",
+    "error",
+    "-fflags",
+    "+genpts",
+    "-i",
+    filePath,
+    "-map",
+    "0:v:0",
+    "-an",
+    "-c:v",
+    "copy",
+    "-avoid_negative_ts",
+    "make_zero"
+  ];
+  if (extension === "mp4") {
+    args.push("-movflags", "+faststart");
+  }
+  args.push(tempPath);
+
+  try {
+    await execFileAsync(ffmpegPath, args, {
+      windowsHide: true,
+      timeout: 180_000,
+      maxBuffer: 1024 * 1024
+    });
+    const remuxedStats = await stat(tempPath);
+    if (remuxedStats.size <= 0) {
+      await unlink(tempPath).catch(() => undefined);
+      return false;
+    }
+    await unlink(filePath).catch(() => undefined);
+    await rename(tempPath, filePath);
+    await markReplayVideoSeekable(filePath);
+    return true;
+  } catch (error) {
+    console.warn("[replay-video] Seekable remux failed; keeping original recording.", error);
+    await unlink(tempPath).catch(() => undefined);
+    return false;
+  }
 }
 
 function safeFileComponent(value: string, fallback = "RiftLite Replay"): string {
@@ -383,6 +506,10 @@ async function openExternalResource(url: string): Promise<void> {
   await shell.openExternal(parsed.toString());
 }
 
+function simEventReceiverEnabled(): boolean {
+  return process.env.RIFTLITE_SIM_EVENTS === "1" || app.commandLine.hasSwitch("riftlite-sim-events");
+}
+
 async function trackSpotlightClick(payload: SpotlightClickPayload): Promise<void> {
   try {
     await fetch("https://www.riftlite.com/api/spotlight/click", {
@@ -404,17 +531,19 @@ async function trackSpotlightClick(payload: SpotlightClickPayload): Promise<void
 }
 
 async function startReplayVideoCaptureFile(options: ReplayVideoStartOptions): Promise<ReplayVideoSession> {
-  await mkdir(replayVideoDirectory(), { recursive: true });
+  const settings = await store.getSettings();
+  const directory = replayVideoDirectory(settings);
+  await mkdir(directory, { recursive: true });
   const startedAt = new Date().toISOString();
   const filename = screenshotFilename(`${options.platform}-${options.quality}-${options.title || "video-replay"}`, replayVideoExtension(options.mimeType));
-  const filePath = join(replayVideoDirectory(), filename);
+  const filePath = join(directory, filename);
   await writeFile(filePath, Buffer.alloc(0));
   const session: ReplayVideoSession = {
     id: `video-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
     path: filePath,
     url: pathToFileURL(filePath).href,
     filename,
-    directory: replayVideoDirectory(),
+    directory,
     startedAt
   };
   replayVideoSessions.set(session.id, session);
@@ -438,7 +567,9 @@ async function finishReplayVideoCaptureFile(sessionId: string, options: ReplayVi
     throw new Error("Replay video session is no longer active.");
   }
   replayVideoSessions.delete(sessionId);
+  const containerFinalized = await makeReplayVideoSeekable(session.path, options.mimeType);
   const fileStats = await stat(session.path);
+  const actualBitrateKbps = actualReplayBitrateKbps(fileStats.size, options.durationMs) ?? options.actualBitrateKbps;
   return {
     path: session.path,
     url: session.url,
@@ -456,10 +587,117 @@ async function finishReplayVideoCaptureFile(sessionId: string, options: ReplayVi
     fps: options.fps,
     captureIntervalMs: options.captureIntervalMs,
     bitrateKbps: options.bitrateKbps,
-    actualBitrateKbps: options.actualBitrateKbps,
+    actualBitrateKbps,
     codec: options.codec,
-    quality: options.quality
+    quality: options.quality,
+    containerFinalized
   };
+}
+
+async function mergeReplayVideoSegments(segments: ReplayVideoAsset[], options: ReplayVideoMergeOptions): Promise<ReplayVideoAsset> {
+  const validSegments = segments.filter((segment) => segment.path?.trim());
+  if (validSegments.length <= 1) {
+    const only = validSegments[0];
+    if (!only) {
+      throw new Error("No replay video segments to merge.");
+    }
+    return only;
+  }
+  const ffmpegPath = replayVideoFfmpegPath();
+  if (!ffmpegPath || !(await pathExists(ffmpegPath))) {
+    throw new Error("Replay video merge needs ffmpeg.");
+  }
+
+  for (const segment of validSegments) {
+    await assertReplayVideoPathAllowed(segment.path);
+    if (!(await pathExists(segment.path))) {
+      throw new Error(`Replay segment missing: ${segment.filename || segment.path}`);
+    }
+    if (!segment.containerFinalized) {
+      await makeReplayVideoSeekable(segment.path, segment.mimeType).catch(() => false);
+    }
+  }
+
+  const first = validSegments[0]!;
+  const settings = await store.getSettings();
+  const directory = replayVideoDirectory(settings);
+  await mkdir(directory, { recursive: true });
+  const width = first.width || 1920;
+  const height = first.height || 1080;
+  const fps = first.fps || 24;
+  const bitrateKbps = first.bitrateKbps || 1100;
+  const filename = screenshotFilename(`${options.platform}-${options.quality}-${options.title || "merged-video-replay"}`, "mp4");
+  const outputPath = join(directory, filename);
+  await unlink(outputPath).catch(() => undefined);
+
+  const args = ["-y", "-hide_banner", "-loglevel", "error"];
+  for (const segment of validSegments) {
+    args.push("-fflags", "+genpts", "-i", segment.path);
+  }
+  const filters = validSegments.map((_segment, index) =>
+    `[${index}:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,fps=${fps},setsar=1,setpts=PTS-STARTPTS[v${index}]`
+  );
+  const concatInputs = validSegments.map((_segment, index) => `[v${index}]`).join("");
+  args.push(
+    "-filter_complex",
+    `${filters.join(";")};${concatInputs}concat=n=${validSegments.length}:v=1:a=0[v]`,
+    "-map",
+    "[v]",
+    "-an",
+    "-c:v",
+    "libx264",
+    "-preset",
+    "veryfast",
+    "-b:v",
+    `${bitrateKbps}k`,
+    "-maxrate",
+    `${Math.round(bitrateKbps * 1.35)}k`,
+    "-bufsize",
+    `${Math.round(bitrateKbps * 2)}k`,
+    "-pix_fmt",
+    "yuv420p",
+    "-movflags",
+    "+faststart",
+    outputPath
+  );
+
+  await execFileAsync(ffmpegPath, args, {
+    windowsHide: true,
+    timeout: 300_000,
+    maxBuffer: 1024 * 1024
+  });
+  const fileStats = await stat(outputPath);
+  const durationMs = validSegments.reduce((total, segment) => total + Math.max(0, segment.durationMs || 0), 0);
+  await markReplayVideoSeekable(outputPath);
+  return {
+    path: outputPath,
+    url: pathToFileURL(outputPath).href,
+    filename,
+    directory,
+    mimeType: "video/mp4",
+    source: first.source,
+    platform: options.platform,
+    startedAt: first.startedAt,
+    endedAt: validSegments.at(-1)?.endedAt || new Date().toISOString(),
+    durationMs,
+    sizeBytes: fileStats.size,
+    width,
+    height,
+    fps,
+    captureIntervalMs: Math.round(1000 / Math.max(1, fps)),
+    bitrateKbps,
+    actualBitrateKbps: actualReplayBitrateKbps(fileStats.size, durationMs),
+    codec: "H.264 MP4",
+    quality: options.quality,
+    containerFinalized: true
+  };
+}
+
+function actualReplayBitrateKbps(sizeBytes: number, durationMs: number): number | undefined {
+  if (!Number.isFinite(sizeBytes) || !Number.isFinite(durationMs) || sizeBytes <= 0 || durationMs <= 0) {
+    return undefined;
+  }
+  return Math.max(1, Math.round((sizeBytes * 8) / durationMs));
 }
 
 function prepareReplayVideoDisplayTarget(platform: GamePlatform, mode: ReplayVideoCaptureMode): void {
@@ -544,12 +782,34 @@ function pathInside(childPath: string, rootPath: string): boolean {
   return pathBetween === "" || (!!pathBetween && !pathBetween.startsWith("..") && !isAbsolute(pathBetween));
 }
 
+async function replayVideoPathAllowed(filePath: string): Promise<boolean> {
+  const target = filePath.trim();
+  if (!target) {
+    return false;
+  }
+  const settings = await store.getSettings();
+  const roots = [
+    replayVideoDirectory(settings),
+    replayVideoImportDirectory(settings),
+    replayVideoDirectory(),
+    replayVideoImportDirectory(),
+    legacyReplayVideoDirectory()
+  ];
+  return roots.some((root) => pathInside(target, root));
+}
+
+async function assertReplayVideoPathAllowed(filePath: string): Promise<void> {
+  if (!await replayVideoPathAllowed(filePath)) {
+    throw new Error("Replay video path is outside RiftLite replay storage.");
+  }
+}
+
 async function discardReplayVideoAsset(video: ReplayVideoAsset): Promise<void> {
   const filePath = video.path?.trim();
   if (!filePath) {
     return;
   }
-  if (!pathInside(filePath, replayVideoDirectory()) && !pathInside(filePath, replayVideoImportDirectory())) {
+  if (!await replayVideoPathAllowed(filePath)) {
     return;
   }
   await unlink(resolve(filePath)).catch((error: NodeJS.ErrnoException) => {
@@ -557,6 +817,7 @@ async function discardReplayVideoAsset(video: ReplayVideoAsset): Promise<void> {
       throw error;
     }
   });
+  await unlink(replayVideoSeekableMarkerPath(resolve(filePath))).catch(() => undefined);
 }
 
 async function deleteReplayVideoByMatch(matchId: string): Promise<void> {
@@ -580,9 +841,12 @@ async function saveReplayVideoKeyframe(options: ReplayVideoKeyframeOptions): Pro
   if (!options.dataUrl.startsWith("data:image/") || comma < 0) {
     throw new Error("Replay keyframe data is not a supported image.");
   }
+  if (Buffer.byteLength(options.dataUrl, "utf8") > MAX_REPLAY_KEYFRAME_DATA_URL_BYTES) {
+    throw new Error("Replay keyframe image is too large.");
+  }
   const header = options.dataUrl.slice(0, comma);
   const extension = header.includes("image/png") ? "png" : "jpg";
-  const directory = replayFrameDirectory(options.replayId);
+  const directory = replayFrameDirectory(options.replayId, await store.getSettings());
   await mkdir(directory, { recursive: true });
   const filename = screenshotFilename(options.label || "video-keyframe", extension);
   const filePath = join(directory, filename);
@@ -600,6 +864,10 @@ async function loadReplayVideo(video: ReplayVideoAsset): Promise<ArrayBuffer> {
   const filePath = video.path?.trim();
   if (!filePath) {
     throw new Error("Replay video path is missing.");
+  }
+  await assertReplayVideoPathAllowed(filePath);
+  if (!video.containerFinalized) {
+    await makeReplayVideoSeekable(filePath, video.mimeType).catch(() => false);
   }
   const bytes = await readFile(filePath);
   return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
@@ -756,9 +1024,9 @@ async function replayVideoForBundle(replay: ReplayRecord): Promise<ReplayBundleV
 
 function replayForExport(replay: ReplayRecord): ReplayRecord {
   if (!replay.trim) {
-    return replay;
+    return sanitizeReplayForBundle(replay);
   }
-  return {
+  return sanitizeReplayForBundle({
     ...replay,
     events: replay.events.filter((event) => withinReplayTrim(replay, event.capturedAt)),
     structuredEvents: replay.structuredEvents?.filter((event) => withinReplayTrim(replay, event.capturedAt)),
@@ -768,7 +1036,19 @@ function replayForExport(replay: ReplayRecord): ReplayRecord {
     voiceNotes: replay.voiceNotes?.filter((note) =>
       replay.flags?.some((flag) => flag.id === note.flagId && (flag.targetType === "replay" || withinReplayTrim(replay, flag.capturedAt)))
     )
-  };
+  });
+}
+
+function sanitizeReplayForBundle(replay: ReplayRecord): ReplayRecord {
+  if (!replay.video) {
+    return replay;
+  }
+  const video: Record<string, unknown> = { ...replay.video };
+  delete video.data;
+  delete video.asset;
+  delete video.sourcePath;
+  delete video.sourceUrl;
+  return { ...replay, video: video as unknown as ReplayVideoAsset };
 }
 
 function withinReplayTrim(replay: ReplayRecord, capturedAt: string): boolean {
@@ -786,7 +1066,7 @@ function withinReplayTrim(replay: ReplayRecord, capturedAt: string): boolean {
 }
 
 async function exportReplayBundle(replayId: string): Promise<string> {
-  const [replays, matches] = await Promise.all([store.getReplays(), store.getMatches()]);
+  const [replays, matches, settings] = await Promise.all([store.getReplays(), store.getMatches(), store.getSettings()]);
   const storedReplay = replays.find((item) => item.id === replayId);
   if (!storedReplay) {
     throw new Error("Replay not found.");
@@ -808,9 +1088,10 @@ async function exportReplayBundle(replayId: string): Promise<string> {
     frames: await replayFrames(replay),
     video: await replayVideoForBundle(replay)
   };
-  await mkdir(replayBundleDirectory(), { recursive: true });
+  const directory = replayBundleDirectory(settings);
+  await mkdir(directory, { recursive: true });
   const defaultPath = join(
-    replayBundleDirectory(),
+    directory,
     `${safeFileComponent(`${search.title} ${search.players.join(" vs ")} ${search.capturedAt.slice(0, 10)}`, "RiftLite Replay")}.riftreplay`
   );
   const options: SaveDialogOptions = {
@@ -833,8 +1114,9 @@ async function importReplayBundleFromPath(bundlePath: string): Promise<ReplayRec
     throw new Error("This is not a RiftLite replay bundle.");
   }
   const importStamp = new Date().toISOString();
+  const settings = await store.getSettings();
   const replayId = parsed.replay.id;
-  const frameDirectory = replayFrameDirectory(replayId);
+  const frameDirectory = replayFrameDirectory(replayId, settings);
   await mkdir(frameDirectory, { recursive: true });
   const frameByEvent = new Map<string, ReplayBundleFrame & { importedPath: string; importedUrl: string }>();
   const importedFrameRecords: Array<{ frame: ReplayBundleFrame; imported: ReplayScreenshotFrame }> = [];
@@ -884,11 +1166,12 @@ async function importReplayBundleFromPath(bundlePath: string): Promise<ReplayRec
   });
   let importedVideo: ReplayVideoAsset | undefined;
   if (parsed.video?.data && parsed.video.asset) {
-    const videoDirectory = join(replayVideoImportDirectory(), safeFileComponent(replayId, "replay"));
+    const videoDirectory = join(replayVideoImportDirectory(settings), safeFileComponent(replayId, "replay"));
     await mkdir(videoDirectory, { recursive: true });
     const filename = `${safeFileComponent(parsed.video.asset.filename || parsed.replay.title || "video-replay", "video-replay")}.${replayVideoExtension(parsed.video.asset.mimeType)}`;
     const importedPath = join(videoDirectory, filename);
     await writeFile(importedPath, Buffer.from(parsed.video.data, "base64"));
+    const containerFinalized = await makeReplayVideoSeekable(importedPath, parsed.video.asset.mimeType).catch(() => false);
     const importedStats = await stat(importedPath);
     importedVideo = {
       ...parsed.video.asset,
@@ -897,7 +1180,8 @@ async function importReplayBundleFromPath(bundlePath: string): Promise<ReplayRec
       filename,
       directory: videoDirectory,
       source: "riftreplay",
-      sizeBytes: importedStats.size
+      sizeBytes: importedStats.size,
+      containerFinalized: parsed.video.asset.containerFinalized || containerFinalized
     };
   }
   const replay: ReplayRecord = {
@@ -923,11 +1207,122 @@ async function importReplayBundleFromPath(bundlePath: string): Promise<ReplayRec
   return store.saveReplay(replay);
 }
 
+async function exportAccountData(): Promise<string> {
+  const data = await syncService.getAccountExportData();
+  const defaultPath = join(app.getPath("documents"), `RiftLite-account-${new Date().toISOString().slice(0, 10)}.json`);
+  const options: SaveDialogOptions = {
+    title: "Export RiftLite account data",
+    defaultPath,
+    filters: [{ name: "JSON", extensions: ["json"] }]
+  };
+  const result = mainWindow ? await dialog.showSaveDialog(mainWindow, options) : await dialog.showSaveDialog(options);
+  if (result.canceled || !result.filePath) {
+    return "";
+  }
+  await writeFile(result.filePath, JSON.stringify(data, null, 2), "utf8");
+  return result.filePath;
+}
+
+async function exportMatchHistoryCsv(payload: MatchHistoryCsvExportPayload): Promise<string> {
+  const rows = Array.isArray(payload.matches) ? payload.matches : [];
+  const label = safeFileComponent(payload.label || (payload.scope === "hub" ? "private-hub-match-history" : "personal-match-history"), "match-history");
+  const defaultPath = join(app.getPath("documents"), `RiftLite-${label}-${new Date().toISOString().slice(0, 10)}.csv`);
+  const options: SaveDialogOptions = {
+    title: payload.scope === "hub" ? "Export private hub match history" : "Export personal match history",
+    defaultPath,
+    filters: [{ name: "CSV", extensions: ["csv"] }]
+  };
+  const result = mainWindow ? await dialog.showSaveDialog(mainWindow, options) : await dialog.showSaveDialog(options);
+  if (result.canceled || !result.filePath) {
+    return "";
+  }
+  await writeFile(result.filePath, matchHistoryCsv(rows, payload.scope), "utf8");
+  return result.filePath;
+}
+
+function matchHistoryCsv(matches: Array<MatchDraft | CommunityMatch>, scope: "personal" | "hub"): string {
+  const headers = [
+    "id",
+    "scope",
+    "source",
+    "platform",
+    "result",
+    "match_score",
+    "format",
+    "captured_at",
+    "player",
+    "opponent",
+    "my_legend",
+    "opponent_legend",
+    "seat",
+    "my_battlefield",
+    "opponent_battlefield",
+    "deck_name",
+    "deck_source_url",
+    "deck_source_key",
+    "flags",
+    "notes",
+    "games_json"
+  ];
+  const lines = [headers.join(",")];
+  for (const match of matches) {
+    const row = exportMatchRow(match, scope);
+    lines.push(headers.map((header) => csvCell(row[header] ?? "")).join(","));
+  }
+  return `${lines.join("\r\n")}\r\n`;
+}
+
+function exportMatchRow(match: MatchDraft | CommunityMatch, scope: "personal" | "hub"): Record<string, string> {
+  const isCommunity = "gamesJson" in match;
+  const games = isCommunity
+    ? match.gamesJson
+    : JSON.stringify(match.games.map((game) => ({
+      gameNumber: game.gameNumber,
+      result: game.result,
+      myScore: game.myPoints,
+      opponentScore: game.oppPoints,
+      wentFirst: game.wentFirst,
+      myBattlefield: game.myBattlefield,
+      opponentBattlefield: game.oppBattlefield,
+      extraBattlefields: game.extraBattlefields ?? []
+    })));
+  return {
+    id: match.id,
+    scope,
+    source: isCommunity ? match.scope : match.source ?? "capture",
+    platform: isCommunity ? match.scope : match.platform,
+    result: match.result,
+    match_score: match.score,
+    format: match.format,
+    captured_at: isCommunity ? match.date : match.capturedAt,
+    player: isCommunity ? match.username : match.myName,
+    opponent: match.opponentName,
+    my_legend: match.myChampion,
+    opponent_legend: match.opponentChampion,
+    seat: isCommunity ? match.wentFirst : (match.games[0]?.wentFirst ?? ""),
+    my_battlefield: match.myBattlefield,
+    opponent_battlefield: match.opponentBattlefield,
+    deck_name: match.deckName,
+    deck_source_url: match.deckSourceUrl ?? "",
+    deck_source_key: match.deckSourceKey ?? "",
+    flags: match.flags,
+    notes: isCommunity ? "" : match.notes,
+    games_json: games
+  };
+}
+
+function csvCell(value: string): string {
+  const text = String(value ?? "");
+  const safeText = /^[=+\-@\t\r]/.test(text.trimStart()) ? `'${text}` : text;
+  return /[",\r\n]/.test(safeText) ? `"${safeText.replace(/"/g, "\"\"")}"` : safeText;
+}
+
 async function importReplayBundle(): Promise<ReplayRecord | null> {
-  await mkdir(replayBundleDirectory(), { recursive: true });
+  const directory = replayBundleDirectory(await store.getSettings());
+  await mkdir(directory, { recursive: true });
   const options: OpenDialogOptions = {
     title: "Import RiftLite replay",
-    defaultPath: replayBundleDirectory(),
+    defaultPath: directory,
     filters: [{ name: "RiftLite Replay", extensions: ["riftreplay"] }],
     properties: ["openFile"]
   };
@@ -939,10 +1334,11 @@ async function importReplayBundle(): Promise<ReplayRecord | null> {
 }
 
 async function importReplayFolder(): Promise<ReplayRecord[]> {
-  await mkdir(replayBundleDirectory(), { recursive: true });
+  const directory = replayBundleDirectory(await store.getSettings());
+  await mkdir(directory, { recursive: true });
   const options: OpenDialogOptions = {
     title: "Choose folder with RiftLite replays",
-    defaultPath: replayBundleDirectory(),
+    defaultPath: directory,
     properties: ["openDirectory"]
   };
   const result = mainWindow ? await dialog.showOpenDialog(mainWindow, options) : await dialog.showOpenDialog(options);
@@ -987,7 +1383,7 @@ async function createWindow(): Promise<void> {
     mainWindow?.show();
   });
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    void shell.openExternal(url);
+    void openExternalResource(url).catch(() => undefined);
     return { action: "deny" };
   });
   mainWindow.webContents.on("did-attach-webview", (_event, webContents) => {
@@ -1040,6 +1436,9 @@ function registerIpc(): void {
     ) {
       await configureScreenshotHotkey();
     }
+    if (Object.prototype.hasOwnProperty.call(patch, "replayDirectory")) {
+      replayFrameDirectoryCache = null;
+    }
     return saved;
   });
   ipcMain.handle("capture:debug-enabled", async () => (await store.getSettings()).debugMode);
@@ -1052,8 +1451,10 @@ function registerIpc(): void {
   ipcMain.handle("matches:delete", (_event, id: string) => store.deleteMatch(id));
   ipcMain.handle("matches:restore", (_event, id: string) => store.restoreMatch(id));
   ipcMain.handle("matches:purge", (_event, id: string) => store.purgeMatch(id));
+  ipcMain.handle("matches:export-csv", (_event, payload: MatchHistoryCsvExportPayload) => exportMatchHistoryCsv(payload));
   ipcMain.handle("decks:get", () => deckService.getDecks());
   ipcMain.handle("decks:import", (_event, url: string) => deckService.importDeck(url));
+  ipcMain.handle("decks:import-text", (_event, text: string) => deckService.importDeckText(text));
   ipcMain.handle("decks:refresh", (_event, id: string) => deckService.refreshDeck(id));
   ipcMain.handle("decks:delete", (_event, id: string) => deckService.deleteDeck(id));
   ipcMain.handle("decks:set-active", (_event, id: string) => deckService.setActiveDeck(id));
@@ -1067,14 +1468,35 @@ function registerIpc(): void {
   ipcMain.handle("replays:import", () => importReplayBundle());
   ipcMain.handle("replays:import-folder", () => importReplayFolder());
   ipcMain.handle("replays:open-folder", async () => {
-    await mkdir(replayBundleDirectory(), { recursive: true });
-    await shell.openPath(replayBundleDirectory());
+    const directory = replayBundleDirectory(await store.getSettings());
+    await mkdir(directory, { recursive: true });
+    await shell.openPath(directory);
+  });
+  ipcMain.handle("replays:choose-directory", async () => {
+    const settings = await store.getSettings();
+    const options: OpenDialogOptions = {
+      title: "Choose RiftLite replay folder",
+      defaultPath: replayBundleDirectory(settings),
+      properties: ["openDirectory", "createDirectory"]
+    };
+    const result = mainWindow ? await dialog.showOpenDialog(mainWindow, options) : await dialog.showOpenDialog(options);
+    if (result.canceled || !result.filePaths[0]) {
+      return settings;
+    }
+    replayFrameDirectoryCache = null;
+    return store.saveSettings({ replayDirectory: result.filePaths[0] });
+  });
+  ipcMain.handle("replays:open-directory", async () => {
+    const directory = replayBundleDirectory(await store.getSettings());
+    await mkdir(directory, { recursive: true });
+    await shell.openPath(directory);
   });
   ipcMain.handle("replays:video:start", (_event, options: ReplayVideoStartOptions) => startReplayVideoCaptureFile(options));
   ipcMain.handle("replays:video:prepare-target", (_event, platform: GamePlatform, mode: ReplayVideoCaptureMode) => prepareReplayVideoDisplayTarget(platform, mode));
   ipcMain.handle("replays:video:window-source", () => replayWindowCaptureSource());
   ipcMain.handle("replays:video:chunk", (_event, sessionId: string, chunk: ArrayBuffer | Uint8Array) => appendReplayVideoChunk(sessionId, chunk));
   ipcMain.handle("replays:video:finish", (_event, sessionId: string, options: ReplayVideoFinalizeOptions) => finishReplayVideoCaptureFile(sessionId, options));
+  ipcMain.handle("replays:video:merge", (_event, segments: ReplayVideoAsset[], options: ReplayVideoMergeOptions) => mergeReplayVideoSegments(segments, options));
   ipcMain.handle("replays:video:attach", (_event, matchId: string, video: ReplayVideoAsset) => attachReplayVideo(matchId, video));
   ipcMain.handle("replays:video:discard", (_event, video: ReplayVideoAsset) => discardReplayVideoAsset(video));
   ipcMain.handle("replays:video:delete-by-match", (_event, matchId: string) => deleteReplayVideoByMatch(matchId));
@@ -1088,6 +1510,23 @@ function registerIpc(): void {
   ipcMain.handle("hubs:sync-private", () => capture.syncPrivateHubs());
   ipcMain.handle("hubs:sync-selected", (_event, matchIds: string[], hubIds: string[]) => capture.syncMatchesToHubs(matchIds, hubIds));
   ipcMain.handle("hubs:delete-match", (_event, hubId: string, matchId: string) => syncService.deleteHubMatch(hubId, matchId));
+  ipcMain.handle("account:link:start", () => syncService.startAccountLink());
+  ipcMain.handle("account:link:status", (_event, sessionId: string) => syncService.getAccountLinkStatus(sessionId));
+  ipcMain.handle("account:profile:get", () => syncService.getAccountProfile());
+  ipcMain.handle("account:profile:save", (_event, profile: Record<string, unknown>) => syncService.saveAccountProfile(profile));
+  ipcMain.handle("account:profile:backfill", () => syncService.refreshAccountProfileMatches());
+  ipcMain.handle("account:export", () => exportAccountData());
+  ipcMain.handle("account:unlink", () => syncService.unlinkAccount());
+  ipcMain.handle("profiles:search", (_event, query: string) => syncService.searchPublicProfiles(query));
+  ipcMain.handle("hubs:claim", (_event, hubId: string, passwordHash?: string) => syncService.claimHub(hubId, passwordHash));
+  ipcMain.handle("hubs:inbox", () => syncService.getHubInbox());
+  ipcMain.handle("hubs:invite:accept", (_event, inviteId: string) => syncService.acceptHubInvite(inviteId));
+  ipcMain.handle("hubs:invite:decline", (_event, inviteId: string) => syncService.declineHubInvite(inviteId));
+  ipcMain.handle("hubs:members", (_event, hubId: string) => syncService.getHubMembers(hubId));
+  ipcMain.handle("hubs:invite", (_event, hubId: string, targetHandle?: string) => syncService.createHubInvite(hubId, targetHandle));
+  ipcMain.handle("hubs:messages", (_event, hubId: string) => syncService.getHubMessages(hubId));
+  ipcMain.handle("hubs:message:post", (_event, hubId: string, text: string) => syncService.postHubMessage(hubId, text));
+  ipcMain.handle("hubs:message:delete", (_event, hubId: string, messageId: string) => syncService.deleteHubMessage(hubId, messageId));
   ipcMain.handle("updates:status", () => updater.getStatus());
   ipcMain.handle("updates:check", () => updater.check());
   ipcMain.handle("updates:download", () => updater.download());
@@ -1098,6 +1537,8 @@ function registerIpc(): void {
     landscapeUrl: overlayServer.landscapeUrl,
     portraitUrl: overlayServer.portraitUrl,
     port: overlayServer.port,
+    simEventReceiverUrl: simEventReceiver?.url,
+    simEventReceiverPort: simEventReceiver?.port,
     textDirectory: overlayServer.textOutputDirectory,
     textFiles: overlayServer.textFiles
   }));
@@ -1139,6 +1580,13 @@ function registerIpc(): void {
     await shell.openPath(directory);
   });
   ipcMain.handle("external:open", (_event, url: string) => openExternalResource(url));
+  ipcMain.handle("window:fullscreen", (_event, enabled: boolean) => {
+    if (!mainWindow) {
+      return false;
+    }
+    mainWindow.setFullScreen(Boolean(enabled));
+    return mainWindow.isFullScreen();
+  });
   ipcMain.handle("analytics:spotlight-click", (_event, payload: SpotlightClickPayload) => trackSpotlightClick(payload));
   ipcMain.handle("assets:url", (_event, relativePath: string) => assetDataUrl(relativePath));
   ipcMain.handle("battlefields:get", () => loadBattlefields());
@@ -1191,9 +1639,14 @@ app.whenReady().then(async () => {
   updater = new UpdaterService(() => mainWindow);
   await diagnostics.ensureFile();
   capture = new CaptureCoordinator(store, () => mainWindow, tcgaResolver, syncService, diagnostics, captureTimedReplayFrame);
+  if (simEventReceiverEnabled()) {
+    simEventReceiver = new SimEventReceiver((event) => capture.handleEvent(event));
+    await simEventReceiver.start();
+  }
   registerIpc();
   await createWindow();
   await configureScreenshotHotkey();
+  scheduleAppUsageHeartbeat(store);
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -1204,6 +1657,7 @@ app.whenReady().then(async () => {
 
 app.on("window-all-closed", () => {
   overlayServer?.stop();
+  simEventReceiver?.stop();
   if (process.platform !== "darwin") {
     app.quit();
   }
