@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { CaptureEvent, CaptureHealth, GamePlatform, MatchDraft, PrivateHubSyncResult, ReplayRecord, ReplayScreenshotFrame } from "../../shared/types.js";
 import { CaptureDiagnostics } from "./captureDiagnostics.js";
 import { DeckService } from "./deckService.js";
+import { DeckTrackerService } from "./deckTrackerService.js";
 import { FirebaseSyncService } from "./firebaseSync.js";
 import { MatchSessionTracker } from "./matchSessionTracker.js";
 import { RiftLiteStore } from "./store.js";
@@ -83,7 +84,8 @@ export class CaptureCoordinator {
     private readonly tcgaResolver: TcgaResolver,
     private readonly syncService: FirebaseSyncService,
     private readonly diagnostics: CaptureDiagnostics,
-    private readonly captureReplayFrame?: ReplayFrameCapture
+    private readonly captureReplayFrame?: ReplayFrameCapture,
+    private readonly deckTracker?: DeckTrackerService
   ) {
     this.deckService = new DeckService(store);
   }
@@ -114,9 +116,8 @@ export class CaptureCoordinator {
       return;
     }
     const settings = await this.store.getSettings().catch(() => null);
-    const trackedEvent = settings?.username
-      ? { ...event, payload: { ...event.payload, configuredUsername: settings.username } }
-      : event;
+    const trackedEvent = withConfiguredCaptureContext(event, settings?.username ?? "");
+    await this.deckTracker?.ingestCaptureEvent(trackedEvent, settings).catch(() => undefined);
     void this.diagnostics.record(compactCaptureEvent(trackedEvent)).catch(() => undefined);
     const currentCount = this.health.eventCount + 1;
     this.health = {
@@ -133,6 +134,7 @@ export class CaptureCoordinator {
       this.emitHealth(event.kind === "match-start");
     }
 
+    await this.finalizeSessionBeforeRollover(trackedEvent, settings);
     const session = this.tracker.ingest(trackedEvent);
     if (session && event.kind !== "capture-ready") {
       this.ensureTimedReplayCapture(trackedEvent.platform, settings);
@@ -183,12 +185,15 @@ export class CaptureCoordinator {
         }
         const draft = await this.createDraftFromEvent(finalEvent);
         const replayEvents = this.tracker.getReplayEvents(finalEvent.platform);
+        const deckTrackerSnapshots = settings?.deckTrackerSaveToReplay === false ? [] : this.deckTracker?.replaySnapshots(finalEvent.platform) ?? [];
         const savedDraft = await this.saveDraftForReview(draft, finalEvent);
         this.emit("match:draft", savedDraft);
         this.emitHealth(true);
         void this.notifyDraft(savedDraft);
         this.tracker.clear(finalEvent.platform);
-        void this.finalizeReplayForDraft(savedDraft, finalEvent, replayEvents, settings).catch(() => undefined);
+        void this.finalizeReplayForDraft(savedDraft, finalEvent, replayEvents, settings, deckTrackerSnapshots).finally(() => {
+          this.deckTracker?.clear(finalEvent.platform);
+        }).catch(() => undefined);
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
         this.health = {
@@ -244,7 +249,8 @@ export class CaptureCoordinator {
     draft: MatchDraft,
     endEvent: CaptureEvent,
     replayEvents: NonNullable<ReplayRecord["structuredEvents"]>,
-    settings: Awaited<ReturnType<RiftLiteStore["getSettings"]>> | null
+    settings: Awaited<ReturnType<RiftLiteStore["getSettings"]>> | null,
+    deckTrackerSnapshots: ReplayRecord["deckTrackerSnapshots"] = []
   ): Promise<void> {
     const [resolvedReplayEvents, visualFrames] = await Promise.all([
       this.resolveReplayEventCards(endEvent.platform, replayEvents),
@@ -257,7 +263,7 @@ export class CaptureCoordinator {
     if (latest?.keepReplay === false) {
       return;
     }
-    await this.store.saveReplay(this.createReplay(draft, resolvedReplayEvents, visualFrames)).catch(() => undefined);
+    await this.store.saveReplay(this.createReplay(draft, resolvedReplayEvents, visualFrames, deckTrackerSnapshots)).catch(() => undefined);
   }
 
   async confirmMatch(draft: MatchDraft): Promise<MatchDraft> {
@@ -321,6 +327,8 @@ export class CaptureCoordinator {
 
     try {
       const replayEvents = this.tracker.getReplayEvents(activePlatform);
+      const settings = await this.store.getSettings().catch(() => null);
+      const deckTrackerSnapshots = settings?.deckTrackerSaveToReplay === false ? [] : this.deckTracker?.replaySnapshots(activePlatform) ?? [];
       const draft = await this.createDraftFromEvent(forcedEnd);
       const savedDraft = await this.saveDraftForReview(draft, forcedEnd);
       this.emit("match:draft", savedDraft);
@@ -334,7 +342,9 @@ export class CaptureCoordinator {
         lastEventAt: capturedAt
       };
       this.emitHealth(true);
-      void this.finalizeReplayForDraft(savedDraft, forcedEnd, replayEvents, await this.store.getSettings().catch(() => null)).catch(() => undefined);
+      void this.finalizeReplayForDraft(savedDraft, forcedEnd, replayEvents, settings, deckTrackerSnapshots).finally(() => {
+        this.deckTracker?.clear(activePlatform);
+      }).catch(() => undefined);
       return savedDraft;
     } finally {
       this.closingPlatforms.delete(activePlatform);
@@ -420,6 +430,57 @@ export class CaptureCoordinator {
         ? `Private hub sync finished: ${synced} synced${failed ? `, ${failed} failed` : ""}.`
         : "No saved local matches needed private hub sync."
     };
+  }
+
+  private async finalizeSessionBeforeRollover(
+    event: CaptureEvent,
+    settings: Awaited<ReturnType<RiftLiteStore["getSettings"]>> | null
+  ): Promise<void> {
+    if (!this.tracker.shouldFinalizeBeforeNewSession(event) || this.closingPlatforms.has(event.platform)) {
+      return;
+    }
+    const session = this.tracker.get(event.platform);
+    if (!session) {
+      return;
+    }
+    const eventTime = new Date(event.capturedAt).getTime();
+    const capturedAt = new Date(Number.isFinite(eventTime) ? Math.max(0, eventTime - 1) : Date.now()).toISOString();
+    const rolloverEnd: CaptureEvent = {
+      id: randomUUID(),
+      platform: event.platform,
+      kind: "match-end",
+      capturedAt,
+      url: event.url,
+      payload: {
+        ...session.sticky,
+        active: false,
+        reason: "new-match-started-before-review"
+      }
+    };
+
+    this.closingPlatforms.add(event.platform);
+    try {
+      const replayEvents = this.tracker.getReplayEvents(event.platform);
+      const deckTrackerSnapshots = settings?.deckTrackerSaveToReplay === false ? [] : this.deckTracker?.replaySnapshots(event.platform) ?? [];
+      const draft = await this.createDraftFromEvent(rolloverEnd);
+      const savedDraft = await this.saveDraftForReview(draft, rolloverEnd);
+      this.emit("match:draft", savedDraft);
+      void this.notifyDraft(savedDraft);
+      this.tracker.clear(event.platform);
+      this.health = {
+        ...this.health,
+        platform: event.platform,
+        state: "review-needed",
+        message: `${label(event.platform)} previous match was kept for review before a new opponent started`,
+        lastEventAt: capturedAt
+      };
+      this.emitHealth(true);
+      await this.finalizeReplayForDraft(savedDraft, rolloverEnd, replayEvents, settings, deckTrackerSnapshots).finally(() => {
+        this.deckTracker?.clear(event.platform);
+      }).catch(() => undefined);
+    } finally {
+      this.closingPlatforms.delete(event.platform);
+    }
   }
 
   private async createDraftFromEvent(
@@ -781,7 +842,8 @@ export class CaptureCoordinator {
   private createReplay(
     draft: MatchDraft,
     structuredEvents: ReplayRecord["structuredEvents"] = [],
-    visualFrames: ReplayScreenshotFrame[] = []
+    visualFrames: ReplayScreenshotFrame[] = [],
+    deckTrackerSnapshots: ReplayRecord["deckTrackerSnapshots"] = []
   ): ReplayRecord {
     return {
       id: `replay-${draft.id}`,
@@ -796,7 +858,8 @@ export class CaptureCoordinator {
       },
       events: draft.rawEvidence.slice(-24).map(compactCaptureEvent),
       structuredEvents,
-      visualFrames
+      visualFrames,
+      deckTrackerSnapshots
     };
   }
 
@@ -825,6 +888,65 @@ function label(platform: GamePlatform): string {
     return "Riftbound Sim";
   }
   return "Atlas";
+}
+
+function withConfiguredCaptureContext(event: CaptureEvent, configuredUsername: string): CaptureEvent {
+  const payload: Record<string, unknown> = configuredUsername
+    ? { ...event.payload, configuredUsername }
+    : { ...event.payload };
+  if (event.platform !== "atlas") {
+    return { ...event, payload };
+  }
+
+  const knownLocal = [
+    configuredUsername,
+    readPayloadString(payload.myName),
+    readPayloadString(payload.localPlayerName)
+  ].filter(Boolean);
+  const directOpponent = readPayloadString(payload.opponentName);
+  if (!isDistinctCaptureName(directOpponent, knownLocal)) {
+    const candidate = chooseAtlasOpponentFromCandidates(payload.atlasPlayerCandidates, knownLocal);
+    if (candidate) {
+      payload.opponentName = candidate;
+    }
+  }
+  if (!readPayloadString(payload.myName) && configuredUsername) {
+    payload.myName = configuredUsername;
+  }
+  return { ...event, payload };
+}
+
+function chooseAtlasOpponentFromCandidates(value: unknown, localNames: string[]): string {
+  if (!Array.isArray(value)) {
+    return "";
+  }
+  const localKeys = localNames.map(normalizeCaptureNameKey).filter(Boolean);
+  const candidates = value
+    .map((item) => {
+      const record = item && typeof item === "object" && !Array.isArray(item) ? item as Record<string, unknown> : {};
+      const name = readPayloadString(record.name ?? item);
+      return {
+        name,
+        side: readPayloadString(record.side),
+        score: typeof record.score === "number" && Number.isFinite(record.score) ? record.score : 0
+      };
+    })
+    .filter((candidate) =>
+      isDistinctCaptureName(candidate.name, localNames) &&
+      !localKeys.includes(normalizeCaptureNameKey(candidate.name)) &&
+      !/^(unknown|player|opponent|riftlite player)$/i.test(candidate.name)
+    )
+    .sort((a, b) => b.score - a.score);
+  return candidates.find((candidate) => candidate.side === "opponent")?.name ?? (candidates.length === 1 ? candidates[0].name : "");
+}
+
+function isDistinctCaptureName(candidate: string, localNames: string[]): boolean {
+  const key = normalizeCaptureNameKey(candidate);
+  return Boolean(key) && !localNames.some((name) => normalizeCaptureNameKey(name) === key);
+}
+
+function normalizeCaptureNameKey(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, " ");
 }
 
 function mergeRetainedPayload(
@@ -961,6 +1083,13 @@ function compactPayload(payload: Record<string, unknown> = {}): Record<string, u
     }
   }
   next.payloadKeys = Object.keys(payload).sort();
+  if (payload.selectorCounts && typeof payload.selectorCounts === "object" && !Array.isArray(payload.selectorCounts)) {
+    next.selectorCounts = compactValue(payload.selectorCounts);
+  }
+  if (Array.isArray(payload.deckTrackerCards)) {
+    next.deckTrackerCardCount = payload.deckTrackerCards.length;
+    next.deckTrackerCards = payload.deckTrackerCards.slice(0, 8).map(compactValue);
+  }
   if (Array.isArray(payload.counterPlayers)) {
     next.counterPlayers = payload.counterPlayers.slice(0, 4).map(compactValue);
   }
@@ -969,6 +1098,9 @@ function compactPayload(payload: Record<string, unknown> = {}): Record<string, u
   }
   if (Array.isArray(payload.atlasScoreCandidates)) {
     next.atlasScoreCandidates = payload.atlasScoreCandidates.slice(0, 8).map(compactValue);
+  }
+  if (Array.isArray(payload.atlasPlayerCandidates)) {
+    next.atlasPlayerCandidates = payload.atlasPlayerCandidates.slice(0, 8).map(compactValue);
   }
   if (Array.isArray(payload.rows)) {
     next.rows = payload.rows.slice(-10).map((row) => {

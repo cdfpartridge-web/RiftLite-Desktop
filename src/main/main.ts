@@ -1,20 +1,37 @@
-import { app, BrowserWindow, desktopCapturer, dialog, globalShortcut, ipcMain, Menu, nativeImage, session as electronSession, shell } from "electron";
+import { app, BrowserWindow, clipboard, desktopCapturer, dialog, globalShortcut, ipcMain, Menu, nativeImage, session as electronSession, shell } from "electron";
 import type { NativeImage, OpenDialogOptions, SaveDialogOptions, WebContents } from "electron";
 import { execFile } from "node:child_process";
-import { access, appendFile, mkdir, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { once } from "node:events";
+import { createReadStream, createWriteStream } from "node:fs";
+import { access, appendFile, mkdir, open, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { createInterface } from "node:readline";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { randomUUID } from "node:crypto";
 import { promisify } from "node:util";
+import { deflateRawSync, inflateRawSync } from "node:zlib";
 import ffmpegStaticPath from "ffmpeg-static";
 import type {
+  ActiveDeckPrep,
   BattlefieldOption,
   CaptureEvent,
   CommunityMatch,
+  DeckEntry,
+  DeckGuideCardRef,
+  DeckGuideSection,
+  DeckMatchupGuide,
+  DeckNotebook,
+  DeckNotebookExport,
+  DeckPackageExport,
+  DeckPackageImportResult,
+  DeckSnapshot,
   GamePlatform,
   MatchHistoryCsvExportPayload,
   MatchDraft,
+  ReplayAnnotation,
   ReplayBundleFrame,
   ReplayBundleVideo,
+  ReplayFlag,
   ReplayRecord,
   ReplaySearchMetadata,
   ReplayScreenshotFrame,
@@ -27,15 +44,18 @@ import type {
   ReplayVideoStartOptions,
   ReplayWindowCaptureSource,
   RiftReplayBundle,
+  SavedDeck,
   ScreenshotResult,
   SpotlightClickPayload,
   UserSettings
 } from "../shared/types.js";
+import { emptyDeckMatchupGuide, resolveDeckMatchupGuide, sanitizeDeckNotebookForDeck } from "../shared/deckNotebook.js";
 import { detectBrowsers } from "./services/browserDetection.js";
 import { scheduleAppUsageHeartbeat } from "./services/appUsageAnalytics.js";
 import { CaptureCoordinator } from "./services/captureCoordinator.js";
 import { CaptureDiagnostics } from "./services/captureDiagnostics.js";
 import { DeckService } from "./services/deckService.js";
+import { DeckTrackerService } from "./services/deckTrackerService.js";
 import { FirebaseSyncService } from "./services/firebaseSync.js";
 import { OverlayServer } from "./services/overlayServer.js";
 import { RiftLiteStore } from "./services/store.js";
@@ -46,6 +66,12 @@ import { UpdaterService } from "./services/updaterService.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const isDev = process.env.NODE_ENV === "development";
+const DECK_PACKAGE_TEXT_PREFIX = "RIFTLITE_DECK_PACKAGE_V1:";
+const DECK_PACKAGE_COMPRESSED_TEXT_PREFIX = "RIFTLITE_DECK_PACKAGE_V2:";
+const DECK_SHARE_TEXT_PREFIX = "RIFTLITE_DECK_SHARE_V2:";
+const REPLAY_STREAM_MAGIC = "RIFTLITE_REPLAY_STREAM_V1";
+const REPLAY_STREAM_VIDEO_START = "VIDEO_DATA";
+const REPLAY_STREAM_VIDEO_END = "END_VIDEO_DATA";
 
 app.setName("RiftLite Beta 0.7");
 app.setPath("userData", join(app.getPath("appData"), "RiftLite Beta 0.6"));
@@ -63,6 +89,7 @@ let capture: CaptureCoordinator;
 let tcgaResolver: TcgaResolver;
 let syncService: FirebaseSyncService;
 let deckService: DeckService;
+let deckTrackerService: DeckTrackerService;
 let overlayServer: OverlayServer;
 let simEventReceiver: SimEventReceiver | null = null;
 let diagnostics: CaptureDiagnostics;
@@ -80,12 +107,79 @@ const REPLAY_FRAME_DIRECTORY_CACHE_MS = 30_000;
 const REPLAY_FRAME_JPEG_QUALITY = 58;
 const REPLAY_VIDEO_DISPLAY_TARGET_MS = 120_000;
 const MAX_REPLAY_KEYFRAME_DATA_URL_BYTES = 16 * 1024 * 1024;
+const MAX_REPLAY_IMPORT_BUNDLE_BYTES = 512 * 1024 * 1024;
+const MAX_REPLAY_IMPORT_VIDEO_BYTES = 384 * 1024 * 1024;
+const MAX_REPLAY_IMPORT_SEEKABLE_BYTES = 384 * 1024 * 1024;
+const MAX_REPLAY_EXPORT_VIDEO_BYTES = 384 * 1024 * 1024;
+const MAX_REPLAY_IMPORT_FRAME_BYTES = 24 * 1024 * 1024;
+const MAX_REPLAY_EXPORT_FRAME_BYTES = 24 * 1024 * 1024;
+const MAX_REPLAY_IMPORT_FRAMES = 2500;
+const MAX_REPLAY_EXPORT_FRAMES = 2500;
+const REPLAY_IMPORT_BASE64_CHUNK_CHARS = 4 * 1024 * 1024;
 const execFileAsync = promisify(execFile);
 
 type ScreenshotOptions = {
   platform?: GamePlatform;
   label?: string;
   silent?: boolean;
+};
+
+type CompactDeckShareCard = {
+  k?: string;
+  n?: string;
+  c?: string;
+  i?: string;
+  q?: number;
+  t?: string;
+  g?: string;
+  r?: string;
+  m?: string;
+  p?: number;
+};
+
+type CompactDeckShareSection = {
+  c?: CompactDeckShareCard[];
+  n?: string;
+};
+
+type CompactDeckShareGuide = {
+  l?: string;
+  m?: {
+    k?: CompactDeckShareSection;
+    c?: CompactDeckShareSection;
+    a?: CompactDeckShareSection;
+  };
+  s?: {
+    i?: CompactDeckShareSection;
+    o?: CompactDeckShareSection;
+    n?: string;
+  };
+  b?: {
+    g?: CompactDeckShareSection;
+    f?: CompactDeckShareSection;
+    s?: CompactDeckShareSection;
+    n?: string;
+  };
+  x?: string[];
+};
+
+type CompactDeckSharePayload = {
+  f: "riftlite.deck-share";
+  v: 2;
+  d: {
+    u?: string;
+    k?: string;
+    t?: string;
+    l?: string;
+    s?: string;
+  };
+  n: {
+    go?: Array<{ t?: string; s?: string }>;
+    w?: Array<{ k?: string; n?: string; c?: string; i?: string; s?: string; t?: string }>;
+    v?: Array<{ h?: string; t?: string; l?: string; k?: string; u?: string; a?: string; s?: string }>;
+    d?: CompactDeckShareGuide;
+    g?: CompactDeckShareGuide[];
+  };
 };
 
 function resourcesRoot(): string {
@@ -201,6 +295,141 @@ async function pathExists(filePath: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+function formatByteSize(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    return "0 MB";
+  }
+  if (bytes >= 1024 * 1024 * 1024) {
+    return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+  }
+  return `${Math.max(1, Math.round(bytes / (1024 * 1024)))} MB`;
+}
+
+function estimateBase64DecodedBytes(value: string): number {
+  const length = value.length;
+  const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
+  return Math.max(0, Math.floor((length * 3) / 4) - padding);
+}
+
+async function writeBase64FileChunked(filePath: string, value: string, maxDecodedBytes: number): Promise<number> {
+  const estimatedBytes = estimateBase64DecodedBytes(value);
+  if (estimatedBytes > maxDecodedBytes) {
+    throw new Error(`Replay asset is too large to import (${formatByteSize(estimatedBytes)}).`);
+  }
+
+  const file = await open(filePath, "w");
+  let writtenBytes = 0;
+  let carry = "";
+  try {
+    for (let offset = 0; offset < value.length; offset += REPLAY_IMPORT_BASE64_CHUNK_CHARS) {
+      const compact = `${carry}${value.slice(offset, offset + REPLAY_IMPORT_BASE64_CHUNK_CHARS)}`.replace(/\s+/g, "");
+      const usableLength = Math.floor(compact.length / 4) * 4;
+      const chunk = compact.slice(0, usableLength);
+      carry = compact.slice(usableLength);
+      if (!chunk) {
+        continue;
+      }
+      const bytes = Buffer.from(chunk, "base64");
+      writtenBytes += bytes.length;
+      if (writtenBytes > maxDecodedBytes) {
+        throw new Error(`Replay asset is too large to import (${formatByteSize(writtenBytes)}).`);
+      }
+      await file.write(bytes);
+    }
+
+    if (carry) {
+      const bytes = Buffer.from(carry, "base64");
+      writtenBytes += bytes.length;
+      if (writtenBytes > maxDecodedBytes) {
+        throw new Error(`Replay asset is too large to import (${formatByteSize(writtenBytes)}).`);
+      }
+      await file.write(bytes);
+    }
+  } finally {
+    await file.close();
+  }
+  return writtenBytes;
+}
+
+async function writeStreamText(stream: ReturnType<typeof createWriteStream>, text: string): Promise<void> {
+  if (!stream.write(text)) {
+    await once(stream, "drain");
+  }
+}
+
+async function writeFileAsBase64JsonString(stream: ReturnType<typeof createWriteStream>, filePath: string, maxBytes: number): Promise<number> {
+  const fileStats = await stat(filePath);
+  if (fileStats.size > maxBytes) {
+    throw new Error(`Replay video is too large to export safely (${formatByteSize(fileStats.size)}). Trim it before exporting.`);
+  }
+
+  let writtenBytes = 0;
+  let carry = Buffer.alloc(0);
+  await writeStreamText(stream, "\"");
+  for await (const chunk of createReadStream(filePath, { highWaterMark: 1024 * 1024 })) {
+    const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    const combined = carry.length ? Buffer.concat([carry, bytes]) : bytes;
+    const usableLength = combined.length - (combined.length % 3);
+    if (usableLength > 0) {
+      const usable = combined.subarray(0, usableLength);
+      writtenBytes += usable.length;
+      if (writtenBytes > maxBytes) {
+        throw new Error(`Replay video is too large to export safely (${formatByteSize(writtenBytes)}). Trim it before exporting.`);
+      }
+      await writeStreamText(stream, usable.toString("base64"));
+    }
+    carry = combined.subarray(usableLength);
+  }
+  if (carry.length) {
+    writtenBytes += carry.length;
+    if (writtenBytes > maxBytes) {
+      throw new Error(`Replay video is too large to export safely (${formatByteSize(writtenBytes)}). Trim it before exporting.`);
+    }
+    await writeStreamText(stream, carry.toString("base64"));
+  }
+  await writeStreamText(stream, "\"");
+  return writtenBytes;
+}
+
+async function writeFileAsBase64Lines(stream: ReturnType<typeof createWriteStream>, filePath: string, maxBytes: number): Promise<number> {
+  const fileStats = await stat(filePath);
+  if (fileStats.size > maxBytes) {
+    throw new Error(`Replay video is too large to export safely (${formatByteSize(fileStats.size)}). Trim it before exporting.`);
+  }
+
+  let writtenBytes = 0;
+  let carry = Buffer.alloc(0);
+  for await (const chunk of createReadStream(filePath, { highWaterMark: 1024 * 1024 })) {
+    const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    const combined = carry.length ? Buffer.concat([carry, bytes]) : bytes;
+    const usableLength = combined.length - (combined.length % 3);
+    if (usableLength > 0) {
+      const usable = combined.subarray(0, usableLength);
+      writtenBytes += usable.length;
+      if (writtenBytes > maxBytes) {
+        throw new Error(`Replay video is too large to export safely (${formatByteSize(writtenBytes)}). Trim it before exporting.`);
+      }
+      await writeStreamText(stream, `${usable.toString("base64")}\n`);
+    }
+    carry = combined.subarray(usableLength);
+  }
+  if (carry.length) {
+    writtenBytes += carry.length;
+    if (writtenBytes > maxBytes) {
+      throw new Error(`Replay video is too large to export safely (${formatByteSize(writtenBytes)}). Trim it before exporting.`);
+    }
+    await writeStreamText(stream, `${carry.toString("base64")}\n`);
+  }
+  return writtenBytes;
+}
+
+async function finishWriteStream(stream: ReturnType<typeof createWriteStream>): Promise<void> {
+  await new Promise<void>((resolveFinished, rejectFinished) => {
+    stream.once("error", rejectFinished);
+    stream.end(() => resolveFinished());
+  });
 }
 
 function replayVideoSeekableMarkerPath(filePath: string): string {
@@ -590,6 +819,7 @@ async function finishReplayVideoCaptureFile(sessionId: string, options: ReplayVi
     actualBitrateKbps,
     codec: options.codec,
     quality: options.quality,
+    hasAudio: Boolean(options.hasAudio),
     containerFinalized
   };
 }
@@ -626,6 +856,7 @@ async function mergeReplayVideoSegments(segments: ReplayVideoAsset[], options: R
   const height = first.height || 1080;
   const fps = first.fps || 24;
   const bitrateKbps = first.bitrateKbps || 1100;
+  const canMergeAudio = validSegments.every((segment) => segment.hasAudio);
   const filename = screenshotFilename(`${options.platform}-${options.quality}-${options.title || "merged-video-replay"}`, "mp4");
   const outputPath = join(directory, filename);
   await unlink(outputPath).catch(() => undefined);
@@ -637,13 +868,32 @@ async function mergeReplayVideoSegments(segments: ReplayVideoAsset[], options: R
   const filters = validSegments.map((_segment, index) =>
     `[${index}:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,fps=${fps},setsar=1,setpts=PTS-STARTPTS[v${index}]`
   );
-  const concatInputs = validSegments.map((_segment, index) => `[v${index}]`).join("");
+  if (canMergeAudio) {
+    const audioFilters = validSegments.map((_segment, index) => `[${index}:a]aresample=48000,asetpts=PTS-STARTPTS[a${index}]`);
+    const concatInputs = validSegments.map((_segment, index) => `[v${index}][a${index}]`).join("");
+    args.push(
+      "-filter_complex",
+      `${filters.join(";")};${audioFilters.join(";")};${concatInputs}concat=n=${validSegments.length}:v=1:a=1[v][a]`,
+      "-map",
+      "[v]",
+      "-map",
+      "[a]",
+      "-c:a",
+      "aac",
+      "-b:a",
+      "96k"
+    );
+  } else {
+    const concatInputs = validSegments.map((_segment, index) => `[v${index}]`).join("");
+    args.push(
+      "-filter_complex",
+      `${filters.join(";")};${concatInputs}concat=n=${validSegments.length}:v=1:a=0[v]`,
+      "-map",
+      "[v]",
+      "-an"
+    );
+  }
   args.push(
-    "-filter_complex",
-    `${filters.join(";")};${concatInputs}concat=n=${validSegments.length}:v=1:a=0[v]`,
-    "-map",
-    "[v]",
-    "-an",
     "-c:v",
     "libx264",
     "-preset",
@@ -689,6 +939,7 @@ async function mergeReplayVideoSegments(segments: ReplayVideoAsset[], options: R
     actualBitrateKbps: actualReplayBitrateKbps(fileStats.size, durationMs),
     codec: "H.264 MP4",
     quality: options.quality,
+    hasAudio: canMergeAudio,
     containerFinalized: true
   };
 }
@@ -941,6 +1192,9 @@ async function replayFrames(replay: ReplayRecord): Promise<ReplayBundleFrame[]> 
   const frames: ReplayBundleFrame[] = [];
   const seen = new Set<string>();
   for (const frame of replay.visualFrames ?? []) {
+    if (frames.length >= MAX_REPLAY_EXPORT_FRAMES) {
+      break;
+    }
     if (!withinReplayTrim(replay, frame.capturedAt)) {
       continue;
     }
@@ -952,6 +1206,10 @@ async function replayFrames(replay: ReplayRecord): Promise<ReplayBundleFrame[]> 
     }
     seen.add(key);
     try {
+      const frameStats = await stat(sourcePath);
+      if (frameStats.size > MAX_REPLAY_EXPORT_FRAME_BYTES) {
+        continue;
+      }
       const bytes = await readFile(sourcePath);
       frames.push({
         id: `visual:${frames.length + 1}`,
@@ -969,6 +1227,9 @@ async function replayFrames(replay: ReplayRecord): Promise<ReplayBundleFrame[]> 
   }
   const structured = replay.structuredEvents ?? [];
   for (const event of structured) {
+    if (frames.length >= MAX_REPLAY_EXPORT_FRAMES) {
+      break;
+    }
     if (!withinReplayTrim(replay, event.capturedAt)) {
       continue;
     }
@@ -984,6 +1245,10 @@ async function replayFrames(replay: ReplayRecord): Promise<ReplayBundleFrame[]> 
       continue;
     }
     try {
+      const frameStats = await stat(sourcePath);
+      if (frameStats.size > MAX_REPLAY_EXPORT_FRAME_BYTES) {
+        continue;
+      }
       const bytes = await readFile(sourcePath);
       frames.push({
         id: `${event.id}:${frames.length + 1}`,
@@ -1002,23 +1267,80 @@ async function replayFrames(replay: ReplayRecord): Promise<ReplayBundleFrame[]> 
   return frames;
 }
 
-async function replayVideoForBundle(replay: ReplayRecord): Promise<ReplayBundleVideo | undefined> {
+type ReplayVideoBundleSource = Omit<ReplayBundleVideo, "data">;
+
+async function replayVideoExportSource(replay: ReplayRecord): Promise<ReplayVideoBundleSource | undefined> {
   const video = replay.video;
   const sourcePath = video?.path?.trim() ?? "";
   if (!video || !sourcePath) {
     return undefined;
   }
   try {
-    const bytes = await readFile(sourcePath);
+    await assertReplayVideoPathAllowed(sourcePath);
+    if (!video.containerFinalized) {
+      await makeReplayVideoSeekable(sourcePath, video.mimeType).catch(() => false);
+    }
+    const videoStats = await stat(sourcePath);
+    if (videoStats.size > MAX_REPLAY_EXPORT_VIDEO_BYTES) {
+      throw new Error(`Replay video is too large to export safely (${formatByteSize(videoStats.size)}). Trim it before exporting.`);
+    }
     return {
       sourcePath,
       sourceUrl: video.url,
       mimeType: video.mimeType,
-      data: bytes.toString("base64"),
-      asset: video
+      asset: {
+        ...video,
+        sizeBytes: videoStats.size,
+        containerFinalized: video.containerFinalized || await pathExists(replayVideoSeekableMarkerPath(sourcePath))
+      }
     };
-  } catch {
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("too large")) {
+      throw error;
+    }
     return undefined;
+  }
+}
+
+async function writeReplayVideoBundleJson(stream: ReturnType<typeof createWriteStream>, video: ReplayVideoBundleSource): Promise<void> {
+  await writeStreamText(stream, "{\"sourcePath\":");
+  await writeStreamText(stream, JSON.stringify(video.sourcePath));
+  await writeStreamText(stream, ",\"sourceUrl\":");
+  await writeStreamText(stream, JSON.stringify(video.sourceUrl ?? ""));
+  await writeStreamText(stream, ",\"mimeType\":");
+  await writeStreamText(stream, JSON.stringify(video.mimeType));
+  await writeStreamText(stream, ",\"data\":");
+  await writeFileAsBase64JsonString(stream, video.sourcePath, MAX_REPLAY_EXPORT_VIDEO_BYTES);
+  await writeStreamText(stream, ",\"asset\":");
+  await writeStreamText(stream, JSON.stringify(video.asset));
+  await writeStreamText(stream, "}");
+}
+
+async function writeReplayBundleFile(filePath: string, bundle: Omit<RiftReplayBundle, "video">, video?: ReplayVideoBundleSource): Promise<void> {
+  if (!video) {
+    await writeFile(filePath, JSON.stringify(bundle), "utf8");
+    return;
+  }
+
+  const stream = createWriteStream(filePath, { encoding: "utf8" });
+  try {
+    const manifest: RiftReplayBundle = {
+      ...bundle,
+      video: {
+        ...video,
+        data: ""
+      }
+    };
+    await writeStreamText(stream, `${REPLAY_STREAM_MAGIC}\n`);
+    await writeStreamText(stream, `${JSON.stringify(manifest)}\n`);
+    await writeStreamText(stream, `${REPLAY_STREAM_VIDEO_START}\n`);
+    await writeFileAsBase64Lines(stream, video.sourcePath, MAX_REPLAY_EXPORT_VIDEO_BYTES);
+    await writeStreamText(stream, `${REPLAY_STREAM_VIDEO_END}\n`);
+    await finishWriteStream(stream);
+  } catch (error) {
+    stream.destroy();
+    await unlink(filePath).catch(() => undefined);
+    throw error;
   }
 }
 
@@ -1031,6 +1353,7 @@ function replayForExport(replay: ReplayRecord): ReplayRecord {
     events: replay.events.filter((event) => withinReplayTrim(replay, event.capturedAt)),
     structuredEvents: replay.structuredEvents?.filter((event) => withinReplayTrim(replay, event.capturedAt)),
     visualFrames: replay.visualFrames?.filter((frame) => withinReplayTrim(replay, frame.capturedAt)),
+    deckTrackerSnapshots: replay.deckTrackerSnapshots?.filter((snapshot) => withinReplayTrim(replay, snapshot.capturedAt)),
     flags: replay.flags?.filter((flag) => flag.targetType === "replay" || withinReplayTrim(replay, flag.capturedAt)),
     annotations: replay.annotations?.filter((annotation) => withinReplayTrim(replay, annotation.capturedAt)),
     voiceNotes: replay.voiceNotes?.filter((note) =>
@@ -1074,19 +1397,23 @@ async function exportReplayBundle(replayId: string): Promise<string> {
   const replay = replayForExport(storedReplay);
   const match = matches.find((item) => item.id === replay.matchId) ?? replay.matchSnapshot;
   const search = replaySearchMetadata(replay, match);
-  const bundle: RiftReplayBundle = {
+  const coachingPack = replay.coachingPack ?? defaultReplayCoachingPack(replay, match, settings);
+  const video = await replayVideoExportSource(replay);
+  const bundle: Omit<RiftReplayBundle, "video"> = {
     format: "riftlite.replay",
-    version: replay.annotations?.length || replay.voiceNotes?.length ? 3 : replay.video ? 2 : 1,
+    version: 4,
     exportedAt: new Date().toISOString(),
     replay: {
       ...replay,
+      schemaVersion: 4,
+      coachingPack,
       matchSnapshot: match,
       search
     },
     match,
     search,
     frames: await replayFrames(replay),
-    video: await replayVideoForBundle(replay)
+    coachingPack
   };
   const directory = replayBundleDirectory(settings);
   await mkdir(directory, { recursive: true });
@@ -1104,31 +1431,210 @@ async function exportReplayBundle(replayId: string): Promise<string> {
     return "";
   }
   const filePath = result.filePath.endsWith(".riftreplay") ? result.filePath : `${result.filePath}.riftreplay`;
-  await writeFile(filePath, JSON.stringify(bundle));
+  await writeReplayBundleFile(filePath, bundle, video);
   return filePath;
 }
 
-async function importReplayBundleFromPath(bundlePath: string): Promise<ReplayRecord> {
-  const parsed = JSON.parse(await readFile(bundlePath, "utf8")) as RiftReplayBundle;
-  if (parsed.format !== "riftlite.replay" || ![1, 2, 3].includes(parsed.version) || !parsed.replay?.id) {
+function defaultReplayCoachingPack(replay: ReplayRecord, match: MatchDraft | undefined, settings: UserSettings): NonNullable<ReplayRecord["coachingPack"]> {
+  const title = replay.title || (match ? `${match.myChampion || "Player"} vs ${match.opponentChampion || "Opponent"}` : "RiftLite coaching pack");
+  return {
+    title,
+    author: settings.username || replay.players.me || "RiftLite player",
+    summary: match?.notes?.trim() || "",
+    purpose: "Review",
+    createdAt: new Date().toISOString()
+  };
+}
+
+function validateReplayBundle(parsed: RiftReplayBundle): void {
+  if (parsed.format !== "riftlite.replay" || ![1, 2, 3, 4].includes(parsed.version) || !parsed.replay?.id) {
     throw new Error("This is not a RiftLite replay bundle.");
   }
+}
+
+async function replayBundleFilePrefix(bundlePath: string): Promise<string> {
+  const file = await open(bundlePath, "r");
+  try {
+    const buffer = Buffer.alloc(REPLAY_STREAM_MAGIC.length + 8);
+    const result = await file.read(buffer, 0, buffer.length, 0);
+    return buffer.subarray(0, result.bytesRead).toString("utf8");
+  } finally {
+    await file.close();
+  }
+}
+
+async function importReplayBundleFromPath(bundlePath: string): Promise<ReplayRecord> {
+  const prefix = await replayBundleFilePrefix(bundlePath);
+  if (prefix.startsWith(REPLAY_STREAM_MAGIC)) {
+    return importStreamedReplayBundleFromPath(bundlePath);
+  }
+
+  const bundleStats = await stat(bundlePath);
+  if (bundleStats.size > MAX_REPLAY_IMPORT_BUNDLE_BYTES) {
+    throw new Error(
+      `That replay bundle is too large to import safely (${formatByteSize(bundleStats.size)}). Trim or re-export a smaller coaching pack.`
+    );
+  }
+
+  let parsed: RiftReplayBundle;
+  try {
+    parsed = JSON.parse(await readFile(bundlePath, "utf8")) as RiftReplayBundle;
+  } catch {
+    throw new Error("That replay file could not be read. It may be incomplete or corrupted.");
+  }
+  validateReplayBundle(parsed);
+  return saveImportedReplayBundleData(parsed, bundlePath);
+}
+
+async function importStreamedReplayBundleFromPath(bundlePath: string): Promise<ReplayRecord> {
+  const bundleStats = await stat(bundlePath);
+  if (bundleStats.size > MAX_REPLAY_IMPORT_BUNDLE_BYTES) {
+    throw new Error(
+      `That replay bundle is too large to import safely (${formatByteSize(bundleStats.size)}). Trim or re-export a smaller coaching pack.`
+    );
+  }
+
+  const readStream = createReadStream(bundlePath, { encoding: "utf8" });
+  const lines = createInterface({ input: readStream, crlfDelay: Infinity });
+  let parsed: RiftReplayBundle | null = null;
+  let replayId = "";
+  let importedVideo: ReplayVideoAsset | undefined;
+  let videoHandle: Awaited<ReturnType<typeof open>> | null = null;
+  let importedPath = "";
+  let videoDirectory = "";
+  let filename = "";
+  let decodedBytes = 0;
+  let readingVideo = false;
+
+  try {
+    for await (const rawLine of lines) {
+      const line = rawLine.trim();
+      if (!parsed) {
+        if (line === REPLAY_STREAM_MAGIC) {
+          continue;
+        }
+        try {
+          parsed = JSON.parse(line) as RiftReplayBundle;
+        } catch {
+          throw new Error("That replay file could not be read. It may be incomplete or corrupted.");
+        }
+        validateReplayBundle(parsed);
+        replayId = randomUUID();
+        if (parsed.video?.asset) {
+          const settings = await store.getSettings();
+          videoDirectory = join(replayVideoImportDirectory(settings), safeFileComponent(replayId, "replay"));
+          await mkdir(videoDirectory, { recursive: true });
+          filename = `${safeFileComponent(parsed.video.asset.filename || parsed.replay.title || "video-replay", "video-replay")}.${replayVideoExtension(parsed.video.asset.mimeType)}`;
+          importedPath = join(videoDirectory, filename);
+        }
+        continue;
+      }
+
+      if (line === REPLAY_STREAM_VIDEO_START) {
+        if (!parsed.video?.asset || !importedPath) {
+          readingVideo = false;
+          continue;
+        }
+        videoHandle = await open(importedPath, "w");
+        readingVideo = true;
+        continue;
+      }
+
+      if (line === REPLAY_STREAM_VIDEO_END) {
+        readingVideo = false;
+        if (videoHandle) {
+          await videoHandle.close();
+          videoHandle = null;
+        }
+        if (parsed.video?.asset && importedPath) {
+          const shouldRemuxImportedVideo = decodedBytes <= MAX_REPLAY_IMPORT_SEEKABLE_BYTES;
+          const containerFinalized = shouldRemuxImportedVideo
+            ? await makeReplayVideoSeekable(importedPath, parsed.video.asset.mimeType).catch(() => false)
+            : false;
+          const importedStats = await stat(importedPath);
+          importedVideo = {
+            ...parsed.video.asset,
+            path: importedPath,
+            url: pathToFileURL(importedPath).href,
+            filename,
+            directory: videoDirectory,
+            source: "riftreplay",
+            sizeBytes: importedStats.size,
+            containerFinalized: parsed.video.asset.containerFinalized || containerFinalized
+          };
+        }
+        continue;
+      }
+
+      if (readingVideo && videoHandle && line) {
+        const bytes = Buffer.from(line, "base64");
+        decodedBytes += bytes.length;
+        if (decodedBytes > MAX_REPLAY_IMPORT_VIDEO_BYTES) {
+          throw new Error(
+            `That replay video is too large to import safely (${formatByteSize(decodedBytes)}). Ask the sender to trim it or export a smaller replay.`
+          );
+        }
+        await videoHandle.write(bytes);
+      }
+    }
+  } catch (error) {
+    if (videoHandle) {
+      await videoHandle.close().catch(() => undefined);
+    }
+    if (importedPath) {
+      await unlink(importedPath).catch(() => undefined);
+    }
+    throw error;
+  } finally {
+    readStream.destroy();
+  }
+
+  if (!parsed) {
+    throw new Error("That replay file could not be read. It may be incomplete or corrupted.");
+  }
+  if (videoHandle || readingVideo) {
+    if (videoHandle) {
+      await videoHandle.close().catch(() => undefined);
+    }
+    if (importedPath) {
+      await unlink(importedPath).catch(() => undefined);
+    }
+    throw new Error("That replay file looks incomplete. The video data did not finish exporting.");
+  }
+  return saveImportedReplayBundleData(parsed, bundlePath, { replayId, importedVideo });
+}
+
+async function saveImportedReplayBundleData(
+  parsed: RiftReplayBundle,
+  bundlePath: string,
+  options: { replayId?: string; importedVideo?: ReplayVideoAsset } = {}
+): Promise<ReplayRecord> {
+  validateReplayBundle(parsed);
   const importStamp = new Date().toISOString();
   const settings = await store.getSettings();
-  const replayId = parsed.replay.id;
+  const sourceReplayId = parsed.replay.id;
+  const replayId = options.replayId ?? randomUUID();
   const frameDirectory = replayFrameDirectory(replayId, settings);
   await mkdir(frameDirectory, { recursive: true });
   const frameByEvent = new Map<string, ReplayBundleFrame & { importedPath: string; importedUrl: string }>();
   const importedFrameRecords: Array<{ frame: ReplayBundleFrame; imported: ReplayScreenshotFrame }> = [];
   const importedFrameTargetIds = new Map<string, string>();
-  for (const frame of parsed.frames ?? []) {
+  for (const frame of (parsed.frames ?? []).slice(0, MAX_REPLAY_IMPORT_FRAMES)) {
     if (!frame.data || !frame.eventId) {
+      continue;
+    }
+    if (estimateBase64DecodedBytes(frame.data) > MAX_REPLAY_IMPORT_FRAME_BYTES) {
       continue;
     }
     const extension = extensionForFrame(frame);
     const filename = `${safeFileComponent(frame.eventId, "frame")}-${safeFileComponent(frame.label, "keyframe")}.${extension}`;
     const importedPath = join(frameDirectory, filename);
-    await writeFile(importedPath, Buffer.from(frame.data, "base64"));
+    try {
+      await writeBase64FileChunked(importedPath, frame.data, MAX_REPLAY_IMPORT_FRAME_BYTES);
+    } catch {
+      await unlink(importedPath).catch(() => undefined);
+      continue;
+    }
     const importedUrl = pathToFileURL(importedPath).href;
     frameByEvent.set(frame.eventId, {
       ...frame,
@@ -1164,14 +1670,28 @@ async function importReplayBundleFromPath(bundlePath: string): Promise<ReplayRec
       }
     };
   });
-  let importedVideo: ReplayVideoAsset | undefined;
-  if (parsed.video?.data && parsed.video.asset) {
+  let importedVideo: ReplayVideoAsset | undefined = options.importedVideo;
+  if (!importedVideo && parsed.video?.data && parsed.video.asset) {
     const videoDirectory = join(replayVideoImportDirectory(settings), safeFileComponent(replayId, "replay"));
     await mkdir(videoDirectory, { recursive: true });
     const filename = `${safeFileComponent(parsed.video.asset.filename || parsed.replay.title || "video-replay", "video-replay")}.${replayVideoExtension(parsed.video.asset.mimeType)}`;
     const importedPath = join(videoDirectory, filename);
-    await writeFile(importedPath, Buffer.from(parsed.video.data, "base64"));
-    const containerFinalized = await makeReplayVideoSeekable(importedPath, parsed.video.asset.mimeType).catch(() => false);
+    const decodedBytes = estimateBase64DecodedBytes(parsed.video.data);
+    if (decodedBytes > MAX_REPLAY_IMPORT_VIDEO_BYTES) {
+      throw new Error(
+        `That replay video is too large to import safely (${formatByteSize(decodedBytes)}). Ask the sender to trim it or export a smaller replay.`
+      );
+    }
+    try {
+      await writeBase64FileChunked(importedPath, parsed.video.data, MAX_REPLAY_IMPORT_VIDEO_BYTES);
+    } catch (error) {
+      await unlink(importedPath).catch(() => undefined);
+      throw error;
+    }
+    const shouldRemuxImportedVideo = decodedBytes <= MAX_REPLAY_IMPORT_SEEKABLE_BYTES;
+    const containerFinalized = shouldRemuxImportedVideo
+      ? await makeReplayVideoSeekable(importedPath, parsed.video.asset.mimeType).catch(() => false)
+      : false;
     const importedStats = await stat(importedPath);
     importedVideo = {
       ...parsed.video.asset,
@@ -1184,27 +1704,1070 @@ async function importReplayBundleFromPath(bundlePath: string): Promise<ReplayRec
       containerFinalized: parsed.video.asset.containerFinalized || containerFinalized
     };
   }
+  const importedMatch = parsed.match ?? parsed.replay.matchSnapshot;
+  const matchSnapshot = importedMatch
+    ? { ...importedMatch, id: `${replayId}:match`, rawEvidence: [] }
+    : undefined;
+  const remapTargetId = (targetType: ReplayFlag["targetType"] | ReplayAnnotation["targetType"], targetId: string): string => {
+    if (targetType === "frame") {
+      return importedFrameTargetIds.get(targetId) ?? targetId;
+    }
+    if (targetType === "replay" && targetId === sourceReplayId) {
+      return replayId;
+    }
+    return targetId;
+  };
   const replay: ReplayRecord = {
     ...parsed.replay,
     id: replayId,
-    matchId: parsed.replay.matchId || parsed.match?.id || replayId,
+    matchId: matchSnapshot?.id ?? replayId,
+    title: parsed.replay.title || parsed.search?.title || "Imported replay",
     structuredEvents,
     visualFrames: importedFrameRecords
       .filter(({ frame }) => frame.eventId.startsWith("visual:") || !structuredEventIds.has(frame.eventId))
       .map(({ imported }) => imported),
-    matchSnapshot: parsed.match ?? parsed.replay.matchSnapshot,
+    matchSnapshot,
     search: parsed.search,
-    video: importedVideo ?? parsed.replay.video,
-    flags: parsed.replay.flags?.map((flag) => flag.targetType === "frame"
-      ? { ...flag, targetId: importedFrameTargetIds.get(flag.targetId) ?? flag.targetId }
-      : flag),
-    annotations: parsed.replay.annotations?.map((annotation) => annotation.targetType === "frame"
-      ? { ...annotation, targetId: importedFrameTargetIds.get(annotation.targetId) ?? annotation.targetId }
-      : annotation),
+    video: importedVideo,
+    schemaVersion: Math.max(4, parsed.replay.schemaVersion ?? 1) as ReplayRecord["schemaVersion"],
+    coachingPack: parsed.coachingPack ?? parsed.replay.coachingPack,
+    flags: parsed.replay.flags?.map((flag) => ({ ...flag, targetId: remapTargetId(flag.targetType, flag.targetId) })),
+    annotations: parsed.replay.annotations?.map((annotation) => ({ ...annotation, targetId: remapTargetId(annotation.targetType, annotation.targetId) })),
     importedAt: importStamp,
     importedFrom: bundlePath
   };
   return store.saveReplay(replay);
+}
+
+async function exportDeckNotebook(deckId: string): Promise<string> {
+  const deck = await store.getSavedDeck(deckId);
+  if (!deck) {
+    throw new Error("Deck not found.");
+  }
+  const notebook = await store.getDeckNotebook(deckId);
+  const payload: DeckNotebookExport = {
+    format: "riftlite.deck-notebook",
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    deck,
+    notebook
+  };
+  const defaultPath = join(app.getPath("documents"), `${safeFileComponent(`${deck.title} notebook`, "deck-notebook")}.riftdecknotebook`);
+  const options: SaveDialogOptions = {
+    title: "Export RiftLite deck notebook",
+    defaultPath,
+    filters: [{ name: "RiftLite Deck Notebook", extensions: ["riftdecknotebook", "json"] }]
+  };
+  const result = mainWindow ? await dialog.showSaveDialog(mainWindow, options) : await dialog.showSaveDialog(options);
+  if (result.canceled || !result.filePath) {
+    return "";
+  }
+  const filePath = result.filePath.endsWith(".riftdecknotebook") || result.filePath.endsWith(".json")
+    ? result.filePath
+    : `${result.filePath}.riftdecknotebook`;
+  await writeFile(filePath, JSON.stringify(payload, null, 2), "utf8");
+  return filePath;
+}
+
+async function importDeckNotebook(): Promise<DeckNotebook | null> {
+  const options: OpenDialogOptions = {
+    title: "Import RiftLite deck notebook",
+    properties: ["openFile"],
+    filters: [{ name: "RiftLite Deck Notebook", extensions: ["riftdecknotebook", "json"] }]
+  };
+  const result = mainWindow ? await dialog.showOpenDialog(mainWindow, options) : await dialog.showOpenDialog(options);
+  if (result.canceled || !result.filePaths[0]) {
+    return null;
+  }
+  const parsed = JSON.parse(await readFile(result.filePaths[0], "utf8")) as DeckNotebookExport;
+  if (parsed.format !== "riftlite.deck-notebook" || parsed.version !== 1 || !parsed.deck || !parsed.notebook) {
+    throw new Error("This is not a RiftLite deck notebook export.");
+  }
+  const deck = await store.upsertSavedDeck(parsed.deck as SavedDeck);
+  return store.saveDeckNotebook(deck.id, { ...parsed.notebook, deckId: deck.id });
+}
+
+async function exportDeckPackage(deckId: string, notebookOverride?: DeckNotebook): Promise<string> {
+  const payload = await deckPackagePayload(deckId, notebookOverride);
+  const defaultPath = join(app.getPath("documents"), `${safeFileComponent(payload.deck.title || "riftlite-deck", "riftlite-deck")}.riftdeck`);
+  const options: SaveDialogOptions = {
+    title: "Export RiftLite deck package",
+    defaultPath,
+    filters: [{ name: "RiftLite Deck Package", extensions: ["riftdeck", "json"] }]
+  };
+  const result = mainWindow ? await dialog.showSaveDialog(mainWindow, options) : await dialog.showSaveDialog(options);
+  if (result.canceled || !result.filePath) {
+    return "";
+  }
+  const filePath = result.filePath.endsWith(".riftdeck") || result.filePath.endsWith(".json")
+    ? result.filePath
+    : `${result.filePath}.riftdeck`;
+  await writeFile(filePath, JSON.stringify(payload, null, 2), "utf8");
+  return filePath;
+}
+
+async function deckPackagePayload(deckId: string, notebookOverride?: DeckNotebook): Promise<DeckPackageExport> {
+  const deck = await store.getSavedDeck(deckId);
+  if (!deck) {
+    throw new Error("Deck not found.");
+  }
+  const notebook = sanitizeDeckNotebookForDeck(
+    notebookOverride?.deckId === deck.id ? notebookOverride : await store.getDeckNotebook(deckId),
+    deck
+  );
+  return {
+    format: "riftlite.deck-package",
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    deck,
+    notebook
+  };
+}
+
+async function exportDeckPackageText(deckId: string, notebookOverride?: DeckNotebook): Promise<string> {
+  const payload = await deckPackagePayload(deckId, notebookOverride);
+  const textPayload = payload.deck.sourceUrl.startsWith("http")
+    ? compactDeckSharePayload(payload)
+    : payload;
+  const encoded = deflateRawSync(Buffer.from(JSON.stringify(textPayload), "utf8")).toString("base64url");
+  return `${payload.deck.sourceUrl.startsWith("http") ? DECK_SHARE_TEXT_PREFIX : DECK_PACKAGE_COMPRESSED_TEXT_PREFIX}${encoded}`;
+}
+
+function compactDeckSharePayload(payload: DeckPackageExport): CompactDeckSharePayload {
+  return {
+    f: "riftlite.deck-share",
+    v: 2,
+    d: {
+      u: payload.deck.sourceUrl,
+      k: payload.deck.sourceKey,
+      t: payload.deck.title,
+      l: payload.deck.legend
+    },
+    n: compactDeckNotebook(payload.notebook)
+  };
+}
+
+function compactDeckNotebook(notebook: DeckNotebook): CompactDeckSharePayload["n"] {
+  return {
+    go: notebook.goals.map((goal) => ({ t: goal.text, s: goal.status })),
+    w: notebook.watchlist.map((item) => ({
+      k: item.cardKey,
+      n: item.cardName,
+      c: item.cardId,
+      i: item.imageUrl,
+      s: item.status,
+      t: item.note
+    })),
+    v: notebook.versions.map((version) => ({
+      h: version.snapshotHash,
+      t: version.title,
+      l: version.legend,
+      k: version.sourceKey,
+      u: version.sourceUrl,
+      a: version.importedAt,
+      s: version.summary
+    })),
+    d: compactDeckGuide(notebook.defaultGuide),
+    g: notebook.matchupGuides.map(compactDeckGuide)
+  };
+}
+
+function compactDeckGuide(guide: DeckMatchupGuide): CompactDeckShareGuide {
+  return {
+    ...(guide.legend ? { l: guide.legend } : {}),
+    m: {
+      k: compactDeckGuideSection(guide.mulligan.keep),
+      c: compactDeckGuideSection(guide.mulligan.consider),
+      a: compactDeckGuideSection(guide.mulligan.avoid)
+    },
+    s: {
+      i: compactDeckGuideSection(guide.sideboard.in),
+      o: compactDeckGuideSection(guide.sideboard.out),
+      ...(guide.sideboard.note ? { n: guide.sideboard.note } : {})
+    },
+    b: {
+      g: compactDeckGuideSection(guide.battlefields.game1),
+      f: compactDeckGuideSection(guide.battlefields.game1First),
+      s: compactDeckGuideSection(guide.battlefields.game1Second),
+      ...(guide.battlefields.note ? { n: guide.battlefields.note } : {})
+    },
+    ...(guide.notes.length ? { x: guide.notes.map((note) => note.text).filter(Boolean) } : {})
+  };
+}
+
+function compactDeckGuideSection(section: DeckGuideSection): CompactDeckShareSection {
+  return {
+    ...(section.cards.length ? { c: section.cards.map(compactDeckGuideCard) } : {}),
+    ...(section.note ? { n: section.note } : {})
+  };
+}
+
+function compactDeckGuideCard(card: DeckGuideCardRef): CompactDeckShareCard {
+  return {
+    k: card.cardKey,
+    n: card.cardName,
+    c: card.cardId,
+    i: card.imageUrl,
+    q: card.qty,
+    t: card.note,
+    g: card.groupName,
+    r: card.groupTarget,
+    m: card.groupNote,
+    p: card.priority
+  };
+}
+
+async function exportDeckPrepPdf(deckId: string, notebookOverride?: DeckNotebook): Promise<string> {
+  const deck = await store.getSavedDeck(deckId);
+  if (!deck) {
+    throw new Error("Deck not found.");
+  }
+  const notebook = sanitizeDeckNotebookForDeck(
+    notebookOverride?.deckId === deck.id ? notebookOverride : await store.getDeckNotebook(deck.id),
+    deck
+  );
+  const defaultPath = join(
+    app.getPath("documents"),
+    `RiftLite-${safeFileComponent(`${deck.title} matchup prep`, "matchup-prep")}-${new Date().toISOString().slice(0, 10)}.pdf`
+  );
+  const options: SaveDialogOptions = {
+    title: "Export printable RiftLite matchup prep PDF",
+    defaultPath,
+    filters: [{ name: "PDF", extensions: ["pdf"] }]
+  };
+  const result = mainWindow ? await dialog.showSaveDialog(mainWindow, options) : await dialog.showSaveDialog(options);
+  if (result.canceled || !result.filePath) {
+    return "";
+  }
+  const filePath = result.filePath.toLowerCase().endsWith(".pdf") ? result.filePath : `${result.filePath}.pdf`;
+  const logoDataUrl = await assetDataUrl("riftlite-logo-transparent.png").catch(() => "");
+  const html = buildDeckPrepPdfHtml(deck, notebook, logoDataUrl);
+  const pdfWindow = new BrowserWindow({
+    show: false,
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true
+    }
+  });
+  try {
+    await pdfWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+    await waitForPrintableAssets(pdfWindow);
+    const pdf = await pdfWindow.webContents.printToPDF({
+      printBackground: true,
+      pageSize: "A4",
+      margins: {
+        marginType: "custom",
+        top: 0.35,
+        bottom: 0.35,
+        left: 0.3,
+        right: 0.3
+      }
+    });
+    await writeFile(filePath, pdf);
+    return filePath;
+  } finally {
+    if (!pdfWindow.isDestroyed()) {
+      pdfWindow.destroy();
+    }
+  }
+}
+
+async function waitForPrintableAssets(window: BrowserWindow): Promise<void> {
+  const assetReadyScript = `
+    Promise.all(Array.from(document.images).map((img) => {
+      if (img.complete) return true;
+      return new Promise((resolve) => {
+        img.onload = () => resolve(true);
+        img.onerror = () => resolve(true);
+      });
+    })).then(() => true)
+  `;
+  await Promise.race([
+    window.webContents.executeJavaScript(assetReadyScript, true).catch(() => true),
+    new Promise((resolve) => setTimeout(resolve, 1800))
+  ]);
+}
+
+function buildDeckPrepPdfHtml(deck: SavedDeck, notebook: DeckNotebook, logoDataUrl: string): string {
+  const snapshot = parseDeckSnapshotForPdf(deck);
+  const guideList = [
+    { title: "All matchups default", guide: notebook.defaultGuide, source: "default" },
+    ...notebook.matchupGuides
+      .filter(deckGuideHasContent)
+      .sort((a, b) => a.legend.localeCompare(b.legend))
+      .map((guide) => ({ title: `Vs ${guide.legend}`, guide, source: "matchup" }))
+  ];
+  const printedAt = new Date().toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" });
+  const subtitle = [
+    snapshot.legend || deck.legend || "Unknown legend",
+    snapshot.sourceUrl ? "RiftLite deck package" : "RiftLite deck"
+  ].filter(Boolean).join(" | ");
+  return `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>${htmlText(deck.title)} - RiftLite Matchup Prep</title>
+  <style>
+    :root {
+      --ink: #0d1730;
+      --muted: #5e6b82;
+      --line: #d9e5f8;
+      --panel: #f7fbff;
+      --cyan: #12c8ff;
+      --blue: #1751d8;
+      --purple: #8b3dff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      font-family: Inter, Segoe UI, Arial, sans-serif;
+      background: #ffffff;
+      font-size: 11px;
+      line-height: 1.35;
+    }
+    .page { padding: 18px 20px 22px; }
+    .hero {
+      display: grid;
+      grid-template-columns: 72px 1fr auto;
+      gap: 16px;
+      align-items: center;
+      padding: 16px;
+      color: white;
+      background: linear-gradient(135deg, #071a3d 0%, #124f9f 47%, #7628e8 100%);
+      border-radius: 14px;
+      overflow: hidden;
+    }
+    .logo {
+      width: 68px;
+      height: 68px;
+      object-fit: contain;
+      padding: 4px;
+      background: rgba(255,255,255,0.12);
+      border: 1px solid rgba(255,255,255,0.22);
+      border-radius: 14px;
+    }
+    .logo-fallback {
+      width: 68px;
+      height: 68px;
+      display: grid;
+      place-items: center;
+      font-size: 38px;
+      font-weight: 900;
+      color: #88f3ff;
+      background: rgba(255,255,255,0.12);
+      border-radius: 14px;
+    }
+    .eyebrow {
+      margin: 0 0 3px;
+      color: #88f3ff;
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    h1, h2, h3, h4, p { margin-top: 0; }
+    h1 { margin-bottom: 4px; font-size: 28px; line-height: 1.05; }
+    .hero p { margin-bottom: 0; color: #d8efff; }
+    .print-meta {
+      text-align: right;
+      color: #dbf8ff;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 10px;
+      margin: 14px 0;
+    }
+    .summary-card, .panel {
+      border: 1px solid var(--line);
+      background: var(--panel);
+      border-radius: 10px;
+      padding: 10px;
+    }
+    .label {
+      color: var(--muted);
+      font-size: 9px;
+      font-weight: 800;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    .value { margin-top: 3px; font-size: 15px; font-weight: 900; }
+    .deck-list {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+    .deck-list h3, .guide h2 {
+      color: #092c63;
+      margin-bottom: 8px;
+      font-size: 16px;
+    }
+    .entries {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 3px 8px;
+    }
+    .entry {
+      display: grid;
+      grid-template-columns: 24px 1fr;
+      gap: 5px;
+      min-width: 0;
+      break-inside: avoid;
+    }
+    .qty {
+      color: var(--blue);
+      font-weight: 900;
+      text-align: right;
+    }
+    .guide {
+      break-inside: avoid;
+      page-break-inside: avoid;
+      margin: 14px 0;
+      padding: 12px;
+      border: 1px solid #b9d3ff;
+      border-radius: 14px;
+      background: linear-gradient(180deg, #ffffff 0%, #f4faff 100%);
+    }
+    .guide-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 10px;
+      border-bottom: 2px solid #e6f1ff;
+      padding-bottom: 8px;
+      margin-bottom: 10px;
+    }
+    .guide-head span {
+      color: var(--muted);
+      font-weight: 700;
+    }
+    .guide-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+    .section {
+      margin-bottom: 9px;
+      break-inside: avoid;
+    }
+    .section h4 {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      color: #0a336e;
+      margin-bottom: 6px;
+      padding-bottom: 3px;
+      border-bottom: 1px solid #dceaff;
+      font-size: 12px;
+    }
+    .card-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 6px;
+    }
+    .mini-group {
+      grid-column: 1 / -1;
+      display: grid;
+      gap: 6px;
+      padding: 7px;
+      border: 1px solid #c7e4ff;
+      border-radius: 8px;
+      background: #eef7ff;
+      break-inside: avoid;
+    }
+    .mini-group header {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      color: #092c63;
+      font-size: 10px;
+      font-weight: 900;
+    }
+    .mini-group header span,
+    .mini-group p {
+      color: var(--muted);
+      font-size: 9px;
+      font-weight: 700;
+    }
+    .mini-group p {
+      margin: 0;
+      font-weight: 500;
+    }
+    .mini-group-cards {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 5px;
+    }
+    .card {
+      display: grid;
+      grid-template-columns: 34px 1fr;
+      gap: 7px;
+      align-items: center;
+      min-height: 48px;
+      padding: 5px;
+      border: 1px solid #cce0ff;
+      border-radius: 8px;
+      background: white;
+      break-inside: avoid;
+    }
+    .thumb-wrap {
+      position: relative;
+      width: 32px;
+      min-height: 44px;
+    }
+    .card img {
+      width: 32px;
+      height: 44px;
+      object-fit: cover;
+      border-radius: 5px;
+      border: 1px solid #b7c8e7;
+    }
+    .priority-badge {
+      position: absolute;
+      top: -5px;
+      right: -6px;
+      min-width: 18px;
+      padding: 2px 4px;
+      border-radius: 99px;
+      color: white;
+      background: linear-gradient(135deg, var(--blue), var(--purple));
+      font-size: 8px;
+      font-weight: 900;
+      line-height: 1;
+      text-align: center;
+    }
+    .card strong {
+      display: block;
+      font-size: 10px;
+    }
+    .group-chip {
+      display: inline-block;
+      max-width: 100%;
+      margin-top: 2px;
+      padding: 1px 5px;
+      border: 1px solid #bdd7ff;
+      border-radius: 99px;
+      color: #0a336e;
+      background: #eaf4ff;
+      font-size: 8px;
+      font-weight: 800;
+    }
+    .card em, .note {
+      display: block;
+      color: var(--muted);
+      font-size: 9px;
+      font-style: normal;
+      margin-top: 2px;
+    }
+    .fallback-thumb {
+      width: 32px;
+      height: 44px;
+      display: grid;
+      place-items: center;
+      color: white;
+      font-weight: 900;
+      border-radius: 5px;
+      background: linear-gradient(135deg, var(--blue), var(--purple));
+    }
+    .empty {
+      margin: 0;
+      color: #7b879b;
+      font-style: italic;
+    }
+    .note-box {
+      padding: 7px;
+      border: 1px dashed #b9cbe8;
+      border-radius: 8px;
+      background: #fbfdff;
+      color: #31415f;
+      white-space: pre-wrap;
+    }
+    .notes-list {
+      display: grid;
+      gap: 6px;
+    }
+    .footer {
+      display: flex;
+      justify-content: space-between;
+      margin-top: 16px;
+      padding-top: 8px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 9px;
+    }
+    @media print {
+      .page { padding: 0; }
+      .guide { page-break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="hero">
+      ${logoDataUrl ? `<img class="logo" src="${htmlAttr(logoDataUrl)}" alt="RiftLite logo" />` : `<div class="logo-fallback">R</div>`}
+      <div>
+        <p class="eyebrow">RiftLite Matchup Prep</p>
+        <h1>${htmlText(deck.title || "Untitled deck")}</h1>
+        <p>${htmlText(subtitle)}</p>
+      </div>
+      <div class="print-meta">RiftLite.com<br />${htmlText(printedAt)}</div>
+    </section>
+    <section class="summary-grid">
+      ${summaryCard("Legend", snapshot.legend || deck.legend || "Unknown")}
+      ${summaryCard("Main deck", `${sumQty(snapshot.mainDeck)} cards`)}
+      ${summaryCard("Sideboard", `${sumQty(snapshot.sideboard)} cards`)}
+      ${summaryCard("Guides", `${guideList.length} printable guide${guideList.length === 1 ? "" : "s"}`)}
+    </section>
+    <section class="deck-list">
+      ${deckListPanel("Runes", snapshot.runes)}
+      ${deckListPanel("Battlefields", snapshot.battlefields)}
+      ${deckListPanel("Main deck", snapshot.mainDeck)}
+      ${deckListPanel("Sideboard", snapshot.sideboard)}
+    </section>
+    ${guideList.map(({ title, guide, source }) => guidePdfHtml(title, guide, source)).join("")}
+    <section class="footer">
+      <span>Local-only prep export. Share only if you want other players to see your guide.</span>
+      <strong>Generated by RiftLite</strong>
+    </section>
+  </main>
+</body>
+</html>`;
+}
+
+function parseDeckSnapshotForPdf(deck: SavedDeck): DeckSnapshot {
+  let raw: Record<string, unknown> = {};
+  try {
+    const parsed = JSON.parse(deck.snapshotJson) as unknown;
+    raw = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+  } catch {
+    raw = {};
+  }
+  return {
+    title: plainText(raw.title) || deck.title,
+    legend: plainText(raw.legend) || deck.legend,
+    legendKey: plainText(raw.legendKey ?? raw.legend_key),
+    legendEntry: cleanDeckEntry(raw.legendEntry ?? raw.legend_entry),
+    sourceUrl: plainText(raw.sourceUrl ?? raw.source_url) || deck.sourceUrl,
+    sourceKey: plainText(raw.sourceKey ?? raw.source_key) || deck.sourceKey,
+    runes: cleanDeckEntries(raw.runes),
+    battlefields: cleanDeckEntries(raw.battlefields),
+    mainDeck: cleanDeckEntries(raw.mainDeck ?? raw.main_deck),
+    sideboard: cleanDeckEntries(raw.sideboard),
+    tcgaMeta: raw.tcgaMeta && typeof raw.tcgaMeta === "object" && !Array.isArray(raw.tcgaMeta) ? raw.tcgaMeta as Record<string, unknown> : undefined
+  };
+}
+
+function cleanDeckEntries(value: unknown): DeckEntry[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.map(cleanDeckEntry).filter((entry): entry is DeckEntry => Boolean(entry?.name));
+}
+
+function cleanDeckEntry(value: unknown): DeckEntry | undefined {
+  if (typeof value === "string") {
+    const name = plainText(value);
+    return name ? { qty: 1, name } : undefined;
+  }
+  const record = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  const qty = Math.max(1, Math.trunc(Number(record.qty ?? record.quantity ?? record.count ?? 1) || 1));
+  const name = plainText(record.name ?? record.cardName ?? record.card_name ?? record.title);
+  if (!name) {
+    return undefined;
+  }
+  return {
+    qty,
+    name,
+    cardId: plainText(record.cardId ?? record.card_id) || undefined,
+    imageUrl: plainText(record.imageUrl ?? record.image_url) || undefined
+  };
+}
+
+function guidePdfHtml(title: string, guide: DeckMatchupGuide, source: string): string {
+  return `<section class="guide">
+    <div class="guide-head">
+      <h2>${htmlText(title)}</h2>
+      <span>${source === "default" ? "Fallback guide" : "Specific matchup guide"}</span>
+    </div>
+    <div class="guide-grid">
+      <div class="panel">
+        <h3>Mulligan</h3>
+        ${guideSectionPdfHtml("Keep", guide.mulligan.keep)}
+        ${guideSectionPdfHtml("Consider", guide.mulligan.consider)}
+        ${guideSectionPdfHtml("Avoid", guide.mulligan.avoid)}
+      </div>
+      <div class="panel">
+        <h3>Sideboard</h3>
+        ${guideSectionPdfHtml("Bring in", guide.sideboard.in)}
+        ${guideSectionPdfHtml("Take out", guide.sideboard.out)}
+        ${guide.sideboard.note.trim() ? `<div class="section"><h4>Plan</h4><div class="note-box">${htmlText(guide.sideboard.note)}</div></div>` : ""}
+      </div>
+      <div class="panel">
+        <h3>Battlefields</h3>
+        ${guideSectionPdfHtml("Game 1 Blind Pick", guide.battlefields.game1)}
+        ${guideSectionPdfHtml("Going First", guide.battlefields.game1First)}
+        ${guideSectionPdfHtml("Going Second", guide.battlefields.game1Second)}
+        ${guide.battlefields.note.trim() ? `<div class="section"><h4>Plan</h4><div class="note-box">${htmlText(guide.battlefields.note)}</div></div>` : ""}
+      </div>
+    </div>
+    ${guide.notes.length ? `<div class="panel" style="margin-top:10px"><h3>Matchup notes</h3><div class="notes-list">${guide.notes.map((note) => `<div class="note-box">${htmlText(note.text)}</div>`).join("")}</div></div>` : ""}
+  </section>`;
+}
+
+function guideSectionPdfHtml(title: string, section: DeckGuideSection): string {
+  const cards = groupedGuideCardsForPdf(section.cards);
+  return `<div class="section">
+    <h4><span>${htmlText(title)}</span><span>${section.cards.length}</span></h4>
+    ${section.cards.length ? `<div class="card-grid">${cards.map((item) => item.type === "group" ? guideGroupPdfHtml(item) : guideCardPdfHtml(item.card)).join("")}</div>` : `<p class="empty">No cards selected.</p>`}
+    ${section.note.trim() ? `<div class="note-box" style="margin-top:6px">${htmlText(section.note)}</div>` : ""}
+  </div>`;
+}
+
+type PdfGuideItem =
+  | { type: "card"; card: DeckGuideCardRef }
+  | { type: "group"; key: string; title: string; target: string; note: string; cards: DeckGuideCardRef[] };
+
+function groupedGuideCardsForPdf(cards: DeckGuideCardRef[]): PdfGuideItem[] {
+  const output: PdfGuideItem[] = [];
+  const groups = new Map<string, Extract<PdfGuideItem, { type: "group" }>>();
+  for (const card of cards) {
+    const title = card.groupName?.trim();
+    if (!title) {
+      output.push({ type: "card", card });
+      continue;
+    }
+    const key = title.toLowerCase();
+    const existing = groups.get(key);
+    if (existing) {
+      existing.cards.push(card);
+      if (!existing.target && card.groupTarget?.trim()) {
+        existing.target = card.groupTarget.trim();
+      }
+      if (!existing.note && card.groupNote?.trim()) {
+        existing.note = card.groupNote.trim();
+      }
+      continue;
+    }
+    const group: Extract<PdfGuideItem, { type: "group" }> = {
+      type: "group",
+      key,
+      title,
+      target: card.groupTarget?.trim() ?? "",
+      note: card.groupNote?.trim() ?? "",
+      cards: [card]
+    };
+    groups.set(key, group);
+    output.push(group);
+  }
+  return output.map((item) => item.type === "group"
+    ? { ...item, cards: [...item.cards].sort(compareGuidePriorityForPdf) }
+    : item
+  );
+}
+
+function compareGuidePriorityForPdf(a: DeckGuideCardRef, b: DeckGuideCardRef): number {
+  const aPriority = Number.isFinite(a.priority) && a.priority ? a.priority : 99;
+  const bPriority = Number.isFinite(b.priority) && b.priority ? b.priority : 99;
+  return aPriority - bPriority || a.cardName.localeCompare(b.cardName);
+}
+
+function guideGroupPdfHtml(group: Extract<PdfGuideItem, { type: "group" }>): string {
+  return `<div class="mini-group">
+    <header><strong>${htmlText(group.title)}</strong>${group.target ? `<span>${htmlText(group.target)}</span>` : ""}</header>
+    ${group.note ? `<p>${htmlText(group.note)}</p>` : ""}
+    <div class="mini-group-cards">${group.cards.map(guideCardPdfHtml).join("")}</div>
+  </div>`;
+}
+
+function guideCardPdfHtml(card: DeckGuideCardRef): string {
+  const image = safePdfImageUrl(card.imageUrl ?? "");
+  return `<div class="card">
+    <div class="thumb-wrap">
+      ${image ? `<img src="${htmlAttr(image)}" alt="" />` : `<span class="fallback-thumb">${htmlText(card.cardName.slice(0, 1) || "?")}</span>`}
+      ${card.priority ? `<b class="priority-badge">P${htmlText(card.priority)}</b>` : ""}
+    </div>
+    <div>
+      <strong>${htmlText(`${card.qty}x ${card.cardName}`)}</strong>
+      ${card.groupName?.trim() ? `<small class="group-chip">${htmlText(card.groupName)}</small>` : ""}
+      ${card.note?.trim() ? `<em>${htmlText(card.note)}</em>` : ""}
+    </div>
+  </div>`;
+}
+
+function deckListPanel(title: string, entries: DeckEntry[]): string {
+  return `<section class="panel">
+    <h3>${htmlText(title)}</h3>
+    ${entries.length ? `<div class="entries">${entries.map((entry) => `<div class="entry"><span class="qty">${entry.qty}x</span><span>${htmlText(entry.name)}</span></div>`).join("")}</div>` : `<p class="empty">No ${htmlText(title.toLowerCase())} listed.</p>`}
+  </section>`;
+}
+
+function summaryCard(label: string, value: string): string {
+  return `<div class="summary-card"><div class="label">${htmlText(label)}</div><div class="value">${htmlText(value)}</div></div>`;
+}
+
+function deckGuideHasContent(guide: DeckMatchupGuide): boolean {
+  return [
+    guide.mulligan.keep,
+    guide.mulligan.consider,
+    guide.mulligan.avoid,
+    guide.sideboard.in,
+    guide.sideboard.out,
+    guide.battlefields.game1,
+    guide.battlefields.game1First,
+    guide.battlefields.game1Second
+  ].some((section) => section.cards.length || section.note.trim())
+    || guide.sideboard.note.trim().length > 0
+    || guide.battlefields.note.trim().length > 0
+    || guide.notes.some((note) => note.text.trim());
+}
+
+function sumQty(entries: DeckEntry[]): number {
+  return entries.reduce((total, entry) => total + Math.max(0, Number(entry.qty) || 0), 0);
+}
+
+function safePdfImageUrl(value: string): string {
+  const trimmed = value.trim();
+  if (/^https?:\/\//i.test(trimmed) || /^data:image\//i.test(trimmed)) {
+    return trimmed;
+  }
+  return "";
+}
+
+function plainText(value: unknown): string {
+  return String(value ?? "").trim();
+}
+
+function htmlText(value: unknown): string {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function htmlAttr(value: unknown): string {
+  return htmlText(value);
+}
+
+async function importDeckPackage(): Promise<DeckPackageImportResult | null> {
+  const options: OpenDialogOptions = {
+    title: "Import RiftLite deck package",
+    properties: ["openFile"],
+    filters: [{ name: "RiftLite Deck Package", extensions: ["riftdeck", "riftdecknotebook", "json"] }]
+  };
+  const result = mainWindow ? await dialog.showOpenDialog(mainWindow, options) : await dialog.showOpenDialog(options);
+  if (result.canceled || !result.filePaths[0]) {
+    return null;
+  }
+  const parsed = JSON.parse(await readFile(result.filePaths[0], "utf8")) as DeckPackageExport | DeckNotebookExport;
+  return importDeckPackagePayload(parsed);
+}
+
+async function importDeckPackageText(text: string): Promise<DeckPackageImportResult> {
+  const parsed = parseDeckPackageText(text);
+  if (isCompactDeckSharePayload(parsed)) {
+    return importCompactDeckSharePayload(parsed);
+  }
+  const imported = await importDeckPackagePayload(parsed);
+  if (!imported) {
+    throw new Error("This is not a RiftLite deck package.");
+  }
+  return imported;
+}
+
+function parseDeckPackageText(text: string): DeckPackageExport | DeckNotebookExport | CompactDeckSharePayload {
+  const raw = text.trim();
+  if (!raw) {
+    throw new Error("Paste a RiftLite deck package first.");
+  }
+  const sharePrefixIndex = raw.toUpperCase().indexOf(DECK_SHARE_TEXT_PREFIX);
+  if (sharePrefixIndex >= 0) {
+    const encoded = extractEncodedPackageText(raw.slice(sharePrefixIndex + DECK_SHARE_TEXT_PREFIX.length));
+    return JSON.parse(inflateRawSync(Buffer.from(encoded, "base64url")).toString("utf8")) as CompactDeckSharePayload;
+  }
+  const compressedPrefixIndex = raw.toUpperCase().indexOf(DECK_PACKAGE_COMPRESSED_TEXT_PREFIX);
+  if (compressedPrefixIndex >= 0) {
+    const encoded = extractEncodedPackageText(raw.slice(compressedPrefixIndex + DECK_PACKAGE_COMPRESSED_TEXT_PREFIX.length));
+    return JSON.parse(inflateRawSync(Buffer.from(encoded, "base64url")).toString("utf8")) as DeckPackageExport | DeckNotebookExport;
+  }
+  const prefixIndex = raw.toUpperCase().indexOf(DECK_PACKAGE_TEXT_PREFIX);
+  if (prefixIndex >= 0) {
+    const encoded = extractEncodedPackageText(raw.slice(prefixIndex + DECK_PACKAGE_TEXT_PREFIX.length));
+    return JSON.parse(Buffer.from(encoded, "base64url").toString("utf8")) as DeckPackageExport | DeckNotebookExport;
+  }
+  const unfenced = raw
+    .replace(/^```(?:json|text|riftdeck)?\s*/i, "")
+    .replace(/\s*```$/i, "")
+    .trim();
+  if (unfenced.startsWith("{")) {
+    return JSON.parse(unfenced) as DeckPackageExport | DeckNotebookExport;
+  }
+  return JSON.parse(Buffer.from(unfenced.replace(/\s+/g, ""), "base64url").toString("utf8")) as DeckPackageExport | DeckNotebookExport;
+}
+
+function extractEncodedPackageText(value: string): string {
+  const encoded = value
+    .replace(/^```(?:json|text|riftdeck)?\s*/i, "")
+    .replace(/\s+/g, "")
+    .match(/^[A-Za-z0-9_-]+/)?.[0];
+  if (!encoded) {
+    throw new Error("That RiftLite deck package text is missing its encoded package.");
+  }
+  return encoded;
+}
+
+function isCompactDeckSharePayload(value: DeckPackageExport | DeckNotebookExport | CompactDeckSharePayload): value is CompactDeckSharePayload {
+  return (value as CompactDeckSharePayload).f === "riftlite.deck-share" && (value as CompactDeckSharePayload).v === 2;
+}
+
+async function importCompactDeckSharePayload(parsed: CompactDeckSharePayload): Promise<DeckPackageImportResult> {
+  const deckInfo = parsed.d ?? {};
+  const sourceUrl = plainText(deckInfo.u);
+  const snapshotJson = plainText(deckInfo.s);
+  let deck: SavedDeck;
+  if (snapshotJson) {
+    deck = await store.upsertSavedDeck({
+      sourceUrl,
+      sourceKey: plainText(deckInfo.k),
+      title: plainText(deckInfo.t) || "Imported RiftLite deck",
+      legend: plainText(deckInfo.l),
+      snapshotJson,
+      lastRefreshStatus: "shared-text",
+      lastRefreshError: ""
+    });
+  } else if (sourceUrl.startsWith("http")) {
+    try {
+      deck = await deckService.importDeck(sourceUrl);
+    } catch (error) {
+      throw new Error(`Could not fetch the deck source for this short package. Ask for the .riftdeck file instead. ${error instanceof Error ? error.message : ""}`.trim());
+    }
+  } else {
+    throw new Error("This short deck package does not include enough deck data. Ask for the .riftdeck file instead.");
+  }
+  const notebook = await store.saveDeckNotebook(deck.id, expandCompactDeckNotebook(parsed.n, deck.id, deck));
+  return { deck, notebook };
+}
+
+function expandCompactDeckNotebook(value: CompactDeckSharePayload["n"], deckId: string, deck: SavedDeck): DeckNotebook {
+  const now = new Date().toISOString();
+  return {
+    deckId,
+    updatedAt: now,
+    goals: (value.go ?? []).map((goal) => ({
+      id: randomUUID(),
+      text: plainText(goal.t),
+      status: (goal.s === "Done" || goal.s === "Paused" ? goal.s : "Active") as DeckNotebook["goals"][number]["status"],
+      createdAt: now
+    })).filter((goal) => goal.text),
+    versions: (value.v ?? []).map((version) => ({
+      id: randomUUID(),
+      snapshotHash: plainText(version.h),
+      title: plainText(version.t) || deck.title,
+      legend: plainText(version.l) || deck.legend,
+      sourceKey: plainText(version.k) || deck.sourceKey,
+      sourceUrl: plainText(version.u) || deck.sourceUrl,
+      importedAt: plainText(version.a) || now,
+      summary: plainText(version.s)
+    })).filter((version) => version.snapshotHash),
+    watchlist: (value.w ?? []).map((item) => ({
+      id: randomUUID(),
+      cardKey: plainText(item.k),
+      cardName: plainText(item.n),
+      cardId: plainText(item.c),
+      imageUrl: plainText(item.i),
+      status: (item.s === "Overperforming" || item.s === "Underperforming" || item.s === "Cut candidate" ? item.s : "Testing") as DeckNotebook["watchlist"][number]["status"],
+      note: plainText(item.t),
+      createdAt: now
+    })).filter((item) => item.cardKey && item.cardName),
+    defaultGuide: expandCompactDeckGuide(value.d, ""),
+    matchupGuides: (value.g ?? []).map((guide) => expandCompactDeckGuide(guide, plainText(guide.l))).filter((guide) => guide.legend)
+  };
+}
+
+function expandCompactDeckGuide(value: CompactDeckShareGuide | undefined, legend: string): DeckMatchupGuide {
+  const base = emptyDeckMatchupGuide(legend);
+  const now = new Date().toISOString();
+  return {
+    ...base,
+    updatedAt: now,
+    mulligan: {
+      keep: expandCompactDeckSection(value?.m?.k),
+      consider: expandCompactDeckSection(value?.m?.c),
+      avoid: expandCompactDeckSection(value?.m?.a)
+    },
+    sideboard: {
+      in: expandCompactDeckSection(value?.s?.i),
+      out: expandCompactDeckSection(value?.s?.o),
+      note: plainText(value?.s?.n)
+    },
+    battlefields: {
+      game1: expandCompactDeckSection(value?.b?.g),
+      game1First: expandCompactDeckSection(value?.b?.f),
+      game1Second: expandCompactDeckSection(value?.b?.s),
+      note: plainText(value?.b?.n)
+    },
+    notes: (value?.x ?? []).map((text) => ({
+      id: randomUUID(),
+      text: plainText(text),
+      createdAt: now,
+      updatedAt: "",
+      source: "deck" as const
+    })).filter((note) => note.text)
+  };
+}
+
+function expandCompactDeckSection(value: CompactDeckShareSection | undefined): DeckGuideSection {
+  return {
+    cards: (value?.c ?? []).map((card) => ({
+      id: randomUUID(),
+      cardKey: plainText(card.k),
+      cardName: plainText(card.n),
+      cardId: plainText(card.c),
+      imageUrl: plainText(card.i),
+      qty: Math.max(1, Math.trunc(Number(card.q) || 1)),
+      note: plainText(card.t),
+      groupName: plainText(card.g),
+      groupTarget: plainText(card.r),
+      groupNote: plainText(card.m),
+      priority: Number.isFinite(Number(card.p)) && Number(card.p) > 0 ? Math.trunc(Number(card.p)) : undefined
+    })).filter((card) => card.cardKey && card.cardName),
+    note: plainText(value?.n)
+  };
+}
+
+async function importDeckPackagePayload(parsed: DeckPackageExport | DeckNotebookExport): Promise<DeckPackageImportResult> {
+  if (parsed.format !== "riftlite.deck-package" && parsed.format !== "riftlite.deck-notebook") {
+    throw new Error("This is not a RiftLite deck package.");
+  }
+  if (parsed.version !== 1 || !parsed.deck || !parsed.notebook) {
+    throw new Error("This RiftLite deck package is not supported.");
+  }
+  const deck = await store.upsertSavedDeck(parsed.deck as SavedDeck);
+  const notebook = await store.saveDeckNotebook(deck.id, { ...parsed.notebook, deckId: deck.id });
+  return { deck, notebook };
+}
+
+async function getActiveDeckPrep(opponentLegend = ""): Promise<ActiveDeckPrep> {
+  const settings = await store.getSettings();
+  const deck = settings.activeDeckId ? await store.getSavedDeck(settings.activeDeckId) : null;
+  if (!deck) {
+    return { deck: null, notebook: null, guide: null, opponentLegend: "", source: "none" };
+  }
+  const notebook = await store.getDeckNotebook(deck.id);
+  const resolved = resolveDeckMatchupGuide(notebook, opponentLegend);
+  return {
+    deck,
+    notebook,
+    guide: resolved.guide,
+    opponentLegend,
+    source: resolved.source
+  };
 }
 
 async function exportAccountData(): Promise<string> {
@@ -1347,8 +2910,17 @@ async function importReplayFolder(): Promise<ReplayRecord[]> {
   }
   const files = await readdir(result.filePaths[0]);
   const imported: ReplayRecord[] = [];
+  const failures: string[] = [];
   for (const file of files.filter((item) => item.toLowerCase().endsWith(".riftreplay"))) {
-    imported.push(await importReplayBundleFromPath(join(result.filePaths[0], file)));
+    try {
+      imported.push(await importReplayBundleFromPath(join(result.filePaths[0], file)));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      failures.push(`${file}: ${message}`);
+    }
+  }
+  if (!imported.length && failures.length) {
+    throw new Error(`No replays imported. ${failures[0]}`);
   }
   return imported;
 }
@@ -1458,6 +3030,24 @@ function registerIpc(): void {
   ipcMain.handle("decks:refresh", (_event, id: string) => deckService.refreshDeck(id));
   ipcMain.handle("decks:delete", (_event, id: string) => deckService.deleteDeck(id));
   ipcMain.handle("decks:set-active", (_event, id: string) => deckService.setActiveDeck(id));
+  ipcMain.handle("decks:notebook:get", (_event, deckId: string) => store.getDeckNotebook(deckId));
+  ipcMain.handle("decks:notebook:save", (_event, deckId: string, notebook: DeckNotebook) => store.saveDeckNotebook(deckId, notebook));
+  ipcMain.handle("decks:notebook:export", (_event, deckId: string) => exportDeckNotebook(deckId));
+  ipcMain.handle("decks:notebook:import", () => importDeckNotebook());
+  ipcMain.handle("decks:package:export", (_event, deckId: string, notebook?: DeckNotebook) => exportDeckPackage(deckId, notebook));
+  ipcMain.handle("decks:package:import", () => importDeckPackage());
+  ipcMain.handle("decks:package:export-text", (_event, deckId: string, notebook?: DeckNotebook) => exportDeckPackageText(deckId, notebook));
+  ipcMain.handle("decks:package:import-text", (_event, text: string) => importDeckPackageText(text));
+  ipcMain.handle("decks:prep:export-pdf", (_event, deckId: string, notebook?: DeckNotebook) => exportDeckPrepPdf(deckId, notebook));
+  ipcMain.handle("decks:prep:get-active", (_event, opponentLegend?: string) => getActiveDeckPrep(opponentLegend));
+  ipcMain.handle("clipboard:write-text", (_event, text: string) => {
+    clipboard.writeText(String(text ?? ""));
+    return true;
+  });
+  ipcMain.handle("deck-tracker:get-state", () => deckTrackerService.getState());
+  ipcMain.handle("deck-tracker:set-pinned", (_event, deckId: string, cardKeys: string[]) => deckTrackerService.setPinnedCards(deckId, cardKeys));
+  ipcMain.handle("deck-tracker:adjust", (_event, cardKey: string, delta: number) => deckTrackerService.adjustCard(cardKey, delta));
+  ipcMain.handle("deck-tracker:reset", () => deckTrackerService.resetMatch());
   ipcMain.handle("replays:get", () => store.getReplays());
   ipcMain.handle("replays:deleted", () => store.getDeletedReplays());
   ipcMain.handle("replays:save", (_event, replay: ReplayRecord) => store.saveReplay(replay));
@@ -1628,6 +3218,7 @@ app.whenReady().then(async () => {
   tcgaResolver = new TcgaResolver(assetPath("tcga_card_lookup.json"));
   syncService = new FirebaseSyncService(store, () => mainWindow);
   deckService = new DeckService(store);
+  deckTrackerService = new DeckTrackerService(store, tcgaResolver);
   overlayServer = new OverlayServer(store, () => {
     if (typeof capture === "undefined") {
       return null;
@@ -1638,7 +3229,7 @@ app.whenReady().then(async () => {
   diagnostics = new CaptureDiagnostics();
   updater = new UpdaterService(() => mainWindow);
   await diagnostics.ensureFile();
-  capture = new CaptureCoordinator(store, () => mainWindow, tcgaResolver, syncService, diagnostics, captureTimedReplayFrame);
+  capture = new CaptureCoordinator(store, () => mainWindow, tcgaResolver, syncService, diagnostics, captureTimedReplayFrame, deckTrackerService);
   if (simEventReceiverEnabled()) {
     simEventReceiver = new SimEventReceiver((event) => capture.handleEvent(event));
     await simEventReceiver.start();

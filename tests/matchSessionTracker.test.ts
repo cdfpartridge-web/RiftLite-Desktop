@@ -958,6 +958,293 @@ describe("MatchSessionTracker", () => {
     expect(draft.games[2].myBattlefield).toBe("Vilemaw's Lair");
   });
 
+  it("does not release an Atlas BO3 on a Confirm Game 2 Winner screen", () => {
+    const tracker = new MatchSessionTracker();
+
+    tracker.ingest(event("match-start", {
+      active: true,
+      format: "Auto",
+      myName: "BMU",
+      opponentName: "CurlyNuke",
+      score: { me: "8", opp: "3", source: "atlas-score-track" },
+      myBattlefieldImage: "https://assets.riftatlas-workers.com/riftbound/cards/original/OGN-298.webp",
+      opponentBattlefieldImage: "https://assets.riftatlas-workers.com/riftbound/cards/original/OGN-276.webp"
+    }, "2026-05-11T13:18:00.000Z", "atlas"));
+
+    const gameOneEnd = event("match-end", {
+      active: true,
+      reason: "result-text-detected",
+      format: "Auto",
+      atlasResultKind: "game-result",
+      endText: "Confirm Game 1 Winner",
+      opponentName: "CurlyNuke",
+      score: { me: "8", opp: "3", source: "atlas-score-track" },
+      myBattlefieldImage: "https://assets.riftatlas-workers.com/riftbound/cards/original/OGN-298.webp",
+      opponentBattlefieldImage: "https://assets.riftatlas-workers.com/riftbound/cards/original/OGN-276.webp"
+    }, "2026-05-11T13:24:55.490Z", "atlas");
+    tracker.ingest(gameOneEnd);
+    expect(tracker.shouldHoldForBo3("atlas", gameOneEnd)).toBe(true);
+    tracker.holdCurrentGame("atlas", gameOneEnd);
+
+    tracker.ingest(event("match-start", {
+      active: true,
+      format: "Auto",
+      myName: "BMU",
+      opponentName: "CurlyNuke",
+      score: { me: "0", opp: "0", source: "atlas-score-track" },
+      myBattlefieldImage: "https://assets.riftatlas-workers.com/riftbound/cards/original/OGN-289.webp",
+      opponentBattlefieldImage: "https://assets.riftatlas-workers.com/riftbound/cards/original/SFD-209.webp"
+    }, "2026-05-11T13:24:59.296Z", "atlas"));
+
+    const gameTwoEnd = event("match-end", {
+      active: true,
+      reason: "result-text-detected",
+      format: "Auto",
+      atlasResultKind: "game-result",
+      endText: "Confirm Game 2 Winner",
+      opponentName: "CurlyNuke",
+      score: { me: "2", opp: "8", source: "atlas-score-track" },
+      myBattlefieldImage: "https://assets.riftatlas-workers.com/riftbound/cards/original/OGN-289.webp",
+      opponentBattlefieldImage: "https://assets.riftatlas-workers.com/riftbound/cards/original/SFD-209.webp"
+    }, "2026-05-11T13:31:06.038Z", "atlas");
+    tracker.ingest(gameTwoEnd);
+
+    expect(tracker.shouldHoldForBo3("atlas", gameTwoEnd)).toBe(true);
+    tracker.holdCurrentGame("atlas", gameTwoEnd);
+
+    tracker.ingest(event("match-start", {
+      active: true,
+      format: "Auto",
+      myName: "BMU",
+      opponentName: "CurlyNuke",
+      score: { me: "0", opp: "0", source: "atlas-score-track" },
+      myBattlefieldImage: "https://assets.riftatlas-workers.com/riftbound/cards/original/SFD-220.webp",
+      opponentBattlefieldImage: "https://assets.riftatlas-workers.com/riftbound/cards/original/UNL-214.webp"
+    }, "2026-05-11T13:31:13.365Z", "atlas"));
+
+    const gameThreeEnd = event("match-end", {
+      active: true,
+      reason: "result-text-detected",
+      format: "Auto",
+      atlasResultKind: "game-result",
+      endText: "Confirm Game 3 Winner",
+      opponentName: "CurlyNuke",
+      score: { me: "8", opp: "5", source: "atlas-score-track" },
+      myBattlefieldImage: "https://assets.riftatlas-workers.com/riftbound/cards/original/SFD-220.webp",
+      opponentBattlefieldImage: "https://assets.riftatlas-workers.com/riftbound/cards/original/UNL-214.webp"
+    }, "2026-05-11T13:40:00.000Z", "atlas");
+    tracker.ingest(gameThreeEnd);
+
+    expect(tracker.shouldHoldForBo3("atlas", gameThreeEnd)).toBe(false);
+    const draft = tracker.buildDraft("atlas", gameThreeEnd, { ...settings, username: "BMU" });
+    expect(draft.format).toBe("Bo3");
+    expect(draft.games).toHaveLength(3);
+    expect(draft.games.map((game) => game.myBattlefieldImage)).toEqual([
+      "https://assets.riftatlas-workers.com/riftbound/cards/original/OGN-298.webp",
+      "https://assets.riftatlas-workers.com/riftbound/cards/original/OGN-289.webp",
+      "https://assets.riftatlas-workers.com/riftbound/cards/original/SFD-220.webp"
+    ]);
+  });
+
+  it("releases an Atlas BO3 on game two when the match is already 2-0", () => {
+    const tracker = new MatchSessionTracker();
+
+    const gameOneEnd = event("match-end", {
+      active: true,
+      reason: "result-text-detected",
+      format: "Bo3",
+      atlasResultKind: "game-result",
+      endText: "Confirm Game 1 Winner",
+      opponentName: "XD",
+      score: { me: "7", opp: "5", source: "atlas-score-track" },
+      myBattlefieldImage: "https://assets.riftatlas-workers.com/riftbound/cards/original/OGN-298.webp",
+      opponentBattlefieldImage: "https://assets.riftatlas-workers.com/riftbound/cards/original/UNL-209.webp"
+    }, "2026-05-11T15:11:15.203Z", "atlas");
+    tracker.ingest(event("match-start", {
+      active: true,
+      format: "Bo3",
+      opponentName: "XD",
+      score: { me: "6", opp: "5", source: "atlas-score-track" },
+      myBattlefieldImage: "https://assets.riftatlas-workers.com/riftbound/cards/original/OGN-298.webp",
+      opponentBattlefieldImage: "https://assets.riftatlas-workers.com/riftbound/cards/original/UNL-209.webp"
+    }, "2026-05-11T15:07:39.622Z", "atlas"));
+    tracker.ingest(gameOneEnd);
+    expect(tracker.shouldHoldForBo3("atlas", gameOneEnd)).toBe(true);
+    tracker.holdCurrentGame("atlas", gameOneEnd);
+
+    const gameTwoEnd = event("match-end", {
+      active: true,
+      reason: "result-text-detected",
+      format: "Bo3",
+      atlasResultKind: "game-result",
+      endText: "Confirm Game 2 Winner",
+      opponentName: "XD",
+      score: { me: "5", opp: "3", source: "atlas-score-track" },
+      myBattlefieldImage: "https://assets.riftatlas-workers.com/riftbound/cards/original/UNL-215.webp",
+      opponentBattlefieldImage: "https://assets.riftatlas-workers.com/riftbound/cards/original/OGN-297.webp"
+    }, "2026-05-11T15:18:46.738Z", "atlas");
+    tracker.ingest(event("match-start", {
+      active: true,
+      format: "Bo3",
+      opponentName: "XD",
+      score: { me: "0", opp: "0", source: "atlas-score-track" }
+    }, "2026-05-11T15:11:18.665Z", "atlas"));
+    tracker.ingest(gameTwoEnd);
+
+    expect(tracker.shouldHoldForBo3("atlas", gameTwoEnd)).toBe(false);
+    const draft = tracker.buildDraft("atlas", gameTwoEnd, { ...settings, username: "BMU" });
+    expect(draft.score).toBe("2-0");
+    expect(draft.games).toHaveLength(2);
+    expect(draft.games.map((game) => `${game.myPoints}-${game.oppPoints}`)).toEqual(["7-5", "5-3"]);
+    expect(draft.games.map((game) => game.myBattlefieldImage)).toEqual([
+      "https://assets.riftatlas-workers.com/riftbound/cards/original/OGN-298.webp",
+      "https://assets.riftatlas-workers.com/riftbound/cards/original/UNL-215.webp"
+    ]);
+  });
+
+  it("does not split one Atlas game when battlefield markers flicker at the same score", () => {
+    const tracker = new MatchSessionTracker();
+
+    tracker.ingest(event("match-start", {
+      active: true,
+      format: "Bo3",
+      opponentName: "XD",
+      score: { me: "6", opp: "5", source: "atlas-score-track" },
+      myBattlefieldImage: "https://assets.riftatlas-workers.com/riftbound/cards/original/OGN-298.webp",
+      opponentBattlefieldImage: "https://assets.riftatlas-workers.com/riftbound/cards/original/UNL-209.webp"
+    }, "2026-05-11T15:07:39.622Z", "atlas"));
+    tracker.ingest(event("match-snapshot", {
+      active: true,
+      format: "Bo3",
+      opponentName: "XD",
+      score: { me: "7", opp: "5", source: "atlas-score-track" },
+      myBattlefieldImage: "https://assets.riftatlas-workers.com/riftbound/cards/original/OGN-298.webp"
+    }, "2026-05-11T15:08:45.201Z", "atlas"));
+    tracker.ingest(event("match-snapshot", {
+      active: true,
+      format: "Bo3",
+      opponentName: "XD",
+      score: { me: "7", opp: "5", source: "atlas-score-track" },
+      myBattlefieldImage: "https://assets.riftatlas-workers.com/riftbound/cards/original/OGN-298.webp",
+      opponentBattlefieldImage: "https://assets.riftatlas-workers.com/riftbound/cards/original/UNL-209.webp"
+    }, "2026-05-11T15:09:05.256Z", "atlas"));
+    const gameOneEnd = event("match-end", {
+      active: true,
+      reason: "result-text-detected",
+      format: "Bo3",
+      atlasResultKind: "game-result",
+      endText: "Confirm Game 1 Winner",
+      opponentName: "XD",
+      score: { me: "7", opp: "5", source: "atlas-score-track" },
+      myBattlefieldImage: "https://assets.riftatlas-workers.com/riftbound/cards/original/OGN-298.webp",
+      opponentBattlefieldImage: "https://assets.riftatlas-workers.com/riftbound/cards/original/UNL-209.webp"
+    }, "2026-05-11T15:11:15.203Z", "atlas");
+    tracker.ingest(gameOneEnd);
+    expect(tracker.shouldHoldForBo3("atlas", gameOneEnd)).toBe(true);
+    tracker.holdCurrentGame("atlas", gameOneEnd);
+
+    tracker.ingest(event("match-start", {
+      active: true,
+      format: "Bo3",
+      opponentName: "XD",
+      score: { me: "0", opp: "0", source: "atlas-score-track" }
+    }, "2026-05-11T15:11:18.665Z", "atlas"));
+    const finalEnd = event("match-end", {
+      active: false,
+      reason: "inactive-debounce",
+      format: "Bo3",
+      opponentName: "XD",
+      score: { me: "", opp: "", source: "none" },
+      myBattlefieldImage: "https://assets.riftatlas-workers.com/riftbound/cards/original/UNL-215.webp",
+      opponentBattlefieldImage: "https://assets.riftatlas-workers.com/riftbound/cards/original/OGN-297.webp"
+    }, "2026-05-11T15:18:46.738Z", "atlas");
+    tracker.ingest(event("match-snapshot", {
+      active: true,
+      format: "Bo3",
+      opponentName: "XD",
+      score: { me: "5", opp: "3", source: "atlas-score-track" },
+      myBattlefieldImage: "https://assets.riftatlas-workers.com/riftbound/cards/original/UNL-215.webp",
+      opponentBattlefieldImage: "https://assets.riftatlas-workers.com/riftbound/cards/original/OGN-297.webp"
+    }, "2026-05-11T15:16:11.394Z", "atlas"));
+    tracker.ingest(finalEnd);
+
+    const draft = tracker.buildDraft("atlas", finalEnd, { ...settings, username: "BMU" });
+    expect(draft.games).toHaveLength(2);
+    expect(draft.games.map((game) => `${game.myPoints}-${game.oppPoints}`)).toEqual(["7-5", "5-3"]);
+  });
+
+  it("keeps Atlas Auto-format BO3 evidence when setup text looks like an opponent name", () => {
+    const tracker = new MatchSessionTracker();
+    const bmuSettings = { ...settings, username: "BMU" };
+
+    tracker.ingest(event("match-start", {
+      active: true,
+      format: "Auto",
+      myName: "BMU",
+      opponentName: "terr",
+      score: { me: "0", opp: "0", source: "atlas-score-track" },
+      myBattlefieldImage: "https://assets.riftatlas-workers.com/riftbound/cards/original/OGN-298.webp",
+      opponentBattlefieldImage: "https://assets.riftatlas-workers.com/riftbound/cards/original/OGN-276.webp"
+    }, "2026-05-10T07:51:54.922Z", "atlas"));
+
+    const gameOneEnd = event("match-end", {
+      active: true,
+      reason: "result-text-detected",
+      format: "Auto",
+      atlasResultKind: "game-result",
+      endText: "Confirm Game 1 Winner",
+      opponentName: "terr",
+      score: { me: "9", opp: "7", source: "atlas-score-track" },
+      myBattlefieldImage: "https://assets.riftatlas-workers.com/riftbound/cards/original/OGN-298.webp",
+      opponentBattlefieldImage: "https://assets.riftatlas-workers.com/riftbound/cards/original/OGN-276.webp"
+    }, "2026-05-10T08:06:36.654Z", "atlas");
+    tracker.ingest(gameOneEnd);
+    expect(tracker.shouldHoldForBo3("atlas", gameOneEnd)).toBe(true);
+    tracker.holdCurrentGame("atlas", gameOneEnd);
+
+    tracker.ingest(event("match-start", {
+      active: true,
+      format: "Auto",
+      opponentName: "07Locked in a BF",
+      score: { me: "0", opp: "0", source: "atlas-score-track" }
+    }, "2026-05-10T08:06:42.156Z", "atlas"));
+    tracker.ingest(event("match-snapshot", {
+      active: true,
+      format: "Auto",
+      opponentName: "07Chose terr to take the first",
+      score: { me: "3", opp: "2", source: "atlas-score-track" },
+      myBattlefieldImage: "https://assets.riftatlas-workers.com/riftbound/cards/original/UNL-215.webp",
+      opponentBattlefieldImage: "https://assets.riftatlas-workers.com/riftbound/cards/original/OGN-287.webp"
+    }, "2026-05-10T08:10:20.875Z", "atlas"));
+    tracker.ingest(event("match-snapshot", {
+      active: true,
+      format: "Auto",
+      opponentName: "terr",
+      score: { me: "7", opp: "2", source: "atlas-score-track" },
+      myBattlefieldImage: "https://assets.riftatlas-workers.com/riftbound/cards/original/UNL-215.webp",
+      opponentBattlefieldImage: "https://assets.riftatlas-workers.com/riftbound/cards/original/OGN-287.webp"
+    }, "2026-05-10T08:13:47.887Z", "atlas"));
+
+    const finalEnd = event("match-end", {
+      active: false,
+      reason: "inactive-debounce",
+      format: "Bo1",
+      score: { me: "", opp: "", source: "none" }
+    }, "2026-05-10T08:14:24.758Z", "atlas");
+    tracker.ingest(finalEnd);
+    expect(tracker.shouldHoldForBo3("atlas", finalEnd)).toBe(false);
+
+    const draft = tracker.buildDraft("atlas", finalEnd, bmuSettings);
+    expect(draft.format).toBe("Bo3");
+    expect(draft.score).toBe("2-0");
+    expect(draft.opponentName).toBe("terr");
+    expect(draft.games.map((game) => `${game.myPoints}-${game.oppPoints}`)).toEqual(["9-7", "7-2"]);
+    expect(draft.games.map((game) => game.myBattlefieldImage)).toEqual([
+      "https://assets.riftatlas-workers.com/riftbound/cards/original/OGN-298.webp",
+      "https://assets.riftatlas-workers.com/riftbound/cards/original/UNL-215.webp"
+    ]);
+  });
+
   it("freezes Atlas game battlefields before BO3 score resets can overwrite them", () => {
     const tracker = new MatchSessionTracker();
     const bmuSettings = { ...settings, username: "BMU" };
@@ -1211,6 +1498,52 @@ describe("MatchSessionTracker", () => {
     expect(draft.games.map((game) => `${game.myPoints}-${game.oppPoints}`)).toEqual(["3-2", "5-8", "6-7"]);
     expect(draft.games.map((game) => game.myBattlefieldImage)).toEqual([gameOneMine, gameTwoMine, gameThreeMine]);
     expect(draft.games.map((game) => game.oppBattlefieldImage)).toEqual([gameOneOpponent, gameTwoOpponent, gameThreeOpponent]);
+  });
+
+  it("asks the coordinator to review a held Atlas BO3 before a different opponent is absorbed", () => {
+    const tracker = new MatchSessionTracker();
+
+    tracker.ingest(event("match-start", {
+      active: true,
+      format: "Auto",
+      opponentName: "Bliss",
+      score: { me: "0", opp: "0", source: "atlas-score-track" }
+    }, "2026-05-06T19:22:11.537Z", "atlas"));
+    const gameOneEnd = event("match-end", {
+      active: true,
+      reason: "result-text-detected",
+      format: "Auto",
+      atlasResultKind: "game-result",
+      endText: "Confirm Game 1 Winner",
+      opponentName: "Bliss",
+      score: { me: "7", opp: "5", source: "atlas-score-track" },
+      myBattlefieldImage: "https://assets.riftatlas-workers.com/riftbound/cards/original/UNL-215.webp",
+      opponentBattlefieldImage: "https://assets.riftatlas-workers.com/riftbound/cards/original/OGN-295.webp"
+    }, "2026-05-06T19:36:24.422Z", "atlas");
+    tracker.ingest(gameOneEnd);
+    expect(tracker.shouldHoldForBo3("atlas", gameOneEnd)).toBe(true);
+    tracker.holdCurrentGame("atlas", gameOneEnd);
+
+    tracker.ingest(event("match-start", {
+      active: true,
+      format: "Auto",
+      opponentName: "Bliss",
+      score: { me: "5", opp: "6", source: "atlas-score-track" },
+      myBattlefieldImage: "https://assets.riftatlas-workers.com/riftbound/cards/original/SFD-218.webp",
+      opponentBattlefieldImage: "https://assets.riftatlas-workers.com/riftbound/cards/original/OGN-297.webp"
+    }, "2026-05-06T19:52:31.519Z", "atlas"));
+
+    const nextOpponentEnd = event("match-end", {
+      active: true,
+      reason: "result-text-detected",
+      format: "Auto",
+      atlasResultKind: "game-result",
+      endText: "Confirm Game 1 Winner",
+      opponentName: "CurlyNuke",
+      score: { me: "6", opp: "5", source: "atlas-score-track" }
+    }, "2026-05-06T20:50:19.019Z", "atlas");
+
+    expect(tracker.shouldFinalizeBeforeNewSession(nextOpponentEnd)).toBe(true);
   });
 
   it("keeps Atlas BO3 game results even when score is blank", () => {

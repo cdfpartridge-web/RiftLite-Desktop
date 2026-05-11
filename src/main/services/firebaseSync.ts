@@ -885,12 +885,12 @@ function readString(value: unknown): string {
 
 function isGenericDisplayName(value: unknown): boolean {
   const cleaned = readString(value).toLowerCase().replace(/\s+/g, " ");
-  return !cleaned || GENERIC_DISPLAY_NAMES.has(cleaned) || /^player(?:[ #_-]|$)/.test(cleaned);
+  return !cleaned || GENERIC_DISPLAY_NAMES.has(cleaned) || /^player(?:[ _-]|$)/.test(cleaned);
 }
 
 function fallbackAccountName(uid = ""): string {
   const suffix = uid.replace(/[^a-zA-Z0-9]/g, "").slice(0, 6);
-  return suffix ? `Player ${suffix}` : "";
+  return suffix ? `Player#${suffix}` : "";
 }
 
 function bestDisplayNameCandidate(...values: unknown[]): string {

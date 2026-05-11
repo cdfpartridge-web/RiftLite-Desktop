@@ -20,6 +20,7 @@ import {
   FolderOpen,
   Gamepad2,
   Globe2,
+  GripVertical,
   History,
   Images,
   Keyboard,
@@ -57,7 +58,15 @@ import type {
   CaptureDiagnosticsSummary,
   CaptureEvent,
   CaptureHealth,
+  DeckCardWatchStatus,
   DeckEntry,
+  DeckGuideCardRef,
+  DeckGuideSection,
+  DeckGuideNote,
+  DeckMatchupGuide,
+  DeckNotebook,
+  DeckTestingGoalStatus,
+  DeckTrackerState,
   GamePlatform,
   HubActionResult,
   HubInboxItem,
@@ -95,8 +104,19 @@ import type {
 } from "../shared/types";
 import { buildAtlasReplay, replaySnapshotCardCount, type AtlasReplayViewModel, type ReplayTimelineEvent, type ReplayTurnView } from "../shared/atlasReplay";
 import { activeDeckOverlayStats, buildDeckPerformance, type DeckBattlefieldPairStat, type DeckBattlefieldStat, type DeckPerformanceStats, type DeckRecordStats } from "../shared/deckPerformance";
+import {
+  buildDeckVersionPerformance,
+  deckNotebookBattlefieldCardOptions,
+  deckNotebookCardOptions,
+  deckNotebookMainDeckCardOptions,
+  deckNotebookMulliganCardOptions,
+  deckNotebookSideboardCardOptions,
+  emptyDeckMatchupGuide,
+  emptyDeckNotebook,
+  resolveDeckMatchupGuide
+} from "../shared/deckNotebook";
 import { CANONICAL_LEGEND_NAMES, canonicalLegendName, legendAliasesFor, normalizeLegendName } from "../shared/legendNames";
-import { legendImageUrl } from "../shared/legendImages";
+import { legendFromImageUrl, legendImageUrl } from "../shared/legendImages";
 import { upsertMatchPreservingOrder } from "../shared/matchList";
 import { publicCommunitySyncEnabled, syncModePatch } from "../shared/syncPolicy";
 import "./styles/app.css";
@@ -116,16 +136,18 @@ const DEFAULT_HEALTH: CaptureHealth = {
   eventCount: 0
 };
 
+const DECK_TRACKER_FEATURE_ENABLED = false;
+
 const DEFAULT_UPDATE_STATUS: UpdateStatus = {
   state: "idle",
-  currentVersion: "0.7.40",
+  currentVersion: "0.7.50",
   message: "Updater ready"
 };
 
-const APP_VERSION_META = "0.7.40";
+const APP_VERSION_META = "0.7.50";
 const RELEASE_NOTES = {
   version: APP_VERSION_META,
-  title: "RiftLite 0.7.40",
+  title: "RiftLite 0.7.50",
   intro: "This update focuses on clearer reviews, healthier replays, and easier tester support.",
   items: [
     "Match reviews now show capture confidence and clearer BO3 incomplete-match guidance.",
@@ -138,6 +160,8 @@ const RIOT_LEGAL_NOTICE = `RiftLite was created under Riot Games' "Legal Jibber 
 const REVIEW_DISMISS_PREFIX = "riftlite-dismissed-review:";
 const DIRECT_REPLAY_MODE_MIGRATION_KEY = "riftlite-direct-replay-mode-v2";
 const VIDEO_REPLAY_DEFAULTS_MIGRATION_KEY = "riftlite-video-replay-defaults-v070";
+const MATCHUP_PREP_POSITION_KEY = "riftlite-matchup-prep-position-v1";
+const MATCHUP_PREP_HIDDEN_KEY = "riftlite-matchup-prep-hidden-v1";
 const STARTUP_VALUE_TIMEOUT_MS = 6_000;
 
 async function startupValue<T>(label: string, promise: Promise<T>, fallback: T): Promise<T> {
@@ -174,14 +198,39 @@ type ReplayRecorderFormat = {
 
 function supportedReplayVideoFormats(): ReplayRecorderFormat[] {
   const candidates = [
+    { recorderMimeType: "video/mp4;codecs=avc1.640028,mp4a.40.2", fileMimeType: "video/mp4" as const, codec: "H.264 MP4 + mic" },
+    { recorderMimeType: "video/mp4;codecs=avc1.4D4028,mp4a.40.2", fileMimeType: "video/mp4" as const, codec: "H.264 MP4 + mic" },
     { recorderMimeType: "video/mp4;codecs=avc1.640028", fileMimeType: "video/mp4" as const, codec: "H.264 MP4" },
     { recorderMimeType: "video/mp4;codecs=avc1.4D4028", fileMimeType: "video/mp4" as const, codec: "H.264 MP4" },
     { recorderMimeType: "video/mp4", fileMimeType: "video/mp4" as const, codec: "MP4" },
+    { recorderMimeType: "video/webm;codecs=vp8,opus", fileMimeType: "video/webm" as const, codec: "VP8 WebM + mic" },
+    { recorderMimeType: "video/webm;codecs=vp9,opus", fileMimeType: "video/webm" as const, codec: "VP9 WebM + mic" },
     { recorderMimeType: "video/webm;codecs=vp8", fileMimeType: "video/webm" as const, codec: "VP8 WebM" },
     { recorderMimeType: "video/webm", fileMimeType: "video/webm" as const, codec: "WebM" },
     { recorderMimeType: "video/webm;codecs=vp9", fileMimeType: "video/webm" as const, codec: "VP9 WebM" }
   ];
   return candidates.filter((candidate) => MediaRecorder.isTypeSupported(candidate.recorderMimeType));
+}
+
+async function createReplayMicrophoneStream(microphoneDeviceId: string): Promise<MediaStream> {
+  const audio: MediaTrackConstraints = {
+    ...(microphoneDeviceId ? { deviceId: { exact: microphoneDeviceId } } : {}),
+    echoCancellation: false,
+    noiseSuppression: false,
+    autoGainControl: false,
+    channelCount: 1,
+    sampleRate: 48_000,
+    sampleSize: 16
+  };
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio });
+    await Promise.all(stream.getAudioTracks().map((track) => track.applyConstraints(audio).catch(() => undefined)));
+    return stream;
+  } catch {
+    return navigator.mediaDevices.getUserMedia({
+      audio: microphoneDeviceId ? { deviceId: { exact: microphoneDeviceId } } : true
+    });
+  }
 }
 
 function formatBytes(value: number): string {
@@ -497,6 +546,8 @@ type ReplayVideoRuntime = {
   height: number;
   timer: number;
   sourceStream?: MediaStream;
+  micStream?: MediaStream;
+  hasAudio: boolean;
   sourceVideo?: ReplaySourceVideoElement;
   videoFrameCallbackId?: number;
   resizeGuardCleanup?: () => void;
@@ -1311,6 +1362,10 @@ function App() {
   const [deletedMatches, setDeletedMatches] = useState<MatchDraft[]>([]);
   const [deletedReplays, setDeletedReplays] = useState<ReplayRecord[]>([]);
   const [decks, setDecks] = useState<SavedDeck[]>([]);
+  const [deckTrackerState, setDeckTrackerState] = useState<DeckTrackerState | null>(null);
+  const [prepNotebook, setPrepNotebook] = useState<DeckNotebook | null>(null);
+  const [prepOpponentLegend, setPrepOpponentLegend] = useState("");
+  const [prepSideboardHint, setPrepSideboardHint] = useState(false);
   const [battlefields, setBattlefields] = useState<BattlefieldOption[]>([]);
   const [communityMatches, setCommunityMatches] = useState<CommunityMatch[]>([]);
   const [hubMatches, setHubMatches] = useState<Record<string, CommunityMatch[]>>({});
@@ -1341,6 +1396,10 @@ function App() {
   const communityLoadedRef = useRef(false);
   const activeViewRef = useRef<ActiveView>(activeView);
   const settingsRef = useRef<UserSettings | null>(settings);
+  const decksRef = useRef<SavedDeck[]>(decks);
+  const prepNotebookRef = useRef<DeckNotebook | null>(prepNotebook);
+  const prepOpponentLegendRef = useRef("");
+  const consumedPrepNoteDraftIdsRef = useRef(new Set<string>());
   const replayVideoRef = useRef<ReplayVideoRuntime | null>(null);
   const pendingReplayVideoRef = useRef<ReplayVideoAsset | null>(null);
   const pendingReplayVideoSegmentsRef = useRef<ReplayVideoAsset[]>([]);
@@ -1350,6 +1409,11 @@ function App() {
   const replayVideoResizeResumeTimerRef = useRef<number | undefined>(undefined);
   const lastReplayArmAttemptRef = useRef(0);
   const gameZoom = clampGameZoom(settings?.gameZoomFactor);
+  const playActiveDeck = useMemo(
+    () => settings?.activeDeckId ? decks.find((deck) => deck.id === settings.activeDeckId) ?? null : null,
+    [decks, settings?.activeDeckId]
+  );
+  const previousMatchFlags = useMemo(() => previousFlagsFromMatches(matches), [matches]);
 
   useEffect(() => {
     activeViewRef.current = activeView;
@@ -1360,9 +1424,25 @@ function App() {
   }, [settings]);
 
   useEffect(() => {
+    decksRef.current = decks;
+  }, [decks]);
+
+  useEffect(() => {
+    prepNotebookRef.current = prepNotebook;
+  }, [prepNotebook]);
+
+  useEffect(() => {
+    prepOpponentLegendRef.current = prepOpponentLegend;
+  }, [prepOpponentLegend]);
+
+  useEffect(() => {
     void bootstrap();
     const offEvent = window.riftlite.onCaptureEvent((event) => {
       void maybeStartReplayVideo(event);
+      updatePrepFromCaptureEvent(event);
+      if (DECK_TRACKER_FEATURE_ENABLED) {
+        void refreshDeckTrackerState();
+      }
       scheduleDiagnosticsRefresh();
     });
     const offHealth = window.riftlite.onCaptureHealth((nextHealth) => {
@@ -1377,7 +1457,7 @@ function App() {
     });
     const offDraft = window.riftlite.onMatchDraft((draft) => {
       clearPendingReviewFallback();
-      const repairedDraft = sanitizeDraftDeckDefaults(repairDraftForReview(draft));
+      const repairedDraft = prepareDraftForReview(draft);
       clearDismissedReview(repairedDraft);
       setReviewDraft(repairedDraft);
       setMatches((current) => upsertMatchPreservingOrder(current, repairedDraft));
@@ -1426,12 +1506,52 @@ function App() {
   }, [activePlatform]);
 
   useEffect(() => {
+    if (!DECK_TRACKER_FEATURE_ENABLED) {
+      setDeckTrackerState(null);
+      return;
+    }
     if (!settings) {
       return;
     }
     const timer = window.setTimeout(() => applyGameZoom(clampGameZoom(settings.gameZoomFactor)), 50);
     return () => window.clearTimeout(timer);
   }, [activePlatform, preloadUrl, settings?.gameZoomFactor]);
+
+  useEffect(() => {
+    if (!settings) {
+      return;
+    }
+    void refreshDeckTrackerState();
+    if (activeView !== "play") {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      void refreshDeckTrackerState();
+    }, 2500);
+    return () => window.clearInterval(timer);
+  }, [activeView, activePlatform, settings?.activeDeckId, settings?.deckTrackerEnabled, settings?.deckTrackerAutoStart]);
+
+  useEffect(() => {
+    if (!settings?.activeDeckId) {
+      setPrepNotebook(null);
+      return;
+    }
+    let cancelled = false;
+    void window.riftlite.getDeckNotebook(settings.activeDeckId)
+      .then((notebook) => {
+        if (!cancelled) {
+          setPrepNotebook(notebook);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setPrepNotebook(null);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [settings?.activeDeckId, decks, activeView]);
 
   useEffect(() => {
     function handleRefreshShortcut(event: KeyboardEvent) {
@@ -1574,7 +1694,7 @@ function App() {
     if (bootSettings.confirmationEnabled) {
       const pendingReview = latestPendingReviewMatch(nextMatches, { maxAgeMs: PENDING_REVIEW_STARTUP_WINDOW_MS });
       if (pendingReview) {
-        setReviewDraft((current) => current ?? sanitizeDraftDeckDefaults(repairDraftForReview(pendingReview)));
+        setReviewDraft((current) => current ?? prepareDraftForReview(pendingReview));
       }
     }
     if (shouldShowReleaseNotes) {
@@ -1608,6 +1728,23 @@ function App() {
     showActionFeedback(message, 4500);
   }
 
+  function updatePrepFromCaptureEvent(event: CaptureEvent) {
+    if (!["match-start", "match-snapshot", "match-update", "match-end"].includes(event.kind)) {
+      return;
+    }
+    if (event.kind === "match-start") {
+      setPrepOpponentLegend("");
+      setPrepSideboardHint(false);
+    }
+    const opponent = opponentLegendFromCaptureEvent(event);
+    if (opponent) {
+      setPrepOpponentLegend(opponent);
+    }
+    if (captureEventMentionsSideboard(event)) {
+      setPrepSideboardHint(true);
+    }
+  }
+
   async function openLatestPendingReview() {
     const [nextSettings, nextMatches] = await Promise.all([
       window.riftlite.getSettings(),
@@ -1622,7 +1759,7 @@ function App() {
     if (!pendingReview) {
       return;
     }
-    setReviewDraft((current) => current && current.status !== "saved" ? current : sanitizeDraftDeckDefaults(repairDraftForReview(pendingReview)));
+    setReviewDraft((current) => current && current.status !== "saved" ? current : prepareDraftForReview(pendingReview));
   }
 
   async function forceCaptureReview() {
@@ -1633,7 +1770,7 @@ function App() {
       showActionFeedback(`No active ${activePlatform === "tcga" ? "TCGA" : "Atlas"} capture data to force yet.`);
       return;
     }
-    const repairedDraft = sanitizeDraftDeckDefaults(repairDraftForReview(draft));
+    const repairedDraft = prepareDraftForReview(draft);
     clearDismissedReview(repairedDraft);
     setReviewDraft(repairedDraft);
     setMatches((current) => upsertMatchPreservingOrder(current, repairedDraft));
@@ -1645,6 +1782,71 @@ function App() {
       markReviewDismissed(reviewDraft);
     }
     setReviewDraft(null);
+  }
+
+  function prepareDraftForReview(draft: MatchDraft): MatchDraft {
+    const repaired = sanitizeDraftDeckDefaults(repairDraftForReview(draft));
+    return appendMatchupPrepNotes(repaired);
+  }
+
+  function appendMatchupPrepNotes(draft: MatchDraft): MatchDraft {
+    const notebook = prepNotebookRef.current;
+    const settingsSnapshot = settingsRef.current;
+    if (!notebook || !settingsSnapshot?.activeDeckId) {
+      return draft;
+    }
+    const activeDeck = decksRef.current.find((deck) => deck.id === settingsSnapshot.activeDeckId);
+    if (!activeDeck) {
+      return draft;
+    }
+    const draftDeckKey = draft.deckSourceKey || draft.deckSourceId || "";
+    const activeKeys = new Set([activeDeck.id, activeDeck.sourceKey, activeDeck.sourceUrl].filter(Boolean));
+    if (draftDeckKey && !activeKeys.has(draftDeckKey) && draft.deckSourceUrl && draft.deckSourceUrl !== activeDeck.sourceUrl) {
+      return draft;
+    }
+    const opponentLegend = normalizeLegendName(draft.opponentChampion || prepOpponentLegendRef.current);
+    const resolved = resolveDeckMatchupGuide(notebook, opponentLegend);
+    const notes = resolved.guide.notes
+      .filter((note) => note.source === "play")
+      .map((note) => note.text.trim())
+      .filter(Boolean);
+    if (!notes.length) {
+      return draft;
+    }
+    const heading = `Matchup prep notes${opponentLegend ? ` vs ${opponentLegend}` : ""}:`;
+    if (draft.notes.includes(heading)) {
+      clearImportedPrepNotesOnce(draft.id, notebook);
+      return draft;
+    }
+    const block = [heading, ...notes.map((note) => `- ${note}`)].join("\n");
+    clearImportedPrepNotesOnce(draft.id, notebook);
+    return {
+      ...draft,
+      notes: [draft.notes.trim(), block].filter(Boolean).join("\n\n")
+    };
+  }
+
+  function clearImportedPrepNotesOnce(draftId: string, notebook: DeckNotebook) {
+    if (consumedPrepNoteDraftIdsRef.current.has(draftId)) {
+      return;
+    }
+    consumedPrepNoteDraftIdsRef.current.add(draftId);
+    const cleaned = deckNotebookWithoutPlayNotes(notebook);
+    if (cleaned === notebook) {
+      return;
+    }
+    prepNotebookRef.current = cleaned;
+    setPrepNotebook(cleaned);
+    const activeDeckId = settingsRef.current?.activeDeckId;
+    if (!activeDeckId) {
+      return;
+    }
+    void window.riftlite.saveDeckNotebook(activeDeckId, cleaned)
+      .then((saved) => {
+        prepNotebookRef.current = saved;
+        setPrepNotebook(saved);
+      })
+      .catch(() => undefined);
   }
 
   function scheduleDiagnosticsRefresh(delayMs = 900, force = false) {
@@ -1718,6 +1920,26 @@ function App() {
     }
   }
 
+  async function toggleReplayMicrophone() {
+    const current = settingsRef.current;
+    if (!current) {
+      return;
+    }
+    const nextEnabled = !current.replayMicAudioEnabled;
+    const next = await window.riftlite.saveSettings({ replayMicAudioEnabled: nextEnabled });
+    setSettings(next);
+    const runtime = replayVideoRef.current;
+    if (runtime?.micStream) {
+      runtime.micStream.getAudioTracks().forEach((track) => {
+        track.enabled = nextEnabled;
+      });
+      runtime.hasAudio = true;
+      showActionFeedback(nextEnabled ? "Replay microphone on." : "Replay microphone muted.");
+      return;
+    }
+    showActionFeedback(nextEnabled ? "Replay microphone will record with the next video replay." : "Replay microphone off.");
+  }
+
   async function dismissReleaseNotes() {
     setReleaseNotesOpen(false);
     const next = await window.riftlite.saveSettings({ lastSeenVersion: APP_VERSION_META });
@@ -1743,6 +1965,57 @@ function App() {
     ]);
     setDecks(nextDecks);
     setSettings(nextSettings);
+    if (nextSettings.activeDeckId) {
+      void window.riftlite.getDeckNotebook(nextSettings.activeDeckId).then(setPrepNotebook).catch(() => setPrepNotebook(null));
+    } else {
+      setPrepNotebook(null);
+    }
+    if (DECK_TRACKER_FEATURE_ENABLED) {
+      void refreshDeckTrackerState();
+    }
+  }
+
+  async function refreshDeckTrackerState() {
+    if (!DECK_TRACKER_FEATURE_ENABLED) {
+      setDeckTrackerState(null);
+      return;
+    }
+    const state = await window.riftlite.getDeckTrackerState().catch(() => null);
+    if (state) {
+      setDeckTrackerState(state);
+    }
+  }
+
+  async function adjustDeckTrackerCard(cardKey: string, delta: number) {
+    if (!DECK_TRACKER_FEATURE_ENABLED) {
+      return;
+    }
+    const state = await window.riftlite.adjustDeckTrackerCard(cardKey, delta);
+    setDeckTrackerState(state);
+  }
+
+  async function setDeckTrackerPins(deckId: string, cardKeys: string[]) {
+    if (!DECK_TRACKER_FEATURE_ENABLED) {
+      return;
+    }
+    const state = await window.riftlite.setDeckTrackerPinnedCards(deckId, cardKeys);
+    setDeckTrackerState(state);
+  }
+
+  async function resetDeckTrackerMatch() {
+    if (!DECK_TRACKER_FEATURE_ENABLED) {
+      return;
+    }
+    const state = await window.riftlite.resetDeckTrackerMatch();
+    setDeckTrackerState(state);
+  }
+
+  async function savePrepNotebook(next: DeckNotebook) {
+    if (!playActiveDeck) {
+      return;
+    }
+    const saved = await window.riftlite.saveDeckNotebook(playActiveDeck.id, next);
+    setPrepNotebook(saved);
   }
 
   async function refreshReplays(focusReplayId = "") {
@@ -2168,14 +2441,34 @@ function App() {
         source = "system-window-crop";
       }
     }
+    let micStream: MediaStream | undefined;
+    let recorderStream = stream;
+    if (currentSettings.replayMicAudioEnabled) {
+      try {
+        micStream = await createReplayMicrophoneStream(currentSettings.microphoneDeviceId);
+        const audioTracks = micStream.getAudioTracks();
+        if (audioTracks.length) {
+          recorderStream = new MediaStream([...stream.getVideoTracks(), ...audioTracks]);
+        } else {
+          micStream.getTracks().forEach((track) => track.stop());
+          micStream = undefined;
+        }
+      } catch (error) {
+        showActionFeedback("Replay microphone could not start; video replay continues without voice.");
+        reportReplayVideoDebug(event.platform, "microphone-start-failed", {
+          message: error instanceof Error ? error.message : String(error)
+        });
+      }
+    }
     let recorder: MediaRecorder | null = null;
     let recorderFormat: ReplayRecorderFormat | null = null;
     for (const candidate of recorderFormats) {
       try {
-        recorder = new MediaRecorder(stream, {
+        recorder = new MediaRecorder(recorderStream, {
           mimeType: candidate.recorderMimeType,
           bitsPerSecond: profile.bitrateKbps * 1000,
-          videoBitsPerSecond: profile.bitrateKbps * 1000
+          videoBitsPerSecond: profile.bitrateKbps * 1000,
+          ...(micStream ? { audioBitsPerSecond: 96_000 } : {})
         });
         recorderFormat = candidate;
         break;
@@ -2184,6 +2477,7 @@ function App() {
       }
     }
     if (!recorder || !recorderFormat) {
+      micStream?.getTracks().forEach((track) => track.stop());
       sourceStream?.getTracks().forEach((track) => track.stop());
       if (stream !== sourceStream) {
         stream.getTracks().forEach((track) => track.stop());
@@ -2210,11 +2504,13 @@ function App() {
       canvas,
       context,
       recorder,
-      stream,
+      stream: recorderStream,
       width,
       height,
       timer: 0,
       sourceStream,
+      micStream,
+      hasAudio: Boolean(micStream),
       sourceVideo,
       videoFrameCallbackId: undefined,
       cropCache: undefined,
@@ -2260,7 +2556,7 @@ function App() {
       ? "direct game frame"
       : "window crop";
     if (!isResizeResume) {
-      showActionFeedback(`Video replay started (${profile.label}, ${modeLabel}).`);
+      showActionFeedback(`Video replay started (${profile.label}, ${modeLabel}${runtime.hasAudio ? ", mic on" : ""}).`);
     }
     const recorderTrack = runtime.stream.getVideoTracks()[0] ?? runtime.sourceStream?.getVideoTracks()[0];
     const trackSettings = recorderTrack?.getSettings?.();
@@ -2282,6 +2578,7 @@ function App() {
       sourceHeight: sourceTrackSettings?.height,
       sourceFps: sourceTrackSettings?.frameRate,
       bitrateKbps: profile.bitrateKbps,
+      hasAudio: runtime.hasAudio,
       resampled: Boolean(runtime.canvas && runtime.source === "game-frame-direct"),
       constantFps: Boolean(profile.constantFps),
       chunkMs: 5000
@@ -2748,6 +3045,7 @@ function App() {
       await runtime.writeChain.catch(() => undefined);
       await Promise.allSettled(runtime.pendingWrites);
       runtime.sourceStream?.getTracks().forEach((track) => track.stop());
+      runtime.micStream?.getTracks().forEach((track) => track.stop());
       if (runtime.sourceVideo) {
         runtime.sourceVideo.pause();
         runtime.sourceVideo.srcObject = null;
@@ -2770,7 +3068,8 @@ function App() {
         codec: runtime.codec,
         quality: runtime.quality,
         mimeType: runtime.fileMimeType,
-        source: runtime.source
+        source: runtime.source,
+        hasAudio: runtime.hasAudio
       });
       if (draft) {
         const retainedSegments = pendingReplayVideoSegmentsRef.current.filter((segment) => segment.platform === draft.platform);
@@ -2927,6 +3226,14 @@ function App() {
             >
               <Camera size={16} />
             </button>
+            <button
+              className="segmented icon-segment"
+              onClick={() => void toggleReplayMicrophone()}
+              data-active={settings.replayMicAudioEnabled}
+              title={settings.replayMicAudioEnabled ? "Replay microphone is on" : "Record microphone into video replays"}
+            >
+              <Mic size={16} />
+            </button>
             <button className="segmented icon-segment" onClick={() => setDetailsOpen((open) => !open)} data-active={detailsOpen} title="Capture details">
               {detailsOpen ? <X size={16} /> : <SlidersHorizontal size={16} />}
             </button>
@@ -2969,6 +3276,23 @@ function App() {
             <SessionCard stats={sessionStats} matches={matches} />
             <SyncCard settings={settings} onSave={saveSettings} onForceReview={forceCaptureReview} />
           </aside>
+          {DECK_TRACKER_FEATURE_ENABLED ? (
+            <DeckTrackerOverlay
+              state={deckTrackerState}
+              onAdjust={adjustDeckTrackerCard}
+              onPinnedChange={setDeckTrackerPins}
+              onReset={resetDeckTrackerMatch}
+            />
+          ) : null}
+          {playActiveDeck && prepNotebook ? (
+            <MatchupPrepOverlay
+              deck={playActiveDeck}
+              notebook={prepNotebook}
+              opponentLegend={prepOpponentLegend}
+              sideboardSuggested={prepSideboardHint}
+              onSave={(next) => void savePrepNotebook(next)}
+            />
+          ) : null}
         </section>
 
         {activeView !== "play" ? (
@@ -3018,7 +3342,7 @@ function App() {
             onMatchesChanged={async () => {
               setMatches(await window.riftlite.getMatches());
             }}
-            onReview={(draft) => setReviewDraft(sanitizeDraftDeckDefaults(repairDraftForReview(draft)))}
+            onReview={(draft) => setReviewDraft(prepareDraftForReview(draft))}
             replayFocusId={focusedReplayId}
             onReplayFocusConsumed={() => setFocusedReplayId("")}
             onOpenReplayForMatch={openReplayForMatch}
@@ -3046,6 +3370,7 @@ function App() {
               draft={reviewDraft}
               decks={decks}
               battlefields={battlefields}
+              previousFlags={previousMatchFlags}
               onClose={dismissReviewDraft}
               onConfirm={confirmDraft}
           onChange={setReviewDraft}
@@ -3377,6 +3702,112 @@ function SyncCard({
       </button>
       <p className="muted force-review-copy">Manual backup if a BO3 is abandoned or the automatic popup does not appear.</p>
     </section>
+  );
+}
+
+function DeckTrackerOverlay({
+  state,
+  onAdjust,
+  onPinnedChange,
+  onReset
+}: {
+  state: DeckTrackerState | null;
+  onAdjust: (cardKey: string, delta: number) => Promise<void>;
+  onPinnedChange: (deckId: string, cardKeys: string[]) => Promise<void>;
+  onReset: () => Promise<void>;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const [search, setSearch] = useState("");
+  const [busyKey, setBusyKey] = useState("");
+  const cards = state?.cards ?? [];
+  const pinnedCards = cards.filter((card) => card.pinned);
+  const needle = search.trim().toLowerCase();
+  const visibleCards = (needle
+    ? cards.filter((card) => [card.name, card.code, card.cardId].join(" ").toLowerCase().includes(needle))
+    : (pinnedCards.length ? pinnedCards : cards)
+  ).slice(0, 10);
+  const title = state?.active ? `${state.cardsLeft}/${state.deckSize} left` : "Deck";
+
+  async function adjust(cardKey: string, delta: number) {
+    setBusyKey(cardKey);
+    try {
+      await onAdjust(cardKey, delta);
+    } finally {
+      setBusyKey("");
+    }
+  }
+
+  async function togglePin(cardKey: string) {
+    if (!state?.deckId) {
+      return;
+    }
+    const current = new Set(state.pinnedCards);
+    if (current.has(cardKey)) {
+      current.delete(cardKey);
+    } else {
+      current.add(cardKey);
+    }
+    await onPinnedChange(state.deckId, [...current]);
+  }
+
+  return (
+    <div className="deck-tracker-overlay" data-expanded={expanded}>
+      {!expanded ? (
+        <button type="button" className="deck-tracker-pill" onClick={() => setExpanded(true)} title="Open My Deck Tracker">
+          <BookOpen size={16} />
+          <span>{title}</span>
+        </button>
+      ) : (
+        <section className="deck-tracker-panel" aria-label="My Deck Tracker">
+          <header>
+            <div>
+              <span>My Deck Tracker</span>
+              <h2>{state?.deckTitle || "Set active deck"}</h2>
+              <p>{state?.reason || "Waiting for an active match."}</p>
+            </div>
+            <button type="button" className="icon-button" onClick={() => setExpanded(false)} aria-label="Collapse deck tracker">
+              <X size={15} />
+            </button>
+          </header>
+          <div className="deck-tracker-summary">
+            <Metric label="Deck left" value={state?.active ? String(state.cardsLeft) : "-"} />
+            <Metric label="Seen" value={state?.active ? String(state.seenCount) : "-"} />
+            <Metric label="Confidence" value={state?.confidence === "tracked" ? "Tracked" : "Estimated"} />
+          </div>
+          <label className="deck-tracker-search">
+            Search or pin cards
+            <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Card name or code..." />
+          </label>
+          <div className="deck-tracker-card-list">
+            {visibleCards.map((card) => (
+              <div className="deck-tracker-card" key={card.cardKey}>
+                {card.imageUrl ? <img src={card.imageUrl} alt="" loading="lazy" /> : <span className="deck-tracker-card-fallback">{card.name.slice(0, 2)}</span>}
+                <div className="deck-tracker-card-main">
+                  <button type="button" onClick={() => void togglePin(card.cardKey)} data-pinned={card.pinned}>
+                    <Flag size={13} /> {card.name}
+                  </button>
+                  <small>{card.copiesLeft}/{card.deckCount} left {card.code ? `- ${card.code}` : ""}</small>
+                  <div className="deck-tracker-odds">
+                    <span>1: {percent(card.odds.next1)}</span>
+                    <span>2: {percent(card.odds.next2)}</span>
+                    <span>3: {percent(card.odds.next3)}</span>
+                  </div>
+                </div>
+                <div className="deck-tracker-adjust">
+                  <button type="button" disabled={busyKey === card.cardKey} onClick={() => void adjust(card.cardKey, 1)} title="Mark one extra seen copy">-</button>
+                  <button type="button" disabled={busyKey === card.cardKey} onClick={() => void adjust(card.cardKey, -1)} title="Undo one seen copy">+</button>
+                </div>
+              </div>
+            ))}
+            {state?.active && !visibleCards.length ? <p className="muted">No cards match that search.</p> : null}
+            {!state?.active ? <p className="muted">Pick an active deck in Decks, then start a TCGA or Atlas match.</p> : null}
+          </div>
+          <footer>
+            <button type="button" className="secondary" onClick={() => void onReset()}><RefreshCw size={14} /> Reset match</button>
+          </footer>
+        </section>
+      )}
+    </div>
   );
 }
 
@@ -4853,6 +5284,8 @@ function MatchesView({
           const opponentLegend = normalizeLegendName(match.opponentChampion);
           const syncable = isPrivateHubSyncableMatch(match);
           const checked = selectedSyncIds.includes(match.id);
+          const replay = replayByMatch.get(match.id);
+          const matchTimerLabel = matchTimerLabelFromReplay(replay);
           return (
           <div
             className="match-row interactive-row"
@@ -4882,6 +5315,7 @@ function MatchesView({
               <span className="match-result-pill" data-result={match.result}>{match.result}</span>
               <strong>{displayMatchRecord(match) || "Score pending"}</strong>
               <span>{new Date(match.capturedAt).toLocaleString()}</span>
+              {matchTimerLabel ? <span>Timer {matchTimerLabel}</span> : null}
             </div>
             <div className="match-legend-cell">
               <LegendAvatar legend={myLegend || "Unknown"} />
@@ -4900,7 +5334,7 @@ function MatchesView({
             </div>
             <SyncPill match={match} />
             <div className="row-actions">
-              {replayByMatch.has(match.id) ? (
+              {replay ? (
                 <button className="secondary" onClick={(event) => { event.stopPropagation(); onOpenReplay(match.id); }}>
                   <Images size={14} /> Replay
                 </button>
@@ -4928,6 +5362,7 @@ function MatchesView({
               match={selectedAnalyticsMatch}
               relatedMatches={relatedOpponentLegendMatches(analyticsMatches, selectedAnalyticsMatch)}
               hasReplay={replayByMatch.has(selectedMatch.id)}
+              matchTimerLabel={matchTimerLabelFromReplay(replayByMatch.get(selectedMatch.id))}
               onOpenReplay={() => onOpenReplay(selectedMatch.id)}
               onClose={() => setSelectedMatchId("")}
             />
@@ -4942,12 +5377,14 @@ function LocalMatchDrilldown({
   match,
   relatedMatches,
   hasReplay = false,
+  matchTimerLabel = "",
   onOpenReplay,
   onClose
 }: {
   match: AnalyticsMatch;
   relatedMatches: AnalyticsMatch[];
   hasReplay?: boolean;
+  matchTimerLabel?: string;
   onOpenReplay?: () => void;
   onClose: () => void;
 }) {
@@ -4977,9 +5414,10 @@ function LocalMatchDrilldown({
         <Metric label="Result" value={`${match.result}${match.score ? ` ${match.score}` : ""}`} />
         <Metric label="Format" value={match.format} />
         <Metric label="Games" value={String(games)} />
+        {matchTimerLabel ? <Metric label="Match timer" value={matchTimerLabel} /> : null}
         <Metric label={opponentLegendRecordLabel(match)} value={`${relatedStats.wins}-${relatedStats.losses}${relatedStats.draws ? `-${relatedStats.draws}` : ""}`} />
       </div>
-      <MatchDetailPanel match={match} showFlags />
+      <MatchDetailPanel match={match} showFlags matchTimerLabel={matchTimerLabel} />
     </section>
   );
 }
@@ -5723,6 +6161,12 @@ function sectionText(title: string, entries: Array<{ qty: number; name: string }
 }
 
 async function copyTextToClipboard(text: string): Promise<void> {
+  try {
+    await window.riftlite.writeClipboardText(text);
+    return;
+  } catch {
+    // Fall back for non-Electron test/browser contexts.
+  }
   if (navigator.clipboard?.writeText) {
     await navigator.clipboard.writeText(text);
     return;
@@ -5736,6 +6180,118 @@ async function copyTextToClipboard(text: string): Promise<void> {
   textarea.select();
   document.execCommand("copy");
   textarea.remove();
+}
+
+function guideCardFromOption(option: DeckGuideCardOption): DeckGuideCardRef {
+  return {
+    id: crypto.randomUUID(),
+    cardKey: option.cardKey,
+    cardName: option.cardName,
+    cardId: option.cardId,
+    imageUrl: option.imageUrl,
+    qty: Math.max(1, option.qty || 1),
+    note: "",
+    groupName: "",
+    groupTarget: "",
+    groupNote: "",
+    priority: undefined
+  };
+}
+
+function editableGuideForLegend(notebook: DeckNotebook, legendValue: string): DeckMatchupGuide {
+  const legend = normalizeLegendName(legendValue);
+  if (!legend || legendValue === "default") {
+    return notebook.defaultGuide;
+  }
+  return notebook.matchupGuides.find((guide) => normalizeLegendName(guide.legend) === legend) ?? emptyDeckMatchupGuide(legend);
+}
+
+function notebookWithGuide(notebook: DeckNotebook, guide: DeckMatchupGuide): Partial<DeckNotebook> {
+  const legend = normalizeLegendName(guide.legend);
+  if (!legend || guide.legendKey === "default") {
+    return { defaultGuide: { ...guide, legend: "", legendKey: "default" } };
+  }
+  const nextGuide = { ...guide, legend, legendKey: normalizedGuideKey(legend) };
+  const found = notebook.matchupGuides.some((item) => normalizeLegendName(item.legend) === legend);
+  return {
+    matchupGuides: found
+      ? notebook.matchupGuides.map((item) => normalizeLegendName(item.legend) === legend ? nextGuide : item)
+      : [...notebook.matchupGuides, nextGuide].sort((a, b) => a.legend.localeCompare(b.legend))
+  };
+}
+
+function cloneGuideForLegend(guide: DeckMatchupGuide, legend: string): DeckMatchupGuide {
+  const normalized = normalizeLegendName(legend);
+  return {
+    ...deepClone(guide),
+    id: crypto.randomUUID(),
+    legend: normalized,
+    legendKey: normalized ? normalizedGuideKey(normalized) : "default",
+    updatedAt: new Date().toISOString()
+  };
+}
+
+function normalizedGuideKey(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, "").trim() || "default";
+}
+
+function deepClone<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function opponentLegendFromCaptureEvent(event: CaptureEvent): string {
+  const record = event.payload;
+  const textLegend = normalizeLegendName(
+    readFirstUnknownString(
+      record.opponentLegend,
+      record.oppLegend,
+      record.opponentChampion,
+      record.oppChampion,
+      record.theirChampion,
+      record.enemyChampion,
+      nestedValue(record, ["match", "opponentLegend"]),
+      nestedValue(record, ["match", "opponentChampion"]),
+      nestedValue(record, ["state", "opponentLegend"]),
+      nestedValue(record, ["state", "opponentChampion"]),
+      nestedValue(record, ["players", "opponent", "legend"]),
+      nestedValue(record, ["players", "opponent", "champion"])
+    )
+  );
+  if (canonicalLegendName(textLegend)) {
+    return textLegend;
+  }
+  return normalizeLegendName(
+    legendFromImageUrl(
+      readFirstUnknownString(
+        record.opponentChampionImage,
+        record.oppChampionImage,
+        record.opponentLegendImage,
+        nestedValue(record, ["match", "opponentChampionImage"]),
+        nestedValue(record, ["state", "opponentChampionImage"]),
+        nestedValue(record, ["players", "opponent", "image"]),
+        nestedValue(record, ["players", "opponent", "legendImage"])
+      )
+    )
+  );
+}
+
+function captureEventMentionsSideboard(event: CaptureEvent): boolean {
+  if (!["match-start", "match-snapshot", "match-update"].includes(event.kind)) {
+    return false;
+  }
+  const haystack = JSON.stringify(event.payload).toLowerCase();
+  return haystack.includes("sideboard") || haystack.includes("sideboarding");
+}
+
+function nestedValue(value: unknown, path: string[]): unknown {
+  let current = value;
+  for (const key of path) {
+    if (!current || typeof current !== "object") {
+      return undefined;
+    }
+    current = (current as Record<string, unknown>)[key];
+  }
+  return current;
 }
 
 function replaySettingsGuardrail(settings: UserSettings): string {
@@ -5915,6 +6471,11 @@ function DecksView({ decks, matches, settings, onDecksChanged }: { decks: SavedD
               onSetActive={() => void setActiveDeck(selected.id)}
               onRefresh={() => void refreshDeck(selected.id)}
               onDelete={() => void deleteDeck(selected.id)}
+              onDecksChanged={onDecksChanged}
+              onDeckImported={(deckId, title) => {
+                setSelectedId(deckId);
+                setStatus(`Imported ${title}.`);
+              }}
             />
           ) : (
             <p className="muted">Select a deck to view its snapshot.</p>
@@ -5925,17 +6486,21 @@ function DecksView({ decks, matches, settings, onDecksChanged }: { decks: SavedD
   );
 }
 
-function DeckDetail({ deck, matches, active, onSetActive, onRefresh, onDelete }: {
+function DeckDetail({ deck, matches, active, onSetActive, onRefresh, onDelete, onDecksChanged, onDeckImported }: {
   deck: SavedDeck;
   matches: MatchDraft[];
   active: boolean;
   onSetActive: () => void;
   onRefresh: () => void;
   onDelete: () => void;
+  onDecksChanged: () => Promise<void>;
+  onDeckImported: (deckId: string, title: string) => void;
 }) {
   const snapshot = parseDeckSnapshot(deck.snapshotJson);
   const needsRefresh = deckNeedsRefresh(snapshot);
   const performance = useMemo(() => buildDeckPerformance(deck, matches), [deck, matches]);
+  const [notebook, setNotebook] = useState<DeckNotebook>(() => emptyDeckNotebook(deck.id));
+  const [notebookStatus, setNotebookStatus] = useState("");
   const sections = [
     ["Runes", deckEntries(snapshot, "runes")],
     ["Battlefields", deckEntries(snapshot, "battlefields")],
@@ -5943,6 +6508,41 @@ function DeckDetail({ deck, matches, active, onSetActive, onRefresh, onDelete }:
     ["Sideboard", deckEntries(snapshot, "sideboard")]
   ] as const;
   const totalCards = deckEntries(snapshot, "main_deck", "mainDeck").reduce((total, entry) => total + entry.qty, 0);
+
+  useEffect(() => {
+    let cancelled = false;
+    setNotebook(emptyDeckNotebook(deck.id));
+    setNotebookStatus("Loading notebook...");
+    void window.riftlite.getDeckNotebook(deck.id)
+      .then((next) => {
+        if (!cancelled) {
+          setNotebook(next);
+          setNotebookStatus("");
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setNotebookStatus("Notebook could not be loaded.");
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [deck.id]);
+
+  async function saveNotebook(next: DeckNotebook) {
+    setNotebook(next);
+    setNotebookStatus("Saving...");
+    try {
+      const saved = await window.riftlite.saveDeckNotebook(deck.id, next);
+      setNotebook(saved);
+      setNotebookStatus("Saved");
+      window.setTimeout(() => setNotebookStatus(""), 1200);
+    } catch {
+      setNotebookStatus("Notebook could not be saved.");
+    }
+  }
+
   return (
     <>
       <div className="deck-detail-header">
@@ -5951,6 +6551,9 @@ function DeckDetail({ deck, matches, active, onSetActive, onRefresh, onDelete }:
           <span>{deck.legend || "Unknown legend"}{active ? " - Active fallback" : ""}</span>
         </div>
         <div className="row-actions">
+          <button className="secondary" onClick={() => document.getElementById(`matchup-prep-${deck.id}`)?.scrollIntoView({ block: "start", behavior: "smooth" })}>
+            <BookOpen size={15} /> Matchup prep
+          </button>
           <button className="secondary" onClick={onSetActive}>{active ? "Clear active" : "Set active"}</button>
           <button className="secondary" onClick={onRefresh}>Refresh</button>
           {deck.sourceUrl.startsWith("http") ? <button className="secondary" onClick={() => void window.riftlite.openExternalResource(deck.sourceUrl)}>Open source</button> : null}
@@ -5972,6 +6575,16 @@ function DeckDetail({ deck, matches, active, onSetActive, onRefresh, onDelete }:
         title={deck.title}
         sourceUrl={deck.sourceUrl}
         snapshotJson={deck.snapshotJson}
+      />
+      <DeckNotebookPanel
+        deck={deck}
+        notebook={notebook}
+        matches={matches}
+        linkedMatches={performance.matches}
+        status={notebookStatus}
+        onSave={(next) => void saveNotebook(next)}
+        onDecksChanged={onDecksChanged}
+        onDeckImported={onDeckImported}
       />
       <DeckPerformancePanel performance={performance} />
       <div className="deck-section-grid">
@@ -6064,6 +6677,1204 @@ function DeckPerformancePanel({ performance }: { performance: DeckPerformanceSta
 
       <MatchupMatrixPanel matches={analytics} emptyText="Deck matchups appear after this deck has completed matches with both legends recorded." showFlags={false} />
     </section>
+  );
+}
+
+function DeckNotebookPanel({
+  deck,
+  notebook,
+  matches,
+  linkedMatches,
+  status,
+  onSave,
+  onDecksChanged,
+  onDeckImported
+}: {
+  deck: SavedDeck;
+  notebook: DeckNotebook;
+  matches: MatchDraft[];
+  linkedMatches: MatchDraft[];
+  status: string;
+  onSave: (notebook: DeckNotebook) => void;
+  onDecksChanged: () => Promise<void>;
+  onDeckImported: (deckId: string, title: string) => void;
+}) {
+  const [goalText, setGoalText] = useState("");
+  const [watchCardKey, setWatchCardKey] = useState("");
+  const [watchStatus, setWatchStatus] = useState<DeckCardWatchStatus>("Testing");
+  const [notesQuery, setNotesQuery] = useState("");
+  const [prepLegend, setPrepLegend] = useState("default");
+  const [prepCopyTarget, setPrepCopyTarget] = useState("");
+  const [prepExportStatus, setPrepExportStatus] = useState("");
+  const [packageTextOpen, setPackageTextOpen] = useState(false);
+  const [packageText, setPackageText] = useState("");
+  const [packageTextStatus, setPackageTextStatus] = useState("");
+  const cardOptions = useMemo(() => deckNotebookCardOptions(deck), [deck]);
+  const mainDeckOptions = useMemo(() => deckNotebookMainDeckCardOptions(deck), [deck]);
+  const mulliganOptions = useMemo(() => deckNotebookMulliganCardOptions(deck), [deck]);
+  const sideboardOptions = useMemo(() => deckNotebookSideboardCardOptions(deck), [deck]);
+  const battlefieldOptions = useMemo(() => deckNotebookBattlefieldCardOptions(deck), [deck]);
+  const prepGuide = useMemo(() => editableGuideForLegend(notebook, prepLegend), [notebook, prepLegend]);
+  const [prepDraft, setPrepDraft] = useState<DeckMatchupGuide>(() => prepGuide);
+  const versionRows = useMemo(() => buildDeckVersionPerformance(deck, notebook, matches), [deck, matches, notebook]);
+  const prepDirty = useMemo(() => JSON.stringify(prepDraft) !== JSON.stringify(prepGuide), [prepDraft, prepGuide]);
+  const noteMatches = useMemo(() => {
+    const query = notesQuery.trim().toLowerCase();
+    return linkedMatches
+      .filter((match) => match.notes.trim())
+      .filter((match) => {
+        if (!query) {
+          return true;
+        }
+        return [
+          match.notes,
+          match.opponentChampion,
+          match.opponentName,
+          match.myBattlefield,
+          match.opponentBattlefield,
+          match.result,
+          match.format
+        ].some((value) => String(value ?? "").toLowerCase().includes(query));
+      })
+      .slice(0, 12);
+  }, [linkedMatches, notesQuery]);
+
+  useEffect(() => {
+    setPrepDraft(deepClone(prepGuide));
+  }, [deck.id, prepLegend, prepGuide.id, prepGuide.updatedAt]);
+
+  function patchNotebook(patch: Partial<DeckNotebook>) {
+    onSave({ ...notebook, ...patch, updatedAt: new Date().toISOString() });
+  }
+
+  function addGoal() {
+    const text = goalText.trim();
+    if (!text) {
+      return;
+    }
+    patchNotebook({
+      goals: [
+        ...notebook.goals,
+        {
+          id: crypto.randomUUID(),
+          text,
+          status: "Active",
+          createdAt: new Date().toISOString()
+        }
+      ]
+    });
+    setGoalText("");
+  }
+
+  function updateGoal(id: string, patch: { text?: string; status?: DeckTestingGoalStatus }) {
+    patchNotebook({
+      goals: notebook.goals.map((goal) => goal.id === id ? { ...goal, ...patch, updatedAt: new Date().toISOString() } : goal)
+    });
+  }
+
+  function removeGoal(id: string) {
+    patchNotebook({ goals: notebook.goals.filter((goal) => goal.id !== id) });
+  }
+
+  function updateVersionSummary(id: string, summary: string) {
+    patchNotebook({
+      versions: notebook.versions.map((version) => version.id === id ? { ...version, summary } : version)
+    });
+  }
+
+  function addWatchItem() {
+    const option = cardOptions.find((card) => card.cardKey === watchCardKey);
+    if (!option || notebook.watchlist.some((item) => item.cardKey === option.cardKey)) {
+      return;
+    }
+    patchNotebook({
+      watchlist: [
+        ...notebook.watchlist,
+        {
+          id: crypto.randomUUID(),
+          cardKey: option.cardKey,
+          cardName: option.cardName,
+          cardId: option.cardId,
+          imageUrl: option.imageUrl,
+          status: watchStatus,
+          note: "",
+          createdAt: new Date().toISOString()
+        }
+      ]
+    });
+    setWatchCardKey("");
+    setWatchStatus("Testing");
+  }
+
+  function updateWatchItem(id: string, patch: { status?: DeckCardWatchStatus; note?: string }) {
+    patchNotebook({
+      watchlist: notebook.watchlist.map((item) => item.id === id ? { ...item, ...patch, updatedAt: new Date().toISOString() } : item)
+    });
+  }
+
+  function removeWatchItem(id: string) {
+    patchNotebook({ watchlist: notebook.watchlist.filter((item) => item.id !== id) });
+  }
+
+  function savePrepGuide(nextGuide: DeckMatchupGuide) {
+    patchNotebook(notebookWithGuide(notebook, nextGuide));
+  }
+
+  function savePrepDraft() {
+    savePrepGuide({ ...prepDraft, updatedAt: new Date().toISOString() });
+  }
+
+  function notebookWithPrepDraft(): DeckNotebook {
+    const guide = { ...prepDraft, updatedAt: new Date().toISOString() };
+    return {
+      ...notebook,
+      ...notebookWithGuide(notebook, guide),
+      updatedAt: new Date().toISOString()
+    };
+  }
+
+  function copyDefaultToCurrent() {
+    if (prepLegend === "default") {
+      return;
+    }
+    const targetLegend = normalizeLegendName(prepLegend);
+    setPrepDraft({
+      ...cloneGuideForLegend(notebook.defaultGuide, targetLegend),
+      updatedAt: new Date().toISOString()
+    });
+  }
+
+  function copyCurrentToTarget() {
+    const targetLegend = normalizeLegendName(prepCopyTarget);
+    if (!targetLegend) {
+      return;
+    }
+    savePrepGuide({
+      ...cloneGuideForLegend(prepDraft, targetLegend),
+      updatedAt: new Date().toISOString()
+    });
+    setPrepLegend(targetLegend);
+    setPrepCopyTarget("");
+  }
+
+  function resetCurrentGuide() {
+    setPrepDraft(emptyDeckMatchupGuide(prepLegend === "default" ? "" : normalizeLegendName(prepLegend)));
+  }
+
+  async function exportNotebook() {
+    const path = await window.riftlite.exportDeckNotebook(deck.id);
+    if (path) {
+      patchNotebook({ updatedAt: new Date().toISOString() });
+    }
+  }
+
+  async function importNotebook() {
+    const imported = await window.riftlite.importDeckNotebook();
+    if (imported) {
+      await onDecksChanged();
+      onDeckImported(imported.deckId, "notebook");
+      if (imported.deckId === deck.id) {
+        setNotesQuery("");
+        onSave(imported);
+      }
+    }
+  }
+
+  async function exportDeckPackage() {
+    const path = await window.riftlite.exportDeckPackage(deck.id, prepDirty ? notebookWithPrepDraft() : notebook);
+    if (path) {
+      patchNotebook({ updatedAt: new Date().toISOString() });
+    }
+  }
+
+  async function copyDeckPackageText() {
+    setPackageTextStatus("Preparing package text...");
+    try {
+      const text = await window.riftlite.exportDeckPackageText(deck.id, prepDirty ? notebookWithPrepDraft() : notebook);
+      await copyTextToClipboard(text);
+      setPackageTextStatus("Package text copied.");
+    } catch (error) {
+      setPackageTextStatus(error instanceof Error ? error.message : "Could not copy package text.");
+    }
+  }
+
+  async function exportPrepPdf() {
+    setPrepExportStatus("Preparing printable PDF...");
+    try {
+      const path = await window.riftlite.exportDeckPrepPdf(deck.id, prepDirty ? notebookWithPrepDraft() : notebook);
+      setPrepExportStatus(path ? "Printable PDF exported." : "");
+    } catch (error) {
+      setPrepExportStatus(error instanceof Error ? error.message : "Could not export PDF.");
+    }
+  }
+
+  async function importDeckPackage() {
+    const imported = await window.riftlite.importDeckPackage();
+    if (!imported) {
+      return;
+    }
+    await onDecksChanged();
+    onDeckImported(imported.deck.id, imported.deck.title);
+    if (imported.deck.id === deck.id) {
+      onSave(imported.notebook);
+    }
+  }
+
+  async function importDeckPackageText() {
+    setPackageTextStatus("Importing package text...");
+    try {
+      const imported = await window.riftlite.importDeckPackageText(packageText);
+      await onDecksChanged();
+      onDeckImported(imported.deck.id, imported.deck.title);
+      if (imported.deck.id === deck.id) {
+        onSave(imported.notebook);
+      }
+      setPackageText("");
+      setPackageTextOpen(false);
+      setPackageTextStatus("Package text imported.");
+    } catch (error) {
+      setPackageTextStatus(error instanceof Error ? error.message : "Could not import package text.");
+    }
+  }
+
+  return (
+    <section className="deck-notebook-panel">
+      <div className="deck-performance-heading">
+        <div>
+          <h3>Testing notebook</h3>
+          <span>Local-only deck goals, versions, card notes, and match learnings.</span>
+        </div>
+        <div className="row-actions">
+          {status ? <span className="deck-notebook-status">{status}</span> : null}
+          <button type="button" className="secondary" onClick={() => void importDeckPackage()}>Import package</button>
+          <button type="button" className="secondary" onClick={() => void exportDeckPackage()}>Export package</button>
+          <button type="button" className="secondary" onClick={() => void copyDeckPackageText()}>Copy package text</button>
+          <button type="button" className="secondary" onClick={() => setPackageTextOpen((value) => !value)}>Import text</button>
+          <button type="button" className="secondary" onClick={() => void importNotebook()}>Import notebook</button>
+          <button type="button" className="secondary" onClick={() => void exportNotebook()}>Export notebook</button>
+        </div>
+      </div>
+      {packageTextOpen ? (
+        <section className="compact-panel deck-package-text-panel">
+          <h3>Import package text</h3>
+          <p className="muted">Paste a RiftLite package block from Discord, a blog post, or raw JSON. File imports still work exactly as before.</p>
+          <textarea
+            value={packageText}
+            onChange={(event) => setPackageText(event.target.value)}
+            placeholder="RIFTLITE_DECK_PACKAGE_V1:..."
+          />
+          <div className="row-actions">
+            {packageTextStatus ? <span className="deck-notebook-status">{packageTextStatus}</span> : null}
+            <button type="button" className="secondary" onClick={() => setPackageText("")}>Clear</button>
+            <button type="button" className="primary" disabled={!packageText.trim()} onClick={() => void importDeckPackageText()}>Import pasted package</button>
+          </div>
+        </section>
+      ) : packageTextStatus ? (
+        <span className="deck-notebook-status">{packageTextStatus}</span>
+      ) : null}
+
+      <section className="two-column deck-notebook-grid">
+        <div className="compact-panel">
+          <h3>Testing goals</h3>
+          <div className="inline-form">
+            <input value={goalText} onChange={(event) => setGoalText(event.target.value)} placeholder="Improve Irelia matchup..." />
+            <button type="button" className="secondary" onClick={addGoal}>Add</button>
+          </div>
+          <div className="deck-notebook-list">
+            {notebook.goals.map((goal) => (
+              <div className="deck-notebook-row" key={goal.id}>
+                <select value={goal.status} onChange={(event) => updateGoal(goal.id, { status: event.target.value as DeckTestingGoalStatus })}>
+                  <option>Active</option>
+                  <option>Done</option>
+                  <option>Paused</option>
+                </select>
+                <input value={goal.text} onChange={(event) => updateGoal(goal.id, { text: event.target.value })} />
+                <button type="button" className="icon-button" onClick={() => removeGoal(goal.id)} title="Remove goal"><X size={14} /></button>
+              </div>
+            ))}
+            {!notebook.goals.length ? <p className="muted">Add the thing this list is trying to prove.</p> : null}
+          </div>
+        </div>
+
+        <div className="compact-panel">
+          <h3>Card watchlist</h3>
+          <div className="inline-form">
+            <select value={watchCardKey} onChange={(event) => setWatchCardKey(event.target.value)}>
+              <option value="">Choose a deck card</option>
+              {cardOptions.map((card) => <option value={card.cardKey} key={card.cardKey}>{card.cardName}</option>)}
+            </select>
+            <select value={watchStatus} onChange={(event) => setWatchStatus(event.target.value as DeckCardWatchStatus)}>
+              <option>Testing</option>
+              <option>Overperforming</option>
+              <option>Underperforming</option>
+              <option>Cut candidate</option>
+            </select>
+            <button type="button" className="secondary" onClick={addWatchItem}>Track</button>
+          </div>
+          <div className="deck-watchlist">
+            {notebook.watchlist.map((item) => (
+              <div className="deck-watch-card" key={item.id}>
+                {item.imageUrl ? <img src={item.imageUrl} alt="" /> : <div className="deck-watch-placeholder">{item.cardName.slice(0, 1)}</div>}
+                <div>
+                  <strong>{item.cardName}</strong>
+                  <select value={item.status} onChange={(event) => updateWatchItem(item.id, { status: event.target.value as DeckCardWatchStatus })}>
+                    <option>Testing</option>
+                    <option>Overperforming</option>
+                    <option>Underperforming</option>
+                    <option>Cut candidate</option>
+                  </select>
+                  <textarea value={item.note} onChange={(event) => updateWatchItem(item.id, { note: event.target.value })} placeholder="Why this card is being watched..." />
+                </div>
+                <button type="button" className="icon-button" onClick={() => removeWatchItem(item.id)} title="Remove card"><X size={14} /></button>
+              </div>
+            ))}
+            {!notebook.watchlist.length ? <p className="muted">Track cards that are overperforming, underperforming, or still being tested.</p> : null}
+          </div>
+        </div>
+      </section>
+
+      <section className="compact-panel matchup-prep-panel" id={`matchup-prep-${deck.id}`}>
+        <div className="matchup-prep-header">
+          <div>
+            <h3>Matchup prep</h3>
+            <span>Visual mulligan, sideboard, and matchup notes for the in-game prep pill.</span>
+          </div>
+          <div className="matchup-prep-controls">
+            <select value={prepLegend} onChange={(event) => setPrepLegend(event.target.value)}>
+              <option value="default">All matchups default</option>
+              {CANONICAL_LEGEND_NAMES.map((legend) => <option value={legend} key={legend}>{legend}</option>)}
+            </select>
+            <button type="button" className="secondary" disabled={prepLegend === "default"} onClick={copyDefaultToCurrent}>Copy default</button>
+            <button type="button" className="secondary" onClick={() => void exportPrepPdf()}>
+              <FileText size={15} /> Export PDF
+            </button>
+            <button type="button" className="primary" disabled={!prepDirty} onClick={savePrepDraft}>
+              <Save size={15} /> Save guide
+            </button>
+            <button type="button" className="secondary danger" onClick={resetCurrentGuide}>Reset</button>
+          </div>
+        </div>
+        <div className="matchup-prep-copy-row">
+          <span>{prepDirty ? "Unsaved matchup prep changes." : prepLegend === "default" ? "Editing the guide used when no specific matchup exists." : `Editing ${normalizeLegendName(prepLegend)}. Blank sections use the default guide in play.`}</span>
+          {prepExportStatus ? <strong className="deck-notebook-status">{prepExportStatus}</strong> : null}
+          <select value={prepCopyTarget} onChange={(event) => setPrepCopyTarget(event.target.value)}>
+            <option value="">Copy this guide to...</option>
+            {CANONICAL_LEGEND_NAMES.filter((legend) => normalizeLegendName(legend) !== normalizeLegendName(prepLegend)).map((legend) => (
+              <option value={legend} key={legend}>{legend}</option>
+            ))}
+          </select>
+          <button type="button" className="secondary" disabled={!prepCopyTarget} onClick={copyCurrentToTarget}>Copy</button>
+        </div>
+        <section className="matchup-prep-grid">
+          <div className="matchup-prep-column">
+            <h4>Mulligan guide</h4>
+            <GuideSectionEditor
+              title="Keep"
+              options={mulliganOptions}
+              section={prepDraft.mulligan.keep}
+              onChange={(section) => setPrepDraft({ ...prepDraft, mulligan: { ...prepDraft.mulligan, keep: section }, updatedAt: new Date().toISOString() })}
+            />
+            <GuideSectionEditor
+              title="Consider"
+              options={mulliganOptions}
+              section={prepDraft.mulligan.consider}
+              onChange={(section) => setPrepDraft({ ...prepDraft, mulligan: { ...prepDraft.mulligan, consider: section }, updatedAt: new Date().toISOString() })}
+            />
+            <GuideSectionEditor
+              title="Avoid"
+              options={mulliganOptions}
+              section={prepDraft.mulligan.avoid}
+              onChange={(section) => setPrepDraft({ ...prepDraft, mulligan: { ...prepDraft.mulligan, avoid: section }, updatedAt: new Date().toISOString() })}
+            />
+          </div>
+          <div className="matchup-prep-column">
+            <h4>Sideboard guide</h4>
+            <GuideSectionEditor
+              title="Bring in"
+              options={sideboardOptions}
+              section={prepDraft.sideboard.in}
+              onChange={(section) => setPrepDraft({ ...prepDraft, sideboard: { ...prepDraft.sideboard, in: section }, updatedAt: new Date().toISOString() })}
+            />
+            <GuideSectionEditor
+              title="Take out"
+              options={mainDeckOptions}
+              section={prepDraft.sideboard.out}
+              onChange={(section) => setPrepDraft({ ...prepDraft, sideboard: { ...prepDraft.sideboard, out: section }, updatedAt: new Date().toISOString() })}
+            />
+            <label className="guide-note-editor">
+              Sideboard note
+              <textarea
+                value={prepDraft.sideboard.note}
+                onChange={(event) => setPrepDraft({ ...prepDraft, sideboard: { ...prepDraft.sideboard, note: event.target.value }, updatedAt: new Date().toISOString() })}
+                placeholder="Game 2 plan, cards to respect, battlefield reminders..."
+              />
+            </label>
+          </div>
+          <div className="matchup-prep-column">
+            <h4>Battlefield guide</h4>
+            <GuideSectionEditor
+              title="Game 1 Blind Pick"
+              options={battlefieldOptions}
+              section={prepDraft.battlefields.game1}
+              onChange={(section) => setPrepDraft({ ...prepDraft, battlefields: { ...prepDraft.battlefields, game1: section }, updatedAt: new Date().toISOString() })}
+            />
+            <GuideSectionEditor
+              title="Going First"
+              options={battlefieldOptions}
+              section={prepDraft.battlefields.game1First}
+              onChange={(section) => setPrepDraft({ ...prepDraft, battlefields: { ...prepDraft.battlefields, game1First: section }, updatedAt: new Date().toISOString() })}
+            />
+            <GuideSectionEditor
+              title="Going Second"
+              options={battlefieldOptions}
+              section={prepDraft.battlefields.game1Second}
+              onChange={(section) => setPrepDraft({ ...prepDraft, battlefields: { ...prepDraft.battlefields, game1Second: section }, updatedAt: new Date().toISOString() })}
+            />
+            <label className="guide-note-editor">
+              Battlefield note
+              <textarea
+                value={prepDraft.battlefields.note}
+                onChange={(event) => setPrepDraft({ ...prepDraft, battlefields: { ...prepDraft.battlefields, note: event.target.value }, updatedAt: new Date().toISOString() })}
+                placeholder="Game 1 battlefield priority, why first/second changes the pick..."
+              />
+            </label>
+          </div>
+        </section>
+        <GuideNotesEditor
+          notes={prepDraft.notes}
+          onChange={(notes) => setPrepDraft({ ...prepDraft, notes, updatedAt: new Date().toISOString() })}
+        />
+      </section>
+
+      <section className="compact-panel">
+        <h3>Version history</h3>
+        <div className="deck-version-table">
+          <div className="deck-version-head">
+            <span>Version</span>
+            <span>Performance</span>
+            <span>BO1 / BO3</span>
+            <span>Seat</span>
+            <span>Key matchups</span>
+          </div>
+          {versionRows.map((row) => (
+            <div className="deck-version-row" key={row.version.id}>
+              <label>
+                <strong>{row.version.title || deck.title}</strong>
+                <em>{new Date(row.version.importedAt).toLocaleDateString()}</em>
+                <input value={row.version.summary} onChange={(event) => updateVersionSummary(row.version.id, event.target.value)} />
+              </label>
+              <span>{row.record} | {row.winRateLabel} | {row.completed} match{row.completed === 1 ? "" : "es"}</span>
+              <span>{row.bo1} / {row.bo3}</span>
+              <span>1st {row.firstRecord}<br />2nd {row.secondRecord}</span>
+              <span>Best {row.bestMatchup}<br />Hardest {row.worstMatchup}</span>
+            </div>
+          ))}
+          {!versionRows.length ? <p className="muted">Import or refresh this deck to start version history.</p> : null}
+        </div>
+      </section>
+
+      <section className="compact-panel">
+        <h3>Linked match notes</h3>
+        <input className="full-width-input" value={notesQuery} onChange={(event) => setNotesQuery(event.target.value)} placeholder="Search notes, opponent legend, battlefield, result, or format..." />
+        <div className="deck-note-list">
+          {noteMatches.map((match) => (
+            <div className="event-row deck-note-row" key={match.id}>
+              <span>
+                <strong>{match.result} {match.score} vs {match.opponentChampion || "Unknown"}</strong>
+                <em>{new Date(match.capturedAt).toLocaleDateString()} - {match.format} - {match.myBattlefield || "No battlefield"} vs {match.opponentBattlefield || "No battlefield"}</em>
+                <small>{match.notes}</small>
+              </span>
+            </div>
+          ))}
+          {!noteMatches.length ? <p className="muted">No linked notes match this search yet.</p> : null}
+        </div>
+      </section>
+    </section>
+  );
+}
+
+type DeckGuideCardOption = ReturnType<typeof deckNotebookMainDeckCardOptions>[number];
+
+function GuideSectionEditor({ title, options, section, onChange }: {
+  title: string;
+  options: DeckGuideCardOption[];
+  section: DeckGuideSection;
+  onChange: (section: DeckGuideSection) => void;
+}) {
+  const [selected, setSelected] = useState("");
+
+  function addCard() {
+    const option = options.find((card) => card.cardKey === selected);
+    if (!option) {
+      return;
+    }
+    const existing = section.cards.find((card) => card.cardKey === option.cardKey);
+    const cards = existing
+      ? section.cards.map((card) => card.cardKey === option.cardKey ? { ...card, qty: Math.min(9, card.qty + 1) } : card)
+      : [...section.cards, guideCardFromOption(option)];
+    onChange({ ...section, cards });
+    setSelected("");
+  }
+
+  function updateCard(cardId: string, patch: Partial<DeckGuideCardRef>) {
+    onChange({
+      ...section,
+      cards: section.cards.map((card) => card.id === cardId ? { ...card, ...patch } : card)
+    });
+  }
+
+  function removeCard(cardId: string) {
+    onChange({ ...section, cards: section.cards.filter((card) => card.id !== cardId) });
+  }
+
+  return (
+    <div className="guide-section-editor">
+      <div className="guide-section-title">
+        <strong>{title}</strong>
+        <span>{section.cards.length} card{section.cards.length === 1 ? "" : "s"}</span>
+      </div>
+      <div className="inline-form guide-card-picker">
+        <select value={selected} onChange={(event) => setSelected(event.target.value)}>
+          <option value="">Choose a card</option>
+          {options.map((card) => <option value={card.cardKey} key={card.cardKey}>{card.cardName}</option>)}
+        </select>
+        <button type="button" className="secondary" disabled={!selected} onClick={addCard}>Add</button>
+      </div>
+      <div className="guide-card-grid">
+        {section.cards.map((card) => (
+          <div className="guide-card" key={card.id}>
+            <div className="guide-card-thumb">
+              {card.imageUrl ? <img src={card.imageUrl} alt="" loading="lazy" draggable={false} /> : <span className="guide-card-fallback">{card.cardName.slice(0, 1)}</span>}
+              {card.priority ? <strong className="guide-priority-badge">P{card.priority}</strong> : null}
+            </div>
+            <div>
+              <strong>{card.cardName}</strong>
+              <label>
+                Qty
+                <input
+                  type="number"
+                  min={1}
+                  max={9}
+                  value={card.qty}
+                  onChange={(event) => updateCard(card.id, { qty: Math.max(1, Math.trunc(Number(event.target.value) || 1)) })}
+                />
+              </label>
+              <div className="guide-card-meta-grid">
+                <input
+                  value={card.groupName ?? ""}
+                  onChange={(event) => updateCard(card.id, { groupName: event.target.value })}
+                  placeholder="Mini-group e.g. Turn 1 play"
+                />
+                <input
+                  type="number"
+                  min={1}
+                  max={9}
+                  value={card.priority ?? ""}
+                  onChange={(event) => {
+                    const value = Number(event.target.value);
+                    updateCard(card.id, { priority: Number.isFinite(value) && value > 0 ? Math.trunc(value) : undefined });
+                  }}
+                  placeholder="Priority"
+                />
+              </div>
+              <div className="guide-card-meta-grid">
+                <input
+                  value={card.groupTarget ?? ""}
+                  onChange={(event) => updateCard(card.id, { groupTarget: event.target.value })}
+                  placeholder="Goal e.g. Look for 1x"
+                />
+                <input
+                  value={card.groupNote ?? ""}
+                  onChange={(event) => updateCard(card.id, { groupNote: event.target.value })}
+                  placeholder="Group note"
+                />
+              </div>
+              <input value={card.note ?? ""} onChange={(event) => updateCard(card.id, { note: event.target.value })} placeholder="Tiny note..." />
+            </div>
+            <button type="button" className="icon-button" onClick={() => removeCard(card.id)} title="Remove card"><X size={14} /></button>
+          </div>
+        ))}
+        {!section.cards.length ? <p className="muted">Add cards from this deck to make the guide visual.</p> : null}
+      </div>
+      <textarea value={section.note} onChange={(event) => onChange({ ...section, note: event.target.value })} placeholder={`${title} notes...`} />
+    </div>
+  );
+}
+
+function GuideNotesEditor({ notes, onChange }: { notes: DeckGuideNote[]; onChange: (notes: DeckGuideNote[]) => void }) {
+  const [noteText, setNoteText] = useState("");
+
+  function addNote() {
+    const text = noteText.trim();
+    if (!text) {
+      return;
+    }
+    onChange([
+      ...notes,
+      {
+        id: crypto.randomUUID(),
+        text,
+        createdAt: new Date().toISOString(),
+        source: "deck"
+      }
+    ]);
+    setNoteText("");
+  }
+
+  return (
+    <section className="guide-notes-editor">
+      <h4>Matchup notes</h4>
+      <div className="inline-form">
+        <input value={noteText} onChange={(event) => setNoteText(event.target.value)} placeholder="Pattern, mistake, battlefield reminder..." />
+        <button type="button" className="secondary" disabled={!noteText.trim()} onClick={addNote}>Add note</button>
+      </div>
+      <div className="guide-note-list">
+        {notes.map((note) => (
+          <div className="guide-note-item" key={note.id}>
+            <textarea value={note.text} onChange={(event) => onChange(notes.map((item) => item.id === note.id ? { ...item, text: event.target.value, updatedAt: new Date().toISOString() } : item))} />
+            <button type="button" className="icon-button" onClick={() => onChange(notes.filter((item) => item.id !== note.id))} title="Remove note"><X size={14} /></button>
+          </div>
+        ))}
+        {!notes.length ? <p className="muted">Deck notes stay in this matchup. Play prep notes are copied into the next review, then cleared.</p> : null}
+      </div>
+    </section>
+  );
+}
+
+type FloatingPrepPosition = { x: number; y: number };
+
+function defaultMatchupPrepPosition(): FloatingPrepPosition {
+  if (typeof window === "undefined") {
+    return { x: 16, y: 260 };
+  }
+  return {
+    x: 16,
+    y: Math.max(72, Math.round(window.innerHeight * 0.44))
+  };
+}
+
+function readMatchupPrepPosition(): FloatingPrepPosition {
+  if (typeof window === "undefined") {
+    return defaultMatchupPrepPosition();
+  }
+  try {
+    const raw = window.localStorage.getItem(MATCHUP_PREP_POSITION_KEY);
+    if (!raw) {
+      return defaultMatchupPrepPosition();
+    }
+    const parsed = JSON.parse(raw) as Partial<FloatingPrepPosition>;
+    const x = Number(parsed.x);
+    const y = Number(parsed.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+      return defaultMatchupPrepPosition();
+    }
+    return { x, y };
+  } catch {
+    return defaultMatchupPrepPosition();
+  }
+}
+
+function saveMatchupPrepPosition(position: FloatingPrepPosition) {
+  try {
+    window.localStorage.setItem(MATCHUP_PREP_POSITION_KEY, JSON.stringify(position));
+  } catch {
+    // Position memory is a convenience only.
+  }
+}
+
+function readMatchupPrepHidden(): boolean {
+  try {
+    return window.localStorage.getItem(MATCHUP_PREP_HIDDEN_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function saveMatchupPrepHidden(hidden: boolean) {
+  try {
+    window.localStorage.setItem(MATCHUP_PREP_HIDDEN_KEY, hidden ? "1" : "0");
+  } catch {
+    // Hidden state is a convenience only.
+  }
+}
+
+function deckMatchupGuideHasVisibleContent(guide: DeckMatchupGuide): boolean {
+  const sections = [
+    guide.mulligan.keep,
+    guide.mulligan.consider,
+    guide.mulligan.avoid,
+    guide.sideboard.in,
+    guide.sideboard.out,
+    guide.battlefields.game1,
+    guide.battlefields.game1First,
+    guide.battlefields.game1Second
+  ];
+  return sections.some((section) => section.cards.length > 0 || section.note.trim().length > 0)
+    || guide.sideboard.note.trim().length > 0
+    || guide.battlefields.note.trim().length > 0
+    || guide.notes.some((note) => note.text.trim().length > 0);
+}
+
+function deckNotebookWithoutPlayNotes(notebook: DeckNotebook): DeckNotebook {
+  let changed = false;
+  const cleanGuide = (guide: DeckMatchupGuide): DeckMatchupGuide => {
+    const notes = guide.notes.filter((note) => note.source !== "play");
+    if (notes.length === guide.notes.length) {
+      return guide;
+    }
+    changed = true;
+    return {
+      ...guide,
+      notes,
+      updatedAt: new Date().toISOString()
+    };
+  };
+  const defaultGuide = cleanGuide(notebook.defaultGuide);
+  const matchupGuides = notebook.matchupGuides.map(cleanGuide);
+  if (!changed) {
+    return notebook;
+  }
+  return {
+    ...notebook,
+    defaultGuide,
+    matchupGuides,
+    updatedAt: new Date().toISOString()
+  };
+}
+
+function MatchupPrepOverlay({ deck, notebook, opponentLegend, sideboardSuggested, onSave }: {
+  deck: SavedDeck;
+  notebook: DeckNotebook;
+  opponentLegend: string;
+  sideboardSuggested: boolean;
+  onSave: (notebook: DeckNotebook) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [hidden, setHidden] = useState(() => readMatchupPrepHidden());
+  const [tab, setTab] = useState<"mulligan" | "sideboard" | "battlefields" | "notes">(sideboardSuggested ? "sideboard" : "mulligan");
+  const [liveNote, setLiveNote] = useState("");
+  const [manualLegend, setManualLegend] = useState("");
+  const [position, setPosition] = useState<FloatingPrepPosition>(() => readMatchupPrepPosition());
+  const [dragging, setDragging] = useState(false);
+  const overlayRef = useRef<HTMLDivElement | null>(null);
+  const positionRef = useRef(position);
+  const savedPositionRef = useRef(position);
+  const dragRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startY: number;
+    origin: FloatingPrepPosition;
+    moved: boolean;
+  } | null>(null);
+  const suppressNextClickRef = useRef(false);
+  const targetLegend = manualLegend === "default" ? "" : normalizeLegendName(manualLegend || opponentLegend);
+  const resolved = useMemo(() => resolveDeckMatchupGuide(notebook, targetLegend), [notebook, targetLegend]);
+  const guide = resolved.guide;
+
+  useEffect(() => {
+    return () => {
+      document.body.classList.remove("matchup-prep-dragging");
+    };
+  }, []);
+
+  useEffect(() => {
+    positionRef.current = position;
+  }, [position]);
+
+  useEffect(() => {
+    if (sideboardSuggested) {
+      setHidden(false);
+      saveMatchupPrepHidden(false);
+      setTab("sideboard");
+      setOpen(true);
+    }
+  }, [sideboardSuggested]);
+
+  useEffect(() => {
+    const clampAndSave = () => {
+      const next = clampPrepPosition(savedPositionRef.current);
+      positionRef.current = next;
+      setPosition(next);
+      if (!open) {
+        const saved = savedPositionRef.current;
+        if (next.x !== saved.x || next.y !== saved.y) {
+          savedPositionRef.current = next;
+          saveMatchupPrepPosition(next);
+        }
+      }
+    };
+    clampAndSave();
+    window.addEventListener("resize", clampAndSave);
+    return () => window.removeEventListener("resize", clampAndSave);
+  }, [open]);
+
+  function clampPrepPosition(next: FloatingPrepPosition): FloatingPrepPosition {
+    const parent = overlayRef.current?.parentElement;
+    const bounds = parent?.getBoundingClientRect();
+    const width = overlayRef.current?.offsetWidth || (open ? 430 : 58);
+    const height = overlayRef.current?.offsetHeight || (open ? 420 : 112);
+    const boundsWidth = bounds?.width || window.innerWidth;
+    const boundsHeight = bounds?.height || window.innerHeight;
+    const margin = 8;
+    const maxX = Math.max(margin, boundsWidth - width - margin);
+    const maxY = Math.max(margin, boundsHeight - height - margin);
+    return {
+      x: Math.min(maxX, Math.max(margin, Math.round(next.x))),
+      y: Math.min(maxY, Math.max(margin, Math.round(next.y)))
+    };
+  }
+
+  function clearPrepSelection() {
+    window.getSelection()?.removeAllRanges();
+  }
+
+  function startDrag(event: React.PointerEvent<HTMLElement>) {
+    if (event.button !== 0) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    clearPrepSelection();
+    document.body.classList.add("matchup-prep-dragging");
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    dragRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      origin: positionRef.current,
+      moved: false
+    };
+    setDragging(true);
+  }
+
+  function moveDrag(event: React.PointerEvent<HTMLElement>) {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    clearPrepSelection();
+    const dx = event.clientX - drag.startX;
+    const dy = event.clientY - drag.startY;
+    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
+      drag.moved = true;
+    }
+    const next = clampPrepPosition({ x: drag.origin.x + dx, y: drag.origin.y + dy });
+    positionRef.current = next;
+    setPosition(next);
+  }
+
+  function endDrag(event: React.PointerEvent<HTMLElement>) {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    clearPrepSelection();
+    const shouldOpenPill = !open && !drag.moved && event.currentTarget.classList.contains("matchup-prep-pill");
+    event.currentTarget.releasePointerCapture?.(event.pointerId);
+    dragRef.current = null;
+    setDragging(false);
+    document.body.classList.remove("matchup-prep-dragging");
+    const next = clampPrepPosition(positionRef.current);
+    setPosition(next);
+    savedPositionRef.current = next;
+    saveMatchupPrepPosition(next);
+    if (drag.moved) {
+      suppressNextClickRef.current = true;
+      window.setTimeout(() => {
+        suppressNextClickRef.current = false;
+      }, 0);
+    } else if (shouldOpenPill) {
+      setOpen(true);
+    }
+  }
+
+  function cancelDrag(event: React.PointerEvent<HTMLElement>) {
+    if (dragRef.current?.pointerId !== event.pointerId) {
+      return;
+    }
+    dragRef.current = null;
+    setDragging(false);
+    document.body.classList.remove("matchup-prep-dragging");
+    clearPrepSelection();
+  }
+
+  function openFromPill(event: React.MouseEvent<HTMLButtonElement>) {
+    if (suppressNextClickRef.current) {
+      suppressNextClickRef.current = false;
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+    setOpen(true);
+  }
+
+  function addLiveNote() {
+    const text = liveNote.trim();
+    if (!text) {
+      return;
+    }
+    const nextGuide = editableGuideForLegend(notebook, targetLegend || "default");
+    const note: DeckGuideNote = {
+      id: crypto.randomUUID(),
+      text,
+      createdAt: new Date().toISOString(),
+      source: "play"
+    };
+    onSave({
+      ...notebook,
+      ...notebookWithGuide(notebook, { ...nextGuide, notes: [...nextGuide.notes, note], updatedAt: new Date().toISOString() }),
+      updatedAt: new Date().toISOString()
+    });
+    setLiveNote("");
+  }
+
+  function hidePrep() {
+    setOpen(false);
+    setHidden(true);
+    saveMatchupPrepHidden(true);
+  }
+
+  function showPrep() {
+    setHidden(false);
+    saveMatchupPrepHidden(false);
+    setOpen(true);
+  }
+
+  const hasAnyGuideContent = deckMatchupGuideHasVisibleContent(guide);
+
+  if (hidden) {
+    return (
+      <div className="matchup-prep-overlay matchup-prep-restore-wrap" data-hidden="true">
+        <button type="button" className="secondary matchup-prep-restore" onClick={showPrep} title="Show matchup prep">
+          <BookOpen size={15} />
+          <span>Prep</span>
+        </button>
+      </div>
+    );
+  }
+
+  if (!open) {
+    return (
+      <div
+        ref={overlayRef}
+        className="matchup-prep-overlay"
+        data-open="false"
+        data-dragging={dragging}
+        style={{ left: position.x, top: position.y }}
+        onDragStart={(event) => event.preventDefault()}
+        onPointerDownCapture={clearPrepSelection}
+      >
+        <button
+          type="button"
+          className="secondary matchup-prep-pill"
+          onClick={openFromPill}
+          onPointerDown={startDrag}
+          onPointerMove={moveDrag}
+          onPointerUp={endDrag}
+          onPointerCancel={cancelDrag}
+          title="Open or drag matchup prep guide"
+        >
+          <BookOpen size={16} />
+          <span>Prep</span>
+          <em>{targetLegend ? `vs ${targetLegend}` : "Default"}</em>
+        </button>
+        <button type="button" className="matchup-prep-pill-hide" onClick={hidePrep} title="Hide matchup prep">
+          <X size={12} />
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      ref={overlayRef}
+      className="matchup-prep-overlay"
+      data-open="true"
+      data-dragging={dragging}
+      style={{ left: position.x, top: position.y }}
+      onDragStart={(event) => event.preventDefault()}
+      onPointerDownCapture={clearPrepSelection}
+    >
+      <section className="matchup-prep-overlay-panel">
+        <header>
+          <div
+            className="matchup-prep-drag-region"
+            onPointerDown={startDrag}
+            onPointerMove={moveDrag}
+            onPointerUp={endDrag}
+            onPointerCancel={cancelDrag}
+            title="Drag prep widget"
+          >
+            <GripVertical size={17} />
+            <div>
+              <h2>{targetLegend ? `Prep vs ${targetLegend}` : "Default prep"}</h2>
+              <span>{deck.title} - {manualLegend === "default" ? "default guide" : manualLegend ? "manual matchup" : resolved.source === "matchup" ? "matchup guide" : "default guide"}</span>
+            </div>
+          </div>
+          <div className="matchup-prep-window-actions">
+            <button type="button" className="secondary compact-button" onClick={hidePrep} title="Hide matchup prep">Hide</button>
+            <button type="button" className="icon-button" onClick={() => setOpen(false)} title="Collapse prep"><X size={16} /></button>
+          </div>
+        </header>
+        {!hasAnyGuideContent ? (
+          <p className="matchup-prep-empty-hint">No prep guide set yet. Go to Decks, open this deck, and add mulligan, sideboard, or battlefield notes.</p>
+        ) : null}
+        <label className="matchup-prep-selector">
+          Matchup
+          <select value={manualLegend} onChange={(event) => setManualLegend(event.target.value)}>
+            <option value="">{opponentLegend ? `Auto - ${normalizeLegendName(opponentLegend)}` : "Auto - waiting"}</option>
+            <option value="default">Default guide</option>
+            {CANONICAL_LEGEND_NAMES.map((legend) => <option value={legend} key={legend}>{legend}</option>)}
+          </select>
+        </label>
+        <div className="segmented-row">
+          <button type="button" className="segmented" data-active={tab === "mulligan"} onClick={() => setTab("mulligan")}>Mulligan</button>
+          <button type="button" className="segmented" data-active={tab === "sideboard"} onClick={() => setTab("sideboard")}>Sideboard</button>
+          <button type="button" className="segmented" data-active={tab === "battlefields"} onClick={() => setTab("battlefields")}>Battlefields</button>
+          <button type="button" className="segmented" data-active={tab === "notes"} onClick={() => setTab("notes")}>Notes</button>
+        </div>
+        {tab === "mulligan" ? (
+          <div className="matchup-prep-preview">
+            <GuidePreviewSection title="Keep" section={guide.mulligan.keep} />
+            <GuidePreviewSection title="Consider" section={guide.mulligan.consider} />
+            <GuidePreviewSection title="Avoid" section={guide.mulligan.avoid} />
+          </div>
+        ) : null}
+        {tab === "sideboard" ? (
+          <div className="matchup-prep-preview">
+            <GuidePreviewSection title="Bring in" section={guide.sideboard.in} />
+            <GuidePreviewSection title="Take out" section={guide.sideboard.out} />
+            {guide.sideboard.note ? <p className="guide-preview-note">{guide.sideboard.note}</p> : <p className="muted">No sideboard note yet.</p>}
+          </div>
+        ) : null}
+        {tab === "battlefields" ? (
+          <div className="matchup-prep-preview">
+            <GuidePreviewSection title="Game 1 Blind Pick" section={guide.battlefields.game1} />
+            <GuidePreviewSection title="Going First" section={guide.battlefields.game1First} />
+            <GuidePreviewSection title="Going Second" section={guide.battlefields.game1Second} />
+            {guide.battlefields.note ? <p className="guide-preview-note">{guide.battlefields.note}</p> : <p className="muted">No battlefield note yet.</p>}
+          </div>
+        ) : null}
+        {tab === "notes" ? (
+          <div className="matchup-prep-preview">
+            {guide.notes.map((note) => <p className="guide-preview-note" key={note.id}>{note.text}</p>)}
+            {!guide.notes.length ? <p className="muted">No matchup notes yet.</p> : null}
+            <div className="inline-form">
+              <input value={liveNote} onChange={(event) => setLiveNote(event.target.value)} placeholder="Add a note for this match review..." />
+              <button type="button" className="secondary" disabled={!liveNote.trim()} onClick={addLiveNote}>Save</button>
+            </div>
+          </div>
+        ) : null}
+      </section>
+    </div>
+  );
+}
+
+function GuidePreviewSection({ title, section }: { title: string; section: DeckGuideSection }) {
+  const cards = groupedGuidePreviewCards(section.cards);
+  return (
+    <section className="guide-preview-section">
+      <h3>{title}</h3>
+      <div className="guide-preview-cards">
+        {cards.map((item) => item.type === "group"
+          ? <GuidePreviewMiniGroup group={item} key={item.key} />
+          : <GuidePreviewCard card={item.card} key={item.card.id} />
+        )}
+        {!section.cards.length ? <p className="muted">No cards set.</p> : null}
+      </div>
+      {section.note ? <p className="guide-preview-note">{section.note}</p> : null}
+    </section>
+  );
+}
+
+type GuidePreviewItem =
+  | { type: "card"; card: DeckGuideCardRef }
+  | { type: "group"; key: string; title: string; target: string; note: string; cards: DeckGuideCardRef[] };
+
+function groupedGuidePreviewCards(cards: DeckGuideCardRef[]): GuidePreviewItem[] {
+  const output: GuidePreviewItem[] = [];
+  const groups = new Map<string, Extract<GuidePreviewItem, { type: "group" }>>();
+  for (const card of cards) {
+    const title = card.groupName?.trim();
+    if (!title) {
+      output.push({ type: "card", card });
+      continue;
+    }
+    const key = title.toLowerCase();
+    const existing = groups.get(key);
+    if (existing) {
+      existing.cards.push(card);
+      if (!existing.target && card.groupTarget?.trim()) {
+        existing.target = card.groupTarget.trim();
+      }
+      if (!existing.note && card.groupNote?.trim()) {
+        existing.note = card.groupNote.trim();
+      }
+      continue;
+    }
+    const group: Extract<GuidePreviewItem, { type: "group" }> = {
+      type: "group",
+      key,
+      title,
+      target: card.groupTarget?.trim() ?? "",
+      note: card.groupNote?.trim() ?? "",
+      cards: [card]
+    };
+    groups.set(key, group);
+    output.push(group);
+  }
+  return output.map((item) => item.type === "group"
+    ? { ...item, cards: [...item.cards].sort(compareGuidePriority) }
+    : item
+  );
+}
+
+function compareGuidePriority(a: DeckGuideCardRef, b: DeckGuideCardRef): number {
+  const aPriority = Number.isFinite(a.priority) && a.priority ? a.priority : 99;
+  const bPriority = Number.isFinite(b.priority) && b.priority ? b.priority : 99;
+  return aPriority - bPriority || a.cardName.localeCompare(b.cardName);
+}
+
+function GuidePreviewMiniGroup({ group }: { group: Extract<GuidePreviewItem, { type: "group" }> }) {
+  return (
+    <section className="guide-preview-mini-group">
+      <header>
+        <strong>{group.title}</strong>
+        {group.target ? <span>{group.target}</span> : null}
+      </header>
+      {group.note ? <p>{group.note}</p> : null}
+      <div className="guide-preview-mini-group-cards">
+        {group.cards.map((card) => <GuidePreviewCard card={card} key={card.id} />)}
+      </div>
+    </section>
+  );
+}
+
+function GuidePreviewCard({ card }: { card: DeckGuideCardRef }) {
+  const [expanded, setExpanded] = useState(false);
+  const note = card.note?.trim() ?? "";
+  const canExpand = note.length > 82 || note.includes("\n");
+  return (
+    <div className="guide-preview-card" data-expanded={expanded || !canExpand}>
+      <div className="guide-card-thumb">
+        {card.imageUrl ? <img src={card.imageUrl} alt="" loading="lazy" draggable={false} /> : <span>{card.cardName.slice(0, 1)}</span>}
+        {card.priority ? <strong className="guide-priority-badge">P{card.priority}</strong> : null}
+      </div>
+      <div>
+        <strong>{card.qty}x {card.cardName}</strong>
+        {card.groupName?.trim() ? <small className="guide-group-chip">{card.groupName.trim()}</small> : null}
+        {note ? <em>{note}</em> : null}
+        {canExpand ? (
+          <button type="button" className="text-button guide-preview-more" onClick={() => setExpanded((value) => !value)}>
+            {expanded ? "Less" : "More"}
+          </button>
+        ) : null}
+      </div>
+    </div>
   );
 }
 
@@ -6201,24 +8012,32 @@ function ReplayView({
 
   async function importReplay() {
     setStatus("Importing replay...");
-    const imported = await window.riftlite.importReplayBundle();
-    if (!imported) {
-      setStatus("");
-      return;
+    try {
+      const imported = await window.riftlite.importReplayBundle();
+      if (!imported) {
+        setStatus("");
+        return;
+      }
+      await onReplaysChanged(imported.id);
+      setStatus("Replay imported.");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Replay import failed.");
     }
-    await onReplaysChanged(imported.id);
-    setStatus("Replay imported.");
   }
 
   async function importReplayFolder() {
     setStatus("Importing replay folder...");
-    const imported = await window.riftlite.importReplayFolder();
-    if (!imported.length) {
-      setStatus("");
-      return;
+    try {
+      const imported = await window.riftlite.importReplayFolder();
+      if (!imported.length) {
+        setStatus("");
+        return;
+      }
+      await onReplaysChanged(imported[0]?.id);
+      setStatus(`Imported ${imported.length} replay${imported.length === 1 ? "" : "s"}.`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Replay folder import failed.");
     }
-    await onReplaysChanged(imported[0]?.id);
-    setStatus(`Imported ${imported.length} replay${imported.length === 1 ? "" : "s"}.`);
   }
 
   async function exportReplay(replayId: string) {
@@ -6552,6 +8371,7 @@ function ReplayDetail({
   const [slideshowOpen, setSlideshowOpen] = useState(false);
   const [slideshowIndex, setSlideshowIndex] = useState(0);
   const [videoSeekMs, setVideoSeekMs] = useState<number | null>(null);
+  const [replayVideoCurrentMs, setReplayVideoCurrentMs] = useState(0);
   const [flagType, setFlagType] = useState<ReplayFlagType>("key-turn");
   const [flagCustomType, setFlagCustomType] = useState("");
   const [flagNote, setFlagNote] = useState("");
@@ -6574,6 +8394,15 @@ function ReplayDetail({
   const visibleAnnotations = replayAnnotations.filter((annotation) => layerVisible(annotation.layerId));
   const visibleVoiceNotes = replayVoiceNotes.filter((note) => layerVisible(note.layerId));
   const trimSavings = replayTrimSavings(allScreenshots, screenshots);
+  const [presentationMode, setPresentationMode] = useState(false);
+  const [reviewMode, setReviewMode] = useState(false);
+  const [reviewPreRollMs, setReviewPreRollMs] = useState(3000);
+  const [reviewPostRollMs, setReviewPostRollMs] = useState(5000);
+  const [activeReviewFlagId, setActiveReviewFlagId] = useState("");
+  const [packDraft, setPackDraft] = useState(() => replayCoachingPackDraft(model.replay, settings.username));
+  const reviewFlags = useMemo(() => [...visibleFlags]
+    .filter((flag) => flag.targetType === "video-time" || flag.targetType === "frame" || flag.targetType === "turn")
+    .sort((a, b) => replayFlagSortMs(a) - replayFlagSortMs(b)), [visibleFlags]);
 
   useEffect(() => {
     replayFlagsRef.current = replayFlags;
@@ -6590,12 +8419,17 @@ function ReplayDetail({
   useEffect(() => {
     setSlideshowOpen(false);
     setSlideshowIndex(0);
+    setReplayVideoCurrentMs(0);
     pendingLayerIdRef.current = null;
     setAddingLayer(false);
     setLayerStatus("");
+    setPresentationMode(false);
+    setReviewMode(false);
+    setActiveReviewFlagId("");
+    setPackDraft(replayCoachingPackDraft(model.replay, settings.username));
     setActiveLayerId(layers.at(-1)?.id ?? DEFAULT_REPLAY_LAYER_ID);
     setVisibleLayerIds(new Set(layers.map((layer) => layer.id)));
-  }, [model.replay.id]);
+  }, [model.replay.id, settings.username]);
 
   useEffect(() => {
     const pendingLayerId = pendingLayerIdRef.current;
@@ -6641,7 +8475,7 @@ function ReplayDetail({
     replayFlagsRef.current = flags;
     void onSaveReplay({
       ...model.replay,
-      schemaVersion: 3,
+      schemaVersion: 4,
       flags
     });
   }
@@ -6650,7 +8484,7 @@ function ReplayDetail({
     replayAnnotationsRef.current = annotations;
     void onSaveReplay({
       ...model.replay,
-      schemaVersion: 3,
+      schemaVersion: 4,
       annotations
     });
   }
@@ -6659,7 +8493,7 @@ function ReplayDetail({
     replayVoiceNotesRef.current = voiceNotes;
     void onSaveReplay({
       ...model.replay,
-      schemaVersion: 3,
+      schemaVersion: 4,
       voiceNotes
     });
   }
@@ -6747,7 +8581,7 @@ function ReplayDetail({
     replayAnnotationsRef.current = nextAnnotations;
     void onSaveReplay({
       ...model.replay,
-      schemaVersion: 3,
+      schemaVersion: 4,
       flags: nextFlags,
       annotations: nextAnnotations,
       voiceNotes: nextVoiceNotes
@@ -6772,7 +8606,7 @@ function ReplayDetail({
     replayVoiceNotesRef.current = voiceNotes;
     void onSaveReplay({
       ...model.replay,
-      schemaVersion: 3,
+      schemaVersion: 4,
       flags,
       annotations: replayAnnotationsRef.current,
       voiceNotes
@@ -6794,7 +8628,7 @@ function ReplayDetail({
     replayAnnotationsRef.current = annotations;
     void onSaveReplay({
       ...model.replay,
-      schemaVersion: 3,
+      schemaVersion: 4,
       annotations,
       voiceNotes
     });
@@ -6867,6 +8701,45 @@ function ReplayDetail({
     }
   }
 
+  function openReviewFlag(flag: ReplayFlag) {
+    setActiveReviewFlagId(flag.id);
+    if (flag.targetType === "video-time" && typeof flag.timeMs === "number") {
+      setVideoSeekMs(Math.max(0, flag.timeMs - reviewPreRollMs));
+      return;
+    }
+    openFlag(flag);
+  }
+
+  function jumpReviewFlag(direction: "previous" | "next") {
+    if (!reviewFlags.length) {
+      return;
+    }
+    const currentIndex = Math.max(0, reviewFlags.findIndex((flag) => flag.id === activeReviewFlagId));
+    const nextIndex = direction === "next"
+      ? Math.min(reviewFlags.length - 1, currentIndex + (activeReviewFlagId ? 1 : 0))
+      : Math.max(0, currentIndex - 1);
+    openReviewFlag(reviewFlags[nextIndex]);
+  }
+
+  useEffect(() => {
+    if (!reviewMode || !activeReviewFlagId) {
+      return;
+    }
+    const active = reviewFlags.find((flag) => flag.id === activeReviewFlagId);
+    if (!active || active.targetType !== "video-time" || typeof active.timeMs !== "number") {
+      return;
+    }
+    if (replayVideoCurrentMs >= active.timeMs + reviewPostRollMs) {
+      const index = reviewFlags.findIndex((flag) => flag.id === active.id);
+      const next = reviewFlags[index + 1];
+      if (next) {
+        openReviewFlag(next);
+      } else {
+        setReviewMode(false);
+      }
+    }
+  }, [activeReviewFlagId, replayVideoCurrentMs, reviewFlags, reviewMode, reviewPostRollMs]);
+
   function saveReplayTrim(trim: ReplayTrimRange) {
     void onSaveReplay({
       ...model.replay,
@@ -6880,15 +8753,27 @@ function ReplayDetail({
     void onSaveReplay(nextReplay);
   }
 
+  function saveCoachingPackMetadata() {
+    void onSaveReplay({
+      ...model.replay,
+      schemaVersion: 4,
+      coachingPack: {
+        ...packDraft,
+        updatedAt: new Date().toISOString()
+      }
+    });
+  }
+
   async function addTeachingLayer() {
     if (addingLayer) {
       return;
     }
-    const name = uniqueReplayLayerName(layers, settings.username ? `${settings.username} review` : "Coach review");
+    const presetNames = ["Player review", "Coach review", "Follow-up"];
+    const name = uniqueReplayLayerName(layers, presetNames[Math.min(layers.length, presetNames.length - 1)]);
     const nextLayer: ReplayTeachingLayer = {
       id: crypto.randomUUID(),
       name,
-      author: settings.username || "Coach",
+      author: settings.username || (name.includes("Coach") ? "Coach" : "Player"),
       color: REPLAY_ANNOTATION_COLORS[(layers.length + 1) % REPLAY_ANNOTATION_COLORS.length],
       createdAt: new Date().toISOString()
     };
@@ -6899,7 +8784,7 @@ function ReplayDetail({
     try {
       await onSaveReplay({
         ...model.replay,
-        schemaVersion: 3,
+        schemaVersion: 4,
         layers: [...layers, nextLayer]
       });
       setActiveLayerId(nextLayer.id);
@@ -6939,7 +8824,7 @@ function ReplayDetail({
   }
 
   return (
-    <div className="replay-detail-stack">
+    <div className={`replay-detail-stack ${presentationMode ? "presentation-mode" : ""}`}>
       <section className="rail-card replay-hero">
         <div>
           <span>{model.platformLabel} replay</span>
@@ -6962,6 +8847,9 @@ function ReplayDetail({
           </button>
           <button type="button" className="secondary" onClick={onExport}>
             <ExternalLink size={16} /> Export
+          </button>
+          <button type="button" className="secondary" onClick={() => setPresentationMode((value) => !value)}>
+            <Maximize2 size={16} /> {presentationMode ? "Exit presentation" : "Presentation"}
           </button>
           <button type="button" className="secondary danger" onClick={onDeleteReplay}>
             Delete replay
@@ -6987,6 +8875,36 @@ function ReplayDetail({
         voiceNotes={replayVoiceNotes}
       />
 
+      <section className="rail-card replay-pack-panel">
+        <header>
+          <div>
+            <h2>Coaching pack</h2>
+            <span>These details travel with exported .riftreplay files.</span>
+          </div>
+          <button type="button" className="secondary" onClick={saveCoachingPackMetadata}>
+            <Save size={14} /> Save details
+          </button>
+        </header>
+        <div className="replay-pack-grid">
+          <label>
+            Title
+            <input value={packDraft.title} onChange={(event) => setPackDraft({ ...packDraft, title: event.target.value })} />
+          </label>
+          <label>
+            Author
+            <input value={packDraft.author} onChange={(event) => setPackDraft({ ...packDraft, author: event.target.value })} />
+          </label>
+          <label>
+            Purpose
+            <input value={packDraft.purpose} onChange={(event) => setPackDraft({ ...packDraft, purpose: event.target.value })} />
+          </label>
+          <label>
+            Summary
+            <textarea value={packDraft.summary} onChange={(event) => setPackDraft({ ...packDraft, summary: event.target.value })} placeholder="What should the reviewer focus on?" />
+          </label>
+        </div>
+      </section>
+
       <ReplayLayerPanel
         layers={layers}
         activeLayerId={activeLayerId}
@@ -6998,6 +8916,43 @@ function ReplayDetail({
         onAddLayer={addTeachingLayer}
       />
 
+      <section className="rail-card replay-review-toolbar">
+        <div>
+          <h2>Review mode</h2>
+          <span>{reviewFlags.length ? `${reviewFlags.length} flagged moment${reviewFlags.length === 1 ? "" : "s"} ready` : "Add flags to build a coaching route through this replay."}</span>
+        </div>
+        <div className="replay-review-controls">
+          <button type="button" className="secondary" disabled={!reviewFlags.length} onClick={() => {
+            setReviewMode((value) => !value);
+            if (!reviewMode) {
+              openReviewFlag(reviewFlags[0]);
+            }
+          }}>
+            <Play size={14} /> {reviewMode ? "Stop review" : "Start review"}
+          </button>
+          <button type="button" className="secondary" disabled={!reviewFlags.length} onClick={() => jumpReviewFlag("previous")}>Previous flag</button>
+          <button type="button" className="secondary" disabled={!reviewFlags.length} onClick={() => jumpReviewFlag("next")}>Next flag</button>
+          <label>
+            Pre-roll
+            <select value={reviewPreRollMs} onChange={(event) => setReviewPreRollMs(Number(event.target.value))}>
+              <option value={0}>0s</option>
+              <option value={3000}>3s</option>
+              <option value={5000}>5s</option>
+              <option value={10000}>10s</option>
+            </select>
+          </label>
+          <label>
+            Post-roll
+            <select value={reviewPostRollMs} onChange={(event) => setReviewPostRollMs(Number(event.target.value))}>
+              <option value={3000}>3s</option>
+              <option value={5000}>5s</option>
+              <option value={10000}>10s</option>
+              <option value={15000}>15s</option>
+            </select>
+          </label>
+        </div>
+      </section>
+
       {model.replay.video ? (
         <ReplayVideoPlayer
           video={model.replay.video}
@@ -7006,6 +8961,7 @@ function ReplayDetail({
           voiceNotes={visibleVoiceNotes}
           seekToMs={videoSeekMs}
           onSeekHandled={() => setVideoSeekMs(null)}
+          onTimeChange={setReplayVideoCurrentMs}
           onFlagTime={addVideoTimeFlag}
           onEditFlag={setEditingFlag}
           onSaveKeyframe={saveVideoKeyframe}
@@ -7034,6 +8990,7 @@ function ReplayDetail({
         onRemoveFlag={removeReplayFlag}
       />
 
+      {DECK_TRACKER_FEATURE_ENABLED ? <ReplayDeckTrackerPanel replay={model.replay} currentTimeMs={replayVideoCurrentMs} /> : null}
       <ReplayBattlefields model={model} />
       {analyticsMatch ? <MatchDetailPanel match={analyticsMatch} showFlags={false} /> : null}
       {slideshowOpen ? (
@@ -7199,11 +9156,27 @@ function formatDuration(valueMs: number): string {
   return `${minutes}:${remaining.toString().padStart(2, "0")}`;
 }
 
+function matchTimerLabelFromReplay(replay: ReplayRecord | undefined): string {
+  const durationMs = replay?.video?.durationMs;
+  if (typeof durationMs !== "number" || !Number.isFinite(durationMs) || durationMs <= 0) {
+    return "";
+  }
+  return formatDuration(durationMs);
+}
+
 function replayFlagTypeLabel(flag: Pick<ReplayFlag, "type" | "customType" | "label">): string {
   if (flag.type === "custom") {
     return flag.customType?.trim() || flag.label || "Custom";
   }
   return REPLAY_FLAG_TYPES.find((item) => item.value === flag.type)?.label || flag.label || "Key turn";
+}
+
+function replayFlagSortMs(flag: ReplayFlag): number {
+  if (typeof flag.timeMs === "number") {
+    return flag.timeMs;
+  }
+  const captured = new Date(flag.capturedAt).getTime();
+  return Number.isFinite(captured) ? captured : 0;
 }
 
 function replayFlagTypeFromLabel(label: string): ReplayFlagType {
@@ -7231,6 +9204,17 @@ function replayLayersFor(replay: ReplayRecord, username = ""): ReplayTeachingLay
   };
   const layers = replay.layers?.length ? replay.layers : [base];
   return layers.some((layer) => layer.id === DEFAULT_REPLAY_LAYER_ID) ? layers : [base, ...layers];
+}
+
+function replayCoachingPackDraft(replay: ReplayRecord, username = ""): NonNullable<ReplayRecord["coachingPack"]> {
+  return {
+    title: replay.coachingPack?.title || replay.title || "RiftLite coaching pack",
+    author: replay.coachingPack?.author || username || replay.players?.me || "RiftLite player",
+    purpose: replay.coachingPack?.purpose || "Review",
+    summary: replay.coachingPack?.summary || replay.matchSnapshot?.notes || "",
+    createdAt: replay.coachingPack?.createdAt || new Date().toISOString(),
+    updatedAt: replay.coachingPack?.updatedAt
+  };
 }
 
 function uniqueReplayLayerName(layers: ReplayTeachingLayer[], baseName: string): string {
@@ -7768,6 +9752,7 @@ function ReplayVideoPlayer({
   voiceNotes,
   seekToMs,
   onSeekHandled,
+  onTimeChange,
   onFlagTime,
   onEditFlag,
   onSaveKeyframe,
@@ -7783,6 +9768,7 @@ function ReplayVideoPlayer({
   voiceNotes: ReplayVoiceNote[];
   seekToMs: number | null;
   onSeekHandled: () => void;
+  onTimeChange: (timeMs: number) => void;
   onFlagTime: (timeMs: number) => void;
   onEditFlag: (flag: ReplayFlag) => void;
   onSaveKeyframe: (dataUrl: string, timeMs: number) => Promise<void>;
@@ -8021,6 +10007,7 @@ function ReplayVideoPlayer({
       videoRef.current.currentTime = nextMs / 1000;
     }
     setCurrentMs(nextMs);
+    onTimeChange(nextMs);
     lastTimeUpdateRef.current = nextMs;
   }
 
@@ -8193,12 +10180,14 @@ function ReplayVideoPlayer({
           onLoadedMetadata={(event) => {
             const nextMs = Math.round(event.currentTarget.currentTime * 1000);
             setCurrentMs(nextMs);
+            onTimeChange(nextMs);
           }}
           onTimeUpdate={(event) => {
             const nextMs = Math.round(event.currentTarget.currentTime * 1000);
             if (Math.abs(nextMs - lastTimeUpdateRef.current) >= 500) {
               lastTimeUpdateRef.current = nextMs;
               setCurrentMs(nextMs);
+              onTimeChange(nextMs);
             }
           }}
         />
@@ -8249,6 +10238,7 @@ function ReplayVideoPlayer({
             videoRef.current.currentTime = Math.max(0, timeMs / 1000);
           }
           setCurrentMs(timeMs);
+          onTimeChange(timeMs);
         }}
         onPlayVoice={playVoiceNote}
         onPauseVoice={pauseVoicePlayback}
@@ -8272,6 +10262,8 @@ function ReplayVideoPlayer({
               onClick={() => {
                 if (videoRef.current && typeof flag.timeMs === "number") {
                   videoRef.current.currentTime = flag.timeMs / 1000;
+                  setCurrentMs(flag.timeMs);
+                  onTimeChange(flag.timeMs);
                 }
               }}
               onContextMenu={(event) => {
@@ -8792,6 +10784,49 @@ function replayFrameDelay(
   return Math.round(Math.min(4500, Math.max(800, raw)) / Math.max(0.25, speed));
 }
 
+function ReplayDeckTrackerPanel({ replay, currentTimeMs }: { replay: ReplayRecord; currentTimeMs: number }) {
+  const snapshots = replay.deckTrackerSnapshots ?? [];
+  if (!snapshots.length) {
+    return null;
+  }
+  const targetTime = replay.video?.startedAt
+    ? new Date(replay.video.startedAt).getTime() + currentTimeMs
+    : new Date(replay.capturedAt).getTime();
+  const snapshot = [...snapshots].sort((a, b) => {
+    const aDistance = Math.abs(new Date(a.capturedAt).getTime() - targetTime);
+    const bDistance = Math.abs(new Date(b.capturedAt).getTime() - targetTime);
+    return aDistance - bDistance;
+  })[0] ?? snapshots.at(-1)!;
+  const state = snapshot.state;
+  const cards = state.cards
+    .filter((card) => card.pinned || card.seenCount > 0)
+    .slice(0, 8);
+  return (
+    <section className="rail-card replay-deck-tracker-panel">
+      <header>
+        <div>
+          <h2>Deck tracker</h2>
+          <span>{state.deckTitle || "Active deck"} - nearest snapshot at {new Date(snapshot.capturedAt).toLocaleTimeString()}</span>
+        </div>
+        <strong>{state.cardsLeft}/{state.deckSize} left</strong>
+      </header>
+      <div className="replay-deck-tracker-grid">
+        {cards.map((card) => (
+          <div className="replay-deck-tracker-card" key={card.cardKey}>
+            {card.imageUrl ? <img src={card.imageUrl} alt="" loading="lazy" /> : null}
+            <div>
+              <strong>{card.name}</strong>
+              <span>{card.copiesLeft}/{card.deckCount} left</span>
+              <small>Next 1/2/3: {percent(card.odds.next1)} / {percent(card.odds.next2)} / {percent(card.odds.next3)}</small>
+            </div>
+          </div>
+        ))}
+        {!cards.length ? <p className="muted">No pinned or seen cards in this snapshot.</p> : null}
+      </div>
+    </section>
+  );
+}
+
 function ReplayBattlefields({ model }: { model: AtlasReplayViewModel }) {
   if (!model.battlefields.length) {
     return null;
@@ -9089,6 +11124,36 @@ function SettingsView({
           </div>
           <p className="muted">Direct game frame records only the embedded TCGA/Atlas view and avoids per-frame capture work. Click anywhere in the Play screen before queueing so Windows can arm the stream.</p>
         </div>
+        {DECK_TRACKER_FEATURE_ENABLED ? (
+          <div className="rail-card">
+            <h2>My Deck Tracker</h2>
+            <p className="muted">Local-only draw odds for your active deck. Tracker data only leaves your PC if you export and send a replay file.</p>
+            <label className="toggle-row">
+              <span><BookOpen size={16} /> Deck tracker</span>
+              <input
+                type="checkbox"
+                checked={settings.deckTrackerEnabled}
+                onChange={(event) => void onSave({ deckTrackerEnabled: event.target.checked })}
+              />
+            </label>
+            <label className="toggle-row">
+              <span><Play size={16} /> Auto-start in matches</span>
+              <input
+                type="checkbox"
+                checked={settings.deckTrackerAutoStart}
+                onChange={(event) => void onSave({ deckTrackerAutoStart: event.target.checked })}
+              />
+            </label>
+            <label className="toggle-row">
+              <span><Film size={16} /> Save snapshots to replays</span>
+              <input
+                type="checkbox"
+                checked={settings.deckTrackerSaveToReplay}
+                onChange={(event) => void onSave({ deckTrackerSaveToReplay: event.target.checked })}
+              />
+            </label>
+          </div>
+        ) : null}
         <div className="rail-card">
           <h2>Voice notes</h2>
           <p className="muted">Voice notes are optional coaching clips. RiftLite only asks for microphone access when you press record or refresh devices, and exported .riftreplay files include any voice notes you choose to save.</p>
@@ -9663,6 +11728,27 @@ function HubsView({ settings, matches, hubMatches, onSave, onHubResult, onSyncPr
   const selectedHubTopLegend = topValue(selectedHubAnalytics.map((match) => match.myChampion).filter(Boolean));
   const selectedHubLatest = selectedHubRows[0];
   const allHubPickerMatchesSelected = Boolean(syncableMatches.length) && syncableMatches.every((match) => selectedMatchIds.includes(match.id));
+  const localHubDisplayName = settings.accountDisplayName || settings.username || settings.accountHandle || "";
+  const localHubAccountIds = useMemo(
+    () => new Set([settings.accountUid, settings.firebaseUid].filter(Boolean)),
+    [settings.accountUid, settings.firebaseUid]
+  );
+  const visibleHubMembers = useMemo(
+    () => hubMembers.map((member) => (
+      localHubDisplayName && localHubAccountIds.has(member.uid) && isGenericRiftLiteDisplayName(member.displayName)
+        ? { ...member, displayName: localHubDisplayName }
+        : member
+    )),
+    [hubMembers, localHubAccountIds, localHubDisplayName]
+  );
+  const visibleHubMessages = useMemo(
+    () => hubMessages.map((message) => (
+      localHubDisplayName && localHubAccountIds.has(message.uid) && isGenericRiftLiteDisplayName(message.displayName)
+        ? { ...message, displayName: localHubDisplayName }
+        : message
+    )),
+    [hubMessages, localHubAccountIds, localHubDisplayName]
+  );
 
   function toggleAllHubPickerMatches(checked: boolean) {
     setSelectedMatchIds((current) => {
@@ -9846,7 +11932,7 @@ function HubsView({ settings, matches, hubMatches, onSave, onHubResult, onSyncPr
         <Metric label="Hub matches" value={String(selectedHubRows.length)} />
         <Metric label="Record" value={`${selectedHubWins}-${selectedHubLosses}${selectedHubDraws ? `-${selectedHubDraws}` : ""}`} />
         <Metric label="Top legend" value={selectedHubTopLegend || "Pending"} />
-        <Metric label="Members" value={hubMembers.length ? String(hubMembers.length) : settings.accountUid ? "Refresh" : "Account"} />
+        <Metric label="Members" value={visibleHubMembers.length ? String(visibleHubMembers.length) : settings.accountUid ? "Refresh" : "Account"} />
         <Metric label="Latest" value={selectedHubLatest ? `${normalizeLegendName(selectedHubLatest.myChampion) || "Unknown"} vs ${normalizeLegendName(selectedHubLatest.opponentChampion) || "unknown"}` : "No matches"} />
       </section>
       <div className="rail-card hub-social-card">
@@ -9869,19 +11955,19 @@ function HubsView({ settings, matches, hubMatches, onSave, onHubResult, onSyncPr
             {inviteStatus ? <p className="muted">{inviteStatus}</p> : null}
             <div className="hub-member-list">
               <strong>Members</strong>
-              {hubMembers.map((member) => (
+              {visibleHubMembers.map((member) => (
                 <div className="event-row" key={member.id || member.uid}>
                   <span>{member.displayName || member.handle || member.uid}</span>
                   <strong>{member.role}</strong>
                 </div>
               ))}
-              {!hubMembers.length ? <p className="muted">Member roles appear after the hub is claimed or refreshed.</p> : null}
+              {!visibleHubMembers.length ? <p className="muted">Member roles appear after the hub is claimed or refreshed.</p> : null}
             </div>
             <div className="hub-message-list">
               <strong>Message board</strong>
               <textarea value={hubMessageText} onChange={(event) => setHubMessageText(event.target.value)} placeholder="Post an announcement, note, or @handle mention..." />
               <button className="secondary" disabled={!hubMessageText.trim()} onClick={() => void postHubMessage()}><MessageCircle size={16} /> Post message</button>
-              {hubMessages.map((message) => (
+              {visibleHubMessages.map((message) => (
                 <div className="hub-message" key={message.id}>
                   <div className="row-actions">
                     <strong>{message.displayName || message.handle || "Member"}</strong>
@@ -9890,7 +11976,7 @@ function HubsView({ settings, matches, hubMatches, onSave, onHubResult, onSyncPr
                   <p>{message.text}</p>
                 </div>
               ))}
-              {!hubMessages.length ? <p className="muted">No hub messages yet.</p> : null}
+              {!visibleHubMessages.length ? <p className="muted">No hub messages yet.</p> : null}
             </div>
           </>
         )}
@@ -10847,7 +12933,7 @@ function MatchDetailPopup({ match, showFlags = true, onClose }: { match: Analyti
   );
 }
 
-function MatchDetailPanel({ match, showFlags = true }: { match: AnalyticsMatch; showFlags?: boolean }) {
+function MatchDetailPanel({ match, showFlags = true, matchTimerLabel = "" }: { match: AnalyticsMatch; showFlags?: boolean; matchTimerLabel?: string }) {
   return (
     <section className="match-detail-panel">
       <header>
@@ -10865,6 +12951,7 @@ function MatchDetailPanel({ match, showFlags = true }: { match: AnalyticsMatch; 
         <Metric label="My battlefield" value={match.myBattlefield || "Unknown"} />
         <Metric label="Opponent battlefield" value={match.opponentBattlefield || "Unknown"} />
         <Metric label="Source" value={matchSourceLabel(match)} />
+        {matchTimerLabel ? <Metric label="Match timer" value={matchTimerLabel} /> : null}
         {showFlags ? <Metric label="Flags" value={match.flags || "None"} /> : null}
       </div>
       {match.notes ? (
@@ -10903,7 +12990,10 @@ function MatchDetailPanel({ match, showFlags = true }: { match: AnalyticsMatch; 
 
 function gameBattlefieldLabel(match: AnalyticsMatch, game: MatchGame, side: "me" | "opponent"): string {
   const directValue = side === "me" ? game.myBattlefield : game.oppBattlefield;
-  const matchFallback = game.gameNumber === 1 ? (side === "me" ? match.myBattlefield : match.opponentBattlefield) : "";
+  const anyGameBattlefield = match.games.some((item) => side === "me" ? Boolean(item.myBattlefield) : Boolean(item.oppBattlefield));
+  const matchFallback = game.gameNumber === 1 || !anyGameBattlefield
+    ? (side === "me" ? match.myBattlefield : match.opponentBattlefield)
+    : "";
   return directValue || matchFallback || (side === "me" ? "My battlefield unknown" : "Opponent battlefield unknown");
 }
 
@@ -11354,6 +13444,11 @@ function readUnknownString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function isGenericRiftLiteDisplayName(value: unknown): boolean {
+  const cleaned = readUnknownString(value).toLowerCase().replace(/\s+/g, " ");
+  return !cleaned || cleaned === "riftlite player" || cleaned === "riftlite user" || /^player(?:[ #_-]|$)/.test(cleaned);
+}
+
 function validAnalytics(matches: AnalyticsMatch[]): AnalyticsMatch[] {
   return matches.filter((match) => match.myChampion && match.opponentChampion);
 }
@@ -11364,6 +13459,27 @@ function filterAnalyticsByFormat(matches: AnalyticsMatch[], format: string): Ana
 
 function splitFlags(flags: string): string[] {
   return flags.split(",").map((flag) => flag.trim()).filter(Boolean);
+}
+
+function previousFlagsFromMatches(matches: MatchDraft[]): string[] {
+  const counts = new Map<string, { label: string; count: number; latest: number }>();
+  for (const match of matches) {
+    const capturedAt = new Date(match.capturedAt || match.updatedAt).getTime();
+    const latest = Number.isFinite(capturedAt) ? capturedAt : 0;
+    for (const flag of splitFlags(match.flags)) {
+      const key = flag.toLowerCase();
+      const current = counts.get(key);
+      counts.set(key, {
+        label: current?.label ?? flag,
+        count: (current?.count ?? 0) + 1,
+        latest: Math.max(current?.latest ?? 0, latest)
+      });
+    }
+  }
+  return [...counts.values()]
+    .sort((a, b) => b.count - a.count || b.latest - a.latest || a.label.localeCompare(b.label))
+    .map((item) => item.label)
+    .slice(0, 50);
 }
 
 function filterMatrixMatches(matches: AnalyticsMatch[], filters: MatrixFilters, showFlags = true): AnalyticsMatch[] {
@@ -11813,9 +13929,15 @@ function reviewGamesFromEvidence(draft: MatchDraft): MatchGame[] {
   const events = [...draft.rawEvidence].sort((a, b) => new Date(a.capturedAt).getTime() - new Date(b.capturedAt).getTime());
   const games: MatchGame[] = [];
   let current = createEmptyReviewGame(1);
+  let lastAtlasGameResultSignature = "";
 
   for (const event of events) {
     if (!["match-start", "match-snapshot", "match-update", "match-end"].includes(event.kind)) {
+      continue;
+    }
+    const isAtlasGameResult = isAtlasEvidenceGameResult(event.payload);
+    const atlasGameResultSignature = isAtlasGameResult ? evidenceGameResultSignature(event.payload) : "";
+    if (atlasGameResultSignature && atlasGameResultSignature === lastAtlasGameResultSignature) {
       continue;
     }
     const score = scoreFromEvidencePayload(event.payload);
@@ -11850,12 +13972,38 @@ function reviewGamesFromEvidence(draft: MatchDraft): MatchGame[] {
       current.oppBattlefieldImage = oppBattlefieldImage;
     }
     current.result = inferReviewResult(current.myPoints, current.oppPoints);
+    if (isAtlasGameResult && reviewGameHasData(current)) {
+      games.push(normalizeReviewGame(current));
+      lastAtlasGameResultSignature = atlasGameResultSignature;
+      current = createEmptyReviewGame(games.length + 1);
+    }
   }
 
   if (reviewGameHasData(current)) {
     games.push(normalizeReviewGame(current));
   }
   return cleanEvidenceReviewGames(games).slice(0, 3).map((game, index) => ({ ...game, gameNumber: index + 1 }));
+}
+
+function isAtlasEvidenceGameResult(payload: Record<string, unknown>): boolean {
+  if (readUnknownString(payload.atlasResultKind) === "game-result") {
+    return true;
+  }
+  return /confirm\s+game\s+\d+\s+winner/i.test(readUnknownString(payload.endText));
+}
+
+function evidenceGameResultSignature(payload: Record<string, unknown>): string {
+  const score = scoreFromEvidencePayload(payload);
+  return [
+    readUnknownString(payload.atlasResultKind).toLowerCase(),
+    normalizeTextKey(readUnknownString(payload.endText)),
+    score.me ?? "",
+    score.opp ?? "",
+    normalizeTextKey(readUnknownString(payload.myBattlefield)),
+    normalizeTextKey(readUnknownString(payload.opponentBattlefield)),
+    normalizeAssetKey(readUnknownString(payload.myBattlefieldImage)),
+    normalizeAssetKey(readUnknownString(payload.opponentBattlefieldImage))
+  ].join("|");
 }
 
 function scoreFromEvidencePayload(payload: Record<string, unknown>): { me?: number; opp?: number } {
@@ -11883,6 +14031,7 @@ function shouldStartEvidenceGame(
   }
   const nextHasScore = (score.me ?? 0) + (score.opp ?? 0) > 0;
   const canSplitOnFieldChange = reviewGameHasNonZeroScore(current) && nextHasScore;
+  const nextIsScoreReset = typeof score.me === "number" && typeof score.opp === "number" && score.me === 0 && score.opp === 0;
   if (
     isGeneratedBattlefieldName(myBattlefield) ||
     isGeneratedBattlefieldName(oppBattlefield) ||
@@ -11902,6 +14051,20 @@ function shouldStartEvidenceGame(
   }
   if (canSplitOnFieldChange && oppBattlefieldImage && current.oppBattlefieldImage && normalizeAssetKey(oppBattlefieldImage) !== normalizeAssetKey(current.oppBattlefieldImage)) {
     return true;
+  }
+  if (reviewGameHasNonZeroScore(current) && nextIsScoreReset) {
+    if (myBattlefield && current.myBattlefield && normalizeTextKey(myBattlefield) !== normalizeTextKey(current.myBattlefield)) {
+      return true;
+    }
+    if (oppBattlefield && current.oppBattlefield && normalizeTextKey(oppBattlefield) !== normalizeTextKey(current.oppBattlefield)) {
+      return true;
+    }
+    if (myBattlefieldImage && current.myBattlefieldImage && normalizeAssetKey(myBattlefieldImage) !== normalizeAssetKey(current.myBattlefieldImage)) {
+      return true;
+    }
+    if (oppBattlefieldImage && current.oppBattlefieldImage && normalizeAssetKey(oppBattlefieldImage) !== normalizeAssetKey(current.oppBattlefieldImage)) {
+      return true;
+    }
   }
   if (typeof score.me !== "number" && typeof score.opp !== "number") {
     return false;
@@ -12488,10 +14651,11 @@ function catalogSearchKey(value: string): string {
   return value.toLowerCase().replace(/[’`]/g, "'").replace(/[^a-z0-9]+/g, "");
 }
 
-function MatchReviewModal({ draft, decks, battlefields, onClose, onConfirm, onChange }: {
+function MatchReviewModal({ draft, decks, battlefields, previousFlags, onClose, onConfirm, onChange }: {
   draft: MatchDraft;
   decks: SavedDeck[];
   battlefields: BattlefieldOption[];
+  previousFlags: string[];
   onClose: () => void;
   onConfirm: (draft: MatchDraft) => Promise<void>;
   onChange: (draft: MatchDraft) => void;
@@ -12499,6 +14663,7 @@ function MatchReviewModal({ draft, decks, battlefields, onClose, onConfirm, onCh
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
   const [seatErrorGames, setSeatErrorGames] = useState<number[]>([]);
+  const [previousFlagChoice, setPreviousFlagChoice] = useState("");
   const bo3GamesCacheRef = useRef<MatchGame[]>(draft.games.length > 1 ? ensureReviewGames(draft, "Bo3") : []);
 
   useEffect(() => {
@@ -12673,6 +14838,22 @@ function MatchReviewModal({ draft, decks, battlefields, onClose, onConfirm, onCh
     });
   }
 
+  function addPreviousFlag(flag: string) {
+    const trimmed = flag.trim();
+    if (!trimmed) {
+      return;
+    }
+    const currentFlags = splitFlags(draft.flags);
+    const existing = new Set(currentFlags.map((item) => item.toLowerCase()));
+    const nextFlags = existing.has(trimmed.toLowerCase()) ? currentFlags : [...currentFlags, trimmed];
+    patch({ flags: nextFlags.join(", ") });
+  }
+
+  function choosePreviousFlag(value: string) {
+    setPreviousFlagChoice("");
+    addPreviousFlag(value);
+  }
+
   const reviewGames = ensureReviewGames(draft, draft.format);
   const scoreValues = reviewScoreValues({ ...draft, games: reviewGames });
   const primaryGame = reviewGames[0] ?? createReviewGame(draft);
@@ -12771,6 +14952,20 @@ function MatchReviewModal({ draft, decks, battlefields, onClose, onConfirm, onCh
           </select></label>
           <label>Deck name<input value={draft.deckName} onChange={(event) => patch({ deckName: event.target.value })} placeholder="No deck logged" /></label>
           <label className="wide">Flags<input value={draft.flags} onChange={(event) => patch({ flags: event.target.value })} placeholder="ladder, tournament, testing" /></label>
+          <label className="wide review-previous-flags">
+            Previous flags
+            <div>
+              <select
+                value={previousFlagChoice}
+                onChange={(event) => choosePreviousFlag(event.target.value)}
+                disabled={!previousFlags.length}
+              >
+                <option value="">{previousFlags.length ? "Add a previous flag..." : "No previous flags yet"}</option>
+                {previousFlags.map((flag) => <option value={flag} key={flag}>{flag}</option>)}
+              </select>
+              <span>Pick one or more, then type anything custom above.</span>
+            </div>
+          </label>
           {!isScorepadDraft ? (
             <label className="toggle-row wide review-replay-toggle">
               <span><Images size={16} /> Save replay files for this match</span>

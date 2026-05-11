@@ -44,3 +44,39 @@ const LEGEND_IMAGE_URLS: Record<string, string> = {
 export function legendImageUrl(legend: string): string {
   return LEGEND_IMAGE_URLS[legend] ?? LEGEND_IMAGE_URLS[legend.split(",")[0]?.trim() ?? ""] ?? "";
 }
+
+export function legendFromImageUrl(value: unknown): string {
+  const raw = String(value ?? "").trim();
+  if (!raw) {
+    return "";
+  }
+  const decoded = decodeLoose(raw);
+  const directCode = cardCode(decoded);
+  const directHash = imageHash(decoded);
+  for (const [legend, url] of Object.entries(LEGEND_IMAGE_URLS)) {
+    const candidate = decodeLoose(url);
+    if (directCode && cardCode(candidate) === directCode) {
+      return legend;
+    }
+    if (directHash && imageHash(candidate) === directHash) {
+      return legend;
+    }
+  }
+  return "";
+}
+
+function cardCode(value: string): string {
+  return value.match(/\b((?:OGN|OGS|SFD|UNL)-\d+[A-Z]?)\b/i)?.[1]?.toUpperCase() ?? "";
+}
+
+function imageHash(value: string): string {
+  return value.match(/\b([a-f0-9]{40})\b/i)?.[1]?.toLowerCase() ?? "";
+}
+
+function decodeLoose(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}

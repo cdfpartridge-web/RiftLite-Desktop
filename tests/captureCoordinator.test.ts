@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { CaptureCoordinator } from "../src/main/services/captureCoordinator";
-import type { CaptureEvent, MatchDraft, UserSettings } from "../src/shared/types";
+import type { CaptureEvent, GamePlatform, MatchDraft, UserSettings } from "../src/shared/types";
 
 vi.mock("electron", () => {
   class MockNotification {
@@ -61,13 +61,21 @@ const settings = {
   activeHubs: []
 } as UserSettings;
 
-function event(kind: CaptureEvent["kind"], payload: Record<string, unknown>, capturedAt: string): CaptureEvent {
+function event(
+  kind: CaptureEvent["kind"],
+  payload: Record<string, unknown>,
+  capturedAt: string,
+  platform: GamePlatform = "tcga",
+  url?: string
+): CaptureEvent {
   return {
     id: `${kind}-${capturedAt}`,
-    platform: "tcga",
+    platform,
     kind,
     capturedAt,
-    url: kind === "match-end" ? "https://tcg-arena.fr/" : "https://tcg-arena.fr/play",
+    url: url ?? (platform === "atlas"
+      ? "https://play.riftatlas.com/game"
+      : kind === "match-end" ? "https://tcg-arena.fr/" : "https://tcg-arena.fr/play"),
     payload
   };
 }
@@ -230,6 +238,114 @@ describe("CaptureCoordinator", () => {
           oppPoints: 7
         })
       ]
+    });
+  });
+
+  it("keeps a two-game RiftAtlas BO3 sweep as two distinct games", async () => {
+    const { coordinator, saved } = coordinatorHarness();
+
+    await coordinator.handleEvent(event("match-start", {
+      active: true,
+      format: "Auto",
+      myName: "BMU",
+      opponentName: "Drekayr",
+      score: { me: "0", opp: "0", source: "atlas-score-track" },
+      myBattlefield: "The Arena's Greatest",
+      opponentBattlefield: "Ornn's Forge",
+      myBattlefieldImage: "https://assets.riftatlas-workers.com/riftbound/cards/original/OGN-298.webp",
+      opponentBattlefieldImage: "https://assets.riftatlas-workers.com/riftbound/cards/original/UNL-215.webp"
+    }, "2026-05-11T09:17:37.769Z", "atlas"));
+    await coordinator.handleEvent(event("match-snapshot", {
+      active: true,
+      format: "Auto",
+      myName: "BMU",
+      opponentName: "Drekayr",
+      score: { me: "7", opp: "5", source: "atlas-score-track" },
+      myBattlefield: "The Arena's Greatest",
+      opponentBattlefield: "Ornn's Forge",
+      myBattlefieldImage: "https://assets.riftatlas-workers.com/riftbound/cards/original/OGN-298.webp",
+      opponentBattlefieldImage: "https://assets.riftatlas-workers.com/riftbound/cards/original/UNL-215.webp"
+    }, "2026-05-11T09:33:09.941Z", "atlas"));
+    await coordinator.handleEvent(event("match-end", {
+      active: true,
+      reason: "result-text-detected",
+      atlasResultKind: "game-result",
+      endText: "Confirm Game 1 Winner",
+      format: "Auto",
+      myName: "BMU",
+      opponentName: "Drekayr",
+      score: { me: "7", opp: "5", source: "atlas-score-track" },
+      myBattlefield: "The Arena's Greatest",
+      opponentBattlefield: "Ornn's Forge",
+      myBattlefieldImage: "https://assets.riftatlas-workers.com/riftbound/cards/original/OGN-298.webp",
+      opponentBattlefieldImage: "https://assets.riftatlas-workers.com/riftbound/cards/original/UNL-215.webp"
+    }, "2026-05-11T09:33:30.575Z", "atlas"));
+    await coordinator.handleEvent(event("match-snapshot", {
+      active: false,
+      format: "Auto",
+      myName: "BMU",
+      score: { me: "", opp: "", source: "none" }
+    }, "2026-05-11T09:33:34.747Z", "atlas"));
+    await coordinator.handleEvent(event("match-start", {
+      active: true,
+      format: "Auto",
+      myName: "BMU",
+      opponentName: "Drekayr",
+      score: { me: "0", opp: "0", source: "atlas-score-track" }
+    }, "2026-05-11T09:33:35.751Z", "atlas"));
+    await coordinator.handleEvent(event("match-snapshot", {
+      active: true,
+      format: "Auto",
+      myName: "BMU",
+      opponentName: "Drekayr",
+      score: { me: "0", opp: "0", source: "atlas-score-track" },
+      myBattlefield: "Ornn's Forge",
+      opponentBattlefield: "Ripper's Bay",
+      myBattlefieldImage: "https://assets.riftatlas-workers.com/riftbound/cards/original/UNL-215.webp",
+      opponentBattlefieldImage: "https://assets.riftatlas-workers.com/riftbound/cards/original/SFD-215.webp"
+    }, "2026-05-11T09:34:13.653Z", "atlas"));
+    await coordinator.handleEvent(event("match-snapshot", {
+      active: true,
+      format: "Auto",
+      myName: "BMU",
+      opponentName: "Drekayr",
+      score: { me: "7", opp: "3", source: "atlas-score-track" },
+      myBattlefield: "Ornn's Forge",
+      opponentBattlefield: "Ripper's Bay",
+      myBattlefieldImage: "https://assets.riftatlas-workers.com/riftbound/cards/original/UNL-215.webp",
+      opponentBattlefieldImage: "https://assets.riftatlas-workers.com/riftbound/cards/original/SFD-215.webp"
+    }, "2026-05-11T09:49:47.054Z", "atlas"));
+    await coordinator.handleEvent(event("match-end", {
+      active: false,
+      reason: "inactive-debounce",
+      format: "Bo1",
+      myName: "BMU",
+      score: { me: "", opp: "", source: "none" }
+    }, "2026-05-11T09:51:21.196Z", "atlas", "https://play.riftatlas.com/"));
+
+    expect(saved).toHaveLength(1);
+    expect(saved[0]).toMatchObject({
+      platform: "atlas",
+      format: "Bo3",
+      result: "Win",
+      score: "2-0"
+    });
+    expect(saved[0].games).toHaveLength(2);
+    expect(saved[0].games[0]).toMatchObject({
+      gameNumber: 1,
+      result: "Win",
+      myPoints: 7,
+      oppPoints: 5,
+      myBattlefield: "The Arena's Greatest",
+      oppBattlefield: "Ornn's Forge"
+    });
+    expect(saved[0].games[1]).toMatchObject({
+      gameNumber: 2,
+      result: "Win",
+      myPoints: 7,
+      oppPoints: 3,
+      myBattlefield: "Ornn's Forge",
+      oppBattlefield: "Ripper's Bay"
     });
   });
 });

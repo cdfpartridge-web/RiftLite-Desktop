@@ -141,6 +141,196 @@ export interface SavedDeck {
   lastRefreshError: string;
 }
 
+export type DeckTestingGoalStatus = "Active" | "Done" | "Paused";
+export type DeckCardWatchStatus = "Testing" | "Overperforming" | "Underperforming" | "Cut candidate";
+export type DeckGuideSource = "default" | "matchup" | "none";
+
+export interface DeckTestingGoal {
+  id: string;
+  text: string;
+  status: DeckTestingGoalStatus;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export interface DeckVersionEntry {
+  id: string;
+  snapshotHash: string;
+  title: string;
+  legend: string;
+  sourceKey: string;
+  sourceUrl: string;
+  importedAt: string;
+  summary: string;
+}
+
+export interface DeckCardWatchItem {
+  id: string;
+  cardKey: string;
+  cardName: string;
+  cardId?: string;
+  imageUrl?: string;
+  status: DeckCardWatchStatus;
+  note: string;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export interface DeckGuideCardRef {
+  id: string;
+  cardKey: string;
+  cardName: string;
+  cardId?: string;
+  imageUrl?: string;
+  qty: number;
+  note?: string;
+  groupName?: string;
+  groupTarget?: string;
+  groupNote?: string;
+  priority?: number;
+}
+
+export interface DeckGuideSection {
+  cards: DeckGuideCardRef[];
+  note: string;
+}
+
+export interface DeckGuideNote {
+  id: string;
+  text: string;
+  createdAt: string;
+  updatedAt?: string;
+  source?: "deck" | "play";
+}
+
+export interface DeckMatchupGuide {
+  id: string;
+  legend: string;
+  legendKey: string;
+  updatedAt: string;
+  mulligan: {
+    keep: DeckGuideSection;
+    consider: DeckGuideSection;
+    avoid: DeckGuideSection;
+  };
+  sideboard: {
+    in: DeckGuideSection;
+    out: DeckGuideSection;
+    note: string;
+  };
+  battlefields: {
+    game1: DeckGuideSection;
+    game1First: DeckGuideSection;
+    game1Second: DeckGuideSection;
+    note: string;
+  };
+  notes: DeckGuideNote[];
+}
+
+export interface DeckNotebook {
+  deckId: string;
+  updatedAt: string;
+  goals: DeckTestingGoal[];
+  versions: DeckVersionEntry[];
+  watchlist: DeckCardWatchItem[];
+  defaultGuide: DeckMatchupGuide;
+  matchupGuides: DeckMatchupGuide[];
+}
+
+export interface DeckNotebookExport {
+  format: "riftlite.deck-notebook";
+  version: 1;
+  exportedAt: string;
+  deck: SavedDeck;
+  notebook: DeckNotebook;
+}
+
+export interface DeckPackageExport {
+  format: "riftlite.deck-package";
+  version: 1;
+  exportedAt: string;
+  deck: SavedDeck;
+  notebook: DeckNotebook;
+}
+
+export interface DeckPackageImportResult {
+  deck: SavedDeck;
+  notebook: DeckNotebook;
+}
+
+export interface ActiveDeckPrep {
+  deck: SavedDeck | null;
+  notebook: DeckNotebook | null;
+  guide: DeckMatchupGuide | null;
+  opponentLegend: string;
+  source: DeckGuideSource;
+}
+
+export type DeckTrackerZone = "hand" | "board" | "base" | "stack" | "trash" | "discard" | "unknown";
+export type DeckTrackerConfidence = "tracked" | "estimated";
+
+export interface DeckTrackerObservation {
+  cardKey: string;
+  name: string;
+  code: string;
+  cardId: string;
+  imageUrl: string;
+  zone: DeckTrackerZone;
+  count: number;
+  platform: GamePlatform;
+  confidence: DeckTrackerConfidence;
+  capturedAt: string;
+}
+
+export interface DeckTrackerCorrection {
+  cardKey: string;
+  delta: number;
+  capturedAt: string;
+}
+
+export interface DeckTrackerCardState {
+  cardKey: string;
+  name: string;
+  code: string;
+  cardId: string;
+  imageUrl: string;
+  deckCount: number;
+  seenCount: number;
+  manualDelta: number;
+  copiesLeft: number;
+  pinned: boolean;
+  confidence: DeckTrackerConfidence;
+  odds: {
+    next1: number;
+    next2: number;
+    next3: number;
+  };
+}
+
+export interface DeckTrackerState {
+  active: boolean;
+  reason: string;
+  deckId: string;
+  deckTitle: string;
+  deckLegend: string;
+  platform: GamePlatform | "none";
+  confidence: DeckTrackerConfidence;
+  deckSize: number;
+  cardsLeft: number;
+  seenCount: number;
+  updatedAt: string;
+  pinnedCards: string[];
+  corrections: DeckTrackerCorrection[];
+  cards: DeckTrackerCardState[];
+}
+
+export interface DeckTrackerSnapshot {
+  id: string;
+  capturedAt: string;
+  reason: string;
+  state: DeckTrackerState;
+}
+
 export interface PrivateHub {
   id: string;
   name: string;
@@ -389,7 +579,7 @@ export interface ReplayRecord {
   platform: GamePlatform;
   capturedAt: string;
   deletedAt?: string;
-  schemaVersion?: 1 | 2 | 3;
+  schemaVersion?: 1 | 2 | 3 | 4;
   title: string;
   players: {
     me: string;
@@ -404,10 +594,21 @@ export interface ReplayRecord {
   flags?: ReplayFlag[];
   annotations?: ReplayAnnotation[];
   voiceNotes?: ReplayVoiceNote[];
+  deckTrackerSnapshots?: DeckTrackerSnapshot[];
+  coachingPack?: ReplayCoachingPackMetadata;
   matchSnapshot?: MatchDraft;
   search?: ReplaySearchMetadata;
   importedAt?: string;
   importedFrom?: string;
+}
+
+export interface ReplayCoachingPackMetadata {
+  title: string;
+  author: string;
+  summary: string;
+  purpose: string;
+  createdAt: string;
+  updatedAt?: string;
 }
 
 export interface ReplayTeachingLayer {
@@ -525,6 +726,7 @@ export interface ReplayVideoAsset {
   actualBitrateKbps?: number;
   codec: string;
   quality: ReplayVideoQuality;
+  hasAudio?: boolean;
   containerFinalized?: boolean;
 }
 
@@ -559,6 +761,7 @@ export interface ReplayVideoFinalizeOptions {
   quality: ReplayVideoQuality;
   mimeType: ReplayVideoMimeType;
   source: "game-frame-direct" | "system-window-crop";
+  hasAudio?: boolean;
 }
 
 export interface ReplayVideoMergeOptions {
@@ -613,13 +816,14 @@ export interface ReplayBundleVideo {
 
 export interface RiftReplayBundle {
   format: "riftlite.replay";
-  version: 1 | 2 | 3;
+  version: 1 | 2 | 3 | 4;
   exportedAt: string;
   replay: ReplayRecord;
   match?: MatchDraft;
   search: ReplaySearchMetadata;
   frames: ReplayBundleFrame[];
   video?: ReplayBundleVideo;
+  coachingPack?: ReplayCoachingPackMetadata;
 }
 
 export interface CommunityMatch {
@@ -712,6 +916,11 @@ export interface UserSettings {
   replayVideoEnabled: boolean;
   replayVideoMode: ReplayVideoCaptureMode;
   replayVideoQuality: ReplayVideoQuality;
+  replayMicAudioEnabled: boolean;
+  deckTrackerEnabled: boolean;
+  deckTrackerAutoStart: boolean;
+  deckTrackerSaveToReplay: boolean;
+  deckTrackerPinnedCards: Record<string, string[]>;
   microphoneDeviceId: string;
   gameZoomFactor: number;
   autoSaveAfterSeconds: number;
@@ -920,6 +1129,21 @@ export interface RiftLiteApi {
   refreshDeck(id: string): Promise<SavedDeck>;
   deleteDeck(id: string): Promise<void>;
   setActiveDeck(id: string): Promise<UserSettings>;
+  getDeckNotebook(deckId: string): Promise<DeckNotebook>;
+  saveDeckNotebook(deckId: string, notebook: DeckNotebook): Promise<DeckNotebook>;
+  exportDeckNotebook(deckId: string): Promise<string>;
+  importDeckNotebook(): Promise<DeckNotebook | null>;
+  exportDeckPackage(deckId: string, notebook?: DeckNotebook): Promise<string>;
+  importDeckPackage(): Promise<DeckPackageImportResult | null>;
+  exportDeckPackageText(deckId: string, notebook?: DeckNotebook): Promise<string>;
+  importDeckPackageText(text: string): Promise<DeckPackageImportResult>;
+  exportDeckPrepPdf(deckId: string, notebook?: DeckNotebook): Promise<string>;
+  writeClipboardText(text: string): Promise<boolean>;
+  getActiveDeckPrep(opponentLegend?: string): Promise<ActiveDeckPrep>;
+  getDeckTrackerState(): Promise<DeckTrackerState>;
+  setDeckTrackerPinnedCards(deckId: string, cardKeys: string[]): Promise<DeckTrackerState>;
+  adjustDeckTrackerCard(cardKey: string, delta: number): Promise<DeckTrackerState>;
+  resetDeckTrackerMatch(): Promise<DeckTrackerState>;
   getReplays(): Promise<ReplayRecord[]>;
   getDeletedReplays(): Promise<ReplayRecord[]>;
   saveReplay(replay: ReplayRecord): Promise<ReplayRecord>;

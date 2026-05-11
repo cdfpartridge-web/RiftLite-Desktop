@@ -87,9 +87,27 @@ export async function sendAppUsageHeartbeat(store: RiftLiteStore): Promise<boole
 }
 
 export function scheduleAppUsageHeartbeat(store: RiftLiteStore, delayMs = 4_000): void {
-  setTimeout(() => {
-    void sendAppUsageHeartbeat(store).catch((error) => {
-      console.warn("[usage] Anonymous heartbeat failed", error);
-    });
-  }, delayMs);
+  const retryDelays = [delayMs, 60_000, 5 * 60_000, 15 * 60_000];
+  let attempt = 0;
+
+  const run = () => {
+    const nextDelay = retryDelays[Math.min(attempt, retryDelays.length - 1)];
+    attempt += 1;
+
+    setTimeout(() => {
+      void sendAppUsageHeartbeat(store).then((sent) => {
+        if (sent || attempt >= retryDelays.length) {
+          return;
+        }
+        run();
+      }).catch((error) => {
+        console.warn("[usage] Anonymous heartbeat failed", error);
+        if (attempt < retryDelays.length) {
+          run();
+        }
+      });
+    }, nextDelay);
+  };
+
+  run();
 }

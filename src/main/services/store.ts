@@ -6,8 +6,9 @@ import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import initSqlJs, { type Database, type SqlJsStatic } from "sql.js";
+import { deckNotebookWithCurrentVersion, emptyDeckNotebook, normalizeDeckNotebook, sanitizeDeckNotebookForDeck } from "../../shared/deckNotebook.js";
 import { normalizeLegendName } from "../../shared/legendNames.js";
-import type { CaptureEvent, ImportSummary, MatchDraft, OverlayDisplayOptions, ReplayRecord, SavedDeck, UserSettings } from "../../shared/types.js";
+import type { CaptureEvent, DeckNotebook, ImportSummary, MatchDraft, OverlayDisplayOptions, ReplayRecord, SavedDeck, UserSettings } from "../../shared/types.js";
 
 interface PersistedState {
   settings?: Partial<UserSettings>;
@@ -42,6 +43,11 @@ const DEFAULT_SETTINGS: UserSettings = {
   replayVideoEnabled: true,
   replayVideoMode: "game-frame",
   replayVideoQuality: "sharp",
+  replayMicAudioEnabled: false,
+  deckTrackerEnabled: false,
+  deckTrackerAutoStart: false,
+  deckTrackerSaveToReplay: false,
+  deckTrackerPinnedCards: {},
   microphoneDeviceId: "",
   gameZoomFactor: 1,
   autoSaveAfterSeconds: 45,
@@ -180,6 +186,9 @@ export class RiftLiteStore {
       replayVideoMode: normalizeReplayVideoMode((parsed as { replayVideoMode?: unknown }).replayVideoMode),
       replayFramePreset: normalizeReplayFramePreset((parsed as { replayFramePreset?: unknown }).replayFramePreset),
       overlayDisplay: { ...DEFAULT_SETTINGS.overlayDisplay, ...parsed.overlayDisplay },
+      deckTrackerPinnedCards: parsed.deckTrackerPinnedCards && typeof parsed.deckTrackerPinnedCards === "object" && !Array.isArray(parsed.deckTrackerPinnedCards)
+        ? parsed.deckTrackerPinnedCards
+        : {},
       activeHubs: Array.isArray(parsed.activeHubs) ? parsed.activeHubs : []
     };
   }
@@ -353,6 +362,7 @@ export class RiftLiteStore {
         next.lastRefreshError
       ]
     );
+    this.ensureDeckNotebookCurrentVersion(db, next);
     await this.persist();
     return next;
   }
@@ -360,12 +370,41 @@ export class RiftLiteStore {
   async deleteSavedDeck(id: string): Promise<void> {
     const db = await this.database();
     db.run("DELETE FROM saved_decks WHERE id=?", [id]);
+    db.run("DELETE FROM deck_notebooks WHERE deck_id=?", [id]);
     const settings = await this.getSettings();
     if (settings.activeDeckId === id) {
       await this.saveSettings({ activeDeckId: "" });
       return;
     }
     await this.persist();
+  }
+
+  async getDeckNotebook(deckId: string): Promise<DeckNotebook> {
+    const db = await this.database();
+    const deck = await this.getSavedDeck(deckId);
+    const notebook = this.readDeckNotebook(db, deckId);
+    if (!deck) {
+      return notebook;
+    }
+    const next = deckNotebookWithCurrentVersion(notebook, deck);
+    if (JSON.stringify(next) !== JSON.stringify(notebook)) {
+      this.writeDeckNotebook(db, deckId, next);
+      await this.persist();
+    }
+    return next;
+  }
+
+  async saveDeckNotebook(deckId: string, notebook: DeckNotebook): Promise<DeckNotebook> {
+    const db = await this.database();
+    const deck = await this.getSavedDeck(deckId);
+    let next = normalizeDeckNotebook(deckId, notebook);
+    if (deck) {
+      next = sanitizeDeckNotebookForDeck(deckNotebookWithCurrentVersion(next, deck), deck);
+    }
+    next = { ...next, updatedAt: new Date().toISOString() };
+    this.writeDeckNotebook(db, deckId, next);
+    await this.persist();
+    return next;
   }
 
   async getReplays(): Promise<ReplayRecord[]> {
@@ -566,6 +605,11 @@ export class RiftLiteStore {
         last_refresh_error TEXT NOT NULL
       );
       CREATE UNIQUE INDEX IF NOT EXISTS idx_saved_decks_source_key ON saved_decks(source_key) WHERE source_key <> '';
+      CREATE TABLE IF NOT EXISTS deck_notebooks (
+        deck_id TEXT PRIMARY KEY,
+        data_json TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
     `);
     const existing = db.exec("SELECT value_json FROM settings WHERE key='settings'")[0]?.values[0]?.[0];
     if (!existing) {
@@ -647,6 +691,35 @@ export class RiftLiteStore {
     const freePages = Number(db.exec("PRAGMA freelist_count")[0]?.values?.[0]?.[0] ?? 0);
     if (changed || freePages > 100) {
       db.run("VACUUM");
+    }
+  }
+
+  private readDeckNotebook(db: Database, deckId: string): DeckNotebook {
+    const raw = db.exec("SELECT data_json FROM deck_notebooks WHERE deck_id=?", [deckId])[0]?.values[0]?.[0];
+    if (typeof raw !== "string") {
+      return emptyDeckNotebook(deckId);
+    }
+    try {
+      return normalizeDeckNotebook(deckId, JSON.parse(raw) as DeckNotebook);
+    } catch {
+      return emptyDeckNotebook(deckId);
+    }
+  }
+
+  private writeDeckNotebook(db: Database, deckId: string, notebook: DeckNotebook): void {
+    const next = normalizeDeckNotebook(deckId, notebook);
+    const updatedAt = next.updatedAt || new Date().toISOString();
+    db.run(
+      "INSERT OR REPLACE INTO deck_notebooks (deck_id, data_json, updated_at) VALUES (?, ?, ?)",
+      [deckId, JSON.stringify({ ...next, updatedAt }), updatedAt]
+    );
+  }
+
+  private ensureDeckNotebookCurrentVersion(db: Database, deck: SavedDeck): void {
+    const current = this.readDeckNotebook(db, deck.id);
+    const next = deckNotebookWithCurrentVersion(current, deck);
+    if (JSON.stringify(current) !== JSON.stringify(next)) {
+      this.writeDeckNotebook(db, deck.id, next);
     }
   }
 

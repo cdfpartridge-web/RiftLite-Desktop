@@ -6,7 +6,7 @@ interface LookupPayload {
   codeMap?: Record<string, string>;
 }
 
-const CARD_CODE_RE = /\b((?:OGN|OGS|SFD|UNL)-\d+)\b/i;
+const CARD_CODE_RE = /\b((?:OGN|OGS|SFD|UNL)-\d+[A-Z]?)\b/i;
 const HASH_RE = /\b([a-f0-9]{40})\b/i;
 
 export class TcgaResolver {
@@ -30,6 +30,10 @@ export class TcgaResolver {
     const code = decoded.match(CARD_CODE_RE)?.[1]?.toUpperCase() ?? "";
     if (code && this.codeMap[code]) {
       return this.codeMap[code];
+    }
+    const baseCode = code.match(/^((?:OGN|OGS|SFD|UNL)-\d+)[A-Z]$/)?.[1] ?? "";
+    if (baseCode && this.codeMap[baseCode]) {
+      return this.codeMap[baseCode];
     }
     return "";
   }

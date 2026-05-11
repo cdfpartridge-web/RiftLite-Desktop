@@ -11,6 +11,7 @@ const ACTIVE_HEARTBEAT_MS = 5_000;
 const IDLE_HEARTBEAT_MS = 12_000;
 const DEBUG_MODE_REFRESH_MS = 10_000;
 const ATLAS_INTERACTION_QUIET_MS = 900;
+const DECK_TRACKER_FEATURE_ENABLED = false;
 const BATTLEFIELD_NAMES = [
   { name: "Ravensbloom Conservatory", canonical: "Ravenbloom Conservatory" },
   { name: "Grove of the God-Willow", canonical: "Grove of the God-Willow" },
@@ -116,6 +117,15 @@ type AtlasScoreCandidate = {
   left: number;
 };
 
+type AtlasPlayerCandidate = {
+  name: string;
+  side: "me" | "opponent" | "unknown";
+  source: string;
+  top: number;
+  left: number;
+  score: number;
+};
+
 type ReactScoreProps = {
   value: string;
   variant: string;
@@ -203,16 +213,33 @@ function readLocalStorageJson(key: string): unknown {
 
 function collectCards(selector: string, options: { limit?: number; includeText?: boolean; includeClasses?: boolean } = {}): Array<Record<string, string>> {
   const limit = options.limit ?? 40;
-  return Array.from(document.querySelectorAll(selector))
-    .slice(0, limit)
+  const seen = new Set<Element>();
+  const containers: Element[] = [];
+  for (const element of Array.from(document.querySelectorAll(selector))) {
+    const container = element instanceof HTMLImageElement
+      ? element.closest(".game-card, [data-card-id], [data-drop-zone], [class*='card' i]") ?? element
+      : element;
+    if (seen.has(container)) {
+      continue;
+    }
+    seen.add(container);
+    containers.push(container);
+    if (containers.length >= limit) {
+      break;
+    }
+  }
+  return containers
     .map((element) => {
-      const img = element.querySelector("img") as HTMLImageElement | null;
+      const img = element instanceof HTMLImageElement ? element : element.querySelector("img") as HTMLImageElement | null;
       const image = img?.currentSrc || img?.src || attr(img, "data-src") || attr(img, "alt");
-      const classes = attr(element, "class");
+      const classes = [
+        attr(element, "class"),
+        attr(element.parentElement, "class")
+      ].filter(Boolean).join(" ");
       return {
         text: options.includeText ? textOf(element).slice(0, 80) : "",
         classes: options.includeClasses ? classes.slice(0, 120) : /battlefield-marker/i.test(classes) ? "battlefield-marker" : "",
-        zone: attr(element, "data-drop-zone"),
+        zone: attr(element, "data-drop-zone") || attr(element.closest("[data-drop-zone]"), "data-drop-zone"),
         zoneOwner: attr(element.closest("[data-zone-owner]"), "data-zone-owner"),
         cardId: attr(element, "data-card-id") || attr(img, "data-card-id"),
         code: cardCodeFromImage(image),
@@ -798,7 +825,7 @@ function matchBattlefieldName(text: string): string {
 function normalizeBattlefieldSearch(value: string): string {
   return value
     .toLowerCase()
-    .replace(/[’`]/g, "'")
+    .replace(/[\u2018\u2019`]/g, "'")
     .replace(/[^a-z0-9]+/g, "");
 }
 
@@ -829,6 +856,7 @@ function readTcgaSnapshot(): Record<string, unknown> {
     : battlefieldImageFor(battlefieldCandidates, "opponent") || (isCardBackImage(opponentFallbackImage) ? "" : opponentFallbackImage);
   const endText = findText(/you win|you lose|victory|defeat|wins!|match complete|return to lobby|back to lobby|play again|rematch/i);
   const tcgaPhase = readTcgaPhase(bodyText);
+  const cards = DECK_TRACKER_FEATURE_ENABLED ? collectTcgaVisibleCards() : [];
   const hasOpponentCounter = Boolean(opponentName) || counterPlayers.length > 1;
   const hasScoreSignal = score.source !== "none" && (score.me !== "" || score.opp !== "" || score.raw.length > 1);
   const active = Boolean(endText || hasOpponentCounter || hasScoreSignal || (tcgaPhase === "playing" && counterPlayers.length > 1));
@@ -859,6 +887,7 @@ function readTcgaSnapshot(): Record<string, unknown> {
     opponentBattlefieldImage,
     battlefieldCandidates,
     battlefieldTextEvidence: battlefieldText.evidence,
+    ...(DECK_TRACKER_FEATURE_ENABLED ? { cards, deckTrackerCards: collectTcgaDeckTrackerCards(cards) } : {}),
     selectedDeck: readTcgaDeck(),
     endText
   };
@@ -891,8 +920,8 @@ function readAtlasSnapshot(): Record<string, unknown> {
     .filter((row) => row.text);
   const zoneCards = collectCards("[data-card-id], [data-drop-zone] [data-card-id], [data-zone-owner] [data-drop-zone]", {
     limit: 42,
-    includeText: false,
-    includeClasses: false
+    includeText: true,
+    includeClasses: true
   });
   const rawTerminalText = findText(/you win|you lose|you won|you lost|victory|defeat|wins!|winner|match complete|game over|opponent.*left|left the game|disconnected/i);
   const terminalText = normalizeAtlasTerminalText(rawTerminalText);
@@ -937,12 +966,12 @@ function readAtlasSnapshot(): Record<string, unknown> {
         inGameText ||
         terminalText)
   );
-  const atlasPlayers = readAtlasPlayers(bodyText, logRows);
+  const atlasPlayers = readAtlasPlayers(bodyText, logRows, active || boardEvidence || hasScoreEvidence || gameplayRows);
   const myLegendCard = atlasCardByZone(zoneCards, "self", "legend");
   const opponentLegendCard = atlasCardByZone(zoneCards, "opponent", "legend");
   const battlefieldCards = readAtlasBattlefieldCards(zoneCards);
-  const myBattlefieldCard = battlefieldCards[0] ?? emptyAtlasCard();
-  const opponentBattlefieldCard = battlefieldCards[1] ?? emptyAtlasCard();
+  const myBattlefieldCard = battlefieldCards.find((card) => card.zone === "battlefieldB") ?? emptyAtlasCard();
+  const opponentBattlefieldCard = battlefieldCards.find((card) => card.zone === "battlefieldA") ?? emptyAtlasCard();
   return {
     active,
     score,
@@ -961,6 +990,7 @@ function readAtlasSnapshot(): Record<string, unknown> {
     atlasResultKind: classifyAtlasResult(terminalText),
     myName: atlasPlayers.me,
     opponentName: atlasPlayers.opponent,
+    atlasPlayerCandidates: atlasPlayers.candidates,
     myChampionImage: myLegendCard.image,
     opponentChampionImage: opponentLegendCard.image,
     myBattlefield: "",
@@ -971,8 +1001,126 @@ function readAtlasSnapshot(): Record<string, unknown> {
       atlasBattlefieldCandidate("me", myBattlefieldCard),
       atlasBattlefieldCandidate("opponent", opponentBattlefieldCard)
     ].filter((candidate) => candidate.image || candidate.code || candidate.text),
+    ...(DECK_TRACKER_FEATURE_ENABLED ? { deckTrackerCards: collectAtlasDeckTrackerCards(zoneCards) } : {}),
     endText: terminalText
   };
+}
+
+function collectTcgaVisibleCards(): Array<Record<string, string>> {
+  return collectCards(
+    [
+      ".game-card",
+      "[data-card-id]",
+      "[data-drop-zone] [data-card-id]",
+      "img[src*='/cards/']",
+      "img[src*='game_data_live']"
+    ].join(", "),
+    {
+      limit: 140,
+      includeText: true,
+      includeClasses: true
+    }
+  );
+}
+
+function collectTcgaDeckTrackerCards(cards: Array<Record<string, string>> = collectTcgaVisibleCards()): Array<Record<string, unknown>> {
+  return cards
+    .map((card) => deckTrackerObservationFromCard(card, "tcga"))
+    .filter((card): card is Record<string, unknown> => Boolean(card));
+}
+
+function collectAtlasDeckTrackerCards(cards: Array<Record<string, string>>): Array<Record<string, unknown>> {
+  return cards
+    .map((card) => deckTrackerObservationFromCard(card, "atlas"))
+    .filter((card): card is Record<string, unknown> => Boolean(card));
+}
+
+function deckTrackerObservationFromCard(card: Record<string, string>, sourcePlatform: GamePlatform): Record<string, unknown> | null {
+  const classes = card.classes || "";
+  const zone = normalizeDeckTrackerZone(card.zone, classes);
+  const code = card.code || cardCodeFromImage(card.image);
+  const name = usefulDeckTrackerCardText(card.text);
+  const cardId = card.cardId || "";
+  if (sourcePlatform === "atlas" && !isLocalAtlasDeckTrackerCard(card)) {
+    return null;
+  }
+  if (sourcePlatform === "tcga" && /opponent-card/i.test(classes)) {
+    return null;
+  }
+  if (shouldIgnoreDeckTrackerCard(card, zone)) {
+    return null;
+  }
+  const cardKey = normalizeDeckTrackerKey(cardId || code || name);
+  if (!cardKey) {
+    return null;
+  }
+  return {
+    cardKey,
+    name,
+    code,
+    cardId,
+    imageUrl: card.image,
+    zone,
+    count: 1,
+    platform: sourcePlatform,
+    confidence: cardId || code ? "tracked" : "estimated"
+  };
+}
+
+function isLocalAtlasDeckTrackerCard(card: Record<string, string>): boolean {
+  return /^(self|player|me|local)$/i.test(card.zoneOwner || "");
+}
+
+function shouldIgnoreDeckTrackerCard(card: Record<string, string>, zone: string): boolean {
+  const classes = card.classes || "";
+  const zoneText = card.zone || "";
+  const image = card.image || "";
+  if (!zone || /legend|battlefield|rune|sideboard|deck/i.test(zoneText)) {
+    return true;
+  }
+  if (/Legend|Battlefields|Rune|Sideboard|card-hidden|hidden|card-back/i.test(classes)) {
+    return true;
+  }
+  if (/cardback|card-back/i.test(image)) {
+    return true;
+  }
+  if (!card.cardId && !card.code && !card.image && !usefulDeckTrackerCardText(card.text)) {
+    return true;
+  }
+  return false;
+}
+
+function normalizeDeckTrackerZone(zone: string, classes: string): string {
+  const source = `${zone} ${classes}`.toLowerCase();
+  if (/hand/.test(source)) {
+    return "hand";
+  }
+  if (/base|board|bench|field|unit|battle/.test(source)) {
+    return "board";
+  }
+  if (/stack|chain/.test(source)) {
+    return "stack";
+  }
+  if (/trash|discard|grave/.test(source)) {
+    return source.includes("discard") ? "discard" : "trash";
+  }
+  return "unknown";
+}
+
+function usefulDeckTrackerCardText(value: string): string {
+  const text = usefulAtlasCardText(value).replace(/\s+/g, " ").trim();
+  if (!text || /^(target|tap|ping|error|unknown card|no card|auto pay|energy|power)$/i.test(text)) {
+    return "";
+  }
+  return text.slice(0, 80);
+}
+
+function normalizeDeckTrackerKey(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[\u2018\u2019`]/g, "'")
+    .replace(/&/g, "and")
+    .replace(/[^a-z0-9]+/g, "");
 }
 
 function readAtlasFormat(bodyText: string): "Bo1" | "Bo3" | "Auto" {
@@ -1023,11 +1171,11 @@ function isAtlasSideboarding(bodyText: string): boolean {
   return /sideboarding|lock in sideboard|locked in sideboarding|waiting for .*lock in sideboard|main deck\s*\d+\s*\/\s*\d+|sideboard\s*\d+\s*\/\s*\d+/i.test(bodyText);
 }
 
-function emptyAtlasCard(): { text: string; image: string; code: string } {
+function emptyAtlasCard(): { text: string; image: string; code: string; zone?: string } {
   return { text: "", image: "", code: "" };
 }
 
-function atlasCardByZone(cards: Array<Record<string, string>>, owner: "self" | "opponent", zone: string): { text: string; image: string; code: string } {
+function atlasCardByZone(cards: Array<Record<string, string>>, owner: "self" | "opponent", zone: string): { text: string; image: string; code: string; zone?: string } {
   const card = cards.find((candidate) =>
     candidate.zoneOwner === owner &&
     candidate.zone === zone &&
@@ -1039,11 +1187,12 @@ function atlasCardByZone(cards: Array<Record<string, string>>, owner: "self" | "
   return {
     text: usefulAtlasCardText(card.text),
     image: card.image,
-    code: card.code || cardCodeFromImage(card.image)
+    code: card.code || cardCodeFromImage(card.image),
+    zone
   };
 }
 
-function readAtlasBattlefieldCards(cards: Array<Record<string, string>>): Array<{ text: string; image: string; code: string }> {
+function readAtlasBattlefieldCards(cards: Array<Record<string, string>>): Array<{ text: string; image: string; code: string; zone: string }> {
   return ["battlefieldA", "battlefieldB", "battlefieldC"]
     .map((zone) => {
       const marker = cards.find((card) =>
@@ -1060,9 +1209,10 @@ function readAtlasBattlefieldCards(cards: Array<Record<string, string>>): Array<
         ? {
             text: usefulAtlasCardText(marker.text),
             image: marker.image,
-            code: marker.code || cardCodeFromImage(marker.image)
+            code: marker.code || cardCodeFromImage(marker.image),
+            zone
           }
-        : emptyAtlasCard();
+        : { ...emptyAtlasCard(), zone };
     })
     .filter((card) => card.image || card.code);
 }
@@ -1076,7 +1226,13 @@ function usefulAtlasCardText(value: string): string {
   return /^(target|auto pay|[+-]?\d+\s*(buff|target)?)$/i.test(text) ? "" : text;
 }
 
-function readAtlasPlayers(bodyText: string, logRows: Array<{ text: string }>): { me: string; opponent: string } {
+function readAtlasPlayers(bodyText: string, logRows: Array<{ text: string }>, readDomCandidates = true): { me: string; opponent: string; candidates: AtlasPlayerCandidate[] } {
+  const sessionName = readAtlasSessionPlayerName();
+  const candidates = readDomCandidates ? collectAtlasPlayerCandidates() : [];
+  const domOpponent = chooseAtlasOpponentName(candidates, sessionName);
+  if (sessionName || domOpponent) {
+    return { me: sessionName, opponent: domOpponent, candidates };
+  }
   const lines = [
     ...logRows.map((row) => row.text),
     bodyText.slice(0, MAX_TEXT)
@@ -1090,13 +1246,248 @@ function readAtlasPlayers(bodyText: string, logRows: Array<{ text: string }>): {
     .filter((name) => name && !/^you$/i.test(name) && !isAtlasGenericName(name));
   const opponent = firstStableName(chatNames);
   if (opponent) {
-    return { me: "", opponent };
+    return { me: sessionName, opponent, candidates };
   }
   const turnNames = lines
     .map((line) => line.match(/^(.{1,48}?)['’]s turn\b/iu)?.[1] ?? "")
     .map(cleanAtlasPlayerName)
     .filter((name) => name && !isAtlasGenericName(name));
-  return { me: "", opponent: firstStableName(turnNames) };
+  return { me: sessionName, opponent: firstStableName(turnNames), candidates };
+}
+
+function readAtlasSessionPlayerName(): string {
+  for (const key of ["riftbound_simulator_session", "riftbound_simulator_player_name"]) {
+    try {
+      const raw = window.localStorage.getItem(key) || window.sessionStorage.getItem(key);
+      if (!raw) {
+        continue;
+      }
+      if (raw.trim().startsWith("{")) {
+        const parsed = JSON.parse(raw) as Record<string, unknown>;
+        const name = cleanAtlasPlayerName(String(parsed.playerName ?? parsed.spectatorName ?? ""));
+        if (name && !isAtlasGenericName(name)) {
+          return name;
+        }
+        continue;
+      }
+      const name = cleanAtlasPlayerName(raw);
+      if (name && !isAtlasGenericName(name)) {
+        return name;
+      }
+    } catch {
+      continue;
+    }
+  }
+  return "";
+}
+
+function collectAtlasPlayerCandidates(): AtlasPlayerCandidate[] {
+  const selectors = [
+    "[data-player-name]",
+    "[data-opponent-name]",
+    "[data-username]",
+    "[data-user-name]",
+    "[data-name]",
+    "[aria-label*='player' i]",
+    "[aria-label*='opponent' i]",
+    "[class*='player' i]",
+    "[class*='opponent' i]",
+    "[class*='identity' i]",
+    "[class*='presence' i]",
+    "[class*='name' i]",
+    "[title]"
+  ].join(", ");
+  const byKey = new Map<string, AtlasPlayerCandidate>();
+  for (const element of Array.from(document.querySelectorAll(selectors)).slice(0, 700)) {
+    if (!isVisibleAtlasNameElement(element) || element.closest("[data-card-id], [data-drop-zone], [data-card-counter]")) {
+      continue;
+    }
+    const rect = element.getBoundingClientRect();
+    const side = inferAtlasPlayerCandidateSide(element, rect);
+    const sourceHint = atlasPlayerSourceHint(element);
+    for (const raw of atlasPlayerCandidateValues(element)) {
+      const name = cleanAtlasCandidateName(raw);
+      if (!isLikelyAtlasPlayerName(name)) {
+        continue;
+      }
+      const source = sourceHint || "dom";
+      const score = atlasPlayerCandidateScore(element, source, side, raw);
+      const key = normalizeNameKey(name);
+      const existing = byKey.get(key);
+      if (!existing || score > existing.score) {
+        byKey.set(key, {
+          name,
+          side,
+          source,
+          top: Math.round(rect.top),
+          left: Math.round(rect.left),
+          score
+        });
+      }
+    }
+  }
+  return [...byKey.values()]
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 12);
+}
+
+function isVisibleAtlasNameElement(element: Element): boolean {
+  const rect = element.getBoundingClientRect();
+  if (rect.width < 4 || rect.height < 4) {
+    return false;
+  }
+  const style = window.getComputedStyle(element);
+  return style.display !== "none" && style.visibility !== "hidden" && Number(style.opacity || "1") > 0;
+}
+
+function atlasPlayerCandidateValues(element: Element): string[] {
+  const values = [
+    attr(element, "data-player-name"),
+    attr(element, "data-opponent-name"),
+    attr(element, "data-username"),
+    attr(element, "data-user-name"),
+    attr(element, "data-name"),
+    attr(element, "aria-label"),
+    attr(element, "title"),
+    directTextOf(element),
+    textOf(element)
+  ];
+  return values
+    .flatMap((value) => value.split(/[\n\r|•·]+/))
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
+
+function directTextOf(element: Element): string {
+  return Array.from(element.childNodes)
+    .filter((node) => node.nodeType === Node.TEXT_NODE)
+    .map((node) => node.textContent ?? "")
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function inferAtlasPlayerCandidateSide(element: Element, rect: DOMRect): AtlasPlayerCandidate["side"] {
+  const raw = [
+    attr(element, "data-zone-owner"),
+    attr(element, "data-owner"),
+    attr(element, "data-player"),
+    attr(element, "aria-label"),
+    attr(element, "class"),
+    attr(element.closest("[data-zone-owner]"), "data-zone-owner"),
+    attr(element.closest("[data-owner]"), "data-owner"),
+    attr(element.closest("[class*='opponent' i]"), "class"),
+    attr(element.closest("[class*='player' i]"), "class")
+  ].join(" ").toLowerCase();
+  if (/\b(opponent|enemy|rival|away)\b/.test(raw)) {
+    return "opponent";
+  }
+  if (/\b(self|me|mine|local|you|player)\b/.test(raw)) {
+    return "me";
+  }
+  const midpoint = window.innerHeight / 2;
+  if (rect.top + rect.height / 2 < midpoint * 0.9) {
+    return "opponent";
+  }
+  if (rect.top + rect.height / 2 > midpoint * 1.1) {
+    return "me";
+  }
+  return "unknown";
+}
+
+function atlasPlayerSourceHint(element: Element): string {
+  const attrs = [
+    "data-player-name",
+    "data-opponent-name",
+    "data-username",
+    "data-user-name",
+    "data-name",
+    "aria-label",
+    "title"
+  ];
+  const direct = attrs.find((name) => attr(element, name));
+  if (direct) {
+    return direct;
+  }
+  const classes = attr(element, "class").toLowerCase();
+  if (/identity/.test(classes)) {
+    return "identity-dom";
+  }
+  if (/presence/.test(classes)) {
+    return "presence-dom";
+  }
+  if (/opponent/.test(classes)) {
+    return "opponent-dom";
+  }
+  if (/player/.test(classes)) {
+    return "player-dom";
+  }
+  return "";
+}
+
+function atlasPlayerCandidateScore(element: Element, source: string, side: AtlasPlayerCandidate["side"], raw: string): number {
+  const classes = attr(element, "class").toLowerCase();
+  let score = 1;
+  if (/data-(player-name|opponent-name|username|user-name|name)/.test(source)) {
+    score += 8;
+  }
+  if (/identity|presence|opponent|player|name/.test(classes) || /identity|presence|opponent|player/.test(source)) {
+    score += 4;
+  }
+  if (side === "opponent") {
+    score += 3;
+  }
+  if (side === "me") {
+    score += 1;
+  }
+  if (/score|point|set .*score/i.test(raw)) {
+    score -= 5;
+  }
+  if (element.children.length > 5) {
+    score -= 2;
+  }
+  return score;
+}
+
+function cleanAtlasCandidateName(value: string): string {
+  let text = cleanAtlasPlayerName(value)
+    .replace(/^(opponent|player|you|me|name)\s*:?\s*/iu, "")
+    .replace(/\b(is|are)?\s*(online|offline|connected|disconnected)\b.*$/iu, "")
+    .replace(/\b(set|change|choose|select)\b.*$/iu, "")
+    .replace(/\b(score|points?|turn|deck|cards?|hand|base|battlefield)\b.*$/iu, "")
+    .replace(/\s+\d{1,2}\s*$/u, "")
+    .trim();
+  if (text.includes(":")) {
+    text = text.split(":").pop()?.trim() ?? text;
+  }
+  return cleanAtlasPlayerName(text).slice(0, 48);
+}
+
+function isLikelyAtlasPlayerName(value: string): boolean {
+  const name = cleanAtlasPlayerName(value);
+  if (!name || name.length > 36 || /^\d+$/.test(name)) {
+    return false;
+  }
+  const key = normalizeNameKey(name);
+  if (isAtlasGenericName(name) || BATTLEFIELD_NAMES.some((item) => normalizeNameKey(item.name) === key || normalizeNameKey(item.canonical) === key)) {
+    return false;
+  }
+  if (/^(unl|ogn|sfd|pro)-\d{3}[a-z]?$/i.test(name)) {
+    return false;
+  }
+  if (/\b(score|points?|battlefield|mulligan|sideboard|deck|hand|base|rune|energy|power|turn|room|match|lobby|play|pass|concede|report|winner|victory|defeat|support|tcg|atlas)\b/i.test(name)) {
+    return false;
+  }
+  return true;
+}
+
+function chooseAtlasOpponentName(candidates: AtlasPlayerCandidate[], localName: string): string {
+  const localKey = normalizeNameKey(localName);
+  const usable = candidates.filter((candidate) => {
+    const key = normalizeNameKey(candidate.name);
+    return key && key !== localKey && candidate.score >= 3;
+  });
+  return usable.find((candidate) => candidate.side === "opponent")?.name ?? (usable.length === 1 ? usable[0].name : "");
 }
 
 function cleanAtlasPlayerName(value: string): string {
@@ -1267,6 +1658,7 @@ function publishSnapshot(reason: string): void {
     opponentBattlefield: data.opponentBattlefield || data.opponentBattlefieldImage,
     turnText: data.turnText,
     tcgaPhase: data.tcgaPhase,
+    deckTrackerCards: cardSnapshotSignature(data.deckTrackerCards),
     endText: data.endText
   });
 
