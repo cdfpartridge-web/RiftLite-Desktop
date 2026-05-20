@@ -1,6 +1,6 @@
 {
   "name": "riftlite-desktop-v06",
-  "version": "0.7.50",
+  "version": "0.7.51",
   "private": true,
   "description": "RiftLite 0.7 desktop companion app.",
   "main": "dist/main/main.js",

@@ -1546,6 +1546,76 @@ describe("MatchSessionTracker", () => {
     expect(tracker.shouldFinalizeBeforeNewSession(nextOpponentEnd)).toBe(true);
   });
 
+  it("asks the coordinator to review a completed Atlas BO3 before the same opponent starts another match", () => {
+    const tracker = new MatchSessionTracker();
+
+    tracker.ingest(event("match-start", {
+      active: true,
+      format: "Auto",
+      opponentName: "Azir",
+      score: { me: "0", opp: "0", source: "atlas-score-track" }
+    }, "2026-05-13T04:02:14.393Z", "atlas"));
+
+    const gameOneEnd = event("match-end", {
+      active: true,
+      reason: "result-text-detected",
+      format: "Auto",
+      atlasResultKind: "game-result",
+      endText: "Confirm Game 1 Winner",
+      opponentName: "Azir",
+      score: { me: "6", opp: "7", source: "atlas-score-track" }
+    }, "2026-05-13T04:26:37.128Z", "atlas");
+    tracker.ingest(gameOneEnd);
+    expect(tracker.shouldHoldForBo3("atlas", gameOneEnd)).toBe(true);
+    tracker.holdCurrentGame("atlas", gameOneEnd);
+
+    tracker.ingest(event("match-start", {
+      active: true,
+      format: "Auto",
+      opponentName: "Azir",
+      score: { me: "0", opp: "0", source: "atlas-score-track" }
+    }, "2026-05-13T04:26:41.337Z", "atlas"));
+    const gameTwoEnd = event("match-end", {
+      active: true,
+      reason: "result-text-detected",
+      format: "Auto",
+      atlasResultKind: "game-result",
+      endText: "Confirm Game 2 Winner",
+      opponentName: "Azir",
+      score: { me: "8", opp: "6", source: "atlas-score-track" }
+    }, "2026-05-13T04:45:28.983Z", "atlas");
+    tracker.ingest(gameTwoEnd);
+    expect(tracker.shouldHoldForBo3("atlas", gameTwoEnd)).toBe(true);
+    tracker.holdCurrentGame("atlas", gameTwoEnd);
+
+    tracker.ingest(event("match-start", {
+      active: true,
+      format: "Auto",
+      opponentName: "Azir",
+      score: { me: "0", opp: "0", source: "atlas-score-track" }
+    }, "2026-05-13T04:58:43.966Z", "atlas"));
+    const gameThreeEnd = event("match-end", {
+      active: true,
+      reason: "result-text-detected",
+      format: "Auto",
+      atlasResultKind: "game-result",
+      endText: "Confirm Game 3 Winner",
+      opponentName: "Azir",
+      score: { me: "7", opp: "6", source: "atlas-score-track" }
+    }, "2026-05-13T05:49:12.215Z", "atlas");
+    tracker.ingest(gameThreeEnd);
+    expect(tracker.shouldHoldForBo3("atlas", gameThreeEnd)).toBe(false);
+
+    const nextMatchStart = event("match-start", {
+      active: true,
+      format: "Auto",
+      opponentName: "Azir",
+      score: { me: "0", opp: "0", source: "atlas-score-track" }
+    }, "2026-05-13T05:53:04.779Z", "atlas");
+
+    expect(tracker.shouldFinalizeBeforeNewSession(nextMatchStart)).toBe(true);
+  });
+
   it("keeps Atlas BO3 game results even when score is blank", () => {
     const tracker = new MatchSessionTracker();
     tracker.ingest(event("match-start", {

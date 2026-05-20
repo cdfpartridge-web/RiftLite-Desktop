@@ -86,6 +86,7 @@ import type {
   ReplayAnnotationTool,
   ReplayFlagType,
   ReplayFramePreset,
+  ReplayMp4ExportOptions,
   ReplayTeachingLayer,
   ReplayVoiceNote,
   ReplayRecord,
@@ -140,14 +141,14 @@ const DECK_TRACKER_FEATURE_ENABLED = false;
 
 const DEFAULT_UPDATE_STATUS: UpdateStatus = {
   state: "idle",
-  currentVersion: "0.7.50",
+  currentVersion: "0.7.51",
   message: "Updater ready"
 };
 
-const APP_VERSION_META = "0.7.50";
+const APP_VERSION_META = "0.7.51";
 const RELEASE_NOTES = {
   version: APP_VERSION_META,
-  title: "RiftLite 0.7.50",
+  title: "RiftLite 0.7.51",
   intro: "This update focuses on clearer reviews, healthier replays, and easier tester support.",
   items: [
     "Match reviews now show capture confidence and clearer BO3 incomplete-match guidance.",
@@ -196,19 +197,22 @@ type ReplayRecorderFormat = {
   codec: string;
 };
 
-function supportedReplayVideoFormats(): ReplayRecorderFormat[] {
-  const candidates = [
-    { recorderMimeType: "video/mp4;codecs=avc1.640028,mp4a.40.2", fileMimeType: "video/mp4" as const, codec: "H.264 MP4 + mic" },
-    { recorderMimeType: "video/mp4;codecs=avc1.4D4028,mp4a.40.2", fileMimeType: "video/mp4" as const, codec: "H.264 MP4 + mic" },
+function supportedReplayVideoFormats(includeAudio = false): ReplayRecorderFormat[] {
+  const videoOnlyCandidates = [
     { recorderMimeType: "video/mp4;codecs=avc1.640028", fileMimeType: "video/mp4" as const, codec: "H.264 MP4" },
     { recorderMimeType: "video/mp4;codecs=avc1.4D4028", fileMimeType: "video/mp4" as const, codec: "H.264 MP4" },
     { recorderMimeType: "video/mp4", fileMimeType: "video/mp4" as const, codec: "MP4" },
-    { recorderMimeType: "video/webm;codecs=vp8,opus", fileMimeType: "video/webm" as const, codec: "VP8 WebM + mic" },
-    { recorderMimeType: "video/webm;codecs=vp9,opus", fileMimeType: "video/webm" as const, codec: "VP9 WebM + mic" },
     { recorderMimeType: "video/webm;codecs=vp8", fileMimeType: "video/webm" as const, codec: "VP8 WebM" },
-    { recorderMimeType: "video/webm", fileMimeType: "video/webm" as const, codec: "WebM" },
-    { recorderMimeType: "video/webm;codecs=vp9", fileMimeType: "video/webm" as const, codec: "VP9 WebM" }
+    { recorderMimeType: "video/webm;codecs=vp9", fileMimeType: "video/webm" as const, codec: "VP9 WebM" },
+    { recorderMimeType: "video/webm", fileMimeType: "video/webm" as const, codec: "WebM" }
   ];
+  const audioCandidates = [
+    { recorderMimeType: "video/mp4;codecs=avc1.640028,mp4a.40.2", fileMimeType: "video/mp4" as const, codec: "H.264 MP4 + mic" },
+    { recorderMimeType: "video/mp4;codecs=avc1.4D4028,mp4a.40.2", fileMimeType: "video/mp4" as const, codec: "H.264 MP4 + mic" },
+    { recorderMimeType: "video/webm;codecs=vp8,opus", fileMimeType: "video/webm" as const, codec: "VP8 WebM + mic" },
+    { recorderMimeType: "video/webm;codecs=vp9,opus", fileMimeType: "video/webm" as const, codec: "VP9 WebM + mic" }
+  ];
+  const candidates = includeAudio ? [...audioCandidates, ...videoOnlyCandidates] : videoOnlyCandidates;
   return candidates.filter((candidate) => MediaRecorder.isTypeSupported(candidate.recorderMimeType));
 }
 
@@ -561,6 +565,7 @@ type ReplayVideoRuntime = {
   nextAllowedAt: number;
   slowCaptureStreak: number;
   lastCaptureMs: number;
+  chunkMs: number;
 };
 
 type ReplaySourceVideoElement = HTMLVideoElement & {
@@ -1049,6 +1054,110 @@ const NOVEGGIES_SPOTLIGHT: CommunitySpotlight = {
   ]
 };
 
+const DUNC_SPOTLIGHT: CommunitySpotlight = {
+  id: "dunc",
+  name: "Dunc",
+  kicker: "Creator spotlight",
+  location: "Riftbound content",
+  description: "Dunc makes Riftbound content to help people get into the game, and then obsess over it. YouTube is offline Bo3s on RiftLite, playing out matches and talking through every decision. TikTok is the day-to-day: deck updates, pack openings, meta takes, event vlogs from Regionals, and onboarding content for anyone eyeing Riftbound from the outside. His Discord is where the community hangs out, talks decks, and figures the game out together.",
+  primaryCta: {
+    id: "discord",
+    label: "Join Discord",
+    url: "https://discord.gg/EurGrpSAYd",
+    description: "Join Dunc's Riftbound community for decks, discussion, and learning the game together.",
+    icon: MessageCircle,
+    featured: true
+  },
+  links: [
+    {
+      id: "tiktok",
+      label: "TikTok",
+      url: "https://www.tiktok.com/@dunctcg",
+      description: "Deck updates, pack openings, meta takes, event vlogs, and day-to-day Riftbound content.",
+      icon: Video,
+      featured: true
+    },
+    {
+      id: "discord",
+      label: "Discord",
+      url: "https://discord.gg/EurGrpSAYd",
+      description: "Community space for deck talk, learning, events, and figuring Riftbound out together.",
+      icon: MessageCircle,
+      featured: true
+    },
+    {
+      id: "youtube",
+      label: "YouTube",
+      url: "https://www.youtube.com/@dunctcg",
+      description: "Offline Bo3s on RiftLite with decision-by-decision commentary.",
+      icon: Video,
+      featured: true
+    },
+    {
+      id: "instagram",
+      label: "Instagram",
+      url: "https://www.instagram.com/dunctcg/",
+      description: "Riftbound updates, community posts, and creator highlights.",
+      icon: Camera
+    },
+    {
+      id: "x",
+      label: "X",
+      url: "https://x.com/dunctcg",
+      description: "Posts, updates, and Riftbound conversation from Dunc.",
+      icon: X
+    }
+  ],
+  tags: ["Offline Bo3s", "TikTok", "Onboarding", "Community"],
+  highlights: [
+    {
+      title: "Offline Bo3s",
+      text: "YouTube matches are played through on RiftLite with Dunc talking through decisions as the game develops."
+    },
+    {
+      title: "Daily Riftbound",
+      text: "TikTok is the quick-hit feed for deck updates, pack openings, meta takes, Regionals vlogs, and onboarding."
+    },
+    {
+      title: "New-player friendly",
+      text: "Content is built for people getting into Riftbound from the outside as well as players already deep in the game."
+    },
+    {
+      title: "Community hangout",
+      text: "The Discord gives players a place to talk decks, learn together, and keep the conversation going."
+    }
+  ],
+  assets: {
+    logo: "community/dunc-profile.jpg",
+    banner: "community/dunc-spotlight.svg",
+    tiktok: "community/dunc-spotlight.svg",
+    youtube: "community/dunc-spotlight.svg",
+    twitch: "community/dunc-spotlight.svg"
+  },
+  overviewBanner: "community/dunc-spotlight.svg",
+  overviewLogo: "community/dunc-profile.jpg",
+  routes: [
+    {
+      key: "tiktok",
+      title: "My TikTok",
+      subtitle: "Deck updates, pack openings, meta takes, event vlogs, and onboarding clips.",
+      linkId: "tiktok"
+    },
+    {
+      key: "twitch",
+      title: "My Discord",
+      subtitle: "Join the community to talk decks and learn Riftbound together.",
+      linkId: "discord"
+    },
+    {
+      key: "youtube",
+      title: "My YouTube",
+      subtitle: "Watch offline Bo3s on RiftLite with decision-by-decision commentary.",
+      linkId: "youtube"
+    }
+  ]
+};
+
 const AGITOSWIFTLY_SPOTLIGHT: CommunitySpotlight = {
   id: "agitoswiftly",
   name: "AgitoSwiftly",
@@ -1346,6 +1455,7 @@ const COMMUNITY_SPOTLIGHTS: CommunitySpotlight[] = [
   RUNESANDRIFT_SPOTLIGHT,
   CHALLENGERTCG_SPOTLIGHT,
   NOVEGGIES_SPOTLIGHT,
+  DUNC_SPOTLIGHT,
   AGITOSWIFTLY_SPOTLIGHT,
   MRTOOLSHED_SPOTLIGHT,
   DAEMONXGG_SPOTLIGHT
@@ -2385,13 +2495,6 @@ function App() {
       void primeReplayVideoTarget(event.platform);
       return;
     }
-    const recorderFormats = supportedReplayVideoFormats();
-    if (!recorderFormats.length) {
-      displaySource.stream.getTracks().forEach((track) => track.stop());
-      showActionFeedback("Video replay needs MediaRecorder video support.");
-      reportReplayVideoDebug(event.platform, "recorder-format-missing", { mode, quality, source: displaySource.source });
-      return;
-    }
     let canvas: HTMLCanvasElement | undefined;
     let context: CanvasRenderingContext2D | undefined;
     let stream: MediaStream;
@@ -2460,6 +2563,17 @@ function App() {
         });
       }
     }
+    const recorderFormats = supportedReplayVideoFormats(Boolean(micStream));
+    if (!recorderFormats.length) {
+      micStream?.getTracks().forEach((track) => track.stop());
+      sourceStream?.getTracks().forEach((track) => track.stop());
+      if (stream !== sourceStream) {
+        stream.getTracks().forEach((track) => track.stop());
+      }
+      showActionFeedback("Video replay needs MediaRecorder video support.");
+      reportReplayVideoDebug(event.platform, "recorder-format-missing", { mode, quality, source });
+      return;
+    }
     let recorder: MediaRecorder | null = null;
     let recorderFormat: ReplayRecorderFormat | null = null;
     for (const candidate of recorderFormats) {
@@ -2522,7 +2636,8 @@ function App() {
       lastDrawAt: 0,
       nextAllowedAt: Date.now() + 1000,
       slowCaptureStreak: 0,
-      lastCaptureMs: 0
+      lastCaptureMs: 0,
+      chunkMs: recorderFormat.fileMimeType === "video/mp4" ? 0 : 5000
     };
     recorder.ondataavailable = (chunkEvent) => {
       if (!chunkEvent.data.size) {
@@ -2543,7 +2658,11 @@ function App() {
       });
     };
     replayVideoRef.current = runtime;
-    recorder.start(5000);
+    if (runtime.chunkMs > 0) {
+      recorder.start(runtime.chunkMs);
+    } else {
+      recorder.start();
+    }
     installReplayVideoResizeGuard(runtime);
     if (runtime.source === "system-window-crop") {
       drawSystemWindowReplayFrame(runtime);
@@ -2581,7 +2700,7 @@ function App() {
       hasAudio: runtime.hasAudio,
       resampled: Boolean(runtime.canvas && runtime.source === "game-frame-direct"),
       constantFps: Boolean(profile.constantFps),
-      chunkMs: 5000
+      chunkMs: runtime.chunkMs
     });
   }
 
@@ -3038,7 +3157,9 @@ function App() {
         runtime.recorder.addEventListener("stop", () => resolve(), { once: true });
       });
       if (runtime.recorder.state !== "inactive") {
-        runtime.recorder.requestData();
+        if (runtime.chunkMs > 0) {
+          runtime.recorder.requestData();
+        }
         runtime.recorder.stop();
       }
       await stopped;
@@ -4731,9 +4852,10 @@ function ScorepadView({
     }
     setGames((current) => {
       const next = ensureScorepadBo3Games(current);
-      const used = next.filter((game) => hasScorepadGameData(game));
-      const targetLength = Math.min(3, Math.max(used.length + 1, 2));
-      return next.slice(0, targetLength);
+      if (next.length >= 3) {
+        return next.slice(0, 3);
+      }
+      return [...next, emptyScorepadGame(next.length + 1)].slice(0, 3);
     });
   }
 
@@ -6501,6 +6623,8 @@ function DeckDetail({ deck, matches, active, onSetActive, onRefresh, onDelete, o
   const performance = useMemo(() => buildDeckPerformance(deck, matches), [deck, matches]);
   const [notebook, setNotebook] = useState<DeckNotebook>(() => emptyDeckNotebook(deck.id));
   const [notebookStatus, setNotebookStatus] = useState("");
+  const [titleDraft, setTitleDraft] = useState(deck.title);
+  const [titleStatus, setTitleStatus] = useState("");
   const sections = [
     ["Runes", deckEntries(snapshot, "runes")],
     ["Battlefields", deckEntries(snapshot, "battlefields")],
@@ -6530,6 +6654,11 @@ function DeckDetail({ deck, matches, active, onSetActive, onRefresh, onDelete, o
     };
   }, [deck.id]);
 
+  useEffect(() => {
+    setTitleDraft(deck.title);
+    setTitleStatus("");
+  }, [deck.id, deck.title]);
+
   async function saveNotebook(next: DeckNotebook) {
     setNotebook(next);
     setNotebookStatus("Saving...");
@@ -6543,14 +6672,52 @@ function DeckDetail({ deck, matches, active, onSetActive, onRefresh, onDelete, o
     }
   }
 
+  async function saveDeckTitle() {
+    const nextTitle = titleDraft.trim();
+    if (!nextTitle) {
+      setTitleStatus("Deck name is required.");
+      return;
+    }
+    if (nextTitle === deck.title) {
+      setTitleStatus("");
+      return;
+    }
+    setTitleStatus("Saving name...");
+    try {
+      const renamed = await window.riftlite.renameDeck(deck.id, nextTitle);
+      setTitleDraft(renamed.title);
+      await onDecksChanged();
+      setTitleStatus("Saved");
+      window.setTimeout(() => setTitleStatus(""), 1200);
+    } catch (error) {
+      setTitleStatus(error instanceof Error ? error.message : "Deck name could not be saved.");
+    }
+  }
+
   return (
     <>
       <div className="deck-detail-header">
-        <div>
-          <h2>{deck.title}</h2>
+        <div className="deck-title-editor">
+          <label>
+            <span>Deck name</span>
+            <input
+              value={titleDraft}
+              onChange={(event) => setTitleDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  void saveDeckTitle();
+                }
+              }}
+            />
+          </label>
           <span>{deck.legend || "Unknown legend"}{active ? " - Active fallback" : ""}</span>
+          {titleStatus ? <em>{titleStatus}</em> : null}
         </div>
         <div className="row-actions">
+          <button className="secondary" disabled={!titleDraft.trim() || titleDraft.trim() === deck.title} onClick={() => void saveDeckTitle()}>
+            Save name
+          </button>
           <button className="secondary" onClick={() => document.getElementById(`matchup-prep-${deck.id}`)?.scrollIntoView({ block: "start", behavior: "smooth" })}>
             <BookOpen size={15} /> Matchup prep
           </button>
@@ -7965,6 +8132,7 @@ function ReplayView({
   const deferredSearch = useDeferredValue(search);
   const [selectedReplayId, setSelectedReplayId] = useState("");
   const [status, setStatus] = useState("");
+  const [exportingReplayId, setExportingReplayId] = useState<string | null>(null);
   const [visibleReplayCount, setVisibleReplayCount] = useState(REPLAY_LIST_PAGE_SIZE);
   const matchById = useMemo(() => new Map(matches.map((match) => [match.id, match])), [matches]);
   const replayItems = useMemo(() => replays.map((replay) => replayListItem(replay, matchById.get(replay.matchId) ?? replay.matchSnapshot)), [matchById, replays]);
@@ -8040,13 +8208,25 @@ function ReplayView({
     }
   }
 
-  async function exportReplay(replayId: string) {
-    setStatus("Exporting replay...");
+  async function exportReplayBundleFile(replayId: string) {
+    setExportingReplayId(null);
+    setStatus("Exporting coaching pack...");
     try {
       const exportedPath = await window.riftlite.exportReplayBundle(replayId);
       setStatus(exportedPath ? `Exported ${exportedPath}` : "");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Replay export failed.");
+    }
+  }
+
+  async function exportReplayMp4File(replayId: string, options: ReplayMp4ExportOptions) {
+    setExportingReplayId(null);
+    setStatus("Exporting MP4 video...");
+    try {
+      const exportedPath = await window.riftlite.exportReplayMp4(replayId, options);
+      setStatus(exportedPath ? `Exported MP4 ${exportedPath}` : "");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "MP4 export failed.");
     }
   }
 
@@ -8146,12 +8326,95 @@ function ReplayView({
         <ReplayDetail
           model={selectedModel}
           settings={settings}
-          onExport={() => void exportReplay(selectedModel.replay.id)}
+          onExport={() => setExportingReplayId(selectedModel.replay.id)}
           onSaveReplay={saveReplay}
           onDeleteReplay={() => void onDeleteReplay(selectedModel.replay.id)}
         />
       ) : null}
+      {exportingReplayId ? (
+        <ReplayExportDialog
+          replay={replays.find((replay) => replay.id === exportingReplayId) ?? null}
+          onCancel={() => setExportingReplayId(null)}
+          onExportBundle={() => void exportReplayBundleFile(exportingReplayId)}
+          onExportMp4={(options) => void exportReplayMp4File(exportingReplayId, options)}
+        />
+      ) : null}
     </section>
+  );
+}
+
+function ReplayExportDialog({
+  replay,
+  onCancel,
+  onExportBundle,
+  onExportMp4
+}: {
+  replay: ReplayRecord | null;
+  onCancel: () => void;
+  onExportBundle: () => void;
+  onExportMp4: (options: ReplayMp4ExportOptions) => void;
+}) {
+  const [options, setOptions] = useState<ReplayMp4ExportOptions>({
+    includeFlags: true,
+    includeDrawings: true,
+    includeVoiceNotes: true,
+    includeOriginalAudio: true
+  });
+  const hasVideo = Boolean(replay?.video);
+  const flags = replay?.flags?.length ?? 0;
+  const drawings = replay?.annotations?.length ?? 0;
+  const voiceNotes = replay?.voiceNotes?.length ?? 0;
+  const update = (key: keyof ReplayMp4ExportOptions) => {
+    setOptions((current) => ({ ...current, [key]: !current[key] }));
+  };
+  return (
+    <div className="modal-backdrop replay-export-backdrop" onClick={onCancel}>
+      <section className="replay-export-modal" role="dialog" aria-modal="true" aria-labelledby="replay-export-title" onClick={(event) => event.stopPropagation()}>
+        <header>
+          <div>
+            <h2 id="replay-export-title">Export replay</h2>
+            <p>Choose a RiftLite coaching pack for editing/import, or a burned-in MP4 for YouTube and easy sharing.</p>
+          </div>
+          <button type="button" className="icon-button" onClick={onCancel} aria-label="Close export dialog">
+            <X size={16} />
+          </button>
+        </header>
+        <div className="replay-export-options">
+          <button type="button" className="replay-export-card" onClick={onExportBundle}>
+            <FileText size={24} />
+            <strong>Coaching pack</strong>
+            <span>Exports a `.riftreplay` file with the replay, flags, drawings, voice notes, layers, deck data, and match metadata. Best when the other person will open it in RiftLite.</span>
+          </button>
+          <div className="replay-export-card replay-export-mp4">
+            <Video size={24} />
+            <strong>YouTube MP4</strong>
+            <span>Creates an MP4 video. Selected flags and drawings are burned into the video, and voice notes are mixed into the audio track.</span>
+            <div className="replay-export-checks">
+              <label>
+                <input type="checkbox" checked={options.includeFlags} disabled={!flags} onChange={() => update("includeFlags")} />
+                <Flag size={14} /> Flags {flags ? `(${flags})` : ""}
+              </label>
+              <label>
+                <input type="checkbox" checked={options.includeDrawings} disabled={!drawings} onChange={() => update("includeDrawings")} />
+                <SlidersHorizontal size={14} /> Drawings {drawings ? `(${drawings})` : ""}
+              </label>
+              <label>
+                <input type="checkbox" checked={options.includeVoiceNotes} disabled={!voiceNotes} onChange={() => update("includeVoiceNotes")} />
+                <Mic size={14} /> Voice notes {voiceNotes ? `(${voiceNotes})` : ""}
+              </label>
+              <label>
+                <input type="checkbox" checked={options.includeOriginalAudio} onChange={() => update("includeOriginalAudio")} />
+                <Volume2 size={14} /> Original video audio
+              </label>
+            </div>
+            <button type="button" className="primary" disabled={!hasVideo} onClick={() => onExportMp4(options)}>
+              <Video size={16} /> Export MP4
+            </button>
+            {!hasVideo ? <small>MP4 export needs a full video replay. Use coaching pack for screenshot-only replays.</small> : null}
+          </div>
+        </div>
+      </section>
+    </div>
   );
 }
 

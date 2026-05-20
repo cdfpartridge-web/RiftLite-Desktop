@@ -6,7 +6,7 @@ import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import initSqlJs, { type Database, type SqlJsStatic } from "sql.js";
-import { deckNotebookWithCurrentVersion, emptyDeckNotebook, normalizeDeckNotebook, sanitizeDeckNotebookForDeck } from "../../shared/deckNotebook.js";
+import { deckNotebookWithCurrentVersion, deckSnapshotHash, emptyDeckNotebook, normalizeDeckNotebook, sanitizeDeckNotebookForDeck } from "../../shared/deckNotebook.js";
 import { normalizeLegendName } from "../../shared/legendNames.js";
 import type { CaptureEvent, DeckNotebook, ImportSummary, MatchDraft, OverlayDisplayOptions, ReplayRecord, SavedDeck, UserSettings } from "../../shared/types.js";
 
@@ -363,6 +363,35 @@ export class RiftLiteStore {
       ]
     );
     this.ensureDeckNotebookCurrentVersion(db, next);
+    await this.persist();
+    return next;
+  }
+
+  async renameSavedDeck(id: string, title: string): Promise<SavedDeck> {
+    const cleanTitle = title.trim();
+    if (!cleanTitle) {
+      throw new Error("Deck name is required.");
+    }
+    const db = await this.database();
+    const existing = await this.getSavedDeck(id);
+    if (!existing) {
+      throw new Error("Deck not found.");
+    }
+    const next: SavedDeck = { ...existing, title: cleanTitle };
+    db.run("UPDATE saved_decks SET title=? WHERE id=?", [next.title, next.id]);
+
+    const notebook = this.readDeckNotebook(db, next.id);
+    const currentHash = deckSnapshotHash(next.snapshotJson);
+    if (currentHash && notebook.versions.some((version) => version.snapshotHash === currentHash && version.title !== cleanTitle)) {
+      this.writeDeckNotebook(db, next.id, {
+        ...notebook,
+        versions: notebook.versions.map((version) => (
+          version.snapshotHash === currentHash ? { ...version, title: cleanTitle } : version
+        )),
+        updatedAt: new Date().toISOString()
+      });
+    }
+
     await this.persist();
     return next;
   }

@@ -159,13 +159,13 @@ export class CaptureCoordinator {
         this.emitHealth(true);
         return;
       }
-      if (this.shouldIgnoreEmptyAtlasEnd(trackedEvent)) {
+      if (this.shouldIgnoreEmptyAtlasEnd(trackedEvent) || this.shouldIgnoreEmptyTcgaEnd(trackedEvent)) {
         this.tracker.clear(trackedEvent.platform);
         await this.stopTimedReplayCapture(trackedEvent.platform, false);
         this.health = {
           ...this.health,
           state: "watching",
-          message: "Atlas lobby or sideboarding event ignored"
+          message: `${label(trackedEvent.platform)} lobby or pre-game event ignored`
         };
         this.emitHealth(true);
         return;
@@ -552,6 +552,31 @@ export class CaptureCoordinator {
         !/sideboarding|locked in sideboarding|lock in sideboard/i.test(text);
     });
     return !resultEvidence && !identityEvidence && !gameplayRows;
+  }
+
+  private shouldIgnoreEmptyTcgaEnd(event: CaptureEvent): boolean {
+    if (event.platform !== "tcga" || readPayloadString(event.payload.reason) !== "inactive-debounce") {
+      return false;
+    }
+    const snapshot = this.tracker.get(event.platform)?.sticky ?? event.payload;
+    const resultText = readPayloadString(snapshot.endText);
+    const identityEvidence = [
+      snapshot.opponentName,
+      snapshot.myChampion,
+      snapshot.opponentChampion,
+      snapshot.myChampionImage,
+      snapshot.opponentChampionImage,
+      snapshot.myBattlefield,
+      snapshot.opponentBattlefield,
+      snapshot.myBattlefieldImage,
+      snapshot.opponentBattlefieldImage
+    ].some(hasPayloadValue);
+    const pairedCounterEvidence = Array.isArray(snapshot.counterPlayers) &&
+      snapshot.counterPlayers.filter((item) => {
+        const record = item && typeof item === "object" && !Array.isArray(item) ? item as Record<string, unknown> : {};
+        return hasPayloadValue(record.name) && hasPayloadValue(record.score);
+      }).length >= 2;
+    return !resultText && !identityEvidence && !pairedCounterEvidence;
   }
 
   private async resolveSnapshot(platform: GamePlatform, snapshot: Record<string, unknown>): Promise<{
@@ -1070,6 +1095,7 @@ function compactPayload(payload: Record<string, unknown> = {}): Record<string, u
     "bitrateKbps",
     "actualBitrateKbps",
     "chunkMs",
+    "hasAudio",
     "resampled",
     "constantFps",
     "message",

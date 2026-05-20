@@ -61,8 +61,16 @@ export class DeckService {
       return this.store.upsertSavedDeck({ ...existing, lastRefreshStatus: "local", lastRefreshError: "" });
     }
     try {
-      const refreshed = await this.importDeck(existing.sourceUrl);
-      return refreshed;
+      const payload = await this.fetchPiltoverDeck(existing.sourceUrl);
+      return this.store.upsertSavedDeck({
+        sourceUrl: payload.sourceUrl,
+        sourceKey: payload.sourceKey,
+        title: existing.title || payload.title,
+        legend: payload.legend,
+        snapshotJson: JSON.stringify(payload.snapshot),
+        lastRefreshStatus: "ok",
+        lastRefreshError: ""
+      });
     } catch (error) {
       return this.store.upsertSavedDeck({
         ...existing,
@@ -70,6 +78,10 @@ export class DeckService {
         lastRefreshError: error instanceof Error ? error.message : "Refresh failed."
       });
     }
+  }
+
+  async renameDeck(id: string, title: string): Promise<SavedDeck> {
+    return this.store.renameSavedDeck(id, title);
   }
 
   async deleteDeck(id: string): Promise<void> {

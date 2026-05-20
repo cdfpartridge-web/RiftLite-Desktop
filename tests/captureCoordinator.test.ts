@@ -137,6 +137,59 @@ function coordinatorHarness(options: { failSave?: boolean } = {}): {
 }
 
 describe("CaptureCoordinator", () => {
+  it("ignores TCGA pre-game inactive blips before opponent and legend evidence exists", async () => {
+    const { coordinator, saved, sent } = coordinatorHarness();
+
+    await coordinator.handleEvent(event("match-start", {
+      active: true,
+      myName: "FynalBoss",
+      localPlayerName: "FynalBoss",
+      score: { me: "3", opp: "", source: "tcga-counter-player" },
+      counterPlayers: [
+        { name: "FynalBoss", score: "3" }
+      ]
+    }, "2026-05-20T10:00:00.000Z"));
+    await coordinator.handleEvent(event("match-end", {
+      active: false,
+      reason: "inactive-debounce",
+      score: { me: "", opp: "", source: "none" },
+      counterPlayers: []
+    }, "2026-05-20T10:00:05.000Z"));
+
+    expect(saved).toHaveLength(0);
+    expect(sent.some((item) => item.channel === "match:draft")).toBe(false);
+
+    await coordinator.handleEvent(event("match-start", {
+      active: true,
+      myName: "FynalBoss",
+      opponentName: "ChickenBanana",
+      myChampion: "Annie",
+      opponentChampion: "Kai'Sa",
+      score: { me: "0", opp: "0", source: "tcga-counter-paired" }
+    }, "2026-05-20T10:00:12.000Z"));
+    await coordinator.handleEvent(event("match-snapshot", {
+      active: true,
+      myName: "FynalBoss",
+      opponentName: "ChickenBanana",
+      myChampion: "Annie",
+      opponentChampion: "Kai'Sa",
+      score: { me: "7", opp: "3", source: "tcga-counter-paired" }
+    }, "2026-05-20T10:08:12.000Z"));
+    await coordinator.handleEvent(event("match-end", {
+      active: false,
+      reason: "inactive-debounce",
+      score: { me: "", opp: "", source: "none" }
+    }, "2026-05-20T10:08:18.000Z"));
+
+    expect(saved).toHaveLength(1);
+    expect(saved[0]).toMatchObject({
+      platform: "tcga",
+      opponentName: "ChickenBanana",
+      result: "Win",
+      score: "1-0"
+    });
+  });
+
   it("opens a review from retained TCGA evidence when the final end event is empty", async () => {
     const { coordinator, saved, sent } = coordinatorHarness();
 

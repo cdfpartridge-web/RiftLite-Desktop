@@ -265,6 +265,9 @@ function shouldStartFreshSession(session: SessionState, event: CaptureEvent): bo
   if (!readBoolean(event.payload.active)) {
     return false;
   }
+  if (isFreshAtlasMatchAfterCompletedSession(session, event)) {
+    return true;
+  }
   const existingOpponent = normalizeNameKey(readString(session.sticky.opponentName));
   const nextOpponent = normalizeNameKey(readString(event.payload.opponentName));
   if (event.platform === "atlas" && isLikelyAtlasActionText(nextOpponent)) {
@@ -286,6 +289,24 @@ function shouldStartFreshSession(session: SessionState, event: CaptureEvent): bo
     return true;
   }
   return nextLooksFresh;
+}
+
+function isFreshAtlasMatchAfterCompletedSession(session: SessionState, event: CaptureEvent): boolean {
+  if (session.platform !== "atlas" || event.platform !== "atlas") {
+    return false;
+  }
+  if (readString(event.payload.atlasResultKind) || readString(event.payload.endText)) {
+    return false;
+  }
+  const existingGames = previewGames(session);
+  const sessionComplete = isBo3Complete(existingGames) || readString(session.sticky.atlasResultKind) === "match-terminal" ||
+    /match complete/i.test(readString(session.sticky.endText));
+  if (!sessionComplete) {
+    return false;
+  }
+  const score = readScore(event.payload);
+  const scoreTotal = (score.me ?? 0) + (score.opp ?? 0);
+  return event.kind === "match-start" && scoreTotal <= 1;
 }
 
 function mergeSticky(target: Record<string, unknown>, source: Record<string, unknown>): void {
@@ -311,10 +332,15 @@ function mergeSticky(target: Record<string, unknown>, source: Record<string, unk
     "localPlayerName",
     "configuredUsername",
     "format",
+    "atlasResultKind",
     "endText"
   ];
   for (const key of keys) {
     const value = source[key];
+    if ((key === "atlasResultKind" || key === "endText") && typeof value === "string") {
+      target[key] = value;
+      continue;
+    }
     if (key === "opponentName" && isLikelyAtlasActionText(readString(value))) {
       continue;
     }

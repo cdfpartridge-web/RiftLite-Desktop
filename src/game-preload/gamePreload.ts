@@ -987,6 +987,7 @@ function readAtlasSnapshot(): Record<string, unknown> {
     rows: logRows,
     roomCode: readRoomCode(bodyText),
     format: readAtlasFormat(bodyText),
+    atlasSideboarding: sideboarding,
     atlasResultKind: classifyAtlasResult(terminalText),
     myName: atlasPlayers.me,
     opponentName: atlasPlayers.opponent,
@@ -1177,8 +1178,8 @@ function emptyAtlasCard(): { text: string; image: string; code: string; zone?: s
 
 function atlasCardByZone(cards: Array<Record<string, string>>, owner: "self" | "opponent", zone: string): { text: string; image: string; code: string; zone?: string } {
   const card = cards.find((candidate) =>
-    candidate.zoneOwner === owner &&
-    candidate.zone === zone &&
+    atlasOwnerMatches(candidate.zoneOwner, owner) &&
+    atlasZoneMatches(candidate.zone, zone) &&
     isRealAtlasCardImage(candidate.image)
   );
   if (!card) {
@@ -1190,6 +1191,23 @@ function atlasCardByZone(cards: Array<Record<string, string>>, owner: "self" | "
     code: card.code || cardCodeFromImage(card.image),
     zone
   };
+}
+
+function atlasOwnerMatches(value: string, owner: "self" | "opponent"): boolean {
+  const normalized = value.trim().toLowerCase();
+  if (owner === "self") {
+    return /^(self|player|me|local)$/i.test(normalized);
+  }
+  return /^(opponent|enemy|remote)$/i.test(normalized);
+}
+
+function atlasZoneMatches(value: string, zone: string): boolean {
+  const normalized = value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "");
+  const requested = zone.trim().toLowerCase().replace(/[^a-z0-9]+/g, "");
+  if (requested === "legend") {
+    return ["legend", "champion", "chosenchampion", "chosenlegend", "leader"].includes(normalized);
+  }
+  return normalized === requested;
 }
 
 function readAtlasBattlefieldCards(cards: Array<Record<string, string>>): Array<{ text: string; image: string; code: string; zone: string }> {
@@ -1662,7 +1680,7 @@ function publishSnapshot(reason: string): void {
     endText: data.endText
   });
 
-  if (active && !previousActive && !alreadyEndedVisibleResult) {
+  if (active && !previousActive && !alreadyEndedVisibleResult && !visibleResultKey) {
     if (endTimer) {
       window.clearTimeout(endTimer);
       endTimer = undefined;

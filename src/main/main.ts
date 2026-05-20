@@ -32,6 +32,7 @@ import type {
   ReplayBundleFrame,
   ReplayBundleVideo,
   ReplayFlag,
+  ReplayMp4ExportOptions,
   ReplayRecord,
   ReplaySearchMetadata,
   ReplayScreenshotFrame,
@@ -42,6 +43,7 @@ import type {
   ReplayVideoMergeOptions,
   ReplayVideoSession,
   ReplayVideoStartOptions,
+  ReplayVoiceNote,
   ReplayWindowCaptureSource,
   RiftReplayBundle,
   SavedDeck,
@@ -477,9 +479,14 @@ async function makeReplayVideoSeekable(filePath: string, mimeType: string | unde
     filePath,
     "-map",
     "0:v:0",
-    "-an",
+    "-map",
+    "0:a?",
     "-c:v",
     "copy",
+    "-c:a",
+    "aac",
+    "-b:a",
+    "128k",
     "-avoid_negative_ts",
     "make_zero"
   ];
@@ -1433,6 +1440,391 @@ async function exportReplayBundle(replayId: string): Promise<string> {
   const filePath = result.filePath.endsWith(".riftreplay") ? result.filePath : `${result.filePath}.riftreplay`;
   await writeReplayBundleFile(filePath, bundle, video);
   return filePath;
+}
+
+type ReplayMp4OverlayInput = {
+  path: string;
+  startSec: number;
+  endSec: number;
+};
+
+type ReplayMp4VoiceInput = {
+  path: string;
+  delayMs: number;
+};
+
+function replayMp4ExportLabel(flag: Pick<ReplayFlag, "type" | "customType" | "label">): string {
+  if (flag.type === "custom") {
+    return flag.customType?.trim() || flag.label || "Custom";
+  }
+  const labels: Record<NonNullable<ReplayFlag["type"]>, string> = {
+    "key-turn": "Key turn",
+    "mistake": "Mistake",
+    "good-line": "Good line",
+    "missed-lethal": "Missed lethal",
+    "battlefield-decision": "Battlefield decision",
+    "rules-check": "Rules check",
+    custom: "Custom"
+  };
+  return flag.type ? labels[flag.type] : flag.label || "Key turn";
+}
+
+function replayMp4TimeFromCapturedAt(video: ReplayVideoAsset, capturedAt: string | undefined): number | undefined {
+  if (!capturedAt) {
+    return undefined;
+  }
+  const startedAt = new Date(video.startedAt).getTime();
+  const captured = new Date(capturedAt).getTime();
+  if (!Number.isFinite(startedAt) || !Number.isFinite(captured)) {
+    return undefined;
+  }
+  return Math.max(0, captured - startedAt);
+}
+
+function clampReplayMp4TimeMs(video: ReplayVideoAsset, timeMs: number | undefined): number {
+  const duration = Math.max(1, video.durationMs || 1);
+  if (typeof timeMs !== "number" || !Number.isFinite(timeMs)) {
+    return 0;
+  }
+  return Math.min(duration, Math.max(0, timeMs));
+}
+
+function escapeSvgText(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function wrapReplayMp4Text(value: string, maxLength: number, maxLines: number): string[] {
+  const words = value.trim().split(/\s+/).filter(Boolean);
+  const lines: string[] = [];
+  let current = "";
+  for (const word of words) {
+    const next = current ? `${current} ${word}` : word;
+    if (next.length > maxLength && current) {
+      lines.push(current);
+      current = word;
+    } else {
+      current = next;
+    }
+    if (lines.length >= maxLines) {
+      break;
+    }
+  }
+  if (current && lines.length < maxLines) {
+    lines.push(current);
+  }
+  if (lines.length === maxLines && words.join(" ").length > lines.join(" ").length) {
+    lines[maxLines - 1] = `${lines[maxLines - 1].replace(/\.+$/, "")}...`;
+  }
+  return lines.length ? lines : [""];
+}
+
+function replayMp4FlagSvg(flag: ReplayFlag, width: number, height: number): string {
+  const title = replayMp4ExportLabel(flag);
+  const note = flag.note?.trim() || flag.targetLabel || "";
+  const lines = wrapReplayMp4Text(note, 54, 2);
+  const boxWidth = Math.min(width - 64, 760);
+  const boxHeight = note ? 118 : 76;
+  const x = 32;
+  const y = 32;
+  const accent = flag.type === "mistake" ? "#ff5b7d" : flag.type === "good-line" ? "#4df5a8" : "#6feeff";
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
+  <rect x="${x}" y="${y}" width="${boxWidth}" height="${boxHeight}" rx="18" fill="#07101d" opacity="0.86"/>
+  <rect x="${x}" y="${y}" width="7" height="${boxHeight}" rx="3.5" fill="${accent}"/>
+  <text x="${x + 28}" y="${y + 42}" fill="${accent}" font-family="Arial, sans-serif" font-size="26" font-weight="800">${escapeSvgText(title)}</text>
+  ${note ? lines.map((line, index) => `<text x="${x + 28}" y="${y + 78 + index * 28}" fill="#f5fbff" font-family="Arial, sans-serif" font-size="22" font-weight="700">${escapeSvgText(line)}</text>`).join("") : ""}
+</svg>`;
+}
+
+function replayMp4AnnotationSvg(annotation: ReplayAnnotation, width: number, height: number): string {
+  const points = annotation.points.map((point) => ({
+    x: Math.round(point.x * width),
+    y: Math.round(point.y * height)
+  }));
+  const strokeWidth = Math.max(4, Math.round(annotation.width * 3 * (Math.min(width, height) / 1000)));
+  const first = points[0];
+  const last = points.at(-1);
+  const color = annotation.color || "#6feeff";
+  const commonDefs = `<defs><marker id="arrowhead" markerWidth="18" markerHeight="18" refX="15" refY="6" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L0,12 L17,6 z" fill="${color}"/></marker></defs>`;
+  let body = "";
+  if (annotation.tool === "text" && first) {
+    const text = escapeSvgText(annotation.text?.trim() || annotation.note?.trim() || "");
+    body = `<text x="${first.x}" y="${first.y}" fill="${color}" font-family="Arial, sans-serif" font-size="${Math.max(34, Math.round(height * 0.046))}" font-weight="900" paint-order="stroke" stroke="#020712" stroke-width="10">${text}</text>`;
+  } else if (annotation.tool === "arrow" && first && last) {
+    body = `<line x1="${first.x}" y1="${first.y}" x2="${last.x}" y2="${last.y}" stroke="${color}" stroke-width="${strokeWidth}" stroke-linecap="round" marker-end="url(#arrowhead)"/>`;
+  } else {
+    const polyline = points.map((point) => `${point.x},${point.y}`).join(" ");
+    const opacity = annotation.tool === "highlight" ? "0.48" : "0.94";
+    body = `<polyline points="${polyline}" fill="none" stroke="${color}" stroke-width="${strokeWidth}" stroke-linecap="round" stroke-linejoin="round" opacity="${opacity}"/>`;
+  }
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
+  ${commonDefs}
+  ${body}
+</svg>`;
+}
+
+async function writeReplayMp4OverlayPng(tempDirectory: string, label: string, svg: string): Promise<string> {
+  const image = nativeImage.createFromDataURL(`data:image/svg+xml;base64,${Buffer.from(svg, "utf8").toString("base64")}`);
+  if (image.isEmpty()) {
+    throw new Error("Could not render replay export overlay.");
+  }
+  const filePath = join(tempDirectory, `${safeFileComponent(label, "overlay")}-${randomUUID()}.png`);
+  await writeFile(filePath, image.toPNG());
+  return filePath;
+}
+
+function replayMp4AnnotationTimeMs(
+  annotation: ReplayAnnotation,
+  video: ReplayVideoAsset,
+  flagsById: Map<string, ReplayFlag>,
+  voiceNotesById: Map<string, ReplayVoiceNote>
+): { startMs: number; endMs: number } | null {
+  if (annotation.clipId) {
+    const voiceNote = voiceNotesById.get(annotation.clipId);
+    const flag = voiceNote ? flagsById.get(voiceNote.flagId) : undefined;
+    const baseMs = clampReplayMp4TimeMs(video, flag?.timeMs ?? replayMp4TimeFromCapturedAt(video, flag?.capturedAt) ?? annotation.timeMs ?? replayMp4TimeFromCapturedAt(video, annotation.capturedAt));
+    const offsetMs = Math.max(0, annotation.offsetMs ?? 0);
+    const startMs = clampReplayMp4TimeMs(video, baseMs + offsetMs);
+    const endMs = clampReplayMp4TimeMs(video, Math.max(startMs + 1500, baseMs + Math.max(voiceNote?.durationMs ?? 0, offsetMs + 2500)));
+    return { startMs, endMs };
+  }
+  const startMs = clampReplayMp4TimeMs(video, annotation.timeMs ?? replayMp4TimeFromCapturedAt(video, annotation.capturedAt));
+  const endMs = clampReplayMp4TimeMs(video, startMs + (annotation.tool === "text" ? 5000 : 3500));
+  return { startMs, endMs };
+}
+
+async function replayMp4OverlayInputs(
+  replay: ReplayRecord,
+  video: ReplayVideoAsset,
+  options: ReplayMp4ExportOptions,
+  tempDirectory: string
+): Promise<ReplayMp4OverlayInput[]> {
+  const overlays: ReplayMp4OverlayInput[] = [];
+  const width = Math.max(640, video.width || 1920);
+  const height = Math.max(360, video.height || 1080);
+  const flags = replay.flags ?? [];
+  const flagsById = new Map(flags.map((flag) => [flag.id, flag]));
+  const voiceNotesById = new Map((replay.voiceNotes ?? []).map((note) => [note.id, note]));
+
+  if (options.includeFlags) {
+    for (const flag of flags.filter((item) => typeof item.timeMs === "number").slice(0, 80)) {
+      const startMs = clampReplayMp4TimeMs(video, (flag.timeMs ?? 0) - 250);
+      const endMs = clampReplayMp4TimeMs(video, startMs + 4500);
+      overlays.push({
+        path: await writeReplayMp4OverlayPng(tempDirectory, `flag-${flag.id}`, replayMp4FlagSvg(flag, width, height)),
+        startSec: startMs / 1000,
+        endSec: Math.max(endMs, startMs + 1000) / 1000
+      });
+    }
+  }
+
+  if (options.includeDrawings) {
+    for (const annotation of (replay.annotations ?? []).slice(0, 120)) {
+      const time = replayMp4AnnotationTimeMs(annotation, video, flagsById, voiceNotesById);
+      if (!time) {
+        continue;
+      }
+      overlays.push({
+        path: await writeReplayMp4OverlayPng(tempDirectory, `drawing-${annotation.id}`, replayMp4AnnotationSvg(annotation, width, height)),
+        startSec: time.startMs / 1000,
+        endSec: Math.max(time.endMs, time.startMs + 1000) / 1000
+      });
+    }
+  }
+
+  return overlays;
+}
+
+function replayMp4VoiceNoteDelayMs(note: ReplayVoiceNote, flagsById: Map<string, ReplayFlag>, video: ReplayVideoAsset): number | undefined {
+  const flag = flagsById.get(note.flagId);
+  return clampReplayMp4TimeMs(video, flag?.timeMs ?? replayMp4TimeFromCapturedAt(video, flag?.capturedAt));
+}
+
+function replayVoiceNoteExtension(mimeType: string): string {
+  const lower = mimeType.toLowerCase();
+  if (lower.includes("mp4") || lower.includes("m4a")) return "m4a";
+  if (lower.includes("ogg")) return "ogg";
+  if (lower.includes("wav")) return "wav";
+  return "webm";
+}
+
+async function replayMp4VoiceInputs(replay: ReplayRecord, video: ReplayVideoAsset, options: ReplayMp4ExportOptions, tempDirectory: string): Promise<ReplayMp4VoiceInput[]> {
+  if (!options.includeVoiceNotes) {
+    return [];
+  }
+  const flagsById = new Map((replay.flags ?? []).map((flag) => [flag.id, flag]));
+  const result: ReplayMp4VoiceInput[] = [];
+  for (const note of replay.voiceNotes ?? []) {
+    const comma = note.dataUrl.indexOf(",");
+    const delayMs = replayMp4VoiceNoteDelayMs(note, flagsById, video);
+    if (comma < 0 || delayMs == null) {
+      continue;
+    }
+    const extension = replayVoiceNoteExtension(note.mimeType);
+    const filePath = join(tempDirectory, `voice-${safeFileComponent(note.id, "note")}.${extension}`);
+    await writeFile(filePath, Buffer.from(note.dataUrl.slice(comma + 1), "base64"));
+    result.push({ path: filePath, delayMs });
+  }
+  return result;
+}
+
+function ffmpegSeconds(value: number): string {
+  return Math.max(0, value).toFixed(3);
+}
+
+function appendReplayMp4AudioFilters(
+  filterParts: string[],
+  video: ReplayVideoAsset,
+  voiceInputs: ReplayMp4VoiceInput[],
+  firstVoiceInputIndex: number,
+  options: ReplayMp4ExportOptions
+): string | null {
+  const audioLabels: string[] = [];
+  if (options.includeOriginalAudio && video.hasAudio) {
+    filterParts.push("[0:a]aresample=48000,asetpts=PTS-STARTPTS[a_base]");
+    audioLabels.push("[a_base]");
+  }
+  voiceInputs.forEach((voice, index) => {
+    const inputIndex = firstVoiceInputIndex + index;
+    const label = `[a_note_${index}]`;
+    const delay = Math.max(0, Math.round(voice.delayMs));
+    filterParts.push(`[${inputIndex}:a]aresample=48000,adelay=${delay}|${delay},volume=1.0${label}`);
+    audioLabels.push(label);
+  });
+  if (!audioLabels.length) {
+    return null;
+  }
+  if (audioLabels.length === 1) {
+    return audioLabels[0];
+  }
+  filterParts.push(`${audioLabels.join("")}amix=inputs=${audioLabels.length}:duration=longest:dropout_transition=0[aout]`);
+  return "[aout]";
+}
+
+async function exportReplayMp4(replayId: string, options: ReplayMp4ExportOptions): Promise<string> {
+  const [replays, matches, settings] = await Promise.all([store.getReplays(), store.getMatches(), store.getSettings()]);
+  const storedReplay = replays.find((item) => item.id === replayId);
+  if (!storedReplay) {
+    throw new Error("Replay not found.");
+  }
+  const replay = replayForExport(storedReplay);
+  const match = matches.find((item) => item.id === replay.matchId) ?? replay.matchSnapshot;
+  const search = replaySearchMetadata(replay, match);
+  const source = await replayVideoExportSource(replay);
+  if (!source) {
+    throw new Error("MP4 export needs a video replay. Use the RiftLite coaching pack export for screenshot-only replays.");
+  }
+  const ffmpegPath = replayVideoFfmpegPath();
+  if (!ffmpegPath || !(await pathExists(ffmpegPath))) {
+    throw new Error("MP4 export needs ffmpeg.");
+  }
+
+  const directory = replayBundleDirectory(settings);
+  await mkdir(directory, { recursive: true });
+  const defaultPath = join(
+    directory,
+    `${safeFileComponent(`${search.title} ${search.players.join(" vs ")} ${search.capturedAt.slice(0, 10)}`, "RiftLite Replay")}.mp4`
+  );
+  const saveOptions: SaveDialogOptions = {
+    title: "Export YouTube-ready MP4",
+    defaultPath,
+    filters: [{ name: "MP4 video", extensions: ["mp4"] }]
+  };
+  const result = mainWindow ? await dialog.showSaveDialog(mainWindow, saveOptions) : await dialog.showSaveDialog(saveOptions);
+  if (result.canceled || !result.filePath) {
+    return "";
+  }
+  const outputPath = result.filePath.toLowerCase().endsWith(".mp4") ? result.filePath : `${result.filePath}.mp4`;
+  if (resolve(outputPath) === resolve(source.sourcePath)) {
+    throw new Error("Choose a different file name for the MP4 export so the original replay video is kept safe.");
+  }
+  await unlink(outputPath).catch(() => undefined);
+
+  const tempDirectory = join(app.getPath("temp"), `riftlite-mp4-export-${randomUUID()}`);
+  await mkdir(tempDirectory, { recursive: true });
+  const tempFiles: string[] = [];
+  try {
+    const overlayInputs = await replayMp4OverlayInputs(replay, source.asset, options, tempDirectory);
+    const voiceInputs = await replayMp4VoiceInputs(replay, source.asset, options, tempDirectory);
+    tempFiles.push(...overlayInputs.map((input) => input.path), ...voiceInputs.map((input) => input.path));
+
+    const hasOverlay = overlayInputs.length > 0;
+    const hasVoice = voiceInputs.length > 0;
+    const width = Math.max(640, source.asset.width || 1920);
+    const height = Math.max(360, source.asset.height || 1080);
+    const fps = Math.max(1, source.asset.fps || 24);
+    const videoDurationSec = Math.max(1, (source.asset.durationMs || 1000) / 1000);
+    const args = ["-y", "-hide_banner", "-loglevel", "error", "-fflags", "+genpts", "-i", source.sourcePath];
+    overlayInputs.forEach((overlay) => {
+      args.push("-loop", "1", "-t", ffmpegSeconds(videoDurationSec + 1), "-i", overlay.path);
+    });
+    voiceInputs.forEach((voice) => {
+      args.push("-i", voice.path);
+    });
+
+    if (!hasOverlay && !hasVoice) {
+      args.push("-map", "0:v:0");
+      if (options.includeOriginalAudio) {
+        args.push("-map", "0:a?", "-c:a", "aac", "-b:a", "128k");
+      } else {
+        args.push("-an");
+      }
+      args.push("-c:v", "copy", "-movflags", "+faststart", outputPath);
+    } else {
+      const filterParts: string[] = [
+        `[0:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,fps=${fps},setsar=1[v0]`
+      ];
+      let currentVideoLabel = "[v0]";
+      overlayInputs.forEach((overlay, index) => {
+        const inputIndex = 1 + index;
+        const nextLabel = `[v${index + 1}]`;
+        filterParts.push(`${currentVideoLabel}[${inputIndex}:v]overlay=0:0:shortest=1:enable='gte(t\\,${ffmpegSeconds(overlay.startSec)})*lte(t\\,${ffmpegSeconds(overlay.endSec)})'${nextLabel}`);
+        currentVideoLabel = nextLabel;
+      });
+      const audioLabel = appendReplayMp4AudioFilters(filterParts, source.asset, voiceInputs, 1 + overlayInputs.length, options);
+      args.push("-filter_complex", filterParts.join(";"), "-map", currentVideoLabel);
+      if (audioLabel) {
+        args.push("-map", audioLabel, "-c:a", "aac", "-b:a", "128k");
+      } else if (options.includeOriginalAudio && source.asset.hasAudio) {
+        args.push("-map", "0:a?", "-c:a", "aac", "-b:a", "128k");
+      } else {
+        args.push("-an");
+      }
+      args.push(
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-crf",
+        "18",
+        "-pix_fmt",
+        "yuv420p",
+        "-movflags",
+        "+faststart",
+        outputPath
+      );
+    }
+
+    await execFileAsync(ffmpegPath, args, {
+      windowsHide: true,
+      timeout: 900_000,
+      maxBuffer: 1024 * 1024
+    });
+    const exportedStats = await stat(outputPath);
+    if (exportedStats.size <= 0) {
+      throw new Error("MP4 export did not create a video.");
+    }
+    return outputPath;
+  } finally {
+    for (const file of tempFiles) {
+      await unlink(file).catch(() => undefined);
+    }
+  }
 }
 
 function defaultReplayCoachingPack(replay: ReplayRecord, match: MatchDraft | undefined, settings: UserSettings): NonNullable<ReplayRecord["coachingPack"]> {
@@ -2925,6 +3317,25 @@ async function importReplayFolder(): Promise<ReplayRecord[]> {
   return imported;
 }
 
+function toggleTrueFullscreen(): boolean {
+  if (!mainWindow) {
+    return false;
+  }
+  const next = !mainWindow.isFullScreen();
+  mainWindow.setFullScreen(next);
+  mainWindow.setMenuBarVisibility(false);
+  return next;
+}
+
+function installFullscreenShortcut(webContents: WebContents): void {
+  webContents.on("before-input-event", (event, input) => {
+    if (input.type === "keyDown" && input.key === "F11" && !input.alt && !input.control && !input.meta && !input.shift) {
+      event.preventDefault();
+      toggleTrueFullscreen();
+    }
+  });
+}
+
 async function createWindow(): Promise<void> {
   const iconPath = assetPath("riftlite-app.ico");
   const icon = nativeImage.createFromPath(iconPath);
@@ -2949,6 +3360,7 @@ async function createWindow(): Promise<void> {
   });
   mainWindow.setMenu(null);
   mainWindow.setMenuBarVisibility(false);
+  installFullscreenShortcut(mainWindow.webContents);
   configureDisplayMediaCapture();
 
   mainWindow.once("ready-to-show", () => {
@@ -2960,6 +3372,7 @@ async function createWindow(): Promise<void> {
   });
   mainWindow.webContents.on("did-attach-webview", (_event, webContents) => {
     rememberGameWebContents(webContents);
+    installFullscreenShortcut(webContents);
     webContents.on("did-navigate", () => rememberGameWebContents(webContents));
     webContents.on("did-navigate-in-page", () => rememberGameWebContents(webContents));
     webContents.on("dom-ready", () => rememberGameWebContents(webContents));
@@ -3028,6 +3441,7 @@ function registerIpc(): void {
   ipcMain.handle("decks:import", (_event, url: string) => deckService.importDeck(url));
   ipcMain.handle("decks:import-text", (_event, text: string) => deckService.importDeckText(text));
   ipcMain.handle("decks:refresh", (_event, id: string) => deckService.refreshDeck(id));
+  ipcMain.handle("decks:rename", (_event, id: string, title: string) => deckService.renameDeck(id, title));
   ipcMain.handle("decks:delete", (_event, id: string) => deckService.deleteDeck(id));
   ipcMain.handle("decks:set-active", (_event, id: string) => deckService.setActiveDeck(id));
   ipcMain.handle("decks:notebook:get", (_event, deckId: string) => store.getDeckNotebook(deckId));
@@ -3055,6 +3469,7 @@ function registerIpc(): void {
   ipcMain.handle("replays:restore", (_event, id: string) => store.restoreReplay(id));
   ipcMain.handle("replays:purge", (_event, id: string) => store.purgeReplay(id));
   ipcMain.handle("replays:export", (_event, replayId: string) => exportReplayBundle(replayId));
+  ipcMain.handle("replays:export-mp4", (_event, replayId: string, options: ReplayMp4ExportOptions) => exportReplayMp4(replayId, options));
   ipcMain.handle("replays:import", () => importReplayBundle());
   ipcMain.handle("replays:import-folder", () => importReplayFolder());
   ipcMain.handle("replays:open-folder", async () => {

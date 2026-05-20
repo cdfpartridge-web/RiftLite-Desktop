@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" role="img" aria-label="Dunc TCG Riftbound spotlight artwork">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#061b37"/>
+      <stop offset="0.52" stop-color="#10275b"/>
+      <stop offset="1" stop-color="#3a143d"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#37d9ff"/>
+      <stop offset="0.55" stop-color="#8a55ff"/>
+      <stop offset="1" stop-color="#ff4d7d"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="50%" cy="50%" r="55%">
+      <stop offset="0" stop-color="#37d9ff" stop-opacity="0.34"/>
+      <stop offset="1" stop-color="#37d9ff" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="18" stdDeviation="24" flood-color="#000616" flood-opacity="0.55"/>
+    </filter>
+  </defs>
+  <rect width="1600" height="900" fill="url(#bg)"/>
+  <rect width="1600" height="900" fill="url(#glow)"/>
+  <g opacity="0.18">
+    <path d="M-160 760C170 620 322 338 578 400c184 45 247 230 473 177 196-45 305-216 597-137v460H-160z" fill="#37d9ff"/>
+    <path d="M1184-80c168 76 231 236 176 352-67 141-268 132-370 49-115-94-72-301 194-401z" fill="#ff4d7d"/>
+  </g>
+  <g filter="url(#shadow)" transform="translate(196 170)">
+    <rect x="0" y="0" width="292" height="406" rx="34" fill="#071326" stroke="#5ee8ff" stroke-width="8"/>
+    <rect x="36" y="38" width="220" height="136" rx="16" fill="url(#accent)"/>
+    <rect x="36" y="202" width="220" height="34" rx="10" fill="#f4fbff" opacity="0.9"/>
+    <rect x="36" y="258" width="160" height="24" rx="8" fill="#80efff" opacity="0.8"/>
+    <rect x="36" y="304" width="198" height="24" rx="8" fill="#80efff" opacity="0.56"/>
+    <circle cx="246" cy="346" r="26" fill="#ff4d7d"/>
+  </g>
+  <g filter="url(#shadow)" transform="translate(352 232) rotate(7)">
+    <rect x="0" y="0" width="292" height="406" rx="34" fill="#0a1830" stroke="#9c65ff" stroke-width="8"/>
+    <rect x="36" y="38" width="220" height="136" rx="16" fill="#061b37"/>
+    <path d="M57 150l60-89 37 62 36-47 45 74z" fill="url(#accent)"/>
+    <rect x="36" y="202" width="220" height="34" rx="10" fill="#f4fbff" opacity="0.86"/>
+    <rect x="36" y="258" width="178" height="24" rx="8" fill="#80efff" opacity="0.75"/>
+    <rect x="36" y="304" width="198" height="24" rx="8" fill="#80efff" opacity="0.48"/>
+  </g>
+  <g transform="translate(700 242)">
+    <text x="0" y="0" fill="#8ff3ff" font-family="Arial, Helvetica, sans-serif" font-size="34" font-weight="900" letter-spacing="7">CREATOR SPOTLIGHT</text>
+    <text x="0" y="116" fill="#ffffff" font-family="Arial Black, Arial, Helvetica, sans-serif" font-size="136" font-weight="900">Dunc</text>
+    <text x="0" y="196" fill="#d9ecff" font-family="Arial, Helvetica, sans-serif" font-size="44" font-weight="800">Riftbound videos, decks, vlogs, and community</text>
+    <g transform="translate(0 260)" font-family="Arial, Helvetica, sans-serif" font-size="30" font-weight="900">
+      <rect x="0" y="0" width="196" height="58" rx="29" fill="#09162a" stroke="#37d9ff"/>
+      <text x="32" y="39" fill="#ffffff">TikTok</text>
+      <rect x="224" y="0" width="214" height="58" rx="29" fill="#09162a" stroke="#8a55ff"/>
+      <text x="258" y="39" fill="#ffffff">YouTube</text>
+      <rect x="466" y="0" width="202" height="58" rx="29" fill="#09162a" stroke="#ff4d7d"/>
+      <text x="500" y="39" fill="#ffffff">Discord</text>
+    </g>
+  </g>
+</svg>

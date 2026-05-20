@@ -777,6 +777,13 @@ export interface ReplayVideoKeyframeOptions {
   capturedAt: string;
 }
 
+export interface ReplayMp4ExportOptions {
+  includeFlags: boolean;
+  includeDrawings: boolean;
+  includeVoiceNotes: boolean;
+  includeOriginalAudio: boolean;
+}
+
 export interface ReplayWindowCaptureSource {
   id: string;
   name: string;
@@ -1127,6 +1134,7 @@ export interface RiftLiteApi {
   importDeck(url: string): Promise<SavedDeck>;
   importDeckText(text: string): Promise<SavedDeck>;
   refreshDeck(id: string): Promise<SavedDeck>;
+  renameDeck(id: string, title: string): Promise<SavedDeck>;
   deleteDeck(id: string): Promise<void>;
   setActiveDeck(id: string): Promise<UserSettings>;
   getDeckNotebook(deckId: string): Promise<DeckNotebook>;
@@ -1151,6 +1159,7 @@ export interface RiftLiteApi {
   restoreReplay(id: string): Promise<ReplayRecord | null>;
   purgeReplay(id: string): Promise<void>;
   exportReplayBundle(replayId: string): Promise<string>;
+  exportReplayMp4(replayId: string, options: ReplayMp4ExportOptions): Promise<string>;
   importReplayBundle(): Promise<ReplayRecord | null>;
   importReplayFolder(): Promise<ReplayRecord[]>;
   openReplayFolder(): Promise<void>;

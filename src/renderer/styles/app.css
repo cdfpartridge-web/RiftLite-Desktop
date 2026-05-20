@@ -3221,6 +3221,30 @@ textarea {
   gap: 4px;
 }
 
+.deck-title-editor label {
+  display: grid;
+  gap: 5px;
+}
+
+.deck-title-editor label > span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.deck-title-editor input {
+  min-width: min(520px, 100%);
+  font-size: 20px;
+  font-weight: 950;
+}
+
+.deck-title-editor em {
+  color: var(--cyan-soft);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 900;
+}
+
 .deck-section-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
@@ -6533,6 +6557,112 @@ button.event-row {
 
 .release-note-row svg {
   color: var(--cyan);
+}
+
+.replay-export-backdrop {
+  z-index: 430;
+}
+
+.replay-export-modal {
+  width: min(820px, 100%);
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--surface-2);
+  box-shadow: 0 24px 80px rgb(0 0 0 / 52%);
+}
+
+.replay-export-modal header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 18px;
+  border-bottom: 1px solid var(--border);
+}
+
+.replay-export-modal h2,
+.replay-export-modal p {
+  margin: 0;
+}
+
+.replay-export-modal h2 {
+  margin-bottom: 6px;
+}
+
+.replay-export-modal p,
+.replay-export-card span,
+.replay-export-card small {
+  color: var(--muted);
+}
+
+.replay-export-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  padding: 18px;
+}
+
+.replay-export-card {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  min-height: 260px;
+  padding: 18px;
+  text-align: left;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  color: var(--text);
+  background: #0b1526;
+}
+
+button.replay-export-card {
+  cursor: pointer;
+}
+
+button.replay-export-card:hover {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px rgb(102 238 255 / 18%);
+}
+
+.replay-export-card > svg {
+  color: var(--accent);
+}
+
+.replay-export-card strong {
+  font-size: 18px;
+}
+
+.replay-export-mp4 .primary {
+  justify-self: start;
+}
+
+.replay-export-checks {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgb(2 8 18 / 30%);
+}
+
+.replay-export-checks label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.replay-export-checks input {
+  width: auto;
+}
+
+@media (max-width: 780px) {
+  .replay-export-options {
+    grid-template-columns: 1fr;
+  }
 }
 
 .review-modal footer {
