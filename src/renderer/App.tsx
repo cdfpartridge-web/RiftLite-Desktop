@@ -141,14 +141,14 @@ const DECK_TRACKER_FEATURE_ENABLED = false;
 
 const DEFAULT_UPDATE_STATUS: UpdateStatus = {
   state: "idle",
-  currentVersion: "0.7.51",
+  currentVersion: "0.7.52",
   message: "Updater ready"
 };
 
-const APP_VERSION_META = "0.7.51";
+const APP_VERSION_META = "0.7.52";
 const RELEASE_NOTES = {
   version: APP_VERSION_META,
-  title: "RiftLite 0.7.51",
+  title: "RiftLite 0.7.52",
   intro: "This update focuses on clearer reviews, healthier replays, and easier tester support.",
   items: [
     "Match reviews now show capture confidence and clearer BO3 incomplete-match guidance.",

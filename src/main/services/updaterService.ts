@@ -12,6 +12,13 @@ export class UpdaterService {
   };
 
   constructor(private readonly getWindow: () => BrowserWindow | null) {
+    if (process.platform === "darwin") {
+      autoUpdater.setFeedURL({
+        provider: "github",
+        owner: "cdfpartridge-web",
+        repo: "RiftLite-Desktop-mac"
+      });
+    }
     autoUpdater.autoDownload = false;
     autoUpdater.allowPrerelease = true;
     autoUpdater.on("checking-for-update", () => this.setStatus({ state: "checking", message: "Checking for updates" }));
