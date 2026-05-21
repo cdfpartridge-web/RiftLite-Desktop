@@ -1,6 +1,6 @@
 {
   "name": "riftlite-desktop-v06",
-  "version": "0.7.52",
+  "version": "0.7.53",
   "private": true,
   "description": "RiftLite 0.7 desktop companion app.",
   "main": "dist/main/main.js",
@@ -95,7 +95,7 @@
       ],
       "category": "public.app-category.utilities",
       "icon": "build/icon.icns",
-      "identity": null,
+      "identity": "-",
       "artifactName": "RiftLiteBetaInstall-${arch}.${ext}"
     },
     "nsis": {

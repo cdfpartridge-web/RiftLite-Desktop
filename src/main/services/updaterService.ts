@@ -16,7 +16,7 @@ export class UpdaterService {
       autoUpdater.setFeedURL({
         provider: "github",
         owner: "cdfpartridge-web",
-        repo: "RiftLite-Desktop-mac"
+        repo: "RiftLite-Desktop-Mac"
       });
     }
     autoUpdater.autoDownload = false;
