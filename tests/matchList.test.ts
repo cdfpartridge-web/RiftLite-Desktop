@@ -25,7 +25,7 @@ function match(id: string, capturedAt: string): MatchDraft {
     notes: "",
     games: [],
     rawEvidence: [],
-    sync: { community: "disabled", hubs: {} }
+    sync: { community: "disabled", hubs: {}, teams: {} }
   };
 }
 

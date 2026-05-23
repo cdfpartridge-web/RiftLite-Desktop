@@ -8,6 +8,10 @@ export function privateHubSyncEnabled(settings: Pick<UserSettings, "syncMode">):
   return settings.syncMode === "community-and-hubs" || settings.syncMode === "private-hubs-only" || settings.syncMode === "custom";
 }
 
+export function teamSyncEnabled(settings: Pick<UserSettings, "syncMode">): boolean {
+  return settings.syncMode === "community-and-hubs" || settings.syncMode === "private-hubs-only" || settings.syncMode === "custom";
+}
+
 export function syncModePatch(mode: UserSettings["syncMode"]): Partial<UserSettings> {
   return {
     syncMode: mode,

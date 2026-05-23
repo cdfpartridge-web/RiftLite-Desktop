@@ -355,6 +355,144 @@ describe("MatchSessionTracker", () => {
     expect(draft.games[0].oppPoints).toBe(7);
   });
 
+  it("preserves a low-score TCGA BO3 loss when counters reset to zero", () => {
+    const tracker = new MatchSessionTracker();
+    const maskedSwanSettings = { ...settings, username: "MaskedSwan" };
+
+    tracker.ingest(event("match-start", {
+      active: true,
+      format: "Bo3",
+      configuredUsername: "MaskedSwan",
+      playerData: { preferences: { pseudo: "MaskedSwan" } },
+      counterPlayers: [
+        { name: "Rayomax", score: "5" },
+        { name: "MaskedSwan", score: "0" }
+      ],
+      myBattlefield: "The Academy",
+      opponentBattlefield: "Sunken Temple"
+    }, "2026-05-13T20:00:00.000Z"));
+
+    tracker.ingest(event("match-snapshot", {
+      active: true,
+      format: "Bo3",
+      configuredUsername: "MaskedSwan",
+      counterPlayers: [
+        { name: "Rayomax", score: "0" },
+        { name: "MaskedSwan", score: "0" }
+      ]
+    }, "2026-05-13T20:08:00.000Z"));
+
+    tracker.ingest(event("match-snapshot", {
+      active: true,
+      format: "Bo3",
+      configuredUsername: "MaskedSwan",
+      counterPlayers: [
+        { name: "Rayomax", score: "6" },
+        { name: "MaskedSwan", score: "6" }
+      ],
+      myBattlefield: "Ripper's Bay",
+      opponentBattlefield: "Vilemaw's Lair"
+    }, "2026-05-13T20:18:00.000Z"));
+
+    tracker.ingest(event("match-snapshot", {
+      active: true,
+      format: "Bo3",
+      configuredUsername: "MaskedSwan",
+      counterPlayers: [
+        { name: "Rayomax", score: "0" },
+        { name: "MaskedSwan", score: "0" }
+      ]
+    }, "2026-05-13T20:19:00.000Z"));
+
+    tracker.ingest(event("match-snapshot", {
+      active: true,
+      format: "Bo3",
+      configuredUsername: "MaskedSwan",
+      counterPlayers: [
+        { name: "Rayomax", score: "6" },
+        { name: "MaskedSwan", score: "0" }
+      ],
+      myBattlefield: "The Papertree",
+      opponentBattlefield: "Valley of Idols"
+    }, "2026-05-13T20:28:00.000Z"));
+
+    const draft = tracker.buildDraft("tcga", event("match-end", {
+      active: false,
+      reason: "inactive-debounce"
+    }, "2026-05-13T20:30:00.000Z"), maskedSwanSettings);
+
+    expect(draft.format).toBe("Bo3");
+    expect(draft.score).toBe("0-2");
+    expect(draft.games).toHaveLength(3);
+    expect(draft.games[0].result).toBe("Loss");
+    expect(draft.games[0].myPoints).toBe(0);
+    expect(draft.games[0].oppPoints).toBe(5);
+    expect(draft.games[0].myBattlefield).toBe("The Academy");
+    expect(draft.games[1].result).toBe("Incomplete");
+    expect(draft.games[1].myPoints).toBe(6);
+    expect(draft.games[1].oppPoints).toBe(6);
+    expect(draft.games[2].result).toBe("Loss");
+    expect(draft.games[2].myPoints).toBe(0);
+    expect(draft.games[2].oppPoints).toBe(6);
+  });
+
+  it("preserves an explicit TCGA BO3 quick 4 point game when counters reset to zero", () => {
+    const tracker = new MatchSessionTracker();
+    const bmuSettings = { ...settings, username: "BMU" };
+
+    tracker.ingest(event("match-start", {
+      active: true,
+      format: "Bo3",
+      configuredUsername: "BMU",
+      playerData: { preferences: { pseudo: "BMU" } },
+      counterPlayers: [
+        { name: "Opponent", score: "0" },
+        { name: "BMU", score: "4" }
+      ],
+      myBattlefield: "Zaun Warrens",
+      opponentBattlefield: "Dusk Rose Lab"
+    }, "2026-05-23T20:00:00.000Z"));
+
+    tracker.ingest(event("match-snapshot", {
+      active: true,
+      format: "Bo3",
+      configuredUsername: "BMU",
+      counterPlayers: [
+        { name: "Opponent", score: "0" },
+        { name: "BMU", score: "0" }
+      ]
+    }, "2026-05-23T20:05:00.000Z"));
+
+    tracker.ingest(event("match-snapshot", {
+      active: true,
+      format: "Bo3",
+      configuredUsername: "BMU",
+      counterPlayers: [
+        { name: "Opponent", score: "1" },
+        { name: "BMU", score: "5" }
+      ],
+      myBattlefield: "The Papertree",
+      opponentBattlefield: "Sunken Temple"
+    }, "2026-05-23T20:14:00.000Z"));
+
+    const draft = tracker.buildDraft("tcga", event("match-end", {
+      active: false,
+      reason: "inactive-debounce"
+    }, "2026-05-23T20:15:00.000Z"), bmuSettings);
+
+    expect(draft.format).toBe("Bo3");
+    expect(draft.score).toBe("2-0");
+    expect(draft.games).toHaveLength(2);
+    expect(draft.games[0].result).toBe("Win");
+    expect(draft.games[0].myPoints).toBe(4);
+    expect(draft.games[0].oppPoints).toBe(0);
+    expect(draft.games[0].myBattlefield).toBe("Zaun Warrens");
+    expect(draft.games[0].oppBattlefield).toBe("Dusk Rose Lab");
+    expect(draft.games[1].result).toBe("Win");
+    expect(draft.games[1].myPoints).toBe(5);
+    expect(draft.games[1].oppPoints).toBe(1);
+  });
+
   it("does not accept partial TCGA counter scores when the local row cannot be matched", () => {
     const tracker = new MatchSessionTracker();
     const noConfiguredName = { ...settings, username: "" };
@@ -1046,7 +1184,7 @@ describe("MatchSessionTracker", () => {
     ]);
   });
 
-  it("releases an Atlas BO3 on game two when the match is already 2-0", () => {
+  it("holds Atlas BO3 game two confirmation even when score inference looks complete", () => {
     const tracker = new MatchSessionTracker();
 
     const gameOneEnd = event("match-end", {
@@ -1091,15 +1229,7 @@ describe("MatchSessionTracker", () => {
     }, "2026-05-11T15:11:18.665Z", "atlas"));
     tracker.ingest(gameTwoEnd);
 
-    expect(tracker.shouldHoldForBo3("atlas", gameTwoEnd)).toBe(false);
-    const draft = tracker.buildDraft("atlas", gameTwoEnd, { ...settings, username: "BMU" });
-    expect(draft.score).toBe("2-0");
-    expect(draft.games).toHaveLength(2);
-    expect(draft.games.map((game) => `${game.myPoints}-${game.oppPoints}`)).toEqual(["7-5", "5-3"]);
-    expect(draft.games.map((game) => game.myBattlefieldImage)).toEqual([
-      "https://assets.riftatlas-workers.com/riftbound/cards/original/OGN-298.webp",
-      "https://assets.riftatlas-workers.com/riftbound/cards/original/UNL-215.webp"
-    ]);
+    expect(tracker.shouldHoldForBo3("atlas", gameTwoEnd)).toBe(true);
   });
 
   it("does not split one Atlas game when battlefield markers flicker at the same score", () => {
@@ -1614,6 +1744,35 @@ describe("MatchSessionTracker", () => {
     }, "2026-05-13T05:53:04.779Z", "atlas");
 
     expect(tracker.shouldFinalizeBeforeNewSession(nextMatchStart)).toBe(true);
+  });
+
+  it("waits briefly after a single Atlas game so a manual BO3 can continue", () => {
+    const tracker = new MatchSessionTracker();
+
+    tracker.ingest(event("match-start", {
+      active: true,
+      format: "Auto",
+      myName: "DUNC",
+      opponentName: "Sultan",
+      score: { me: "0", opp: "0", source: "atlas-score-track" }
+    }, "2026-05-18T14:57:47.918Z", "atlas"));
+    tracker.ingest(event("match-snapshot", {
+      active: true,
+      format: "Auto",
+      myName: "DUNC",
+      opponentName: "Sultan",
+      score: { me: "7", opp: "5", source: "atlas-score-track" }
+    }, "2026-05-18T15:14:24.719Z", "atlas"));
+
+    const gameEnd = event("match-end", {
+      active: false,
+      reason: "inactive-debounce",
+      format: "Bo1",
+      myName: "DUNC"
+    }, "2026-05-18T15:14:28.719Z", "atlas");
+    tracker.ingest(gameEnd);
+
+    expect(tracker.shouldWaitForAtlasContinuation("atlas", gameEnd)).toBe(true);
   });
 
   it("keeps Atlas BO3 game results even when score is blank", () => {

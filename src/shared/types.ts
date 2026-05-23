@@ -103,6 +103,7 @@ export interface MatchDraft {
   sync: {
     community: "disabled" | "pending" | "synced" | "failed";
     hubs: Record<string, "pending" | "synced" | "failed">;
+    teams: Record<string, "pending" | "synced" | "failed">;
   };
 }
 
@@ -854,7 +855,7 @@ export interface CommunityMatch {
   deckSourceKey: string;
   deckSnapshotJson: string;
   createdAt: number;
-  scope: "community" | "hub";
+  scope: "community" | "hub" | "team";
   hubId?: string;
 }
 
@@ -874,6 +875,38 @@ export interface ImportSummary {
   importedHubs: number;
   importedSettings: number;
   sourcePath: string;
+}
+
+export interface RiftLiteBackupOptions {
+  includeRecycleBin: boolean;
+}
+
+export interface RiftLiteBackupFile {
+  format: "riftlite.backup";
+  version: 1;
+  exportedAt: string;
+  appVersion: string;
+  settings: UserSettings;
+  matches: MatchDraft[];
+  deletedMatches: MatchDraft[];
+  decks: SavedDeck[];
+  notebooks: DeckNotebook[];
+  replays: ReplayRecord[];
+  deletedReplays: ReplayRecord[];
+}
+
+export interface RiftLiteBackupSummary {
+  path: string;
+  exportedAt: string;
+  appVersion: string;
+  matches: number;
+  deletedMatches: number;
+  decks: number;
+  notebooks: number;
+  replays: number;
+  deletedReplays: number;
+  settingsIncluded: boolean;
+  preRestoreBackupPath?: string;
 }
 
 export type OverlayProfile = "compact" | "tournament" | "grind" | "deck-focused" | "privacy" | "caster";
@@ -942,6 +975,17 @@ export interface UserSettings {
   scorepadLinkedAt: string;
   activeDeckId: string;
   activeHubs: PrivateHub[];
+  activeTeams: TeamSyncTarget[];
+}
+
+export interface TeamSyncTarget {
+  id: string;
+  slug: string;
+  name: string;
+  sync: boolean;
+  role: SocialTeamRole | "";
+  visibility: "public" | "private";
+  joinedAt: string;
 }
 
 export interface BrowserInfo {
@@ -1099,12 +1143,162 @@ export interface HubMessage {
   updatedAt: number;
 }
 
+export interface LfgListing {
+  id: string;
+  uid: string;
+  handle: string;
+  displayName: string;
+  platform: "tcga" | "atlas";
+  roomCode: string;
+  format: "Bo1" | "Bo3";
+  myLegend: string;
+  lookingForLegends: string[];
+  allowAny: boolean;
+  note: string;
+  status: "active" | "matched" | "closed" | "expired";
+  acceptedByUid: string;
+  acceptedByHandle: string;
+  acceptedByDisplayName: string;
+  acceptedAt: number;
+  createdAt: number;
+  expiresAt: number;
+  closedAt: number;
+  discordVoiceChannelId: string;
+  discordGuildId: string;
+  discordChannelUrl: string;
+  discordAppUrl: string;
+  discordInviteUrl: string;
+  discordVoiceExpiresAt: number;
+  discordVoiceCreatedAt: number;
+}
+
+export interface LfgListingDraft {
+  platform: "tcga" | "atlas";
+  roomCode: string;
+  format: "Bo1" | "Bo3";
+  myLegend: string;
+  lookingForLegends: string[];
+  allowAny: boolean;
+  note: string;
+}
+
+export interface DiscordVoiceJoinResult {
+  ok: boolean;
+  attempted: boolean;
+  message: string;
+  usedFallback: boolean;
+}
+
+export interface SocialTeamLinks {
+  x: string;
+  youtube: string;
+  twitch: string;
+  instagram: string;
+  metafy: string;
+}
+
+export interface SocialTeamProfile {
+  id: string;
+  slug: string;
+  name: string;
+  description: string;
+  region: string;
+  locationMode: string;
+  visibility: "public" | "private";
+  purposes: string[];
+  recruitmentStatus: string;
+  logoUrl: string;
+  bannerUrl: string;
+  website: string;
+  discord: string;
+  socials: SocialTeamLinks;
+  ownerUid: string;
+  ownerHandle: string;
+  ownerDisplayName: string;
+  memberCount: number;
+  applicationCount: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export type TeamModerationAction = "hide" | "restore" | "clear-logo" | "clear-banner" | "clear-images";
+
+export interface TeamModerationRecord extends SocialTeamProfile {
+  hidden: boolean;
+  moderationStatus: string;
+  moderationReason: string;
+  moderatedAt: number;
+  moderatedBy: string;
+}
+
+export type SocialTeamRole = "owner" | "admin" | "member";
+
+export interface SocialTeamMember {
+  id: string;
+  uid: string;
+  handle: string;
+  displayName: string;
+  role: SocialTeamRole;
+  joinedAt: number;
+  updatedAt: number;
+}
+
+export interface SocialTeamApplication {
+  id: string;
+  teamId: string;
+  uid: string;
+  handle: string;
+  displayName: string;
+  message: string;
+  region: string;
+  preferredLegends: string[];
+  availability: string;
+  status: "pending" | "accepted" | "declined" | "withdrawn";
+  createdAt: number;
+  updatedAt: number;
+  reviewedAt: number;
+  reviewedBy: string;
+}
+
+export interface SocialTeamMessage {
+  id: string;
+  uid: string;
+  handle: string;
+  displayName: string;
+  text: string;
+  mentions: string[];
+  pinned: boolean;
+  deleted: boolean;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface SocialTeamDetail {
+  team: SocialTeamProfile;
+  members: SocialTeamMember[];
+  myRole: SocialTeamRole | "";
+}
+
+export type SocialTeamDraft = Partial<Pick<
+  SocialTeamProfile,
+  "slug" | "name" | "description" | "region" | "locationMode" | "visibility" | "purposes" | "recruitmentStatus" | "logoUrl" | "bannerUrl" | "website" | "discord" | "socials"
+>>;
+
+export interface SocialTeamApplicationDraft {
+  message: string;
+  region: string;
+  preferredLegends: string[];
+  availability: string;
+}
+
 export interface UpdateStatus {
   state: "idle" | "checking" | "available" | "not-available" | "downloading" | "downloaded" | "error";
   currentVersion: string;
   latestVersion?: string;
   message: string;
   progress?: number;
+  manualInstallOnly?: boolean;
+  downloadUrl?: string;
 }
 
 export interface ScreenshotResult {
@@ -1175,13 +1369,19 @@ export interface RiftLiteApi {
   saveReplayVideoKeyframe(options: ReplayVideoKeyframeOptions): Promise<ReplayScreenshotFrame>;
   loadReplayVideo(video: ReplayVideoAsset): Promise<ArrayBuffer>;
   importLegacyData(): Promise<ImportSummary>;
+  exportBackup(options?: Partial<RiftLiteBackupOptions>): Promise<RiftLiteBackupSummary | null>;
+  restoreBackup(): Promise<RiftLiteBackupSummary | null>;
   getCommunityMatches(forceRefresh?: boolean): Promise<CommunityMatch[]>;
   getHubMatches(hubId: string, forceRefresh?: boolean): Promise<CommunityMatch[]>;
+  getTeamMatches(teamId: string, forceRefresh?: boolean): Promise<CommunityMatch[]>;
   createHub(name: string, password: string): Promise<HubActionResult>;
   joinHub(name: string, password: string): Promise<HubActionResult>;
   syncPrivateHubs(): Promise<PrivateHubSyncResult>;
   syncMatchesToHubs(matchIds: string[], hubIds: string[]): Promise<PrivateHubSyncResult>;
   deleteHubMatch(hubId: string, matchId: string): Promise<void>;
+  syncTeams(): Promise<PrivateHubSyncResult>;
+  syncMatchesToTeams(matchIds: string[], teamIds: string[]): Promise<PrivateHubSyncResult>;
+  deleteTeamMatch(teamId: string, matchId: string): Promise<void>;
   startAccountLink(): Promise<AccountLinkSession>;
   getAccountLinkStatus(sessionId: string): Promise<AccountLinkStatus>;
   getAccountProfile(): Promise<AccountProfile | null>;
@@ -1199,6 +1399,27 @@ export interface RiftLiteApi {
   getHubMessages(hubId: string): Promise<HubMessage[]>;
   postHubMessage(hubId: string, text: string): Promise<HubMessage>;
   deleteHubMessage(hubId: string, messageId: string): Promise<void>;
+  getLfgListings(includeMine?: boolean): Promise<LfgListing[]>;
+  createLfgListing(draft: LfgListingDraft): Promise<LfgListing>;
+  acceptLfgListing(listingId: string): Promise<LfgListing>;
+  closeLfgListing(listingId: string): Promise<LfgListing>;
+  createLfgVoice(listingId: string): Promise<LfgListing>;
+  joinDiscordVoice(listing: Pick<LfgListing, "discordVoiceChannelId" | "discordGuildId" | "discordChannelUrl" | "discordAppUrl" | "discordInviteUrl">): Promise<DiscordVoiceJoinResult>;
+  getSocialTeams(options?: { mine?: boolean; query?: string }): Promise<SocialTeamProfile[]>;
+  createSocialTeam(draft: SocialTeamDraft): Promise<SocialTeamProfile>;
+  getSocialTeam(teamId: string): Promise<SocialTeamDetail>;
+  updateSocialTeam(teamId: string, patch: SocialTeamDraft): Promise<SocialTeamProfile>;
+  applyToSocialTeam(teamId: string, draft: SocialTeamApplicationDraft): Promise<SocialTeamApplication>;
+  getSocialTeamApplications(teamId: string): Promise<SocialTeamApplication[]>;
+  reviewSocialTeamApplication(teamId: string, applicationId: string, status: "accepted" | "declined"): Promise<SocialTeamApplication>;
+  getSocialTeamMessages(teamId: string): Promise<SocialTeamMessage[]>;
+  postSocialTeamMessage(teamId: string, text: string): Promise<SocialTeamMessage>;
+  deleteSocialTeamMessage(teamId: string, messageId: string): Promise<void>;
+  updateSocialTeamMember(teamId: string, uid: string, role: "admin" | "member"): Promise<void>;
+  removeSocialTeamMember(teamId: string, uid: string): Promise<void>;
+  reportSocialTeam(payload: { teamId: string; targetType: "team" | "message"; targetId: string; reason: string }): Promise<void>;
+  getModerationTeams(query?: string): Promise<{ isModerator: boolean; teams: TeamModerationRecord[] }>;
+  moderateTeam(teamId: string, action: TeamModerationAction, reason?: string): Promise<TeamModerationRecord>;
   getUpdateStatus(): Promise<UpdateStatus>;
   checkForUpdates(): Promise<UpdateStatus>;
   downloadUpdate(): Promise<UpdateStatus>;

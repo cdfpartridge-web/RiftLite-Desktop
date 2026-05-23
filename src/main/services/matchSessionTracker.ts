@@ -1,6 +1,6 @@
 import type { CaptureEvent, GamePlatform, MatchDraft, MatchGame, ReplayStructuredEvent, RiftboundSimEvent, UserSettings } from "../../shared/types.js";
 import { normalizeLegendName } from "../../shared/legendNames.js";
-import { privateHubSyncEnabled, publicCommunitySyncEnabled } from "../../shared/syncPolicy.js";
+import { privateHubSyncEnabled, publicCommunitySyncEnabled, teamSyncEnabled } from "../../shared/syncPolicy.js";
 import { readTcgaLocalPlayerName, readTcgaProfileName } from "../../shared/tcgaIdentity.js";
 
 export interface ResolvedSnapshot {
@@ -105,6 +105,30 @@ export class MatchSessionTracker {
     return isBo3 && !isBo3Complete(games);
   }
 
+  shouldWaitForAtlasContinuation(platform: GamePlatform, endEvent: CaptureEvent): boolean {
+    const session = this.sessions.get(platform);
+    if (!session || platform !== "atlas" || endEvent.platform !== "atlas") {
+      return false;
+    }
+    if (readString(endEvent.payload.reason) !== "inactive-debounce") {
+      return false;
+    }
+    if (isAtlasBetweenGameEnd(platform, endEvent.payload) || readString(endEvent.payload.atlasResultKind) === "match-terminal") {
+      return false;
+    }
+    const games = previewGames(session);
+    if (isBo3Complete(games)) {
+      return false;
+    }
+    const playedGames = games.filter(gameHasNonZeroScore);
+    if (playedGames.length !== 1) {
+      return false;
+    }
+    const onlyGame = playedGames[0];
+    const total = (onlyGame.myPoints ?? 0) + (onlyGame.oppPoints ?? 0);
+    return total >= 6 && !resultFromText(readString(session.sticky.endText));
+  }
+
   shouldFinalizeBeforeNewSession(event: CaptureEvent): boolean {
     const session = this.sessions.get(event.platform);
     return Boolean(session && shouldStartFreshSession(session, event) && previewGames(session).length);
@@ -120,7 +144,7 @@ export class MatchSessionTracker {
         ? atlasPayloadResultSignature(endEvent.payload)
         : atlasGameResultSignature(finishCurrentGame(session.currentGame))
       : "";
-    completeCurrentGame(session);
+    completeCurrentGame(session, Boolean(endEvent && resultFromText(readString(endEvent.payload.endText))));
     if (heldSignature) {
       session.atlasHeldResultSignature = heldSignature;
     }
@@ -233,6 +257,9 @@ export class MatchSessionTracker {
         community: publicCommunitySyncEnabled(settings) ? "pending" : "disabled",
         hubs: privateHubSyncEnabled(settings)
           ? Object.fromEntries(settings.activeHubs.filter((hub) => hub.sync).map((hub) => [hub.id, "pending"]))
+          : {},
+        teams: teamSyncEnabled(settings)
+          ? Object.fromEntries((settings.activeTeams ?? []).filter((team) => team.sync).map((team) => [team.id, "pending"]))
           : {}
       }
     };
@@ -1122,8 +1149,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
-function completeCurrentGame(session: SessionState): void {
-  const finished = finishCurrentGame(session.currentGame);
+function completeCurrentGame(session: SessionState, hasTerminalResult = false): void {
+  const finished = normalizeAmbiguousInactiveGame(finishCurrentGame(session.currentGame), hasTerminalResult);
   if (isWorthKeeping(finished)) {
     session.completedGames.push(finished);
   }
@@ -1175,11 +1202,16 @@ function shouldStartNextGame(session: SessionState, score: { me?: number; opp?: 
   const nextTotal = nextMe + nextOpp;
   const scoreDropped = nextMe < currentMe || nextOpp < currentOpp;
   const hasNumericReset = typeof score.me === "number" && typeof score.opp === "number" && nextTotal === 0;
+  const leadingScore = Math.max(currentMe, currentOpp);
   if (session.platform === "atlas") {
     return scoreDropped &&
       currentTotal >= 6 &&
       (hasNumericReset || (looksMultiGame && nextTotal > 0 && nextTotal <= 2)) &&
       isWorthKeeping(finishCurrentGame(current));
+  }
+  const explicitBo3LowScoreReset = looksMultiGame && leadingScore >= 4;
+  if (scoreDropped && hasNumericReset && (leadingScore >= 5 || explicitBo3LowScoreReset)) {
+    return isWorthKeeping(normalizeAmbiguousInactiveGame(finishCurrentGame(current), false));
   }
   if (scoreDropped && currentTotal >= 6 && nextTotal <= currentTotal - 2) {
     return hasNumericReset || nextTotal > 0 || looksMultiGame;
@@ -1603,7 +1635,7 @@ function unfinishedBo3Result(format: MatchDraft["format"], games: MatchGame[]): 
 function shouldHoldAtlasGameResult(session: SessionState, payload: Record<string, unknown>, games: MatchGame[]): boolean {
   const gameNumber = atlasConfirmGameNumber(payload);
   if (gameNumber > 0) {
-    return gameNumber < 3 && !isBo3Complete(games);
+    return gameNumber < 3;
   }
   return !isBo3Complete(games);
 }

@@ -8,7 +8,7 @@ import { homedir } from "node:os";
 import initSqlJs, { type Database, type SqlJsStatic } from "sql.js";
 import { deckNotebookWithCurrentVersion, deckSnapshotHash, emptyDeckNotebook, normalizeDeckNotebook, sanitizeDeckNotebookForDeck } from "../../shared/deckNotebook.js";
 import { normalizeLegendName } from "../../shared/legendNames.js";
-import type { CaptureEvent, DeckNotebook, ImportSummary, MatchDraft, OverlayDisplayOptions, ReplayRecord, SavedDeck, UserSettings } from "../../shared/types.js";
+import type { CaptureEvent, DeckNotebook, ImportSummary, MatchDraft, OverlayDisplayOptions, ReplayRecord, RiftLiteBackupFile, RiftLiteBackupOptions, SavedDeck, UserSettings } from "../../shared/types.js";
 
 interface PersistedState {
   settings?: Partial<UserSettings>;
@@ -61,7 +61,8 @@ const DEFAULT_SETTINGS: UserSettings = {
   scorepadDeviceSecret: "",
   scorepadLinkedAt: "",
   activeDeckId: "",
-  activeHubs: []
+  activeHubs: [],
+  activeTeams: []
 };
 
 function normalizeReplayVideoMode(_value: unknown): UserSettings["replayVideoMode"] {
@@ -88,7 +89,7 @@ function recoverSettingsFromCorruptJson(value: string): Partial<UserSettings> {
   const recovered: Record<string, unknown> = {};
   const keys = Object.keys(DEFAULT_SETTINGS) as Array<keyof UserSettings>;
   for (const key of keys) {
-    if (key === "overlayDisplay" || key === "activeHubs") {
+    if (key === "overlayDisplay" || key === "activeHubs" || key === "activeTeams") {
       continue;
     }
     const pattern = new RegExp(
@@ -109,6 +110,14 @@ function recoverSettingsFromCorruptJson(value: string): Partial<UserSettings> {
     const parsed = parseJsonToken<unknown>(activeHubsMatch[1]);
     if (Array.isArray(parsed)) {
       recovered.activeHubs = parsed;
+    }
+  }
+
+  const activeTeamsMatch = value.match(/"activeTeams"\s*:\s*(\[[^\]]*\])/);
+  if (activeTeamsMatch) {
+    const parsed = parseJsonToken<unknown>(activeTeamsMatch[1]);
+    if (Array.isArray(parsed)) {
+      recovered.activeTeams = parsed;
     }
   }
 
@@ -189,7 +198,8 @@ export class RiftLiteStore {
       deckTrackerPinnedCards: parsed.deckTrackerPinnedCards && typeof parsed.deckTrackerPinnedCards === "object" && !Array.isArray(parsed.deckTrackerPinnedCards)
         ? parsed.deckTrackerPinnedCards
         : {},
-      activeHubs: Array.isArray(parsed.activeHubs) ? parsed.activeHubs : []
+      activeHubs: Array.isArray(parsed.activeHubs) ? parsed.activeHubs : [],
+      activeTeams: Array.isArray(parsed.activeTeams) ? parsed.activeTeams : []
     };
   }
 
@@ -211,7 +221,8 @@ export class RiftLiteStore {
       ...patch,
       replayVideoMode,
       replayFramePreset,
-      activeHubs: patch.activeHubs ? [...patch.activeHubs] : current.activeHubs
+      activeHubs: patch.activeHubs ? [...patch.activeHubs] : current.activeHubs,
+      activeTeams: patch.activeTeams ? [...patch.activeTeams] : current.activeTeams
     };
     const db = await this.database();
     db.run("INSERT OR REPLACE INTO settings (key, value_json, updated_at) VALUES (?, ?, ?)", [
@@ -436,6 +447,19 @@ export class RiftLiteStore {
     return next;
   }
 
+  async getDeckNotebooks(): Promise<DeckNotebook[]> {
+    const db = await this.database();
+    const result = db.exec("SELECT deck_id, data_json FROM deck_notebooks ORDER BY updated_at DESC");
+    return (result[0]?.values ?? []).map((row) => {
+      const deckId = readString(row[0]);
+      try {
+        return normalizeDeckNotebook(deckId, JSON.parse(String(row[1])) as DeckNotebook);
+      } catch {
+        return emptyDeckNotebook(deckId);
+      }
+    }).filter((notebook) => notebook.deckId);
+  }
+
   async getReplays(): Promise<ReplayRecord[]> {
     const db = await this.database();
     const result = db.exec("SELECT data_json FROM replays ORDER BY captured_at DESC");
@@ -515,6 +539,105 @@ export class RiftLiteStore {
       delete replay.deletedAt;
       db.run("UPDATE replays SET data_json=? WHERE id=?", [JSON.stringify(replay), String(row[0])]);
     }
+    await this.persist();
+  }
+
+  async exportBackupData(options: Partial<RiftLiteBackupOptions> = {}): Promise<RiftLiteBackupFile> {
+    const includeRecycleBin = options.includeRecycleBin !== false;
+    return {
+      format: "riftlite.backup",
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      appVersion: app.getVersion(),
+      settings: await this.getSettings(),
+      matches: await this.getMatches(),
+      deletedMatches: includeRecycleBin ? await this.getDeletedMatches() : [],
+      decks: await this.getSavedDecks(),
+      notebooks: await this.getDeckNotebooks(),
+      replays: await this.getReplays(),
+      deletedReplays: includeRecycleBin ? await this.getDeletedReplays() : []
+    };
+  }
+
+  async restoreBackupData(backup: RiftLiteBackupFile): Promise<void> {
+    if (backup.format !== "riftlite.backup" || backup.version !== 1) {
+      throw new Error("That backup file is not a supported RiftLite backup.");
+    }
+    const db = await this.database();
+    db.run("DELETE FROM matches");
+    db.run("DELETE FROM replays");
+    db.run("DELETE FROM saved_decks");
+    db.run("DELETE FROM deck_notebooks");
+
+    const settings = this.normalizeSettings(backup.settings ?? {});
+    db.run("INSERT OR REPLACE INTO settings (key, value_json, updated_at) VALUES (?, ?, ?)", [
+      "settings",
+      JSON.stringify(settings),
+      Date.now()
+    ]);
+    this.settingsCache = settings;
+
+    const matches = [...(backup.matches ?? []), ...(backup.deletedMatches ?? [])];
+    for (const match of matches) {
+      const next = compactMatchForStorage(normalizeStoredMatch(match));
+      db.run(
+        `INSERT OR REPLACE INTO matches
+         (id, platform, status, result, captured_at, updated_at, data_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          next.id,
+          next.platform,
+          next.status,
+          next.result,
+          next.capturedAt,
+          next.updatedAt,
+          JSON.stringify(next)
+        ]
+      );
+    }
+
+    for (const deck of backup.decks ?? []) {
+      const next = normalizeStoredDeck(deck);
+      db.run(
+        `INSERT OR REPLACE INTO saved_decks
+         (id, source_url, source_key, title, legend, snapshot_json, last_imported_at, last_refresh_status, last_refresh_error)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          next.id,
+          next.sourceUrl,
+          next.sourceKey,
+          next.title,
+          next.legend,
+          next.snapshotJson,
+          next.lastImportedAt,
+          next.lastRefreshStatus,
+          next.lastRefreshError
+        ]
+      );
+    }
+
+    for (const notebook of backup.notebooks ?? []) {
+      if (notebook.deckId) {
+        this.writeDeckNotebook(db, notebook.deckId, notebook);
+      }
+    }
+
+    for (const deck of backup.decks ?? []) {
+      const normalizedDeck = normalizeStoredDeck(deck);
+      this.ensureDeckNotebookCurrentVersion(db, normalizedDeck);
+    }
+
+    const replays = [...(backup.replays ?? []), ...(backup.deletedReplays ?? [])];
+    for (const replay of replays) {
+      const next = compactReplayForStorage(replay);
+      db.run(
+        `INSERT OR REPLACE INTO replays
+         (id, match_id, platform, captured_at, data_json)
+         VALUES (?, ?, ?, ?, ?)`,
+        [next.id, next.matchId, next.platform, next.capturedAt, JSON.stringify(next)]
+      );
+    }
+
     await this.persist();
   }
 
@@ -668,7 +791,8 @@ export class RiftLiteStore {
         this.settingsCache = {
           ...migratedSettings,
           overlayDisplay: { ...DEFAULT_SETTINGS.overlayDisplay, ...migratedSettings.overlayDisplay },
-          activeHubs: Array.isArray(migratedSettings.activeHubs) ? migratedSettings.activeHubs : []
+          activeHubs: Array.isArray(migratedSettings.activeHubs) ? migratedSettings.activeHubs : [],
+          activeTeams: Array.isArray(migratedSettings.activeTeams) ? migratedSettings.activeTeams : []
         };
       }
       for (const match of parsed.matches ?? []) {
@@ -896,7 +1020,8 @@ function legacyRowToMatch(row: Record<string, unknown>, settings: UserSettings):
     rawEvidence: [],
     sync: {
       community: syncCommunity,
-      hubs: Object.fromEntries(settings.activeHubs.filter((hub) => hub.sync).map((hub) => [hub.id, "pending"]))
+      hubs: Object.fromEntries(settings.activeHubs.filter((hub) => hub.sync).map((hub) => [hub.id, "pending"])),
+      teams: Object.fromEntries((settings.activeTeams ?? []).filter((team) => team.sync).map((team) => [team.id, "pending"]))
     }
   };
 }
@@ -915,7 +1040,12 @@ function normalizeStoredMatch(match: MatchDraft): MatchDraft {
     deckSourceId: deckSourceKey,
     deckSourceKey,
     deckSourceUrl: match.deckSourceUrl ?? "",
-    deckSnapshotJson: match.deckSnapshotJson ?? ""
+    deckSnapshotJson: match.deckSnapshotJson ?? "",
+    sync: {
+      community: match.sync?.community ?? "disabled",
+      hubs: match.sync?.hubs ?? {},
+      teams: match.sync?.teams ?? {}
+    }
   };
 }
 
@@ -1070,6 +1200,21 @@ function savedDeckFromRow(row: unknown[]): SavedDeck {
     lastImportedAt: readString(row[6]),
     lastRefreshStatus: readString(row[7]),
     lastRefreshError: readString(row[8])
+  };
+}
+
+function normalizeStoredDeck(deck: SavedDeck): SavedDeck {
+  const importedAt = deck.lastImportedAt || new Date().toISOString();
+  return {
+    id: deck.id || randomUUID(),
+    sourceUrl: deck.sourceUrl ?? "",
+    sourceKey: deck.sourceKey ?? "",
+    title: deck.title?.trim() || "Untitled deck",
+    legend: normalizeLegendName(deck.legend),
+    snapshotJson: deck.snapshotJson ?? "",
+    lastImportedAt: importedAt,
+    lastRefreshStatus: deck.lastRefreshStatus || "ok",
+    lastRefreshError: deck.lastRefreshError ?? ""
   };
 }
 

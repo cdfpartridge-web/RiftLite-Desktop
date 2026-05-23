@@ -25,6 +25,7 @@ import {
   Images,
   Keyboard,
   Layers,
+  Link2,
   Maximize2,
   PanelLeftClose,
   PanelLeftOpen,
@@ -42,6 +43,7 @@ import {
   Shield,
   SlidersHorizontal,
   Smartphone,
+  Upload,
   Video,
   Volume2,
   Users,
@@ -73,6 +75,7 @@ import type {
   HubMember,
   HubMessage,
   ImportSummary,
+  LfgListing,
   MatchGame,
   MatchDraft,
   OverlayDisplayOptions,
@@ -100,6 +103,15 @@ import type {
   ReplayVideoSession,
   SavedDeck,
   ScreenshotResult,
+  SocialTeamApplication,
+  SocialTeamDetail,
+  SocialTeamMember,
+  SocialTeamMessage,
+  SocialTeamProfile,
+  SocialTeamRole,
+  TeamModerationAction,
+  TeamModerationRecord,
+  TeamSyncTarget,
   UpdateStatus,
   UserSettings
 } from "../shared/types";
@@ -122,7 +134,7 @@ import { upsertMatchPreservingOrder } from "../shared/matchList";
 import { publicCommunitySyncEnabled, syncModePatch } from "../shared/syncPolicy";
 import "./styles/app.css";
 
-type ActiveView = "play" | "scorepad" | "matches" | "stats" | "spotlight" | "community" | "hubs" | "decks" | "replays" | "stream" | "account" | "settings";
+type ActiveView = "play" | "scorepad" | "matches" | "stats" | "spotlight" | "community" | "social" | "hubs" | "decks" | "replays" | "stream" | "account" | "settings";
 
 const GAME_URLS: Record<GamePlatform, string> = {
   tcga: "https://tcg-arena.fr",
@@ -141,20 +153,20 @@ const DECK_TRACKER_FEATURE_ENABLED = false;
 
 const DEFAULT_UPDATE_STATUS: UpdateStatus = {
   state: "idle",
-  currentVersion: "0.7.52",
+  currentVersion: "0.7.60",
   message: "Updater ready"
 };
 
-const APP_VERSION_META = "0.7.52";
+const APP_VERSION_META = "0.7.60";
 const RELEASE_NOTES = {
   version: APP_VERSION_META,
-  title: "RiftLite 0.7.52",
-  intro: "This update focuses on clearer reviews, healthier replays, and easier tester support.",
+  title: "RiftLite 0.7.60",
+  intro: "This update starts the Social Hub groundwork while keeping capture, replays, and private hubs as they are.",
   items: [
-    "Match reviews now show capture confidence and clearer BO3 incomplete-match guidance.",
-    "Replay pages show a health summary for video, frames, flags, voice notes, drawings, and layers.",
-    "High replay settings now show a performance nudge so testers know what may affect slower PCs.",
-    "Diagnostics include a copyable support summary for faster bug reports."
+    "Find Match lets linked users post short-lived TCGA or RiftAtlas room codes.",
+    "Teams adds public team profiles with applications, members, and a low-read message board.",
+    "Private hubs stay separate and unchanged.",
+    "Social actions require a linked RiftLite account so usernames stay tied to a real profile."
   ]
 };
 const RIOT_LEGAL_NOTICE = `RiftLite was created under Riot Games' "Legal Jibber Jabber" policy using assets owned by Riot Games. Riot Games does not endorse or sponsor this project.`;
@@ -249,8 +261,8 @@ function formatBytes(value: number): string {
 
 type AnalyticsMatch = {
   id: string;
-  platform: GamePlatform | "community" | "hub";
-  source: MatchDraft["source"] | "community" | "hub";
+  platform: GamePlatform | "community" | "hub" | "team";
+  source: MatchDraft["source"] | "community" | "hub" | "team";
   result: string;
   myName: string;
   myChampion: string;
@@ -1479,6 +1491,7 @@ function App() {
   const [battlefields, setBattlefields] = useState<BattlefieldOption[]>([]);
   const [communityMatches, setCommunityMatches] = useState<CommunityMatch[]>([]);
   const [hubMatches, setHubMatches] = useState<Record<string, CommunityMatch[]>>({});
+  const [teamMatches, setTeamMatches] = useState<Record<string, CommunityMatch[]>>({});
   const [communityStatus, setCommunityStatus] = useState("Firebase community ready");
   const [importSummary, setImportSummary] = useState<ImportSummary | null>(null);
   const [reviewDraft, setReviewDraft] = useState<MatchDraft | null>(null);
@@ -2022,9 +2035,9 @@ function App() {
   async function saveSettings(patch: Partial<UserSettings>) {
     const next = await window.riftlite.saveSettings(patch);
     setSettings(next);
-    if (patch.activeHubs || typeof patch.communitySyncEnabled === "boolean" || patch.syncMode) {
+    if (patch.activeHubs || patch.activeTeams || typeof patch.communitySyncEnabled === "boolean" || patch.syncMode) {
       communityLoadedRef.current = false;
-      if (activeViewRef.current === "community" || activeViewRef.current === "hubs") {
+      if (activeViewRef.current === "community" || activeViewRef.current === "hubs" || activeViewRef.current === "social") {
         void refreshCommunityData(next);
       }
     }
@@ -2185,10 +2198,46 @@ function App() {
     return result;
   }
 
+  async function syncTeamsNow(): Promise<PrivateHubSyncResult> {
+    const result = await window.riftlite.syncTeams();
+    const [nextMatches, nextSettings] = await Promise.all([
+      window.riftlite.getMatches(),
+      window.riftlite.getSettings()
+    ]);
+    setMatches(nextMatches);
+    setSettings(nextSettings);
+    await refreshCommunityData(nextSettings, true);
+    return result;
+  }
+
+  async function syncMatchesToTeams(matchIds: string[], teamIds: string[]): Promise<PrivateHubSyncResult> {
+    const result = await window.riftlite.syncMatchesToTeams(matchIds, teamIds);
+    const [nextMatches, nextSettings] = await Promise.all([
+      window.riftlite.getMatches(),
+      window.riftlite.getSettings()
+    ]);
+    setMatches(nextMatches);
+    setSettings(nextSettings);
+    await refreshCommunityData(nextSettings, true);
+    return result;
+  }
+
   async function deleteHubMatch(hubId: string, matchId: string): Promise<void> {
     await window.riftlite.deleteHubMatch(hubId, matchId);
     setMatches(await window.riftlite.getMatches());
     await refreshCommunityData(settings, true);
+  }
+
+  async function deleteTeamMatch(teamId: string, matchId: string): Promise<void> {
+    await window.riftlite.deleteTeamMatch(teamId, matchId);
+    setMatches(await window.riftlite.getMatches());
+    await refreshCommunityData(settings, true);
+  }
+
+  async function refreshTeamMatches(teamId: string, forceRefresh = false): Promise<CommunityMatch[]> {
+    const rows = await window.riftlite.getTeamMatches(teamId, forceRefresh).catch(() => [] as CommunityMatch[]);
+    setTeamMatches((current) => ({ ...current, [teamId]: rows }));
+    return rows;
   }
 
   async function refreshDeletedItems() {
@@ -2233,15 +2282,20 @@ function App() {
     }
     communityLoadedRef.current = true;
     setCommunityStatus("Refreshing Firebase data...");
-    const [nextCommunityMatches, hubEntries] = await Promise.all([
+    const [nextCommunityMatches, hubEntries, teamEntries] = await Promise.all([
       window.riftlite.getCommunityMatches(forceRefresh).catch(() => [] as CommunityMatch[]),
       Promise.all(sourceSettings.activeHubs.map(async (hub) => [
         hub.id,
         await window.riftlite.getHubMatches(hub.id, forceRefresh).catch(() => [] as CommunityMatch[])
+      ] as const)),
+      Promise.all((sourceSettings.activeTeams ?? []).map(async (team) => [
+        team.id,
+        await window.riftlite.getTeamMatches(team.id, forceRefresh).catch(() => [] as CommunityMatch[])
       ] as const))
     ]);
     setCommunityMatches(nextCommunityMatches);
     setHubMatches(Object.fromEntries(hubEntries));
+    setTeamMatches(Object.fromEntries(teamEntries));
     setCommunityStatus(`Loaded ${nextCommunityMatches.length} community-submitted matches`);
   }
 
@@ -3232,6 +3286,7 @@ function App() {
     stats: "Stats",
     spotlight: "Spotlight",
     community: "Community",
+    social: "Social Hub",
     hubs: "Private hubs",
     decks: "Decks",
     replays: "Replays",
@@ -3247,6 +3302,7 @@ function App() {
     stats: "Personal performance from local RiftLite history.",
     spotlight: "Featured Riftbound creators, teams, and community projects.",
     community: "Community data remains compatible with the existing RiftLite website.",
+    social: "Find matches and build public team profiles with linked RiftLite accounts.",
     hubs: "Private hub sync uses hidden hub names and passwords, just like the current app.",
     decks: "Import, refresh, and attach decks to captured matches.",
     replays: "Review Atlas timelines reconstructed from retained capture evidence.",
@@ -3298,6 +3354,7 @@ function App() {
           <NavButton active={activeView === "stats"} title="Stats" onClick={() => setActiveView("stats")} icon={<BarChart3 size={18} />} />
           <NavButton active={activeView === "spotlight"} title="Spotlight" onClick={() => setActiveView("spotlight")} icon={<Compass size={18} />} />
           <NavButton active={activeView === "community"} title="Community" onClick={() => setActiveView("community")} icon={<Globe2 size={18} />} />
+          <NavButton active={activeView === "social"} title="Social Hub" onClick={() => setActiveView("social")} icon={<Radio size={18} />} />
           <NavButton active={activeView === "hubs"} title="Hubs" onClick={() => setActiveView("hubs")} icon={<Users size={18} />} />
           <NavButton active={activeView === "decks"} title="Decks" onClick={() => setActiveView("decks")} icon={<Layers size={18} />} />
           <NavButton active={activeView === "replays"} title="Replays" onClick={() => setActiveView("replays")} icon={<Film size={18} />} />
@@ -3427,6 +3484,7 @@ function App() {
             battlefields={battlefields}
             communityMatches={communityMatches}
             hubMatches={hubMatches}
+            teamMatches={teamMatches}
             communityStatus={communityStatus}
             importSummary={importSummary}
             settings={settings}
@@ -3444,6 +3502,10 @@ function App() {
             onSyncPrivateHubs={syncPrivateHubsNow}
             onSyncMatchesToHubs={syncMatchesToHubs}
             onDeleteHubMatch={deleteHubMatch}
+            onSyncTeams={syncTeamsNow}
+            onSyncMatchesToTeams={syncMatchesToTeams}
+            onDeleteTeamMatch={deleteTeamMatch}
+            onRefreshTeamMatches={refreshTeamMatches}
             onRefreshCommunity={() => refreshCommunityData(settings, true)}
             onImportLegacy={importLegacyData}
             onTakeScreenshot={takeScreenshot}
@@ -3972,6 +4034,7 @@ function DashboardView({
   battlefields,
   communityMatches,
   hubMatches,
+  teamMatches,
   communityStatus,
   importSummary,
   settings,
@@ -3989,6 +4052,10 @@ function DashboardView({
   onSyncPrivateHubs,
   onSyncMatchesToHubs,
   onDeleteHubMatch,
+  onSyncTeams,
+  onSyncMatchesToTeams,
+  onDeleteTeamMatch,
+  onRefreshTeamMatches,
   onRefreshCommunity,
   onImportLegacy,
   onTakeScreenshot,
@@ -4023,6 +4090,7 @@ function DashboardView({
   battlefields: BattlefieldOption[];
   communityMatches: CommunityMatch[];
   hubMatches: Record<string, CommunityMatch[]>;
+  teamMatches: Record<string, CommunityMatch[]>;
   communityStatus: string;
   importSummary: ImportSummary | null;
   settings: UserSettings;
@@ -4040,6 +4108,10 @@ function DashboardView({
   onSyncPrivateHubs: () => Promise<PrivateHubSyncResult>;
   onSyncMatchesToHubs: (matchIds: string[], hubIds: string[]) => Promise<PrivateHubSyncResult>;
   onDeleteHubMatch: (hubId: string, matchId: string) => Promise<void>;
+  onSyncTeams: () => Promise<PrivateHubSyncResult>;
+  onSyncMatchesToTeams: (matchIds: string[], teamIds: string[]) => Promise<PrivateHubSyncResult>;
+  onDeleteTeamMatch: (teamId: string, matchId: string) => Promise<void>;
+  onRefreshTeamMatches: (teamId: string, forceRefresh?: boolean) => Promise<CommunityMatch[]>;
   onRefreshCommunity: () => Promise<void>;
   onImportLegacy: () => Promise<void>;
   onTakeScreenshot: () => Promise<void>;
@@ -4134,7 +4206,1490 @@ function DashboardView({
   if (view === "hubs") {
     return <HubsView settings={settings} matches={matches} hubMatches={hubMatches} onSave={onSaveSettings} onHubResult={onSaveHubResult} onSyncPrivateHubs={onSyncPrivateHubs} onSyncMatchesToHubs={onSyncMatchesToHubs} onDeleteHubMatch={onDeleteHubMatch} onRefresh={onRefreshCommunity} />;
   }
+  if (view === "social") {
+    return (
+      <SocialHubView
+        settings={settings}
+        matches={matches}
+        teamMatches={teamMatches}
+        onSaveSettings={onSaveSettings}
+        onSyncTeams={onSyncTeams}
+        onSyncMatchesToTeams={onSyncMatchesToTeams}
+        onDeleteTeamMatch={onDeleteTeamMatch}
+        onRefreshTeamMatches={onRefreshTeamMatches}
+      />
+    );
+  }
   return <CommunityView matches={matches} communityMatches={communityMatches} hubMatches={hubMatches} settings={settings} status={communityStatus} onRefresh={onRefreshCommunity} />;
+}
+
+function SocialHubView({
+  settings,
+  matches,
+  teamMatches,
+  onSaveSettings,
+  onSyncTeams,
+  onSyncMatchesToTeams,
+  onDeleteTeamMatch,
+  onRefreshTeamMatches
+}: {
+  settings: UserSettings;
+  matches: MatchDraft[];
+  teamMatches: Record<string, CommunityMatch[]>;
+  onSaveSettings: (patch: Partial<UserSettings>) => Promise<void>;
+  onSyncTeams: () => Promise<PrivateHubSyncResult>;
+  onSyncMatchesToTeams: (matchIds: string[], teamIds: string[]) => Promise<PrivateHubSyncResult>;
+  onDeleteTeamMatch: (teamId: string, matchId: string) => Promise<void>;
+  onRefreshTeamMatches: (teamId: string, forceRefresh?: boolean) => Promise<CommunityMatch[]>;
+}) {
+  const [tab, setTab] = useState<"lfg" | "teams" | "applications" | "moderation">("lfg");
+  const signedIn = Boolean(settings.accountUid || settings.firebaseRefreshToken);
+  const canOpenModeration = ["bmu", "bmucasts"].includes(settings.accountHandle.trim().toLowerCase());
+  if (!signedIn || !settings.accountHandle) {
+    return (
+      <section className="panel stack">
+        <div className="account-hero">
+          <Shield size={28} />
+          <div>
+            <h2>Link your RiftLite account</h2>
+            <p>Social Hub needs a linked profile so room codes, applications, and team posts are tied to a real RiftLite handle. Capture, private hubs, Scorepad, and local play still work without this.</p>
+          </div>
+        </div>
+        <p className="muted">Open the Account tab, link your device, claim a handle, then come back here.</p>
+      </section>
+    );
+  }
+  return (
+    <section className="social-hub stack">
+      <div className="social-tabs">
+        <button type="button" data-active={tab === "lfg"} onClick={() => setTab("lfg")}><Radio size={16} /> Find Match</button>
+        <button type="button" data-active={tab === "teams"} onClick={() => setTab("teams")}><Users size={16} /> Teams</button>
+        <button type="button" data-active={tab === "applications"} onClick={() => setTab("applications")}><Bell size={16} /> Applications</button>
+        {canOpenModeration ? (
+          <button type="button" data-active={tab === "moderation"} onClick={() => setTab("moderation")}><Shield size={16} /> Moderation</button>
+        ) : null}
+      </div>
+      {tab === "lfg" ? <FindMatchPanel settings={settings} /> : null}
+      {tab === "teams" ? (
+        <TeamsPanel
+          settings={settings}
+          matches={matches}
+          teamMatches={teamMatches}
+          onSaveSettings={onSaveSettings}
+          onSyncTeams={onSyncTeams}
+          onSyncMatchesToTeams={onSyncMatchesToTeams}
+          onDeleteTeamMatch={onDeleteTeamMatch}
+          onRefreshTeamMatches={onRefreshTeamMatches}
+        />
+      ) : null}
+      {tab === "applications" ? <ApplicationsPanel /> : null}
+      {tab === "moderation" ? <TeamModerationPanel /> : null}
+    </section>
+  );
+}
+
+function discordInviteDeepLink(inviteUrl: string): string {
+  try {
+    const parsed = new URL(inviteUrl);
+    const host = parsed.hostname.toLowerCase();
+    const pathParts = parsed.pathname.split("/").filter(Boolean);
+    let code = "";
+    if (host === "discord.gg") {
+      code = pathParts[0] ?? "";
+    } else if (host.endsWith("discord.com") && pathParts[0] === "invite") {
+      code = pathParts[1] ?? "";
+    }
+    return code ? `discord://-/invite/${encodeURIComponent(code)}` : "";
+  } catch {
+    return "";
+  }
+}
+
+async function openDiscordInvite(inviteUrl: string) {
+  const deepLink = discordInviteDeepLink(inviteUrl);
+  if (deepLink) {
+    try {
+      await window.riftlite.openExternalResource(deepLink);
+      return;
+    } catch {
+      // Fall back to the normal web invite below.
+    }
+  }
+  await window.riftlite.openExternalResource(inviteUrl);
+}
+
+async function tryOpenDiscordInvite(inviteUrl: string) {
+  if (!inviteUrl) return false;
+  try {
+    await openDiscordInvite(inviteUrl);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function tryJoinDiscordVoice(listing: LfgListing) {
+  try {
+    return await window.riftlite.joinDiscordVoice(listing);
+  } catch (error) {
+    const fallbackUrl = listing.discordAppUrl || listing.discordChannelUrl || listing.discordInviteUrl;
+    if (fallbackUrl) {
+      const opened = await tryOpenDiscordInvite(fallbackUrl);
+      return {
+        ok: false,
+        attempted: true,
+        usedFallback: opened,
+        message: opened ? "Opening Discord channel instead." : (error instanceof Error ? error.message : "Could not open Discord voice.")
+      };
+    }
+    return {
+      ok: false,
+      attempted: true,
+      usedFallback: false,
+      message: error instanceof Error ? error.message : "Could not open Discord voice."
+    };
+  }
+}
+
+function FindMatchPanel({ settings }: { settings: UserSettings }) {
+  const [listings, setListings] = useState<LfgListing[]>([]);
+  const [acceptedByMe, setAcceptedByMe] = useState<LfgListing[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [postBusy, setPostBusy] = useState(false);
+  const [status, setStatus] = useState("");
+  const [lfgTraceOpen, setLfgTraceOpen] = useState(false);
+  const [lfgTrace, setLfgTrace] = useState<string[]>([]);
+  const [draft, setDraft] = useState({
+    platform: "atlas" as "tcga" | "atlas",
+    roomCode: "",
+    format: "Bo3" as "Bo1" | "Bo3",
+    myLegend: CANONICAL_LEGEND_NAMES[0] ?? "Vex",
+    allowAny: true,
+    lookingForLegends: [] as string[],
+    withVoice: false,
+    note: ""
+  });
+  const ownUid = settings.accountUid || settings.firebaseUid;
+  const roomCode = draft.roomCode.trim();
+
+  function addLfgTrace(message: string, detail?: unknown) {
+    const stamp = new Date().toLocaleTimeString();
+    const suffix = detail === undefined
+      ? ""
+      : ` - ${typeof detail === "string" ? detail : JSON.stringify(detail)}`;
+    setLfgTrace((current) => [`${stamp} ${message}${suffix}`, ...current].slice(0, 18));
+  }
+
+  async function refresh(showStatus = true, setBusyState = true) {
+    if (setBusyState) setBusy(true);
+    try {
+      const rows = await window.riftlite.getLfgListings(true);
+      setListings(rows);
+      addLfgTrace("LFG refresh complete", `${rows.length} listing${rows.length === 1 ? "" : "s"}`);
+      if (showStatus) setStatus("Find Match refreshed.");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Could not refresh Find Match.";
+      addLfgTrace("LFG refresh failed", message);
+      setStatus(message);
+    } finally {
+      if (setBusyState) setBusy(false);
+    }
+  }
+
+  useEffect(() => {
+    void refresh(false);
+    const interval = window.setInterval(() => {
+      void refresh(false, false);
+    }, 20_000);
+    return () => window.clearInterval(interval);
+  }, [ownUid]);
+
+  async function postListing() {
+    addLfgTrace("Post button handler fired", {
+      platform: draft.platform,
+      format: draft.format,
+      roomCodePresent: Boolean(roomCode),
+      withVoice: draft.withVoice,
+      accountUidPresent: Boolean(ownUid),
+      postBusy
+    });
+    if (postBusy) {
+      addLfgTrace("Post blocked", "already posting");
+      return;
+    }
+    if (!roomCode) {
+      setStatus("Add a room code before posting.");
+      addLfgTrace("Post blocked", "missing room code");
+      return;
+    }
+    setPostBusy(true);
+    setStatus("Posting listing...");
+    try {
+      const payload = {
+        platform: draft.platform,
+        roomCode,
+        format: draft.format,
+        myLegend: draft.myLegend,
+        lookingForLegends: draft.allowAny ? [] : draft.lookingForLegends,
+        allowAny: draft.allowAny,
+        note: draft.note
+      };
+      addLfgTrace("Calling lfg:create", {
+        platform: payload.platform,
+        format: payload.format,
+        legend: payload.myLegend,
+        roomCodeLength: payload.roomCode.length,
+        lookingFor: payload.allowAny ? "Any" : payload.lookingForLegends.join(", ")
+      });
+      const listing = await window.riftlite.createLfgListing(payload);
+      addLfgTrace("lfg:create returned", listing.id || "no id returned");
+      let nextStatus = "Listing posted for 15 minutes.";
+      setStatus(nextStatus);
+      setDraft((current) => ({ ...current, roomCode: "", note: "" }));
+      await refresh(false, false);
+      if (draft.withVoice) {
+        setStatus("Listing posted. Creating Discord voice room...");
+        addLfgTrace("Creating Discord voice", listing.id);
+        try {
+          const voiceListing = await window.riftlite.createLfgVoice(listing.id);
+          addLfgTrace("Discord voice returned", voiceListing.discordVoiceChannelId || voiceListing.discordInviteUrl || "no voice fields");
+          const joinResult = await tryJoinDiscordVoice(voiceListing);
+          addLfgTrace("Discord join attempted", joinResult.message || (joinResult.ok ? "joined" : "not joined"));
+          nextStatus = joinResult.ok
+            ? "Listing posted. Joined Discord voice room."
+            : `Listing posted with Discord voice. ${joinResult.message || "Use Join voice if Discord did not open."}`;
+        } catch (error) {
+          nextStatus = `Listing posted, but Discord voice was not created: ${error instanceof Error ? error.message : "Discord voice could not be created."}`;
+          addLfgTrace("Discord voice failed", error instanceof Error ? error.message : "Discord voice could not be created.");
+        }
+        await refresh(false, false);
+      }
+      setStatus(nextStatus);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Could not post listing.";
+      addLfgTrace("Post failed", message);
+      setStatus(message);
+    } finally {
+      setPostBusy(false);
+      addLfgTrace("Post handler finished");
+    }
+  }
+
+  async function copyCode(code: string) {
+    await window.riftlite.writeClipboardText(code);
+    setStatus(`Copied room code ${code}.`);
+  }
+
+  async function closeListing(id: string) {
+    const listing = listings.find((item) => item.id === id);
+    const warning = listing?.discordVoiceChannelId || listing?.discordInviteUrl
+      ? "Are you sure? This will close the LFG post and the Discord voice call."
+      : "Are you sure? This will close the LFG post.";
+    if (!window.confirm(warning)) return;
+    setBusy(true);
+    try {
+      await window.riftlite.closeLfgListing(id);
+      setStatus(listing?.status === "matched" ? "Accepted listing dismissed." : "Listing closed.");
+      await refresh(false);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not close listing.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function acceptListing(listing: LfgListing) {
+    setBusy(true);
+    setStatus("Accepting listing...");
+    try {
+      const accepted = await window.riftlite.acceptLfgListing(listing.id);
+      await window.riftlite.writeClipboardText(listing.roomCode);
+      setAcceptedByMe((current) => [accepted, ...current.filter((item) => item.id !== accepted.id)].slice(0, 4));
+      if (accepted.discordVoiceChannelId || accepted.discordInviteUrl) {
+        const joinResult = await tryJoinDiscordVoice(accepted);
+        setStatus(joinResult.ok
+          ? `Accepted ${listing.displayName}'s room and copied ${listing.roomCode} to clipboard. Voice room opened.`
+          : `Accepted ${listing.displayName}'s room and copied ${listing.roomCode} to clipboard. ${joinResult.message}`);
+      } else {
+        setStatus(`Accepted ${listing.displayName}'s room. Room code ${listing.roomCode} copied to clipboard.`);
+      }
+      await refresh(false);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not accept listing.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function createVoice(listing: LfgListing) {
+    setBusy(true);
+    try {
+      const voiceListing = await window.riftlite.createLfgVoice(listing.id);
+      if (voiceListing.discordVoiceChannelId || voiceListing.discordInviteUrl) {
+        const joinResult = await tryJoinDiscordVoice(voiceListing);
+        setStatus(joinResult.ok ? "Discord voice room ready. Joined voice." : `Discord voice room ready. ${joinResult.message}`);
+      } else {
+        setStatus("Discord voice room ready.");
+      }
+      await refresh(false);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not create Discord voice.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function joinVoice(listing: LfgListing) {
+    const result = await tryJoinDiscordVoice(listing);
+    setStatus(result.ok ? "Joined Discord voice room." : result.message || "Could not open Discord automatically.");
+  }
+
+  const nowMs = Date.now();
+  const acceptedNotifications = listings.filter((listing) => listing.status === "matched" && listing.uid === ownUid && listing.expiresAt > nowMs);
+  const acceptedByMeSeen = new Set<string>();
+  const acceptedByMeNotifications = [
+    ...acceptedByMe,
+    ...listings.filter((listing) => listing.status === "matched" && listing.acceptedByUid === ownUid)
+  ].filter((listing) => {
+    if (listing.expiresAt <= nowMs || acceptedByMeSeen.has(listing.id)) return false;
+    acceptedByMeSeen.add(listing.id);
+    return true;
+  });
+  const activeListings = listings.filter((listing) => listing.status === "active" && listing.expiresAt > nowMs);
+  const postDisabledReason = postBusy ? "Posting now" : !roomCode ? "Room code required" : "";
+  return (
+    <div className="find-match-grid">
+      <section className="panel-card stack find-match-post-panel">
+        <h2>Post a room</h2>
+        <p className="muted">Room codes are shown only to linked RiftLite users and expire after 15 minutes.</p>
+        <div className="find-match-form-grid">
+          <label>Platform<select value={draft.platform} onChange={(event) => setDraft({ ...draft, platform: event.target.value as "tcga" | "atlas" })}><option value="atlas">RiftAtlas</option><option value="tcga">TCGA</option></select></label>
+          <label>Bo1/Bo3<select value={draft.format} onChange={(event) => setDraft({ ...draft, format: event.target.value as "Bo1" | "Bo3" })}><option>Bo1</option><option>Bo3</option></select></label>
+          <label>My legend<select value={draft.myLegend} onChange={(event) => setDraft({ ...draft, myLegend: event.target.value })}>{CANONICAL_LEGEND_NAMES.map((legend) => <option key={legend}>{legend}</option>)}</select></label>
+          <label>Looking for
+            <span className="checkbox-line"><input checked={draft.allowAny} type="checkbox" onChange={(event) => setDraft({ ...draft, allowAny: event.target.checked })} /> Any legend</span>
+            {!draft.allowAny ? (
+              <>
+                <select multiple value={draft.lookingForLegends} onChange={(event) => setDraft({ ...draft, lookingForLegends: Array.from(event.currentTarget.selectedOptions).map((option) => option.value) })}>
+                  {CANONICAL_LEGEND_NAMES.map((legend) => <option key={legend}>{legend}</option>)}
+                </select>
+                <small>Hold Ctrl to pick several legends.</small>
+              </>
+            ) : null}
+          </label>
+          <label>Room code<input value={draft.roomCode} onChange={(event) => setDraft({ ...draft, roomCode: event.target.value })} placeholder="Paste room code..." /></label>
+          <label>Note<input value={draft.note} onChange={(event) => setDraft({ ...draft, note: event.target.value })} placeholder="Testing a matchup, region, etc." /></label>
+        </div>
+        <div className="find-match-submit-row">
+          <label className="checkbox-line lfg-voice-toggle">
+            <input checked={draft.withVoice} type="checkbox" onChange={(event) => setDraft({ ...draft, withVoice: event.target.checked })} />
+            <span><MessageCircle size={15} /> Create Discord voice room with this listing</span>
+          </label>
+          <button
+            type="button"
+            className="primary find-match-post-button"
+            disabled={postBusy || !roomCode}
+            onClick={(event) => {
+              event.preventDefault();
+              addLfgTrace("Post button clicked");
+              void postListing();
+            }}
+          >
+            <Plus size={16} /> {postBusy ? "Posting..." : "Post listing"}
+          </button>
+        </div>
+        {postDisabledReason ? <small className="muted">Post disabled: {postDisabledReason}</small> : null}
+        {status ? <p className="muted">{status}</p> : null}
+        <div className="lfg-diagnostics">
+          <button type="button" className="secondary" onClick={() => setLfgTraceOpen((open) => !open)}>
+            {lfgTraceOpen ? "Hide" : "Show"} LFG diagnostics
+          </button>
+          <small>
+            Account {ownUid ? "ready" : "not linked"} - refresh {busy ? "busy" : "idle"} - post {postBusy ? "busy" : "idle"} - room {roomCode ? "entered" : "empty"}
+          </small>
+          {lfgTraceOpen ? (
+            <pre>{lfgTrace.length ? lfgTrace.join("\n") : "No LFG actions recorded yet."}</pre>
+          ) : null}
+        </div>
+      </section>
+      <section className="panel-card stack find-match-list-panel">
+        <div className="section-row">
+          <div>
+            <h2>Active listings</h2>
+            <p className="muted">{activeListings.length} rooms visible</p>
+          </div>
+          <button type="button" className="secondary" onClick={() => void refresh()} disabled={busy}><RefreshCw size={15} /> Refresh</button>
+        </div>
+        <div className="social-list">
+          {acceptedByMeNotifications.map((listing) => (
+            <article className="social-listing lfg-accepted-listing" key={`accepted-by-me-${listing.id}`}>
+              <div>
+                <strong>Room accepted</strong>
+                <span>You accepted {listing.displayName}'s {listing.myLegend} {listing.format} room.</span>
+                <small>Room code {listing.roomCode} copied to clipboard{listing.acceptedAt ? ` - accepted ${new Date(listing.acceptedAt).toLocaleTimeString()}` : ""}</small>
+              </div>
+              <div className="inline-actions">
+                {listing.discordInviteUrl ? (
+                  <button type="button" className="secondary" onClick={() => void joinVoice(listing)}><MessageCircle size={15} /> Join voice</button>
+                ) : null}
+                <button type="button" className="primary" onClick={() => void copyCode(listing.roomCode)}>Copy {listing.roomCode}</button>
+                <button type="button" className="secondary" onClick={() => setAcceptedByMe((current) => current.filter((item) => item.id !== listing.id))}>Dismiss</button>
+              </div>
+            </article>
+          ))}
+          {acceptedNotifications.map((listing) => (
+            <article className="social-listing lfg-accepted-listing" key={`accepted-${listing.id}`}>
+              <div>
+                <strong>Listing accepted</strong>
+                <span>{listing.acceptedByDisplayName || listing.acceptedByHandle || "A RiftLite player"} accepted your {listing.myLegend} {listing.format} room.</span>
+                <small>
+                  Room code {listing.roomCode}
+                  {listing.acceptedAt ? ` - accepted ${new Date(listing.acceptedAt).toLocaleTimeString()}` : ""}
+                </small>
+              </div>
+              <div className="inline-actions">
+                {listing.discordInviteUrl ? (
+                  <button type="button" className="secondary" onClick={() => void joinVoice(listing)}><MessageCircle size={15} /> Join voice</button>
+                ) : null}
+                <button type="button" className="secondary" onClick={() => void copyCode(listing.roomCode)}>Copy {listing.roomCode}</button>
+                <button type="button" className="secondary" onClick={() => void closeListing(listing.id)}>Dismiss</button>
+              </div>
+            </article>
+          ))}
+          {activeListings.map((listing) => (
+            <article className="social-listing" key={listing.id}>
+              <div>
+                <strong>{listing.myLegend} looking for {listing.allowAny ? "Any" : listing.lookingForLegends.join(", ")}</strong>
+                <span>{listing.displayName} - {listing.platform === "atlas" ? "RiftAtlas" : "TCGA"} - {listing.format}</span>
+                {listing.note ? <p>{listing.note}</p> : null}
+                <small>
+                  Expires {new Date(listing.expiresAt).toLocaleTimeString()}
+                  {listing.discordInviteUrl && listing.discordVoiceExpiresAt ? ` - Discord voice until ${new Date(listing.discordVoiceExpiresAt).toLocaleTimeString()}` : ""}
+                </small>
+              </div>
+              <div className="inline-actions">
+                {listing.uid === ownUid ? (
+                  <button type="button" className="primary" onClick={() => void copyCode(listing.roomCode)}>Copy {listing.roomCode}</button>
+                ) : (
+                  <button type="button" className="primary" onClick={() => void acceptListing(listing)}>
+                    {listing.discordInviteUrl ? "Accept + voice" : "Accept"}
+                  </button>
+                )}
+                {listing.uid === ownUid && listing.discordInviteUrl ? (
+                  <button type="button" className="secondary" onClick={() => void joinVoice(listing)}><MessageCircle size={15} /> Join voice</button>
+                ) : null}
+                {listing.uid === ownUid && !listing.discordInviteUrl ? (
+                  <button type="button" className="secondary" onClick={() => void createVoice(listing)}><MessageCircle size={15} /> Create voice</button>
+                ) : null}
+                {listing.uid === ownUid ? <button type="button" className="secondary" onClick={() => void closeListing(listing.id)}>Close</button> : null}
+              </div>
+            </article>
+          ))}
+          {!activeListings.length && !acceptedNotifications.length && !acceptedByMeNotifications.length ? <p className="muted">No active rooms right now.</p> : null}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+const TEAM_IMAGE_MAX_BYTES = 180_000;
+
+function loadImageElement(src: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("Could not read that image."));
+    image.src = src;
+  });
+}
+
+async function compressTeamImage(file: File, kind: "logo" | "banner"): Promise<string> {
+  if (!file.type.startsWith("image/")) {
+    throw new Error("Choose a PNG, JPG, or WebP image.");
+  }
+  const sourceUrl = URL.createObjectURL(file);
+  try {
+    const image = await loadImageElement(sourceUrl);
+    const maxWidth = kind === "logo" ? 384 : 1280;
+    const maxHeight = kind === "logo" ? 384 : 420;
+    const scale = Math.min(1, maxWidth / Math.max(image.naturalWidth, 1), maxHeight / Math.max(image.naturalHeight, 1));
+    const width = Math.max(1, Math.round(image.naturalWidth * scale));
+    const height = Math.max(1, Math.round(image.naturalHeight * scale));
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("Could not prepare that image.");
+    context.drawImage(image, 0, 0, width, height);
+    const qualities = kind === "logo" ? [0.82, 0.72, 0.62, 0.52] : [0.74, 0.64, 0.54, 0.44];
+    for (const quality of qualities) {
+      const dataUrl = canvas.toDataURL("image/webp", quality);
+      if (dataUrl.length <= TEAM_IMAGE_MAX_BYTES) return dataUrl;
+    }
+    throw new Error("That image is still too large after compression. Try a smaller crop.");
+  } finally {
+    URL.revokeObjectURL(sourceUrl);
+  }
+}
+
+type TeamEditDraft = {
+  name: string;
+  slug: string;
+  description: string;
+  region: string;
+  locationMode: string;
+  visibility: "public" | "private";
+  purposes: string;
+  recruitmentStatus: string;
+  logoUrl: string;
+  bannerUrl: string;
+  discord: string;
+  website: string;
+  x: string;
+  youtube: string;
+  twitch: string;
+  instagram: string;
+  metafy: string;
+};
+
+function teamToEditDraft(team?: SocialTeamProfile | null): TeamEditDraft {
+  return {
+    name: team?.name ?? "",
+    slug: team?.slug ?? "",
+    description: team?.description ?? "",
+    region: team?.region ?? "",
+    locationMode: team?.locationMode || "Online",
+    visibility: team?.visibility ?? "public",
+    purposes: team?.purposes?.join(", ") || "Testing, Tournament",
+    recruitmentStatus: team?.recruitmentStatus || "open",
+    logoUrl: team?.logoUrl ?? "",
+    bannerUrl: team?.bannerUrl ?? "",
+    discord: team?.discord ?? "",
+    website: team?.website ?? "",
+    x: team?.socials?.x ?? "",
+    youtube: team?.socials?.youtube ?? "",
+    twitch: team?.socials?.twitch ?? "",
+    instagram: team?.socials?.instagram ?? "",
+    metafy: team?.socials?.metafy ?? ""
+  };
+}
+
+function teamDraftPayload(draft: TeamEditDraft) {
+  return {
+    name: draft.name,
+    slug: draft.slug,
+    description: draft.description,
+    region: draft.region,
+    locationMode: draft.locationMode,
+    visibility: draft.visibility,
+    purposes: draft.purposes.split(",").map((item) => item.trim()).filter(Boolean),
+    recruitmentStatus: draft.recruitmentStatus,
+    logoUrl: draft.logoUrl,
+    bannerUrl: draft.bannerUrl,
+    discord: draft.discord,
+    website: draft.website,
+    socials: {
+      x: draft.x,
+      youtube: draft.youtube,
+      twitch: draft.twitch,
+      instagram: draft.instagram,
+      metafy: draft.metafy
+    }
+  };
+}
+
+function TeamsPanel({
+  settings,
+  matches,
+  teamMatches,
+  onSaveSettings,
+  onSyncTeams,
+  onSyncMatchesToTeams,
+  onDeleteTeamMatch,
+  onRefreshTeamMatches
+}: {
+  settings: UserSettings;
+  matches: MatchDraft[];
+  teamMatches: Record<string, CommunityMatch[]>;
+  onSaveSettings: (patch: Partial<UserSettings>) => Promise<void>;
+  onSyncTeams: () => Promise<PrivateHubSyncResult>;
+  onSyncMatchesToTeams: (matchIds: string[], teamIds: string[]) => Promise<PrivateHubSyncResult>;
+  onDeleteTeamMatch: (teamId: string, matchId: string) => Promise<void>;
+  onRefreshTeamMatches: (teamId: string, forceRefresh?: boolean) => Promise<CommunityMatch[]>;
+}) {
+  const [teams, setTeams] = useState<SocialTeamProfile[]>([]);
+  const [mine, setMine] = useState<SocialTeamProfile[]>([]);
+  const [selectedId, setSelectedId] = useState("");
+  const [detail, setDetail] = useState<SocialTeamDetail | null>(null);
+  const [teamTab, setTeamTab] = useState<"overview" | "stats" | "feed" | "members" | "applications" | "tools">("overview");
+  const [messages, setMessages] = useState<SocialTeamMessage[]>([]);
+  const [applications, setApplications] = useState<SocialTeamApplication[]>([]);
+  const [messageDraft, setMessageDraft] = useState("");
+  const [applicationDraft, setApplicationDraft] = useState("");
+  const [status, setStatus] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [teamFilters, setTeamFilters] = useState<MatrixFilters>(DEFAULT_MATRIX_FILTERS);
+  const [selectedTeamMatchIds, setSelectedTeamMatchIds] = useState<string[]>([]);
+  const [createOpen, setCreateOpen] = useState(false);
+  const logoFileRef = useRef<HTMLInputElement>(null);
+  const bannerFileRef = useRef<HTMLInputElement>(null);
+  const editLogoFileRef = useRef<HTMLInputElement>(null);
+  const editBannerFileRef = useRef<HTMLInputElement>(null);
+  const [manageOpen, setManageOpen] = useState(false);
+  const [editDraft, setEditDraft] = useState<TeamEditDraft>(teamToEditDraft(null));
+  const [draft, setDraft] = useState({
+    name: "",
+    slug: "",
+    description: "",
+    region: "",
+    locationMode: "Online",
+    visibility: "public" as "public" | "private",
+    purposes: "Testing, Tournament",
+    recruitmentStatus: "open",
+    logoUrl: "",
+    bannerUrl: "",
+    discord: "",
+    website: "",
+    x: "",
+    youtube: "",
+    twitch: "",
+    instagram: "",
+    metafy: ""
+  });
+
+  async function refreshTeams(showStatus = true) {
+    setBusy(true);
+    try {
+      const [allResult, mineResult] = await Promise.allSettled([
+        window.riftlite.getSocialTeams(),
+        window.riftlite.getSocialTeams({ mine: true })
+      ]);
+      const allTeams = allResult.status === "fulfilled" ? allResult.value : [];
+      const myTeams = mineResult.status === "fulfilled" ? mineResult.value : [];
+      setTeams(allTeams);
+      setMine(myTeams);
+      if (showStatus) {
+        const errors = [allResult, mineResult]
+          .filter((result): result is PromiseRejectedResult => result.status === "rejected")
+          .map((result) => result.reason instanceof Error ? result.reason.message : "Could not load a team list.");
+        setStatus(errors.length ? errors.join(" ") : "Teams refreshed.");
+      }
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not refresh teams.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function loadTeam(teamId: string) {
+    setSelectedId(teamId);
+    setBusy(true);
+    try {
+      const next = await window.riftlite.getSocialTeam(teamId);
+      setDetail(next);
+      setTeamTab("overview");
+      setEditDraft(teamToEditDraft(next.team));
+      setManageOpen(next.myRole === "owner" || next.myRole === "admin" ? manageOpen : false);
+      const [nextMessages, nextApplications] = await Promise.all([
+        window.riftlite.getSocialTeamMessages(teamId).catch(() => []),
+        window.riftlite.getSocialTeamApplications(teamId).catch(() => [])
+      ]);
+      setMessages(nextMessages);
+      setApplications(nextApplications);
+      setStatus("");
+      void onRefreshTeamMatches(next.team.id, false).catch(() => undefined);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not open team.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  useEffect(() => {
+    void refreshTeams(false);
+  }, []);
+
+  async function createTeam() {
+    setBusy(true);
+    try {
+      const team = await window.riftlite.createSocialTeam({
+        name: draft.name,
+        slug: draft.slug,
+        description: draft.description,
+        region: draft.region,
+        locationMode: draft.locationMode,
+        visibility: draft.visibility,
+        purposes: draft.purposes.split(",").map((item) => item.trim()).filter(Boolean),
+        recruitmentStatus: draft.recruitmentStatus,
+        logoUrl: draft.logoUrl,
+        bannerUrl: draft.bannerUrl,
+        discord: draft.discord,
+        website: draft.website,
+        socials: {
+          x: draft.x,
+          youtube: draft.youtube,
+          twitch: draft.twitch,
+          instagram: draft.instagram,
+          metafy: draft.metafy
+        }
+      });
+      setCreateOpen(false);
+      setStatus(`Created ${team.name}.`);
+      await refreshTeams(false);
+      await loadTeam(team.id);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not create team.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function applyToTeam(teamId: string) {
+    setBusy(true);
+    try {
+      await window.riftlite.applyToSocialTeam(teamId, {
+        message: applicationDraft,
+        region: settings.accountHandle,
+        preferredLegends: [],
+        availability: ""
+      });
+      setApplicationDraft("");
+      setStatus("Application sent.");
+      await loadTeam(teamId);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not apply.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function postTeamMessage(teamId: string) {
+    if (!messageDraft.trim()) return;
+    setBusy(true);
+    try {
+      await window.riftlite.postSocialTeamMessage(teamId, messageDraft);
+      setMessageDraft("");
+      await loadTeam(teamId);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not post message.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function reviewApplication(application: SocialTeamApplication, statusValue: "accepted" | "declined") {
+    if (!detail) return;
+    setBusy(true);
+    try {
+      await window.riftlite.reviewSocialTeamApplication(detail.team.id, application.id, statusValue);
+      await loadTeam(detail.team.id);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not review application.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function uploadTeamImage(kind: "logo" | "banner", event: React.ChangeEvent<HTMLInputElement>, target: "create" | "edit" = "create") {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    setBusy(true);
+    try {
+      const dataUrl = await compressTeamImage(file, kind);
+      if (target === "edit") {
+        setEditDraft((current) => ({
+          ...current,
+          [kind === "logo" ? "logoUrl" : "bannerUrl"]: dataUrl
+        }));
+      } else {
+        setDraft((current) => ({
+          ...current,
+          [kind === "logo" ? "logoUrl" : "bannerUrl"]: dataUrl
+        }));
+      }
+      setStatus(`${kind === "logo" ? "Logo" : "Banner"} uploaded and compressed.`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not upload image.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveTeamSettings() {
+    if (!detail) return;
+    setBusy(true);
+    try {
+      const team = await window.riftlite.updateSocialTeam(detail.team.id, teamDraftPayload(editDraft));
+      const next = { ...detail, team };
+      setDetail(next);
+      setEditDraft(teamToEditDraft(team));
+      setStatus("Team profile updated.");
+      await refreshTeams(false);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not update team.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function updateMemberRole(member: SocialTeamMember, role: Exclude<SocialTeamRole, "owner">) {
+    if (!detail) return;
+    setBusy(true);
+    try {
+      await window.riftlite.updateSocialTeamMember(detail.team.id, member.uid, role);
+      setStatus(`${member.displayName} is now ${role}.`);
+      await loadTeam(detail.team.id);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not update member.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeMember(member: SocialTeamMember) {
+    if (!detail || !window.confirm(`Remove ${member.displayName} from ${detail.team.name}?`)) return;
+    setBusy(true);
+    try {
+      await window.riftlite.removeSocialTeamMember(detail.team.id, member.uid);
+      setStatus(`${member.displayName} removed.`);
+      await loadTeam(detail.team.id);
+      await refreshTeams(false);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not remove member.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function deleteTeamMessage(message: SocialTeamMessage) {
+    if (!detail || !window.confirm("Delete this team message?")) return;
+    setBusy(true);
+    try {
+      await window.riftlite.deleteSocialTeamMessage(detail.team.id, message.id);
+      await loadTeam(detail.team.id);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not delete message.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function teamTarget(team: SocialTeamProfile, sync: boolean): TeamSyncTarget {
+    return {
+      id: team.id,
+      slug: team.slug,
+      name: team.name,
+      sync,
+      role: detail?.myRole ?? "",
+      visibility: team.visibility,
+      joinedAt: new Date().toISOString()
+    };
+  }
+
+  async function setTeamAutoSync(enabled: boolean) {
+    if (!detail) return;
+    const current = settings.activeTeams ?? [];
+    const existing = current.find((team) => team.id === detail.team.id);
+    const nextTarget = existing
+      ? { ...existing, name: detail.team.name, slug: detail.team.slug, role: detail.myRole, visibility: detail.team.visibility, sync: enabled }
+      : teamTarget(detail.team, enabled);
+    const nextTeams = [...current.filter((team) => team.id !== detail.team.id), nextTarget];
+    await onSaveSettings({ activeTeams: nextTeams });
+    setStatus(enabled ? `${detail.team.name} will receive future saved matches.` : `${detail.team.name} auto-sync disabled.`);
+  }
+
+  async function refreshTeamData(forceRefresh = true) {
+    if (!detail) return;
+    setBusy(true);
+    try {
+      await onRefreshTeamMatches(detail.team.id, forceRefresh);
+      setStatus("Team match data refreshed.");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not refresh team match data.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function syncTeamMatches(matchIds: string[]) {
+    if (!detail || !matchIds.length) return;
+    setBusy(true);
+    try {
+      const result = await onSyncMatchesToTeams(matchIds, [detail.team.id]);
+      setSelectedTeamMatchIds([]);
+      await onRefreshTeamMatches(detail.team.id, true);
+      setStatus(result.message);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not sync matches to this team.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function syncEnabledTeams() {
+    setBusy(true);
+    try {
+      const result = await onSyncTeams();
+      if (detail) {
+        await onRefreshTeamMatches(detail.team.id, true);
+      }
+      setStatus(result.message);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not sync enabled teams.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeTeamSyncedMatch(matchId: string) {
+    if (!detail || !window.confirm("Remove this match from the team? Your local match and community data stay untouched.")) return;
+    setBusy(true);
+    try {
+      await onDeleteTeamMatch(detail.team.id, matchId);
+      await onRefreshTeamMatches(detail.team.id, true);
+      setStatus("Match removed from this team.");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not remove match from this team.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const canManage = detail?.myRole === "owner" || detail?.myRole === "admin";
+  const canPromoteAdmins = detail?.myRole === "owner";
+  const isTeamMember = Boolean(detail?.myRole);
+  const privateMine = mine.filter((team) => team.visibility === "private" || !teams.some((publicTeam) => publicTeam.id === team.id));
+  const teamRows = detail ? (teamMatches[detail.team.id] ?? []) : [];
+  const teamAnalytics = useMemo(() => validAnalytics(teamRows.map(communityToAnalytics)), [teamRows]);
+  const filteredTeamAnalytics = useMemo(() => filterMatrixMatches(teamAnalytics, teamFilters), [teamAnalytics, teamFilters]);
+  const syncableLocalMatches = useMemo(
+    () => matches.filter((match) => match.status === "saved" && match.result !== "Incomplete"),
+    [matches]
+  );
+  const selectedTeamTarget = detail ? (settings.activeTeams ?? []).find((team) => team.id === detail.team.id) : undefined;
+  const teamAutoSync = Boolean(selectedTeamTarget?.sync);
+  const teamTabs: Array<{ id: typeof teamTab; label: string }> = [
+    { id: "overview", label: "Overview" },
+    { id: "stats", label: "Stats" },
+    { id: "feed", label: "Feed" },
+    { id: "members", label: "Members" },
+    { id: "applications", label: "Applications" },
+    { id: "tools", label: "Tools" }
+  ];
+
+  if (detail) {
+    return (
+      <section className="dashboard-page team-hub-page">
+        <div className="team-hub-banner">
+          {detail.team.bannerUrl ? <img src={detail.team.bannerUrl} alt="" /> : null}
+          <div className="team-hub-banner-content">
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => {
+                setDetail(null);
+                setSelectedId("");
+                setManageOpen(false);
+              }}
+            >
+              <ChevronLeft size={16} /> Team directory
+            </button>
+            <h2>{detail.team.name}</h2>
+            <p>{detail.team.description || "No description yet."}</p>
+            <div className="inline-actions">
+              <span className="status-pill">{detail.team.region || "Online"}</span>
+              <span className="status-pill">{detail.team.visibility === "private" ? "Private" : "Public"}</span>
+              <span className="status-pill">{detail.team.memberCount} members</span>
+              <span className="status-pill">{detail.team.recruitmentStatus || "open"}</span>
+            </div>
+          </div>
+        </div>
+        <nav className="community-tabs team-hub-tabs" aria-label="Team hub sections">
+          {teamTabs.map((tab) => (
+            <button className="community-tab" data-active={teamTab === tab.id} key={tab.id} onClick={() => setTeamTab(tab.id)}>
+              {tab.label}
+            </button>
+          ))}
+        </nav>
+        {teamTab === "overview" ? (
+          <section className="team-hub-section">
+            <div className="team-hub-overview-grid">
+              <div className="rail-card">
+                <h2>Team profile</h2>
+                <p className="muted">{detail.team.purposes.join(", ") || "Testing, scrims, events, and community play."}</p>
+                <div className="inline-actions">
+                  {detail.team.discord ? <button type="button" className="secondary" onClick={() => window.riftlite.openExternalResource(detail.team.discord)}><MessageCircle size={15} /> Discord</button> : null}
+                  {detail.team.website ? <button type="button" className="secondary" onClick={() => window.riftlite.openExternalResource(detail.team.website)}><ExternalLink size={15} /> Website</button> : null}
+                  {detail.team.visibility === "public" ? (
+                    <button type="button" className="secondary" onClick={() => window.riftlite.openExternalResource(`https://www.riftlite.com/teams/${encodeURIComponent(detail.team.slug)}`)}><Link2 size={15} /> Public page</button>
+                  ) : null}
+                </div>
+              </div>
+              <div className="rail-card">
+                <h2>Your access</h2>
+                {detail.myRole ? (
+                  <p className="muted">You are a {detail.myRole} of this team.</p>
+                ) : (
+                  <>
+                    <p className="muted">Send a short application to join this team and access its member board.</p>
+                    <textarea value={applicationDraft} onChange={(event) => setApplicationDraft(event.target.value)} placeholder="Why do you want to join?" />
+                    <button type="button" className="primary" onClick={() => void applyToTeam(detail.team.id)} disabled={busy}>Apply</button>
+                  </>
+                )}
+              </div>
+            </div>
+          </section>
+        ) : null}
+        {teamTab === "stats" ? (
+          <section className="team-hub-section">
+            {isTeamMember ? (
+            <div className="rail-card stack">
+              <div className="section-row">
+                <div>
+                  <h2>Team match sync</h2>
+                  <p className="muted">Send saved local matches to this team, or enable auto-sync for future reviewed matches.</p>
+                </div>
+                <div className="inline-actions">
+                  <button type="button" className="secondary" onClick={() => void refreshTeamData(true)} disabled={busy}>
+                    <RefreshCw size={15} /> Refresh
+                  </button>
+                  <button type="button" className="secondary" onClick={() => void syncEnabledTeams()} disabled={busy || !(settings.activeTeams ?? []).some((team) => team.sync)}>
+                    <Upload size={15} /> Sync enabled teams
+                  </button>
+                </div>
+              </div>
+              <div className="drilldown-grid">
+                <Metric label="Team matches" value={String(teamRows.length)} />
+                <Metric label="Local saved" value={String(syncableLocalMatches.length)} />
+                <Metric label="Visibility" value={detail.team.visibility === "private" ? "Private" : "Public"} />
+                <Metric label="Members" value={String(detail.team.memberCount)} />
+              </div>
+              <label className="check-row">
+                <input
+                  type="checkbox"
+                  checked={teamAutoSync}
+                  disabled={!detail.myRole || busy}
+                  onChange={(event) => void setTeamAutoSync(event.target.checked)}
+                />
+                Auto-sync future reviewed matches to {detail.team.name}
+              </label>
+              <div className="panel-card stack">
+                <div className="section-row compact">
+                  <div>
+                    <h3>Manual sync</h3>
+                    <p className="muted">Select local matches to add to this team. Community data is not changed.</p>
+                  </div>
+                  <button
+                    type="button"
+                    className="primary"
+                    disabled={busy || !selectedTeamMatchIds.length}
+                    onClick={() => void syncTeamMatches(selectedTeamMatchIds)}
+                  >
+                    Sync selected
+                  </button>
+                </div>
+                <div className="match-sync-list">
+                  {syncableLocalMatches.slice(0, 40).map((match) => {
+                    const checked = selectedTeamMatchIds.includes(match.id);
+                    const synced = match.sync.teams?.[detail.team.id] === "synced";
+                    return (
+                      <label className="match-sync-row" key={match.id}>
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          disabled={busy || synced}
+                          onChange={(event) => {
+                            setSelectedTeamMatchIds((current) => event.target.checked
+                              ? [...current, match.id]
+                              : current.filter((id) => id !== match.id));
+                          }}
+                        />
+                        <span>
+                          <strong>{match.myChampion || "Unknown"} vs {match.opponentChampion || "Unknown"}</strong>
+                          <em>{new Date(match.capturedAt).toLocaleDateString()} - {match.result} {match.score || ""} - {match.deckName || "No deck logged"}</em>
+                        </span>
+                        <small>{synced ? "synced" : match.sync.teams?.[detail.team.id] ?? "local"}</small>
+                      </label>
+                    );
+                  })}
+                  {!syncableLocalMatches.length ? <p className="muted">No saved local matches are ready to sync yet.</p> : null}
+                </div>
+              </div>
+            </div>
+            ) : (
+              <div className="rail-card stack">
+                <h2>Team stats</h2>
+                <p className="muted">This team is visible to browse, but match upload tools are only shown after you join.</p>
+              </div>
+            )}
+            <AnalyticsSuite
+              title={`${detail.team.name} stats`}
+              matches={teamAnalytics}
+              filteredMatches={filteredTeamAnalytics}
+              filters={teamFilters}
+              emptyText="No team matches synced yet."
+              onFilterChange={(key, value) => setTeamFilters((current) => ({ ...current, [key]: value }))}
+              onResetFilters={() => setTeamFilters(DEFAULT_MATRIX_FILTERS)}
+            />
+            {canManage && teamRows.length ? (
+              <div className="rail-card stack">
+                <h2>Team match controls</h2>
+                {teamRows.slice(0, 12).map((match) => (
+                  <div className="social-row" key={match.id}>
+                    <span>{match.myChampion || "Unknown"} vs {match.opponentChampion || "Unknown"} - {match.result} {match.score}</span>
+                    <button type="button" className="danger-lite" onClick={() => void removeTeamSyncedMatch(match.id)} disabled={busy}>
+                      Remove from team
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </section>
+        ) : null}
+        {teamTab === "feed" ? (
+          <section className="team-hub-section">
+            <div className="rail-card stack">
+              <h2>Message board</h2>
+              {detail.myRole ? (
+                <div className="inline-form">
+                  <input value={messageDraft} onChange={(event) => setMessageDraft(event.target.value)} placeholder="Post an announcement, testing note, or @handle mention..." />
+                  <button type="button" className="primary" onClick={() => void postTeamMessage(detail.team.id)} disabled={busy || !messageDraft.trim()}>Post</button>
+                </div>
+              ) : <p className="muted">Only team members can read or post on the team board.</p>}
+              {messages.map((item) => (
+                <article className="social-message" key={item.id}>
+                  <div className="section-row compact">
+                    <strong>{item.displayName}</strong>
+                    {canManage ? (
+                      <button type="button" className="danger-lite" disabled={busy} onClick={() => void deleteTeamMessage(item)}><X size={14} /> Delete</button>
+                    ) : null}
+                  </div>
+                  <p>{item.text}</p>
+                  <small>{new Date(item.createdAt).toLocaleString()}</small>
+                </article>
+              ))}
+              {!messages.length ? <p className="muted">No team messages yet.</p> : null}
+            </div>
+          </section>
+        ) : null}
+        {teamTab === "members" ? (
+          <section className="team-hub-section">
+            <div className="rail-card stack">
+              <h2>Members</h2>
+              {detail.members.map((member) => (
+                <div className="social-row team-member-row" key={member.uid}>
+                  <span>{member.displayName}</span>
+                  {canManage && member.role !== "owner" ? (
+                    <div className="inline-actions">
+                      {canPromoteAdmins ? (
+                        <select value={member.role} onChange={(event) => void updateMemberRole(member, event.target.value as "admin" | "member")} disabled={busy}>
+                          <option value="member">member</option>
+                          <option value="admin">admin</option>
+                        </select>
+                      ) : <strong>{member.role}</strong>}
+                      <button type="button" className="danger-lite" disabled={busy} onClick={() => void removeMember(member)}><X size={14} /> Remove</button>
+                    </div>
+                  ) : <strong>{member.role}</strong>}
+                </div>
+              ))}
+            </div>
+          </section>
+        ) : null}
+        {teamTab === "applications" ? (
+          <section className="team-hub-section">
+            <div className="rail-card stack">
+              <h2>Applications</h2>
+              {canManage ? applications.map((application) => (
+                <article className="social-listing" key={application.id}>
+                  <div><strong>{application.displayName}</strong><span>{application.message || "No message"}</span></div>
+                  {application.status === "pending" ? (
+                    <div className="inline-actions">
+                      <button type="button" className="primary" onClick={() => void reviewApplication(application, "accepted")}>Accept</button>
+                      <button type="button" className="secondary" onClick={() => void reviewApplication(application, "declined")}>Decline</button>
+                    </div>
+                  ) : <strong>{application.status}</strong>}
+                </article>
+              )) : <p className="muted">Only team owners and admins can review applications.</p>}
+              {canManage && !applications.length ? <p className="muted">No applications yet.</p> : null}
+            </div>
+          </section>
+        ) : null}
+        {teamTab === "tools" ? (
+          <section className="team-hub-section">
+            {canManage ? (
+              <div className="team-admin-panel stack">
+                <div className="section-row">
+                  <div>
+                    <h3>Owner tools</h3>
+                    <p className="muted">Edit the team profile, control recruitment, manage roles, and keep the member board tidy.</p>
+                  </div>
+                  <div className="inline-actions">
+                    <span className="status-pill">{detail.team.applicationCount} applications</span>
+                    <span className="status-pill">{detail.team.memberCount} members</span>
+                    <span className="status-pill">{detail.team.visibility}</span>
+                  </div>
+                </div>
+                <div className="social-create-form team-tools-form">
+                  <div className="form-grid two">
+                    <label>Name<input value={editDraft.name} onChange={(event) => setEditDraft({ ...editDraft, name: event.target.value })} /></label>
+                    <label>Slug<input value={editDraft.slug} onChange={(event) => setEditDraft({ ...editDraft, slug: event.target.value })} /></label>
+                    <label>Description<textarea value={editDraft.description} onChange={(event) => setEditDraft({ ...editDraft, description: event.target.value })} /></label>
+                    <label>Region<input value={editDraft.region} onChange={(event) => setEditDraft({ ...editDraft, region: event.target.value })} /></label>
+                    <label>Mode<select value={editDraft.locationMode} onChange={(event) => setEditDraft({ ...editDraft, locationMode: event.target.value })}><option>Online</option><option>In-person</option><option>Hybrid</option></select></label>
+                    <label>Visibility<select value={editDraft.visibility} onChange={(event) => setEditDraft({ ...editDraft, visibility: event.target.value as "public" | "private" })}><option value="public">Public team page</option><option value="private">Private team</option></select></label>
+                    <label>Recruitment<select value={editDraft.recruitmentStatus} onChange={(event) => setEditDraft({ ...editDraft, recruitmentStatus: event.target.value })}><option value="open">Open</option><option value="invite-only">Invite only</option><option value="closed">Closed</option></select></label>
+                    <label>Purposes<input value={editDraft.purposes} onChange={(event) => setEditDraft({ ...editDraft, purposes: event.target.value })} /></label>
+                    <label>Discord<input value={editDraft.discord} onChange={(event) => setEditDraft({ ...editDraft, discord: event.target.value })} /></label>
+                    <label>Website<input value={editDraft.website} onChange={(event) => setEditDraft({ ...editDraft, website: event.target.value })} /></label>
+                    <div className="team-image-field">
+                      <label>Logo URL<input value={editDraft.logoUrl} onChange={(event) => setEditDraft({ ...editDraft, logoUrl: event.target.value })} /></label>
+                      <input ref={editLogoFileRef} type="file" accept="image/*" hidden onChange={(event) => void uploadTeamImage("logo", event, "edit")} />
+                      <div className="inline-actions">
+                        <button type="button" className="secondary" disabled={busy} onClick={() => editLogoFileRef.current?.click()}><Upload size={14} /> Upload logo</button>
+                        {editDraft.logoUrl ? <button type="button" className="secondary" onClick={() => setEditDraft({ ...editDraft, logoUrl: "" })}>Clear</button> : null}
+                      </div>
+                    </div>
+                    <div className="team-image-field">
+                      <label>Banner URL<input value={editDraft.bannerUrl} onChange={(event) => setEditDraft({ ...editDraft, bannerUrl: event.target.value })} /></label>
+                      <input ref={editBannerFileRef} type="file" accept="image/*" hidden onChange={(event) => void uploadTeamImage("banner", event, "edit")} />
+                      <div className="inline-actions">
+                        <button type="button" className="secondary" disabled={busy} onClick={() => editBannerFileRef.current?.click()}><Upload size={14} /> Upload banner</button>
+                        {editDraft.bannerUrl ? <button type="button" className="secondary" onClick={() => setEditDraft({ ...editDraft, bannerUrl: "" })}>Clear</button> : null}
+                      </div>
+                    </div>
+                    <label>X<input value={editDraft.x} onChange={(event) => setEditDraft({ ...editDraft, x: event.target.value })} /></label>
+                    <label>YouTube<input value={editDraft.youtube} onChange={(event) => setEditDraft({ ...editDraft, youtube: event.target.value })} /></label>
+                    <label>Twitch<input value={editDraft.twitch} onChange={(event) => setEditDraft({ ...editDraft, twitch: event.target.value })} /></label>
+                    <label>Instagram<input value={editDraft.instagram} onChange={(event) => setEditDraft({ ...editDraft, instagram: event.target.value })} /></label>
+                    <label>Metafy<input value={editDraft.metafy} onChange={(event) => setEditDraft({ ...editDraft, metafy: event.target.value })} /></label>
+                  </div>
+                  <button type="button" className="primary" disabled={busy || !editDraft.name.trim()} onClick={() => void saveTeamSettings()}><Save size={16} /> Save team settings</button>
+                </div>
+              </div>
+            ) : <p className="muted">Only team owners and admins can manage team settings.</p>}
+          </section>
+        ) : null}
+        {status ? <p className="muted">{status}</p> : null}
+      </section>
+    );
+  }
+
+  return (
+    <div className="social-grid">
+      <section className="panel-card stack">
+        <div className="section-row">
+          <div>
+            <h2>Team directory</h2>
+            <p className="muted">{teams.length} public teams, {mine.length} joined</p>
+          </div>
+          <button type="button" className="secondary" disabled={busy} onClick={() => void refreshTeams()}><RefreshCw size={15} /> Refresh</button>
+        </div>
+        <button type="button" className="primary" onClick={() => setCreateOpen((open) => !open)}><Plus size={16} /> Create team</button>
+        {createOpen ? (
+          <div className="social-create-form">
+            <div className="form-grid two">
+              <label>Name<input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></label>
+              <label>Slug<input value={draft.slug} onChange={(event) => setDraft({ ...draft, slug: event.target.value })} placeholder="unified-testing" /></label>
+              <label>Description<textarea value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} /></label>
+              <label>Region<input value={draft.region} onChange={(event) => setDraft({ ...draft, region: event.target.value })} placeholder="UK, EU, Online..." /></label>
+              <label>Mode<select value={draft.locationMode} onChange={(event) => setDraft({ ...draft, locationMode: event.target.value })}><option>Online</option><option>In-person</option><option>Hybrid</option></select></label>
+              <label>Visibility<select value={draft.visibility} onChange={(event) => setDraft({ ...draft, visibility: event.target.value as "public" | "private" })}><option value="public">Public team page</option><option value="private">Private team</option></select></label>
+              <label>Purposes<input value={draft.purposes} onChange={(event) => setDraft({ ...draft, purposes: event.target.value })} /></label>
+              <label>Discord<input value={draft.discord} onChange={(event) => setDraft({ ...draft, discord: event.target.value })} /></label>
+              <label>Website<input value={draft.website} onChange={(event) => setDraft({ ...draft, website: event.target.value })} /></label>
+              <div className="team-image-field">
+                <label>Logo URL<input value={draft.logoUrl} onChange={(event) => setDraft({ ...draft, logoUrl: event.target.value })} placeholder="Paste a URL or upload below" /></label>
+                <input ref={logoFileRef} type="file" accept="image/*" hidden onChange={(event) => void uploadTeamImage("logo", event)} />
+                <div className="inline-actions">
+                  <button type="button" className="secondary" disabled={busy} onClick={() => logoFileRef.current?.click()}><Upload size={14} /> Upload logo</button>
+                  {draft.logoUrl ? <button type="button" className="secondary" onClick={() => setDraft({ ...draft, logoUrl: "" })}>Clear</button> : null}
+                </div>
+                {draft.logoUrl ? <div className="team-image-preview logo"><img src={draft.logoUrl} alt="" /></div> : null}
+              </div>
+              <div className="team-image-field">
+                <label>Banner URL<input value={draft.bannerUrl} onChange={(event) => setDraft({ ...draft, bannerUrl: event.target.value })} placeholder="Paste a URL or upload below" /></label>
+                <input ref={bannerFileRef} type="file" accept="image/*" hidden onChange={(event) => void uploadTeamImage("banner", event)} />
+                <div className="inline-actions">
+                  <button type="button" className="secondary" disabled={busy} onClick={() => bannerFileRef.current?.click()}><Upload size={14} /> Upload banner</button>
+                  {draft.bannerUrl ? <button type="button" className="secondary" onClick={() => setDraft({ ...draft, bannerUrl: "" })}>Clear</button> : null}
+                </div>
+                {draft.bannerUrl ? <div className="team-image-preview banner"><img src={draft.bannerUrl} alt="" /></div> : null}
+              </div>
+              <label>X<input value={draft.x} onChange={(event) => setDraft({ ...draft, x: event.target.value })} /></label>
+              <label>YouTube<input value={draft.youtube} onChange={(event) => setDraft({ ...draft, youtube: event.target.value })} /></label>
+              <label>Twitch<input value={draft.twitch} onChange={(event) => setDraft({ ...draft, twitch: event.target.value })} /></label>
+              <label>Instagram<input value={draft.instagram} onChange={(event) => setDraft({ ...draft, instagram: event.target.value })} /></label>
+              <label>Metafy<input value={draft.metafy} onChange={(event) => setDraft({ ...draft, metafy: event.target.value })} /></label>
+            </div>
+            <button type="button" className="primary" disabled={busy || !draft.name.trim()} onClick={() => void createTeam()}><Save size={16} /> Save team</button>
+          </div>
+        ) : null}
+        {privateMine.length ? (
+          <div className="team-owned-list">
+            <h3>Your teams</h3>
+            <div className="team-card-grid compact">
+              {privateMine.map((team) => (
+                <button type="button" className="team-card" data-active={selectedId === team.id || selectedId === team.slug} key={team.id} onClick={() => void loadTeam(team.id)}>
+                  {team.logoUrl ? <img src={team.logoUrl} alt="" /> : <span>{team.name.slice(0, 1)}</span>}
+                  <strong>{team.name}</strong>
+                  <small>{team.region || "Online"} - {team.memberCount} members</small>
+                  <em>{team.visibility === "private" ? "private" : team.recruitmentStatus || "open"}</em>
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : null}
+        <div className="team-card-grid">
+          {teams.map((team) => (
+            <button type="button" className="team-card" data-active={selectedId === team.id || selectedId === team.slug} key={team.id} onClick={() => void loadTeam(team.id)}>
+              {team.logoUrl ? <img src={team.logoUrl} alt="" /> : <span>{team.name.slice(0, 1)}</span>}
+              <strong>{team.name}</strong>
+              <small>{team.region || "Online"} - {team.memberCount} members</small>
+              <em>{team.visibility === "private" ? "private" : team.recruitmentStatus || "open"}</em>
+            </button>
+          ))}
+        </div>
+        {status ? <p className="muted">{status}</p> : null}
+      </section>
+      <section className="panel-card stack">
+        <h2>Pick a team</h2>
+        <p className="muted">Choose a team card to open its profile, stats, members, applications, and team tools.</p>
+        <p className="muted">Private teams you belong to appear in your teams list; public teams show in the directory.</p>
+      </section>
+    </div>
+  );
+}
+
+function ApplicationsPanel() {
+  const [teams, setTeams] = useState<SocialTeamProfile[]>([]);
+  const [status, setStatus] = useState("");
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      try {
+        const mine = await window.riftlite.getSocialTeams({ mine: true });
+        if (!cancelled) setTeams(mine);
+      } catch (error) {
+        if (!cancelled) setStatus(error instanceof Error ? error.message : "Could not load your teams.");
+      }
+    }
+    void load();
+    return () => { cancelled = true; };
+  }, []);
+  return (
+    <section className="panel-card stack">
+      <h2>Applications and invites</h2>
+      <p className="muted">Team applications live inside each team page. This tab gives you a quick list of teams you manage or belong to.</p>
+      <div className="team-card-grid">
+        {teams.map((team) => (
+          <article className="team-card readonly" key={team.id}>
+            {team.logoUrl ? <img src={team.logoUrl} alt="" /> : <span>{team.name.slice(0, 1)}</span>}
+            <strong>{team.name}</strong>
+            <small>{team.applicationCount} applications - {team.memberCount} members</small>
+          </article>
+        ))}
+      </div>
+      {!teams.length ? <p className="muted">No team memberships yet.</p> : null}
+      {status ? <p className="muted">{status}</p> : null}
+    </section>
+  );
+}
+
+function TeamModerationPanel() {
+  const [teams, setTeams] = useState<TeamModerationRecord[]>([]);
+  const [query, setQuery] = useState("");
+  const [reason, setReason] = useState("");
+  const [status, setStatus] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function refresh(nextQuery = query) {
+    setBusy(true);
+    try {
+      const payload = await window.riftlite.getModerationTeams(nextQuery);
+      setTeams(payload.teams);
+      setStatus(`Loaded ${payload.teams.length} teams.`);
+    } catch (error) {
+      setTeams([]);
+      setStatus(error instanceof Error ? error.message : "Could not load moderation tools.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  useEffect(() => {
+    void refresh("");
+  }, []);
+
+  async function runAction(team: TeamModerationRecord, action: TeamModerationAction) {
+    const label = action === "hide"
+      ? "hide this team from public pages"
+      : action === "restore"
+        ? "restore this team"
+        : action === "clear-logo"
+          ? "clear this logo"
+          : action === "clear-banner"
+            ? "clear this banner"
+            : "clear this logo and banner";
+    if (!window.confirm(`Moderator action: ${label}?`)) return;
+    setBusy(true);
+    try {
+      const updated = await window.riftlite.moderateTeam(team.id, action, reason);
+      setTeams((current) => current.map((item) => item.id === updated.id ? updated : item));
+      setStatus(`Updated ${updated.name}.`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not update that team.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="panel-card stack">
+      <div className="section-row">
+        <div>
+          <h2>Team moderation</h2>
+          <p className="muted">Server-side moderator tools for public team pages, logos, and banners. Hiding a team removes it from public listings without deleting data.</p>
+        </div>
+        <button type="button" className="secondary" disabled={busy} onClick={() => void refresh()}><RefreshCw size={15} /> Refresh</button>
+      </div>
+      <div className="inline-form">
+        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search teams, slug, or owner..." />
+        <button type="button" className="secondary" disabled={busy} onClick={() => void refresh(query)}>Search</button>
+      </div>
+      <label>Moderator note
+        <input value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Optional reason saved to the team record..." />
+      </label>
+      <div className="team-moderation-list">
+        {teams.map((team) => (
+          <article className="team-moderation-card" key={team.id}>
+            <div className="team-moderation-images">
+              {team.logoUrl ? <img src={team.logoUrl} alt="" /> : <span>{team.name.slice(0, 1)}</span>}
+              {team.bannerUrl ? <img src={team.bannerUrl} alt="" /> : null}
+            </div>
+            <div>
+              <strong>{team.name}</strong>
+              <small>@{team.slug} - owner {team.ownerDisplayName || team.ownerHandle || "Unknown"} - {team.visibility}{team.hidden ? " - hidden" : ""}</small>
+              {team.description ? <p>{team.description}</p> : null}
+              {team.moderationStatus ? <em>{team.moderationStatus}{team.moderationReason ? ` - ${team.moderationReason}` : ""}</em> : null}
+            </div>
+            <div className="inline-actions">
+              {team.hidden ? (
+                <button type="button" className="secondary" disabled={busy} onClick={() => void runAction(team, "restore")}>Restore</button>
+              ) : (
+                <button type="button" className="danger-lite" disabled={busy} onClick={() => void runAction(team, "hide")}>Hide</button>
+              )}
+              {team.logoUrl ? <button type="button" className="secondary" disabled={busy} onClick={() => void runAction(team, "clear-logo")}>Clear logo</button> : null}
+              {team.bannerUrl ? <button type="button" className="secondary" disabled={busy} onClick={() => void runAction(team, "clear-banner")}>Clear banner</button> : null}
+              {team.logoUrl || team.bannerUrl ? <button type="button" className="secondary" disabled={busy} onClick={() => void runAction(team, "clear-images")}>Clear images</button> : null}
+            </div>
+          </article>
+        ))}
+      </div>
+      {!teams.length ? <p className="muted">No teams loaded.</p> : null}
+      {status ? <p className="muted">{status}</p> : null}
+    </section>
+  );
 }
 
 function AccountView({ settings, onSettingsChanged }: { settings: UserSettings; onSettingsChanged: (settings: UserSettings) => void }) {
@@ -4906,7 +6461,8 @@ function ScorepadView({
       rawEvidence: [],
       sync: {
         community: "disabled",
-        hubs: {}
+        hubs: {},
+        teams: {}
       }
     };
     onReview(draft);
@@ -11261,6 +12817,8 @@ function SettingsView({
   const [audioInputs, setAudioInputs] = useState<MediaDeviceInfo[]>([]);
   const [audioStatus, setAudioStatus] = useState("");
   const [supportStatus, setSupportStatus] = useState("");
+  const [backupStatus, setBackupStatus] = useState("");
+  const [backupBusy, setBackupBusy] = useState(false);
   async function refreshAudioInputs(requestPermission = false) {
     if (!navigator.mediaDevices?.enumerateDevices) {
       setAudioStatus("Microphone device listing is not available on this system.");
@@ -11295,6 +12853,41 @@ function SettingsView({
     }));
     setSupportStatus("Support summary copied.");
     window.setTimeout(() => setSupportStatus(""), 1800);
+  }
+
+  async function exportBackup() {
+    setBackupBusy(true);
+    setBackupStatus("");
+    try {
+      const summary = await window.riftlite.exportBackup({ includeRecycleBin: true });
+      if (!summary) {
+        setBackupStatus("Backup cancelled.");
+        return;
+      }
+      setBackupStatus(`Backup exported: ${summary.matches + summary.deletedMatches} matches, ${summary.decks} decks, ${summary.notebooks} notebooks.`);
+    } catch (error) {
+      setBackupStatus(error instanceof Error ? error.message : "Backup export failed.");
+    } finally {
+      setBackupBusy(false);
+    }
+  }
+
+  async function restoreBackup() {
+    setBackupBusy(true);
+    setBackupStatus("");
+    try {
+      const summary = await window.riftlite.restoreBackup();
+      if (!summary) {
+        setBackupStatus("Restore cancelled.");
+        return;
+      }
+      setBackupStatus(`Backup restored. Safety backup created first. Reloading RiftLite...`);
+      window.setTimeout(() => window.location.reload(), 900);
+    } catch (error) {
+      setBackupStatus(error instanceof Error ? error.message : "Backup restore failed.");
+    } finally {
+      setBackupBusy(false);
+    }
   }
 
   return (
@@ -11463,6 +13056,20 @@ function SettingsView({
           )}
           <button className="secondary" onClick={() => void onImportLegacy()}>Run import again</button>
         </div>
+        <div className="rail-card">
+          <h2>Backup and restore</h2>
+          <p className="muted">Move RiftLite to another PC or keep a safety copy before big updates. This exports settings, local matches, decks, notebooks, matchup prep, hub/team sync config, and replay records. Video files stay in your replay folder for now.</p>
+          <div className="row-actions">
+            <button className="primary" disabled={backupBusy} onClick={() => void exportBackup()}>
+              <Save size={16} /> Export backup
+            </button>
+            <button className="secondary" disabled={backupBusy} onClick={() => void restoreBackup()}>
+              <Upload size={16} /> Restore backup
+            </button>
+          </div>
+          <p className="muted">Restore replaces local app data and automatically creates a pre-restore backup first.</p>
+          {backupStatus ? <p className="muted">{backupStatus}</p> : null}
+        </div>
         <ScreenshotToolkitPanel
           settings={settings}
           screenshotStatus={screenshotStatus}
@@ -11511,10 +13118,27 @@ function SettingsView({
           <StatRow label="Current" value={updateStatus.currentVersion} />
           {updateStatus.latestVersion ? <StatRow label="Latest" value={updateStatus.latestVersion} /> : null}
           {typeof updateStatus.progress === "number" ? <StatRow label="Download" value={`${updateStatus.progress}%`} /> : null}
+          {updateStatus.manualInstallOnly ? (
+            <p className="muted">
+              Mac updates are manual for now: download the DMG, quit RiftLite, then drag the new app into Applications.
+            </p>
+          ) : null}
           <div className="row-actions">
             <button className="secondary" onClick={() => void onCheckUpdates()}>Check</button>
-            <button className="primary" onClick={() => void onDownloadUpdate()} disabled={updateStatus.state !== "available"}>Download</button>
-            <button className="secondary" onClick={() => void onInstallUpdate()} disabled={updateStatus.state !== "downloaded"}>Install</button>
+            <button
+              className="primary"
+              onClick={() => void onDownloadUpdate()}
+              disabled={!updateStatus.manualInstallOnly && updateStatus.state !== "available"}
+            >
+              {updateStatus.manualInstallOnly ? "Open release" : "Download"}
+            </button>
+            <button
+              className="secondary"
+              onClick={() => void onInstallUpdate()}
+              disabled={updateStatus.manualInstallOnly || updateStatus.state !== "downloaded"}
+            >
+              Install
+            </button>
           </div>
         </div>
       </div>
@@ -13270,9 +14894,12 @@ function StatRow({ label, value, onClick }: { label: string; value: string; onCl
 
 function SyncPill({ match }: { match: MatchDraft }) {
   const hubStates = Object.values(match.sync.hubs);
-  if (match.sync.community === "disabled" && hubStates.length) {
-    const state = hubStates.includes("failed") ? "failed" : hubStates.every((item) => item === "synced") ? "synced" : "pending";
-    return <span className={`sync-pill ${state}`}>hubs {state}</span>;
+  const teamStates = Object.values(match.sync.teams ?? {});
+  const privateStates = [...hubStates, ...teamStates];
+  if (match.sync.community === "disabled" && privateStates.length) {
+    const state = privateStates.includes("failed") ? "failed" : privateStates.every((item) => item === "synced") ? "synced" : "pending";
+    const label = hubStates.length && teamStates.length ? "hubs/teams" : teamStates.length ? "teams" : "hubs";
+    return <span className={`sync-pill ${state}`}>{label} {state}</span>;
   }
   const state = match.sync.community;
   return <span className={`sync-pill ${state}`}>{state}</span>;
@@ -13451,7 +15078,8 @@ function scorepadInboxEntryToDraft(
     rawEvidence: [],
     sync: {
       community: "disabled",
-      hubs: {}
+      hubs: {},
+      teams: {}
     }
   };
 }
@@ -13498,6 +15126,9 @@ function matchSourceLabel(match: Pick<MatchDraft, "source" | "platform"> | Analy
   }
   if (match.platform === "community") {
     return "Community";
+  }
+  if (match.platform === "team") {
+    return "Team";
   }
   return "Hub";
 }

@@ -63,7 +63,7 @@ function match(): MatchDraft {
       }
     ],
     rawEvidence: [],
-    sync: { community: "disabled", hubs: {} }
+    sync: { community: "disabled", hubs: {}, teams: {} }
   };
 }
 

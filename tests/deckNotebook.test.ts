@@ -66,7 +66,7 @@ function match(patch: Partial<MatchDraft>): MatchDraft {
     notes: patch.notes ?? "",
     games: patch.games ?? [],
     rawEvidence: [],
-    sync: { community: "disabled", hubs: {} }
+    sync: { community: "disabled", hubs: {}, teams: {} }
   };
 }
 

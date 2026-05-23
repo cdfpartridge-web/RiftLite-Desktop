@@ -32,11 +32,18 @@ interface TimedReplayState {
   failedCaptures: number;
 }
 
+interface PendingAtlasReview {
+  timer: ReturnType<typeof setTimeout>;
+  endEvent: CaptureEvent;
+  settings: Awaited<ReturnType<RiftLiteStore["getSettings"]>> | null;
+}
+
 const REPLAY_FRAME_INTERVAL_MS_BY_PRESET = {
   light: 5_000,
   standard: 4_000,
   detailed: 2_000
 } as const;
+const ATLAS_CONTINUATION_GRACE_MS = 25_000;
 const MAX_REPLAY_FRAMES = 600;
 const REPLAY_SLOW_CAPTURE_MS = 1_100;
 const REPLAY_FAST_CAPTURE_MS = 650;
@@ -75,6 +82,7 @@ export class CaptureCoordinator {
   private readonly timedReplayState = new Map<GamePlatform, TimedReplayState>();
   private readonly recentEventIds = new Map<string, number>();
   private readonly platformEventQueues = new Map<GamePlatform, Promise<void>>();
+  private readonly pendingAtlasReviews = new Map<GamePlatform, PendingAtlasReview>();
   private lastHealthEmitAt = 0;
   private lastHealthSignature = "";
 
@@ -117,9 +125,21 @@ export class CaptureCoordinator {
     }
     const settings = await this.store.getSettings().catch(() => null);
     const trackedEvent = withConfiguredCaptureContext(event, settings?.username ?? "");
-    await this.deckTracker?.ingestCaptureEvent(trackedEvent, settings).catch(() => undefined);
+    await this.resolvePendingAtlasReviewBeforeEvent(trackedEvent, settings);
     void this.diagnostics.record(compactCaptureEvent(trackedEvent)).catch(() => undefined);
     const currentCount = this.health.eventCount + 1;
+    if (this.shouldIgnoreFalseTcgaResultEnd(trackedEvent)) {
+      this.health = {
+        platform: trackedEvent.platform,
+        state: "watching",
+        message: "TCGA in-game overlay ignored",
+        lastEventAt: trackedEvent.capturedAt,
+        eventCount: currentCount
+      };
+      this.emitHealth(true);
+      return;
+    }
+    await this.deckTracker?.ingestCaptureEvent(trackedEvent, settings).catch(() => undefined);
     this.health = {
       platform: event.platform,
       state: event.kind === "match-end" ? "review-needed" : event.kind === "match-start" ? "match-detected" : "watching",
@@ -173,6 +193,16 @@ export class CaptureCoordinator {
       const finalEvent = this.withRetainedEndEvidence(trackedEvent, session);
       this.closingPlatforms.add(trackedEvent.platform);
       try {
+        if (this.tracker.shouldWaitForAtlasContinuation(finalEvent.platform, finalEvent)) {
+          this.deferAtlasReview(finalEvent, settings);
+          this.health = {
+            ...this.health,
+            state: "match-detected",
+            message: "Atlas game captured, checking briefly for a next BO3 game"
+          };
+          this.emitHealth(true);
+          return;
+        }
         if (this.tracker.shouldHoldForBo3(finalEvent.platform, finalEvent)) {
           this.tracker.holdCurrentGame(finalEvent.platform, finalEvent);
           this.health = {
@@ -293,6 +323,11 @@ export class CaptureCoordinator {
       await this.platformEventQueues.get(targetPlatform)?.catch(() => undefined);
     }
     const activePlatform = targetPlatform ?? platform;
+    const pending = this.pendingAtlasReviews.get(activePlatform);
+    if (pending) {
+      clearTimeout(pending.timer);
+      this.pendingAtlasReviews.delete(activePlatform);
+    }
     const session = this.tracker.get(activePlatform);
     if (!session) {
       this.health = {
@@ -362,6 +397,17 @@ export class CaptureCoordinator {
     return this.syncMatchesToHubIds(matchIds, hubIds, true);
   }
 
+  async syncTeams(): Promise<PrivateHubSyncResult> {
+    const settings = await this.store.getSettings();
+    const activeTeams = (settings.activeTeams ?? []).filter((team) => team.sync);
+    const matches = await this.store.getMatches();
+    return this.syncMatchesToTeamIds(matches.map((match) => match.id), activeTeams.map((team) => team.id), true);
+  }
+
+  async syncMatchesToTeams(matchIds: string[], teamIds: string[]): Promise<PrivateHubSyncResult> {
+    return this.syncMatchesToTeamIds(matchIds, teamIds, true);
+  }
+
   private async syncMatchesToHubIds(matchIds: string[], hubIds: string[], disableCommunity: boolean): Promise<PrivateHubSyncResult> {
     const settings = await this.store.getSettings();
     const requestedHubIds = new Set(hubIds.filter(Boolean));
@@ -408,10 +454,11 @@ export class CaptureCoordinator {
         ...match,
         sync: {
           community: disableCommunity ? "disabled" : match.sync.community,
-          hubs
+          hubs,
+          teams: match.sync.teams ?? {}
         }
       });
-      const result = await this.syncService.syncMatch(prepared);
+      const result = await this.syncService.syncMatch(prepared, { quiet: true });
       const hubStates = activeHubs.map((hub) => result.sync.hubs[hub.id]);
       if (hubStates.some((state) => state === "synced")) {
         synced += 1;
@@ -429,6 +476,76 @@ export class CaptureCoordinator {
       message: matched
         ? `Private hub sync finished: ${synced} synced${failed ? `, ${failed} failed` : ""}.`
         : "No saved local matches needed private hub sync."
+    };
+  }
+
+  private async syncMatchesToTeamIds(matchIds: string[], teamIds: string[], disableCommunity: boolean): Promise<PrivateHubSyncResult> {
+    const requestedTeamIds = new Set(teamIds.filter(Boolean));
+    const targetTeamIds = Array.from(requestedTeamIds);
+    if (!targetTeamIds.length) {
+      return {
+        matched: 0,
+        synced: 0,
+        failed: 0,
+        skipped: 0,
+        message: "Select a team first."
+      };
+    }
+
+    const matches = await this.store.getMatches();
+    const requestedMatchIds = new Set(matchIds.filter(Boolean));
+    let matched = 0;
+    let synced = 0;
+    let failed = 0;
+    let skipped = 0;
+
+    for (const match of matches) {
+      if (!requestedMatchIds.has(match.id)) {
+        continue;
+      }
+      if (match.status !== "saved" || match.result === "Incomplete") {
+        skipped += 1;
+        continue;
+      }
+      const teams = { ...(match.sync.teams ?? {}) };
+      let needsSync = false;
+      for (const teamId of targetTeamIds) {
+        if (teams[teamId] !== "synced") {
+          teams[teamId] = "pending";
+          needsSync = true;
+        }
+      }
+      if (!needsSync) {
+        skipped += 1;
+        continue;
+      }
+      matched += 1;
+      const prepared = await this.store.saveMatch({
+        ...match,
+        sync: {
+          community: disableCommunity ? "disabled" : match.sync.community,
+          hubs: match.sync.hubs,
+          teams
+        }
+      });
+      const result = await this.syncService.syncMatch(prepared, { forceTeamIds: targetTeamIds, quiet: true });
+      const teamStates = targetTeamIds.map((teamId) => result.sync.teams?.[teamId]);
+      if (teamStates.some((state) => state === "synced")) {
+        synced += 1;
+      }
+      if (teamStates.some((state) => state === "failed")) {
+        failed += 1;
+      }
+    }
+
+    return {
+      matched,
+      synced,
+      failed,
+      skipped,
+      message: matched
+        ? `Team sync finished: ${synced} synced${failed ? `, ${failed} failed` : ""}.`
+        : "No saved local matches needed team sync."
     };
   }
 
@@ -480,6 +597,122 @@ export class CaptureCoordinator {
       }).catch(() => undefined);
     } finally {
       this.closingPlatforms.delete(event.platform);
+    }
+  }
+
+  private async resolvePendingAtlasReviewBeforeEvent(
+    event: CaptureEvent,
+    settings: Awaited<ReturnType<RiftLiteStore["getSettings"]>> | null
+  ): Promise<void> {
+    if (event.platform !== "atlas") {
+      return;
+    }
+    const pending = this.pendingAtlasReviews.get(event.platform);
+    if (!pending || !readPayloadBoolean(event.payload.active)) {
+      return;
+    }
+    if (this.isPendingAtlasContinuation(pending.endEvent, event)) {
+      clearTimeout(pending.timer);
+      this.pendingAtlasReviews.delete(event.platform);
+      this.health = {
+        ...this.health,
+        platform: "atlas",
+        state: "match-detected",
+        message: "Atlas next BO3 game detected; continuing the same match",
+        lastEventAt: event.capturedAt
+      };
+      this.emitHealth(true);
+      return;
+    }
+    await this.flushPendingAtlasReview(event.platform, "new-atlas-match-started", settings);
+  }
+
+  private deferAtlasReview(
+    endEvent: CaptureEvent,
+    settings: Awaited<ReturnType<RiftLiteStore["getSettings"]>> | null
+  ): void {
+    const existing = this.pendingAtlasReviews.get(endEvent.platform);
+    if (existing) {
+      clearTimeout(existing.timer);
+    }
+    const timer = setTimeout(() => {
+      void this.flushPendingAtlasReview(endEvent.platform, "atlas-continuation-timeout", settings).catch(() => undefined);
+    }, ATLAS_CONTINUATION_GRACE_MS);
+    this.pendingAtlasReviews.set(endEvent.platform, {
+      timer,
+      endEvent,
+      settings
+    });
+  }
+
+  private isPendingAtlasContinuation(pendingEnd: CaptureEvent, nextEvent: CaptureEvent): boolean {
+    if (nextEvent.platform !== "atlas" || !readPayloadBoolean(nextEvent.payload.active)) {
+      return false;
+    }
+    const nextScore = readPayloadScoreTotal(nextEvent.payload.score);
+    if (nextScore > 2 && nextEvent.kind !== "match-start" && readPayloadString(nextEvent.payload.reason) !== "active-returned") {
+      return false;
+    }
+    const previousOpponent = normalizeCaptureNameKey(readPayloadString(pendingEnd.payload.opponentName));
+    const nextOpponent = normalizeCaptureNameKey(readPayloadString(nextEvent.payload.opponentName));
+    if (previousOpponent && nextOpponent && previousOpponent !== nextOpponent) {
+      return false;
+    }
+    const previousMyLegend = normalizeCaptureNameKey(readPayloadString(pendingEnd.payload.myChampion));
+    const nextMyLegend = normalizeCaptureNameKey(readPayloadString(nextEvent.payload.myChampion));
+    if (previousMyLegend && nextMyLegend && previousMyLegend !== nextMyLegend) {
+      return false;
+    }
+    const previousOppLegend = normalizeCaptureNameKey(readPayloadString(pendingEnd.payload.opponentChampion));
+    const nextOppLegend = normalizeCaptureNameKey(readPayloadString(nextEvent.payload.opponentChampion));
+    return !(previousOppLegend && nextOppLegend && previousOppLegend !== nextOppLegend);
+  }
+
+  private async flushPendingAtlasReview(
+    platform: GamePlatform,
+    reason: string,
+    settingsOverride?: Awaited<ReturnType<RiftLiteStore["getSettings"]>> | null
+  ): Promise<void> {
+    const pending = this.pendingAtlasReviews.get(platform);
+    if (!pending || this.closingPlatforms.has(platform)) {
+      return;
+    }
+    clearTimeout(pending.timer);
+    this.pendingAtlasReviews.delete(platform);
+    const session = this.tracker.get(platform);
+    if (!session) {
+      return;
+    }
+    this.closingPlatforms.add(platform);
+    try {
+      const replayEvents = this.tracker.getReplayEvents(platform);
+      const settings = settingsOverride ?? pending.settings ?? await this.store.getSettings().catch(() => null);
+      const deckTrackerSnapshots = settings?.deckTrackerSaveToReplay === false ? [] : this.deckTracker?.replaySnapshots(platform) ?? [];
+      const finalEvent: CaptureEvent = {
+        ...pending.endEvent,
+        payload: {
+          ...pending.endEvent.payload,
+          reason
+        }
+      };
+      const draft = await this.createDraftFromEvent(finalEvent);
+      const savedDraft = await this.saveDraftForReview(draft, finalEvent);
+      this.emit("match:draft", savedDraft);
+      void this.notifyDraft(savedDraft);
+      this.tracker.clear(platform);
+      this.health = {
+        ...this.health,
+        platform,
+        state: "review-needed",
+        message: `${label(platform)} match is ready to review`,
+        lastEventAt: finalEvent.capturedAt
+      };
+      this.emitHealth(true);
+      await this.finalizeReplayForDraft(savedDraft, finalEvent, replayEvents, settings, deckTrackerSnapshots).finally(() => {
+        this.deckTracker?.clear(platform);
+      }).catch(() => undefined);
+    } finally {
+      this.closingPlatforms.delete(platform);
     }
   }
 
@@ -577,6 +810,34 @@ export class CaptureCoordinator {
         return hasPayloadValue(record.name) && hasPayloadValue(record.score);
       }).length >= 2;
     return !resultText && !identityEvidence && !pairedCounterEvidence;
+  }
+
+  private shouldIgnoreFalseTcgaResultEnd(event: CaptureEvent): boolean {
+    if (event.platform !== "tcga" || readPayloadString(event.payload.reason) !== "result-text-detected") {
+      return false;
+    }
+    const endText = readPayloadString(event.payload.endText);
+    if (!endText) {
+      return false;
+    }
+    const concreteResult = /\b(you win|you lose|victory|defeat|match complete)\b|wins!/i.test(endText);
+    if (concreteResult) {
+      return false;
+    }
+    const shellControls = [
+      /you need to enable javascript/i,
+      /end your turn/i,
+      /pause before drawing/i,
+      /disable auto untap/i,
+      /toggle eliminated/i,
+      /connect with other players/i,
+      /manage turn order/i,
+      /start a new game/i,
+      /cancel all forwards/i,
+      /roll a dice/i
+    ];
+    const controlHits = shellControls.filter((pattern) => pattern.test(endText)).length;
+    return controlHits >= 2 || readPayloadBoolean(event.payload.tcgaCardZoneOverlay);
   }
 
   private async resolveSnapshot(platform: GamePlatform, snapshot: Record<string, unknown>): Promise<{
@@ -1198,6 +1459,31 @@ function hasPayloadValue(value: unknown): boolean {
 
 function readPayloadString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function readPayloadBoolean(value: unknown): boolean {
+  return value === true || value === "true";
+}
+
+function readPayloadScoreTotal(value: unknown): number {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return 0;
+  }
+  const score = value as Record<string, unknown>;
+  const me = readPayloadNumber(score.me);
+  const opp = readPayloadNumber(score.opp ?? score.opponent);
+  return (me ?? 0) + (opp ?? 0);
+}
+
+function readPayloadNumber(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
 }
 
 function isAtlasCancelLobbyText(value: string): boolean {

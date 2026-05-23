@@ -59,6 +59,10 @@ const BATTLEFIELD_NAMES = [
   { name: "Seat of Power", canonical: "Seat of Power" },
   { name: "Sunken Temple", canonical: "Sunken Temple" },
   { name: "Targon's Peak", canonical: "Targon's Peak" },
+  { name: "The Academy", canonical: "The Academy" },
+  { name: "The Acedemy", canonical: "The Academy" },
+  { name: "Acedemy", canonical: "The Academy" },
+  { name: "Academy", canonical: "The Academy" },
   { name: "Dreaming Tree", canonical: "The Dreaming Tree" },
   { name: "The Papertree", canonical: "The Papertree" },
   { name: "Veiled Temple", canonical: "Veiled Temple" },
@@ -854,12 +858,13 @@ function readTcgaSnapshot(): Record<string, unknown> {
   const opponentBattlefieldImage = battlefieldText.opponent
     ? ""
     : battlefieldImageFor(battlefieldCandidates, "opponent") || (isCardBackImage(opponentFallbackImage) ? "" : opponentFallbackImage);
-  const endText = findText(/you win|you lose|victory|defeat|wins!|match complete|return to lobby|back to lobby|play again|rematch/i);
+  const endText = findTcgaEndText();
   const tcgaPhase = readTcgaPhase(bodyText);
   const cards = DECK_TRACKER_FEATURE_ENABLED ? collectTcgaVisibleCards() : [];
+  const cardZoneOverlay = isTcgaCardZoneOverlay(bodyText);
   const hasOpponentCounter = Boolean(opponentName) || counterPlayers.length > 1;
   const hasScoreSignal = score.source !== "none" && (score.me !== "" || score.opp !== "" || score.raw.length > 1);
-  const active = Boolean(endText || hasOpponentCounter || hasScoreSignal || (tcgaPhase === "playing" && counterPlayers.length > 1));
+  const active = Boolean(endText || cardZoneOverlay || hasOpponentCounter || hasScoreSignal || (tcgaPhase === "playing" && counterPlayers.length > 1));
   return {
     active,
     myName: localCounter?.name || localPlayerName || counterPlayers[0]?.name || "",
@@ -868,6 +873,7 @@ function readTcgaSnapshot(): Record<string, unknown> {
     counterPlayers,
     localPlayerName,
     tcgaPhase,
+    tcgaCardZoneOverlay: cardZoneOverlay,
     turnText: readTcgaTurnText(bodyText),
     tcgaIdentity: {
       pseudo: localPlayerName,
@@ -891,6 +897,58 @@ function readTcgaSnapshot(): Record<string, unknown> {
     selectedDeck: readTcgaDeck(),
     endText
   };
+}
+
+function findTcgaEndText(): string {
+  const candidates = Array.from(document.querySelectorAll("button, a, h1, h2, h3, [role='dialog'], [class*='modal'], [class*='dialog'], [class*='result']"));
+  for (const candidate of candidates) {
+    const value = textOf(candidate);
+    if (!value || isTcgaShellOrPlayControlText(value)) {
+      continue;
+    }
+    if (/\b(you win|you lose|victory|defeat|match complete)\b|wins!/i.test(value)) {
+      return value;
+    }
+    if (/\b(return to lobby|back to lobby|play again|rematch)\b/i.test(value) && scoreFromText(value).me && scoreFromText(value).opp) {
+      return value;
+    }
+  }
+  return "";
+}
+
+function isTcgaShellOrPlayControlText(value: string): boolean {
+  const clean = value.replace(/\s+/g, " ").trim();
+  if (!clean) {
+    return true;
+  }
+  if (/you need to enable javascript/i.test(clean)) {
+    return true;
+  }
+  const playControls = [
+    /end your turn/i,
+    /pause before drawing/i,
+    /disable auto untap/i,
+    /toggle eliminated/i,
+    /connect with other players/i,
+    /manage turn order/i,
+    /start a new game/i,
+    /cancel all forwards/i,
+    /roll a dice/i
+  ];
+  const controlHits = playControls.filter((pattern) => pattern.test(clean)).length;
+  return controlHits >= 2;
+}
+
+function isTcgaCardZoneOverlay(bodyText: string): boolean {
+  if (!/trash|discard|grave|removed|banish|exile/i.test(bodyText)) {
+    return false;
+  }
+  if (!/opponent|enemy|your|player|card/i.test(bodyText)) {
+    return false;
+  }
+  return Boolean(document.querySelector(
+    "[role='dialog'], [class*='modal' i], [class*='dialog' i], [class*='drawer' i], [class*='overlay' i], [class*='trash' i], [class*='discard' i], [class*='grave' i], [data-drop-zone*='trash' i], [data-drop-zone*='discard' i]"
+  ));
 }
 
 function readTcgaPhase(bodyText: string): string {
@@ -941,9 +999,19 @@ function readAtlasSnapshot(): Record<string, unknown> {
     '[data-zone-owner="opponent"], [data-zone-owner="self"], [data-zone-owner="player"], [data-owner="opponent"], [data-owner="self"], [data-owner="player"]'
   );
   const realZoneCards = zoneCards.some((card) => Boolean(card.zoneOwner) && isRealAtlasCardImage(card.image));
+  const cardZoneOverlay = Boolean(
+    !terminalText &&
+      !sideboarding &&
+      /trash|discard|grave|removed|banish/i.test(bodyText) &&
+      /opponent|enemy|your|player|card/i.test(bodyText) &&
+      document.querySelector(
+        "[role='dialog'], [class*='modal' i], [class*='dialog' i], [class*='drawer' i], [class*='overlay' i], [class*='trash' i], [class*='discard' i], [data-drop-zone*='trash' i], [data-drop-zone*='discard' i]"
+      )
+  );
   const hardLobby = /paste a deck|host room|join room|find random match|quick match|choose deck|import deck|new deck|save deck/i.test(bodyText) &&
     !inGameText &&
     !terminalText &&
+    !cardZoneOverlay &&
     !ownedBoardSelector &&
     !realZoneCards &&
     !gameplayRows &&
@@ -952,6 +1020,7 @@ function readAtlasSnapshot(): Record<string, unknown> {
     !hardLobby &&
       (ownedBoardSelector ||
       realZoneCards ||
+      cardZoneOverlay ||
       gameplayRows ||
       hasScoreEvidence ||
       (boardSelector && inGameText) ||
@@ -961,6 +1030,7 @@ function readAtlasSnapshot(): Record<string, unknown> {
     boardEvidence &&
       (ownedBoardSelector ||
         realZoneCards ||
+        cardZoneOverlay ||
         logRows.length ||
         hasScoreEvidence ||
         inGameText ||
@@ -988,6 +1058,7 @@ function readAtlasSnapshot(): Record<string, unknown> {
     roomCode: readRoomCode(bodyText),
     format: readAtlasFormat(bodyText),
     atlasSideboarding: sideboarding,
+    atlasCardZoneOverlay: cardZoneOverlay,
     atlasResultKind: classifyAtlasResult(terminalText),
     myName: atlasPlayers.me,
     opponentName: atlasPlayers.opponent,
@@ -1676,6 +1747,7 @@ function publishSnapshot(reason: string): void {
     opponentBattlefield: data.opponentBattlefield || data.opponentBattlefieldImage,
     turnText: data.turnText,
     tcgaPhase: data.tcgaPhase,
+    tcgaCardZoneOverlay: data.tcgaCardZoneOverlay,
     deckTrackerCards: cardSnapshotSignature(data.deckTrackerCards),
     endText: data.endText
   });

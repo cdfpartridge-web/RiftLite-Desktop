@@ -13,9 +13,20 @@ import type {
   HubInvite,
   HubMember,
   HubMessage,
+  LfgListing,
+  LfgListingDraft,
   PrivateHub,
   PublicProfileSearchResult,
   MatchDraft,
+  SocialTeamApplication,
+  SocialTeamApplicationDraft,
+  SocialTeamDetail,
+  SocialTeamDraft,
+  SocialTeamMember,
+  SocialTeamMessage,
+  SocialTeamProfile,
+  TeamModerationAction,
+  TeamModerationRecord,
   UserSettings
 } from "../../shared/types.js";
 import { RiftLiteStore } from "./store.js";
@@ -58,9 +69,16 @@ export class FirebaseSyncService {
     private readonly getWindow: () => BrowserWindow | null
   ) {}
 
-  async syncMatch(match: MatchDraft): Promise<MatchDraft> {
+  async syncMatch(match: MatchDraft, options: { forceTeamIds?: string[]; quiet?: boolean } = {}): Promise<MatchDraft> {
     const settings = await this.store.getSettings();
-    let next: MatchDraft = { ...match, sync: { community: match.sync.community, hubs: { ...match.sync.hubs } } };
+    let next: MatchDraft = {
+      ...match,
+      sync: {
+        community: match.sync.community,
+        hubs: { ...match.sync.hubs },
+        teams: { ...(match.sync.teams ?? {}) }
+      }
+    };
 
     if (!isManualSource(next) && publicCommunitySyncEnabled(settings) && next.sync.community !== "disabled") {
       try {
@@ -102,8 +120,33 @@ export class FirebaseSyncService {
       }
     }
 
+    const activeTeamIds = new Set([
+      ...(settings.activeTeams ?? []).filter((team) => team.sync).map((team) => team.id),
+      ...(options.forceTeamIds ?? []).filter(Boolean)
+    ]);
+    const teamEntries = Object.entries(next.sync.teams ?? {}).filter(([teamId]) => activeTeamIds.has(teamId));
+    for (const [teamId, state] of teamEntries) {
+      if (state === "synced") {
+        continue;
+      }
+      try {
+        await this.uploadTeamMatch(teamId, next, settings);
+        next = {
+          ...next,
+          sync: { ...next.sync, teams: { ...(next.sync.teams ?? {}), [teamId]: "synced" } }
+        };
+      } catch {
+        next = {
+          ...next,
+          sync: { ...next.sync, teams: { ...(next.sync.teams ?? {}), [teamId]: "failed" } }
+        };
+      }
+    }
+
     const saved = await this.store.saveMatch(next);
-    this.getWindow()?.webContents.send("match:draft", saved);
+    if (!options.quiet) {
+      this.getWindow()?.webContents.send("match:draft", saved);
+    }
     return saved;
   }
 
@@ -222,6 +265,17 @@ export class FirebaseSyncService {
     return response.map((doc) => fromFirestoreDoc(doc, "hub", hubId));
   }
 
+  async getTeamMatches(teamId: string, forceRefresh = false, limit = 1000): Promise<CommunityMatch[]> {
+    const query = new URLSearchParams({
+      limit: String(Math.max(1, Math.min(limit, 2000))),
+      refresh: forceRefresh ? "1" : "0"
+    });
+    const payload = await this.authenticatedWebsiteRequest(`/api/teams/${encodeURIComponent(teamId)}/matches?${query}`, { method: "GET" });
+    return webCommunityItems(payload)
+      .filter(isRecord)
+      .map((item) => fromWebMatch(item, "team", teamId));
+  }
+
   async deleteHubMatch(hubId: string, matchId: string): Promise<void> {
     const settings = await this.store.getSettings();
     const auth = await this.getAuth(settings);
@@ -233,6 +287,16 @@ export class FirebaseSyncService {
       const hubs = { ...local.sync.hubs };
       delete hubs[hubId];
       await this.store.saveMatch({ ...local, sync: { ...local.sync, hubs } });
+    }
+  }
+
+  async deleteTeamMatch(teamId: string, matchId: string): Promise<void> {
+    await this.authenticatedWebsiteRequest(`/api/teams/${encodeURIComponent(teamId)}/matches/${encodeURIComponent(matchId)}`, { method: "DELETE" });
+    const local = (await this.store.getMatches()).find((match) => match.id === matchId);
+    if (local?.sync.teams?.[teamId]) {
+      const teams = { ...(local.sync.teams ?? {}) };
+      delete teams[teamId];
+      await this.store.saveMatch({ ...local, sync: { ...local.sync, teams } });
     }
   }
 
@@ -482,6 +546,179 @@ export class FirebaseSyncService {
     });
   }
 
+  async getLfgListings(includeMine = true): Promise<LfgListing[]> {
+    const query = new URLSearchParams(includeMine ? { mine: "1" } : {});
+    const payload = await this.authenticatedWebsiteRequest(`/api/lfg${query.toString() ? `?${query}` : ""}`, { method: "GET" });
+    return Array.isArray(payload.listings) ? payload.listings.filter(isRecord).map(normalizeLfgListing) : [];
+  }
+
+  async createLfgListing(draft: LfgListingDraft): Promise<LfgListing> {
+    const payload = await this.authenticatedWebsiteRequest("/api/lfg", {
+      method: "POST",
+      body: draft
+    });
+    return normalizeLfgListing(isRecord(payload.listing) ? payload.listing : {});
+  }
+
+  async acceptLfgListing(listingId: string): Promise<LfgListing> {
+    const payload = await this.authenticatedWebsiteRequest(`/api/lfg/${encodeURIComponent(listingId)}/accept`, {
+      method: "POST",
+      body: {}
+    });
+    return normalizeLfgListing(isRecord(payload.listing) ? payload.listing : {});
+  }
+
+  async closeLfgListing(listingId: string): Promise<LfgListing> {
+    const payload = await this.authenticatedWebsiteRequest(`/api/lfg/${encodeURIComponent(listingId)}`, { method: "DELETE" });
+    return normalizeLfgListing(isRecord(payload.listing) ? payload.listing : {});
+  }
+
+  async createLfgVoice(listingId: string): Promise<LfgListing> {
+    const payload = await this.authenticatedWebsiteRequest(`/api/lfg/${encodeURIComponent(listingId)}/voice`, { method: "POST", body: {} });
+    return normalizeLfgListing(isRecord(payload.listing) ? payload.listing : {});
+  }
+
+  async exchangeDiscordRpcCode(code: string): Promise<{ accessToken: string; refreshToken?: string; expiresAt: number }> {
+    const payload = await this.authenticatedWebsiteRequest("/api/discord/rpc-token", {
+      method: "POST",
+      body: { code }
+    });
+    const accessToken = readString(payload.accessToken);
+    if (!accessToken) {
+      throw new Error("Discord did not return a usable voice authorization token.");
+    }
+    return {
+      accessToken,
+      refreshToken: readString(payload.refreshToken),
+      expiresAt: readNumber(payload.expiresAt) || Date.now() + 15 * 60 * 1000
+    };
+  }
+
+  async refreshDiscordRpcToken(refreshToken: string): Promise<{ accessToken: string; refreshToken?: string; expiresAt: number }> {
+    const payload = await this.authenticatedWebsiteRequest("/api/discord/rpc-token", {
+      method: "POST",
+      body: { refreshToken }
+    });
+    const accessToken = readString(payload.accessToken);
+    if (!accessToken) {
+      throw new Error("Discord did not return a refreshed voice authorization token.");
+    }
+    return {
+      accessToken,
+      refreshToken: readString(payload.refreshToken),
+      expiresAt: readNumber(payload.expiresAt) || Date.now() + 15 * 60 * 1000
+    };
+  }
+
+  async getSocialTeams(options: { mine?: boolean; query?: string } = {}): Promise<SocialTeamProfile[]> {
+    const query = new URLSearchParams({
+      ...(options.mine ? { mine: "1" } : {}),
+      ...(options.query ? { q: options.query } : {})
+    });
+    const payload = await this.authenticatedWebsiteRequest(`/api/teams${query.toString() ? `?${query}` : ""}`, { method: "GET" });
+    return Array.isArray(payload.teams) ? payload.teams.filter(isRecord).map(normalizeSocialTeam) : [];
+  }
+
+  async createSocialTeam(draft: SocialTeamDraft): Promise<SocialTeamProfile> {
+    const payload = await this.authenticatedWebsiteRequest("/api/teams", {
+      method: "POST",
+      body: draft
+    });
+    return normalizeSocialTeam(isRecord(payload.team) ? payload.team : {});
+  }
+
+  async getSocialTeam(teamId: string): Promise<SocialTeamDetail> {
+    const payload = await this.authenticatedWebsiteRequest(`/api/teams/${encodeURIComponent(teamId)}`, { method: "GET" });
+    return {
+      team: normalizeSocialTeam(isRecord(payload.team) ? payload.team : {}),
+      members: Array.isArray(payload.members) ? payload.members.filter(isRecord).map(normalizeSocialTeamMember) : [],
+      myRole: readTeamRole(payload.myRole)
+    };
+  }
+
+  async updateSocialTeam(teamId: string, patch: SocialTeamDraft): Promise<SocialTeamProfile> {
+    const payload = await this.authenticatedWebsiteRequest(`/api/teams/${encodeURIComponent(teamId)}`, {
+      method: "PATCH",
+      body: patch
+    });
+    return normalizeSocialTeam(isRecord(payload.team) ? payload.team : {});
+  }
+
+  async applyToSocialTeam(teamId: string, draft: SocialTeamApplicationDraft): Promise<SocialTeamApplication> {
+    const payload = await this.authenticatedWebsiteRequest(`/api/teams/${encodeURIComponent(teamId)}/applications`, {
+      method: "POST",
+      body: draft
+    });
+    return normalizeSocialTeamApplication(isRecord(payload.application) ? payload.application : {});
+  }
+
+  async getSocialTeamApplications(teamId: string): Promise<SocialTeamApplication[]> {
+    const payload = await this.authenticatedWebsiteRequest(`/api/teams/${encodeURIComponent(teamId)}/applications`, { method: "GET" });
+    return Array.isArray(payload.applications) ? payload.applications.filter(isRecord).map(normalizeSocialTeamApplication) : [];
+  }
+
+  async reviewSocialTeamApplication(teamId: string, applicationId: string, status: "accepted" | "declined"): Promise<SocialTeamApplication> {
+    const payload = await this.authenticatedWebsiteRequest(`/api/teams/${encodeURIComponent(teamId)}/applications/${encodeURIComponent(applicationId)}`, {
+      method: "PATCH",
+      body: { status }
+    });
+    return normalizeSocialTeamApplication(isRecord(payload.application) ? payload.application : {});
+  }
+
+  async getSocialTeamMessages(teamId: string): Promise<SocialTeamMessage[]> {
+    const payload = await this.authenticatedWebsiteRequest(`/api/teams/${encodeURIComponent(teamId)}/messages`, { method: "GET" });
+    return Array.isArray(payload.messages) ? payload.messages.filter(isRecord).map(normalizeSocialTeamMessage) : [];
+  }
+
+  async postSocialTeamMessage(teamId: string, text: string): Promise<SocialTeamMessage> {
+    const payload = await this.authenticatedWebsiteRequest(`/api/teams/${encodeURIComponent(teamId)}/messages`, {
+      method: "POST",
+      body: { text }
+    });
+    return normalizeSocialTeamMessage(isRecord(payload.message) ? payload.message : {});
+  }
+
+  async deleteSocialTeamMessage(teamId: string, messageId: string): Promise<void> {
+    await this.authenticatedWebsiteRequest(`/api/teams/${encodeURIComponent(teamId)}/messages/${encodeURIComponent(messageId)}`, { method: "DELETE" });
+  }
+
+  async updateSocialTeamMember(teamId: string, uid: string, role: "admin" | "member"): Promise<void> {
+    await this.authenticatedWebsiteRequest(`/api/teams/${encodeURIComponent(teamId)}/members/${encodeURIComponent(uid)}`, {
+      method: "PATCH",
+      body: { role }
+    });
+  }
+
+  async removeSocialTeamMember(teamId: string, uid: string): Promise<void> {
+    await this.authenticatedWebsiteRequest(`/api/teams/${encodeURIComponent(teamId)}/members/${encodeURIComponent(uid)}`, { method: "DELETE" });
+  }
+
+  async reportSocialTeam(payload: { teamId: string; targetType: "team" | "message"; targetId: string; reason: string }): Promise<void> {
+    await this.authenticatedWebsiteRequest("/api/teams/report", {
+      method: "POST",
+      body: payload
+    });
+  }
+
+  async getModerationTeams(query = ""): Promise<{ isModerator: boolean; teams: TeamModerationRecord[] }> {
+    const params = new URLSearchParams({
+      ...(query ? { q: query } : {})
+    });
+    const payload = await this.authenticatedWebsiteRequest(`/api/moderation/teams${params.toString() ? `?${params}` : ""}`, { method: "GET" });
+    return {
+      isModerator: Boolean(payload.isModerator),
+      teams: Array.isArray(payload.teams) ? payload.teams.filter(isRecord).map(normalizeTeamModerationRecord) : []
+    };
+  }
+
+  async moderateTeam(teamId: string, action: TeamModerationAction, reason = ""): Promise<TeamModerationRecord> {
+    const payload = await this.authenticatedWebsiteRequest(`/api/moderation/teams/${encodeURIComponent(teamId)}`, {
+      method: "PATCH",
+      body: { action, reason }
+    });
+    return normalizeTeamModerationRecord(isRecord(payload.team) ? payload.team : {});
+  }
+
   private async uploadPublicMatch(match: MatchDraft, settings: UserSettings): Promise<string> {
     const auth = await this.getAuth(settings);
     const doc = buildSyncDoc(match, settings, auth.uid, { includeFlags: false });
@@ -540,6 +777,17 @@ export class FirebaseSyncService {
     });
     const name = typeof response.name === "string" ? response.name : "";
     return name.split("/").pop() ?? "";
+  }
+
+  private async uploadTeamMatch(teamId: string, match: MatchDraft, settings: UserSettings): Promise<string> {
+    const auth = await this.getAuth(settings);
+    const doc = buildSyncDoc(match, settings, auth.uid, { includeFlags: true });
+    const payload = await this.authenticatedWebsiteRequest(`/api/teams/${encodeURIComponent(teamId)}/matches/${encodeURIComponent(match.id)}`, {
+      method: "PATCH",
+      body: { match: doc }
+    });
+    const matchPayload = isRecord(payload.match) ? payload.match : {};
+    return readString(matchPayload.id) || match.id;
   }
 
   private async getAuth(settings: UserSettings): Promise<AuthState> {
@@ -646,10 +894,16 @@ export class FirebaseSyncService {
     try {
       payload = text ? JSON.parse(text) as Record<string, unknown> : {};
     } catch {
+      if (response.status === 404 && isSocialHubApiPath(path)) {
+        throw new Error("Social Hub is not available on the live RiftLite website yet. Please try again after the website update has finished deploying.");
+      }
       const preview = text.replace(/\s+/g, " ").slice(0, 120);
       throw new Error(`RiftLite website returned ${response.status} ${response.statusText || "non-JSON response"} for ${path}${preview ? `: ${preview}` : ""}`);
     }
     if (!response.ok) {
+      if (response.status === 404 && isSocialHubApiPath(path)) {
+        throw new Error("Social Hub is not available on the live RiftLite website yet. Please try again after the website update has finished deploying.");
+      }
       throw new Error(readString(payload.error) || `RiftLite API ${response.status}`);
     }
     return payload;
@@ -1111,6 +1365,153 @@ function normalizeHubInboxItem(value: Record<string, unknown>): HubInboxItem {
 }
 
 function normalizeHubMessage(value: Record<string, unknown>): HubMessage {
+  const uid = readString(value.uid);
+  const handle = readString(value.handle);
+  return {
+    id: readString(value.id),
+    uid,
+    handle,
+    displayName: bestDisplayNameCandidate(value.displayName, handle, fallbackAccountName(uid)),
+    text: readString(value.text),
+    mentions: Array.isArray(value.mentions) ? value.mentions.map(readString).filter(Boolean) : [],
+    pinned: Boolean(value.pinned),
+    deleted: Boolean(value.deleted),
+    createdAt: readNumber(value.createdAt),
+    updatedAt: readNumber(value.updatedAt)
+  };
+}
+
+function normalizeLfgListing(value: Record<string, unknown>): LfgListing {
+  const platform = readString(value.platform);
+  const format = readString(value.format);
+  const status = readString(value.status);
+  const uid = readString(value.uid);
+  const handle = readString(value.handle);
+  return {
+    id: readString(value.id),
+    uid,
+    handle,
+    displayName: bestDisplayNameCandidate(value.displayName, handle, fallbackAccountName(uid)),
+    platform: platform === "tcga" ? "tcga" : "atlas",
+    roomCode: readString(value.roomCode),
+    format: format === "Bo1" ? "Bo1" : "Bo3",
+    myLegend: readString(value.myLegend),
+    lookingForLegends: Array.isArray(value.lookingForLegends) ? value.lookingForLegends.map(readString).filter(Boolean) : [],
+    allowAny: Boolean(value.allowAny),
+    note: readString(value.note),
+    status: status === "closed" || status === "expired"
+      ? status
+      : status === "matched" || status === "accepted"
+        ? "matched"
+        : "active",
+    acceptedByUid: readString(value.acceptedByUid),
+    acceptedByHandle: readString(value.acceptedByHandle),
+    acceptedByDisplayName: bestDisplayNameCandidate(value.acceptedByDisplayName, readString(value.acceptedByHandle), fallbackAccountName(readString(value.acceptedByUid))),
+    acceptedAt: readNumber(value.acceptedAt),
+    createdAt: readNumber(value.createdAt),
+    expiresAt: readNumber(value.expiresAt),
+    closedAt: readNumber(value.closedAt),
+    discordVoiceChannelId: readString(value.discordVoiceChannelId),
+    discordGuildId: readString(value.discordGuildId),
+    discordChannelUrl: readString(value.discordChannelUrl),
+    discordAppUrl: readString(value.discordAppUrl),
+    discordInviteUrl: readString(value.discordInviteUrl),
+    discordVoiceExpiresAt: readNumber(value.discordVoiceExpiresAt),
+    discordVoiceCreatedAt: readNumber(value.discordVoiceCreatedAt)
+  };
+}
+
+function isSocialHubApiPath(path: string): boolean {
+  return path.startsWith("/api/lfg") || path.startsWith("/api/teams") || path.startsWith("/api/moderation");
+}
+
+function normalizeSocialTeam(value: Record<string, unknown>): SocialTeamProfile {
+  const socials = isRecord(value.socials) ? value.socials : {};
+  const visibility = readString(value.visibility);
+  return {
+    id: readString(value.id),
+    slug: readString(value.slug) || readString(value.id),
+    name: readString(value.name) || readString(value.slug) || "RiftLite team",
+    description: readString(value.description),
+    region: readString(value.region),
+    locationMode: readString(value.locationMode),
+    visibility: visibility === "private" ? "private" : "public",
+    purposes: Array.isArray(value.purposes) ? value.purposes.map(readString).filter(Boolean) : [],
+    recruitmentStatus: readString(value.recruitmentStatus) || "open",
+    logoUrl: readString(value.logoUrl),
+    bannerUrl: readString(value.bannerUrl),
+    website: readString(value.website),
+    discord: readString(value.discord),
+    socials: {
+      x: readString(socials.x),
+      youtube: readString(socials.youtube),
+      twitch: readString(socials.twitch),
+      instagram: readString(socials.instagram),
+      metafy: readString(socials.metafy)
+    },
+    ownerUid: readString(value.ownerUid),
+    ownerHandle: readString(value.ownerHandle),
+    ownerDisplayName: bestDisplayNameCandidate(value.ownerDisplayName, value.ownerHandle, fallbackAccountName(readString(value.ownerUid))),
+    memberCount: readNumber(value.memberCount),
+    applicationCount: readNumber(value.applicationCount),
+    createdAt: readNumber(value.createdAt),
+    updatedAt: readNumber(value.updatedAt)
+  };
+}
+
+function normalizeTeamModerationRecord(value: Record<string, unknown>): TeamModerationRecord {
+  return {
+    ...normalizeSocialTeam(value),
+    hidden: Boolean(value.hidden),
+    moderationStatus: readString(value.moderationStatus),
+    moderationReason: readString(value.moderationReason),
+    moderatedAt: readNumber(value.moderatedAt),
+    moderatedBy: readString(value.moderatedBy)
+  };
+}
+
+function readTeamRole(value: unknown): SocialTeamMember["role"] | "" {
+  const role = readString(value);
+  return role === "owner" || role === "admin" || role === "member" ? role : "";
+}
+
+function normalizeSocialTeamMember(value: Record<string, unknown>): SocialTeamMember {
+  const uid = readString(value.uid) || readString(value.id);
+  const handle = readString(value.handle);
+  return {
+    id: readString(value.id) || uid,
+    uid,
+    handle,
+    displayName: bestDisplayNameCandidate(value.displayName, handle, fallbackAccountName(uid)),
+    role: readTeamRole(value.role) || "member",
+    joinedAt: readNumber(value.joinedAt),
+    updatedAt: readNumber(value.updatedAt)
+  };
+}
+
+function normalizeSocialTeamApplication(value: Record<string, unknown>): SocialTeamApplication {
+  const status = readString(value.status);
+  const uid = readString(value.uid);
+  const handle = readString(value.handle);
+  return {
+    id: readString(value.id),
+    teamId: readString(value.teamId),
+    uid,
+    handle,
+    displayName: bestDisplayNameCandidate(value.displayName, handle, fallbackAccountName(uid)),
+    message: readString(value.message),
+    region: readString(value.region),
+    preferredLegends: Array.isArray(value.preferredLegends) ? value.preferredLegends.map(readString).filter(Boolean) : [],
+    availability: readString(value.availability),
+    status: status === "accepted" || status === "declined" || status === "withdrawn" ? status : "pending",
+    createdAt: readNumber(value.createdAt),
+    updatedAt: readNumber(value.updatedAt),
+    reviewedAt: readNumber(value.reviewedAt),
+    reviewedBy: readString(value.reviewedBy)
+  };
+}
+
+function normalizeSocialTeamMessage(value: Record<string, unknown>): SocialTeamMessage {
   const uid = readString(value.uid);
   const handle = readString(value.handle);
   return {

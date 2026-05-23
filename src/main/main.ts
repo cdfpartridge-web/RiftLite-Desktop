@@ -25,7 +25,9 @@ import type {
   DeckPackageExport,
   DeckPackageImportResult,
   DeckSnapshot,
+  DiscordVoiceJoinResult,
   GamePlatform,
+  LfgListing,
   MatchHistoryCsvExportPayload,
   MatchDraft,
   ReplayAnnotation,
@@ -46,6 +48,9 @@ import type {
   ReplayVoiceNote,
   ReplayWindowCaptureSource,
   RiftReplayBundle,
+  RiftLiteBackupFile,
+  RiftLiteBackupOptions,
+  RiftLiteBackupSummary,
   SavedDeck,
   ScreenshotResult,
   SpotlightClickPayload,
@@ -58,6 +63,7 @@ import { CaptureCoordinator } from "./services/captureCoordinator.js";
 import { CaptureDiagnostics } from "./services/captureDiagnostics.js";
 import { DeckService } from "./services/deckService.js";
 import { DeckTrackerService } from "./services/deckTrackerService.js";
+import { joinDiscordVoiceChannel } from "./services/discordRpc.js";
 import { FirebaseSyncService } from "./services/firebaseSync.js";
 import { OverlayServer } from "./services/overlayServer.js";
 import { RiftLiteStore } from "./services/store.js";
@@ -71,6 +77,7 @@ const isDev = process.env.NODE_ENV === "development";
 const DECK_PACKAGE_TEXT_PREFIX = "RIFTLITE_DECK_PACKAGE_V1:";
 const DECK_PACKAGE_COMPRESSED_TEXT_PREFIX = "RIFTLITE_DECK_PACKAGE_V2:";
 const DECK_SHARE_TEXT_PREFIX = "RIFTLITE_DECK_SHARE_V2:";
+const RIFTLITE_BACKUP_EXTENSION = "riftlitebackup";
 const REPLAY_STREAM_MAGIC = "RIFTLITE_REPLAY_STREAM_V1";
 const REPLAY_STREAM_VIDEO_START = "VIDEO_DATA";
 const REPLAY_STREAM_VIDEO_END = "END_VIDEO_DATA";
@@ -258,6 +265,14 @@ function replayFrameCaptureDirectory(settings: UserSettings): string {
 
 function replayBundleDirectory(settings?: UserSettings): string {
   return settings ? replayDirectory(settings) : defaultReplayDirectory();
+}
+
+function backupDirectory(): string {
+  return join(app.getPath("documents"), "RiftLite", "Backups");
+}
+
+function backupTimestamp(): string {
+  return new Date().toISOString().replace(/T/, "_").replace(/\..+$/, "").replace(/:/g, "-");
 }
 
 function legacyReplayVideoDirectory(): string {
@@ -736,10 +751,90 @@ async function configureScreenshotHotkey(): Promise<void> {
 
 async function openExternalResource(url: string): Promise<void> {
   const parsed = new URL(url);
-  if (parsed.protocol !== "https:" && parsed.protocol !== "http:" && parsed.protocol !== "mailto:") {
-    throw new Error("Only web and email links can be opened.");
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:" && parsed.protocol !== "mailto:" && parsed.protocol !== "discord:") {
+    throw new Error("Only web, Discord, and email links can be opened.");
   }
   await shell.openExternal(parsed.toString());
+}
+
+async function discordDirectVoiceConfigured(): Promise<boolean> {
+  try {
+    const response = await fetch("https://www.riftlite.com/api/discord/rpc-token", {
+      method: "GET",
+      cache: "no-store"
+    });
+    if (!response.ok) return false;
+    const payload = await response.json() as { configured?: unknown };
+    return payload.configured === true;
+  } catch {
+    return false;
+  }
+}
+
+async function joinDiscordVoiceFromListing(listing: Pick<LfgListing, "discordVoiceChannelId" | "discordGuildId" | "discordChannelUrl" | "discordAppUrl" | "discordInviteUrl">): Promise<DiscordVoiceJoinResult> {
+  const fallbackUrl = listing.discordAppUrl || listing.discordChannelUrl || listing.discordInviteUrl;
+  const channelId = listing.discordVoiceChannelId?.trim() ?? "";
+  if (!channelId) {
+    if (fallbackUrl) await openExternalResource(fallbackUrl);
+    return {
+      ok: false,
+      attempted: false,
+      usedFallback: Boolean(fallbackUrl),
+      message: fallbackUrl ? "Opening Discord voice channel." : "No Discord voice channel is available."
+    };
+  }
+
+  if (!await discordDirectVoiceConfigured()) {
+    if (fallbackUrl) await openExternalResource(fallbackUrl);
+    return {
+      ok: false,
+      attempted: false,
+      usedFallback: Boolean(fallbackUrl),
+      message: fallbackUrl ? "Opening Discord voice channel. Direct voice join is not configured yet." : "Discord direct voice join is not configured yet."
+    };
+  }
+
+  try {
+    return await joinDiscordVoiceChannel({
+      channelId,
+      tokenCachePath: join(app.getPath("userData"), "discord-rpc-token.json"),
+      exchangeCode: (code) => syncService.exchangeDiscordRpcCode(code),
+      refreshToken: (refreshToken) => syncService.refreshDiscordRpcToken(refreshToken),
+      confirmMoveFromCurrentVoice: async () => {
+        const response = mainWindow
+          ? await dialog.showMessageBox(mainWindow, {
+            type: "question",
+            buttons: ["Move me", "Stay where I am"],
+            defaultId: 0,
+            cancelId: 1,
+            title: "Move Discord voice?",
+            message: "Discord says you are already in another voice channel.",
+            detail: "Do you want RiftLite to move you into this LFG voice room?"
+          })
+          : await dialog.showMessageBox({
+            type: "question",
+            buttons: ["Move me", "Stay where I am"],
+            defaultId: 0,
+            cancelId: 1,
+            title: "Move Discord voice?",
+            message: "Discord says you are already in another voice channel.",
+            detail: "Do you want RiftLite to move you into this LFG voice room?"
+          });
+        return response.response === 0;
+      }
+    });
+  } catch (error) {
+    if (fallbackUrl) {
+      await openExternalResource(fallbackUrl);
+      return {
+        ok: false,
+        attempted: true,
+        usedFallback: true,
+        message: `${error instanceof Error ? error.message : "Discord direct voice join failed."} Opening Discord channel instead.`
+      };
+    }
+    throw error;
+  }
 }
 
 function simEventReceiverEnabled(): boolean {
@@ -3178,6 +3273,94 @@ async function exportAccountData(): Promise<string> {
   return result.filePath;
 }
 
+function backupSummary(data: RiftLiteBackupFile, filePath: string, preRestoreBackupPath = ""): RiftLiteBackupSummary {
+  return {
+    path: filePath,
+    exportedAt: data.exportedAt,
+    appVersion: data.appVersion,
+    matches: data.matches?.length ?? 0,
+    deletedMatches: data.deletedMatches?.length ?? 0,
+    decks: data.decks?.length ?? 0,
+    notebooks: data.notebooks?.length ?? 0,
+    replays: data.replays?.length ?? 0,
+    deletedReplays: data.deletedReplays?.length ?? 0,
+    settingsIncluded: Boolean(data.settings),
+    preRestoreBackupPath: preRestoreBackupPath || undefined
+  };
+}
+
+function parseBackupFile(raw: string): RiftLiteBackupFile {
+  const parsed = JSON.parse(raw) as RiftLiteBackupFile;
+  if (parsed.format !== "riftlite.backup" || parsed.version !== 1) {
+    throw new Error("That file is not a supported RiftLite backup.");
+  }
+  if (!parsed.settings || !Array.isArray(parsed.matches) || !Array.isArray(parsed.decks) || !Array.isArray(parsed.replays)) {
+    throw new Error("That backup is missing required RiftLite data.");
+  }
+  return {
+    ...parsed,
+    deletedMatches: Array.isArray(parsed.deletedMatches) ? parsed.deletedMatches : [],
+    notebooks: Array.isArray(parsed.notebooks) ? parsed.notebooks : [],
+    deletedReplays: Array.isArray(parsed.deletedReplays) ? parsed.deletedReplays : []
+  };
+}
+
+async function writeBackupFile(filePath: string, data: RiftLiteBackupFile): Promise<void> {
+  await mkdir(dirname(filePath), { recursive: true });
+  await writeFile(filePath, JSON.stringify(data), "utf8");
+}
+
+async function exportRiftLiteBackup(options: Partial<RiftLiteBackupOptions> = {}): Promise<RiftLiteBackupSummary | null> {
+  const defaultPath = join(backupDirectory(), `RiftLite Backup ${backupTimestamp()}.${RIFTLITE_BACKUP_EXTENSION}`);
+  const dialogOptions: SaveDialogOptions = {
+    title: "Export RiftLite backup",
+    defaultPath,
+    filters: [{ name: "RiftLite backup", extensions: [RIFTLITE_BACKUP_EXTENSION] }]
+  };
+  const result = mainWindow ? await dialog.showSaveDialog(mainWindow, dialogOptions) : await dialog.showSaveDialog(dialogOptions);
+  if (result.canceled || !result.filePath) {
+    return null;
+  }
+  const backup = await store.exportBackupData({ includeRecycleBin: options.includeRecycleBin !== false });
+  await writeBackupFile(result.filePath, backup);
+  shell.showItemInFolder(result.filePath);
+  return backupSummary(backup, result.filePath);
+}
+
+async function restoreRiftLiteBackup(): Promise<RiftLiteBackupSummary | null> {
+  const dialogOptions: OpenDialogOptions = {
+    title: "Restore RiftLite backup",
+    defaultPath: backupDirectory(),
+    filters: [{ name: "RiftLite backup", extensions: [RIFTLITE_BACKUP_EXTENSION] }],
+    properties: ["openFile"]
+  };
+  const openResult = mainWindow ? await dialog.showOpenDialog(mainWindow, dialogOptions) : await dialog.showOpenDialog(dialogOptions);
+  const filePath = openResult.filePaths[0];
+  if (openResult.canceled || !filePath) {
+    return null;
+  }
+  const backup = parseBackupFile(await readFile(filePath, "utf8"));
+  const messageBoxOptions = {
+    type: "warning" as const,
+    buttons: ["Restore backup", "Cancel"],
+    defaultId: 1,
+    cancelId: 1,
+    title: "Restore RiftLite backup?",
+    message: "This will replace the local RiftLite data on this PC.",
+    detail: `RiftLite will first create a safety backup of the current data.\n\nBackup contains ${backup.matches.length + backup.deletedMatches.length} matches, ${backup.decks.length} decks, ${backup.notebooks.length} notebooks, and ${backup.replays.length + backup.deletedReplays.length} replay records. Replay video files are not copied by this app-data backup.`
+  };
+  const warning = mainWindow ? await dialog.showMessageBox(mainWindow, messageBoxOptions) : await dialog.showMessageBox(messageBoxOptions);
+  if (warning.response !== 0) {
+    return null;
+  }
+
+  const safetyBackup = await store.exportBackupData({ includeRecycleBin: true });
+  const safetyPath = join(backupDirectory(), `RiftLite Pre-Restore Backup ${backupTimestamp()}.${RIFTLITE_BACKUP_EXTENSION}`);
+  await writeBackupFile(safetyPath, safetyBackup);
+  await store.restoreBackupData(backup);
+  return backupSummary(backup, filePath, safetyPath);
+}
+
 async function exportMatchHistoryCsv(payload: MatchHistoryCsvExportPayload): Promise<string> {
   const rows = Array.isArray(payload.matches) ? payload.matches : [];
   const label = safeFileComponent(payload.label || (payload.scope === "hub" ? "private-hub-match-history" : "personal-match-history"), "match-history");
@@ -3508,6 +3691,8 @@ function registerIpc(): void {
   ipcMain.handle("replays:video:keyframe", (_event, options: ReplayVideoKeyframeOptions) => saveReplayVideoKeyframe(options));
   ipcMain.handle("replays:video:load", (_event, video: ReplayVideoAsset) => loadReplayVideo(video));
   ipcMain.handle("legacy:import", () => store.importLegacyData());
+  ipcMain.handle("backup:export", (_event, options?: Partial<RiftLiteBackupOptions>) => exportRiftLiteBackup(options ?? {}));
+  ipcMain.handle("backup:restore", () => restoreRiftLiteBackup());
   ipcMain.handle("community:matches", (_event, forceRefresh = false) => syncService.getCommunityMatches(Boolean(forceRefresh)));
   ipcMain.handle("hubs:create", async (_event, name: string, password: string) => syncService.createHub(name, password, await store.getSettings()));
   ipcMain.handle("hubs:join", async (_event, name: string, password: string) => syncService.joinHub(name, password, await store.getSettings()));
@@ -3515,6 +3700,10 @@ function registerIpc(): void {
   ipcMain.handle("hubs:sync-private", () => capture.syncPrivateHubs());
   ipcMain.handle("hubs:sync-selected", (_event, matchIds: string[], hubIds: string[]) => capture.syncMatchesToHubs(matchIds, hubIds));
   ipcMain.handle("hubs:delete-match", (_event, hubId: string, matchId: string) => syncService.deleteHubMatch(hubId, matchId));
+  ipcMain.handle("teams:matches", (_event, teamId: string, forceRefresh = false) => syncService.getTeamMatches(teamId, Boolean(forceRefresh)));
+  ipcMain.handle("teams:sync-enabled", () => capture.syncTeams());
+  ipcMain.handle("teams:sync-selected", (_event, matchIds: string[], teamIds: string[]) => capture.syncMatchesToTeams(matchIds, teamIds));
+  ipcMain.handle("teams:delete-match", (_event, teamId: string, matchId: string) => syncService.deleteTeamMatch(teamId, matchId));
   ipcMain.handle("account:link:start", () => syncService.startAccountLink());
   ipcMain.handle("account:link:status", (_event, sessionId: string) => syncService.getAccountLinkStatus(sessionId));
   ipcMain.handle("account:profile:get", () => syncService.getAccountProfile());
@@ -3532,6 +3721,27 @@ function registerIpc(): void {
   ipcMain.handle("hubs:messages", (_event, hubId: string) => syncService.getHubMessages(hubId));
   ipcMain.handle("hubs:message:post", (_event, hubId: string, text: string) => syncService.postHubMessage(hubId, text));
   ipcMain.handle("hubs:message:delete", (_event, hubId: string, messageId: string) => syncService.deleteHubMessage(hubId, messageId));
+  ipcMain.handle("lfg:list", (_event, includeMine?: boolean) => syncService.getLfgListings(Boolean(includeMine)));
+  ipcMain.handle("lfg:create", (_event, draft) => syncService.createLfgListing(draft));
+  ipcMain.handle("lfg:accept", (_event, listingId: string) => syncService.acceptLfgListing(listingId));
+  ipcMain.handle("lfg:close", (_event, listingId: string) => syncService.closeLfgListing(listingId));
+  ipcMain.handle("lfg:voice:create", (_event, listingId: string) => syncService.createLfgVoice(listingId));
+  ipcMain.handle("discord:voice:join", (_event, listing) => joinDiscordVoiceFromListing(listing));
+  ipcMain.handle("teams:list", (_event, options) => syncService.getSocialTeams(options));
+  ipcMain.handle("teams:create", (_event, draft) => syncService.createSocialTeam(draft));
+  ipcMain.handle("teams:get", (_event, teamId: string) => syncService.getSocialTeam(teamId));
+  ipcMain.handle("teams:update", (_event, teamId: string, patch) => syncService.updateSocialTeam(teamId, patch));
+  ipcMain.handle("teams:apply", (_event, teamId: string, draft) => syncService.applyToSocialTeam(teamId, draft));
+  ipcMain.handle("teams:applications", (_event, teamId: string) => syncService.getSocialTeamApplications(teamId));
+  ipcMain.handle("teams:application:review", (_event, teamId: string, applicationId: string, status: "accepted" | "declined") => syncService.reviewSocialTeamApplication(teamId, applicationId, status));
+  ipcMain.handle("teams:messages", (_event, teamId: string) => syncService.getSocialTeamMessages(teamId));
+  ipcMain.handle("teams:message:post", (_event, teamId: string, text: string) => syncService.postSocialTeamMessage(teamId, text));
+  ipcMain.handle("teams:message:delete", (_event, teamId: string, messageId: string) => syncService.deleteSocialTeamMessage(teamId, messageId));
+  ipcMain.handle("teams:member:update", (_event, teamId: string, uid: string, role: "admin" | "member") => syncService.updateSocialTeamMember(teamId, uid, role));
+  ipcMain.handle("teams:member:remove", (_event, teamId: string, uid: string) => syncService.removeSocialTeamMember(teamId, uid));
+  ipcMain.handle("teams:report", (_event, payload) => syncService.reportSocialTeam(payload));
+  ipcMain.handle("moderation:teams", (_event, query?: string) => syncService.getModerationTeams(query));
+  ipcMain.handle("moderation:team:update", (_event, teamId: string, action, reason?: string) => syncService.moderateTeam(teamId, action, reason));
   ipcMain.handle("updates:status", () => updater.getStatus());
   ipcMain.handle("updates:check", () => updater.check());
   ipcMain.handle("updates:download", () => updater.download());
