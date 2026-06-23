@@ -8,6 +8,7 @@ import { homedir } from "node:os";
 import initSqlJs, { type Database, type SqlJsStatic } from "sql.js";
 import { deckNotebookWithCurrentVersion, deckSnapshotHash, emptyDeckNotebook, normalizeDeckNotebook, sanitizeDeckNotebookForDeck } from "../../shared/deckNotebook.js";
 import { normalizeLegendName } from "../../shared/legendNames.js";
+import { buildCombinedBo3Match, buildMatchCombinePreview, markOriginalAsCombined, restoreCombinedOriginal, type MatchCombinePreview, type MatchCombineSavePayload } from "../../shared/matchCombine.js";
 import type { CaptureEvent, DeckNotebook, ImportSummary, MatchDraft, OverlayDisplayOptions, ReplayRecord, RiftLiteBackupFile, RiftLiteBackupOptions, SavedDeck, UserSettings } from "../../shared/types.js";
 
 interface PersistedState {
@@ -44,9 +45,11 @@ const DEFAULT_SETTINGS: UserSettings = {
   replayVideoMode: "game-frame",
   replayVideoQuality: "sharp",
   replayMicAudioEnabled: false,
+  replayCustomFlagTypes: ["Mistake Consequence", "Question", "Alternative Line"],
   deckTrackerEnabled: false,
   deckTrackerAutoStart: false,
   deckTrackerSaveToReplay: false,
+  deckTrackerPerformanceMode: "balanced",
   deckTrackerPinnedCards: {},
   microphoneDeviceId: "",
   gameZoomFactor: 1,
@@ -71,6 +74,24 @@ function normalizeReplayVideoMode(_value: unknown): UserSettings["replayVideoMod
 
 function normalizeReplayFramePreset(value: unknown): UserSettings["replayFramePreset"] {
   return value === "light" || value === "detailed" ? value : "standard";
+}
+
+function uniqueReplayCustomFlagTypes(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const item of value) {
+    const label = String(item ?? "").trim().replace(/\s+/g, " ");
+    const key = label.toLowerCase();
+    if (!label || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    result.push(label.slice(0, 48));
+  }
+  return result.slice(0, 24);
 }
 
 function escapeRegExp(value: string): string {
@@ -195,6 +216,9 @@ export class RiftLiteStore {
       replayVideoMode: normalizeReplayVideoMode((parsed as { replayVideoMode?: unknown }).replayVideoMode),
       replayFramePreset: normalizeReplayFramePreset((parsed as { replayFramePreset?: unknown }).replayFramePreset),
       overlayDisplay: { ...DEFAULT_SETTINGS.overlayDisplay, ...parsed.overlayDisplay },
+      replayCustomFlagTypes: Array.isArray(parsed.replayCustomFlagTypes)
+        ? uniqueReplayCustomFlagTypes(parsed.replayCustomFlagTypes)
+        : DEFAULT_SETTINGS.replayCustomFlagTypes,
       deckTrackerPinnedCards: parsed.deckTrackerPinnedCards && typeof parsed.deckTrackerPinnedCards === "object" && !Array.isArray(parsed.deckTrackerPinnedCards)
         ? parsed.deckTrackerPinnedCards
         : {},
@@ -221,6 +245,9 @@ export class RiftLiteStore {
       ...patch,
       replayVideoMode,
       replayFramePreset,
+      replayCustomFlagTypes: Object.prototype.hasOwnProperty.call(patch, "replayCustomFlagTypes")
+        ? uniqueReplayCustomFlagTypes(patch.replayCustomFlagTypes)
+        : current.replayCustomFlagTypes,
       activeHubs: patch.activeHubs ? [...patch.activeHubs] : current.activeHubs,
       activeTeams: patch.activeTeams ? [...patch.activeTeams] : current.activeTeams
     };
@@ -239,7 +266,8 @@ export class RiftLiteStore {
     const db = await this.database();
     const result = db.exec("SELECT data_json FROM matches ORDER BY captured_at DESC");
     return (result[0]?.values ?? [])
-      .map((row) => normalizeStoredMatch(JSON.parse(String(row[0])) as MatchDraft))
+      .map((row) => this.parseStoredMatch(row[0]))
+      .filter((match): match is MatchDraft => Boolean(match))
       .filter((match) => !match.deletedAt);
   }
 
@@ -247,7 +275,8 @@ export class RiftLiteStore {
     const db = await this.database();
     const result = db.exec("SELECT data_json FROM matches ORDER BY updated_at DESC");
     return (result[0]?.values ?? [])
-      .map((row) => normalizeStoredMatch(JSON.parse(String(row[0])) as MatchDraft))
+      .map((row) => this.parseStoredMatch(row[0]))
+      .filter((match): match is MatchDraft => Boolean(match))
       .filter((match) => Boolean(match.deletedAt));
   }
 
@@ -265,6 +294,92 @@ export class RiftLiteStore {
       await this.persist();
     });
     return next;
+  }
+
+  async previewCombinedMatches(matchIds: string[]): Promise<MatchCombinePreview> {
+    const matches = await this.getMatchesByIds(matchIds);
+    return buildMatchCombinePreview(matches);
+  }
+
+  async combineMatches(payload: MatchCombineSavePayload): Promise<MatchDraft> {
+    const orderedMatchIds = payload.orderedMatchIds.filter(Boolean).slice(0, 3);
+    const matches = await this.getMatchesByIds(orderedMatchIds);
+    const preview = buildMatchCombinePreview(matches);
+    if (!preview.canSave) {
+      const error = preview.warnings.find((warning) => warning.severity === "error")?.message ?? "Those matches cannot be combined.";
+      throw new Error(error);
+    }
+
+    const db = await this.database();
+    const now = new Date().toISOString();
+    const combined = compactMatchForStorage(normalizeStoredMatch(buildCombinedBo3Match(matches, randomUUID(), now)));
+    const originals = matches.map((match) => compactMatchForStorage(normalizeStoredMatch(markOriginalAsCombined(match, combined.id, now))));
+
+    await this.withDatabaseRepair("combine-matches", async () => {
+      db.run(
+        `INSERT OR REPLACE INTO matches
+         (id, platform, status, result, captured_at, updated_at, data_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [combined.id, combined.platform, combined.status, combined.result, combined.capturedAt, combined.updatedAt, JSON.stringify(combined)]
+      );
+      for (const original of originals) {
+        db.run(
+          "UPDATE matches SET updated_at=?, data_json=? WHERE id=?",
+          [original.updatedAt, JSON.stringify(original), original.id]
+        );
+      }
+      await this.persist();
+    });
+    return combined;
+  }
+
+  async undoCombinedMatch(combinedMatchId: string): Promise<MatchDraft[]> {
+    const db = await this.database();
+    const row = db.exec("SELECT data_json FROM matches WHERE id=?", [combinedMatchId])[0]?.values[0]?.[0];
+    if (typeof row !== "string") {
+      throw new Error("Combined match was not found.");
+    }
+    const combined = normalizeStoredMatch(JSON.parse(row) as MatchDraft);
+    if (!combined.manualRepair || !combined.combinedFromMatchIds?.length) {
+      throw new Error("That match is not a combined Bo3 repair.");
+    }
+
+    const now = new Date().toISOString();
+    const restored: MatchDraft[] = [];
+    await this.withDatabaseRepair("undo-combined-match", async () => {
+      const deletedCombined = normalizeStoredMatch({ ...combined, deletedAt: now, updatedAt: now });
+      db.run(
+        "UPDATE matches SET updated_at=?, data_json=? WHERE id=?",
+        [deletedCombined.updatedAt, JSON.stringify(deletedCombined), deletedCombined.id]
+      );
+      for (const originalId of combined.combinedFromMatchIds ?? []) {
+        const originalRow = db.exec("SELECT data_json FROM matches WHERE id=?", [originalId])[0]?.values[0]?.[0];
+        if (typeof originalRow !== "string") {
+          continue;
+        }
+        const original = normalizeStoredMatch(JSON.parse(originalRow) as MatchDraft);
+        const next = compactMatchForStorage(normalizeStoredMatch(restoreCombinedOriginal(original, now)));
+        db.run("UPDATE matches SET updated_at=?, data_json=? WHERE id=?", [next.updatedAt, JSON.stringify(next), next.id]);
+        restored.push(next);
+      }
+      await this.persist();
+    });
+    return restored;
+  }
+
+  private async getMatchesByIds(matchIds: string[]): Promise<MatchDraft[]> {
+    const db = await this.database();
+    const matches = new Map<string, MatchDraft>();
+    for (const id of new Set(matchIds.filter(Boolean))) {
+      const row = db.exec("SELECT data_json FROM matches WHERE id=?", [id])[0]?.values[0]?.[0];
+      if (typeof row === "string") {
+        const match = normalizeStoredMatch(JSON.parse(row) as MatchDraft);
+        if (!match.deletedAt) {
+          matches.set(id, match);
+        }
+      }
+    }
+    return matchIds.map((id) => matches.get(id)).filter((match): match is MatchDraft => Boolean(match));
   }
 
   async deleteMatch(id: string): Promise<void> {
@@ -464,7 +579,8 @@ export class RiftLiteStore {
     const db = await this.database();
     const result = db.exec("SELECT data_json FROM replays ORDER BY captured_at DESC");
     return (result[0]?.values ?? [])
-      .map((row) => JSON.parse(String(row[0])) as ReplayRecord)
+      .map((row) => this.parseStoredReplay(row[0]))
+      .filter((replay): replay is ReplayRecord => Boolean(replay))
       .filter((replay) => !replay.deletedAt);
   }
 
@@ -472,7 +588,8 @@ export class RiftLiteStore {
     const db = await this.database();
     const result = db.exec("SELECT data_json FROM replays ORDER BY captured_at DESC");
     return (result[0]?.values ?? [])
-      .map((row) => JSON.parse(String(row[0])) as ReplayRecord)
+      .map((row) => this.parseStoredReplay(row[0]))
+      .filter((replay): replay is ReplayRecord => Boolean(replay))
       .filter((replay) => Boolean(replay.deletedAt));
   }
 
@@ -700,14 +817,17 @@ export class RiftLiteStore {
     const wasmPath = require.resolve("sql.js/dist/sql-wasm.wasm");
     this.sql = await initSqlJs({ locateFile: () => wasmPath });
     const bytes = existsSync(this.dbPath) ? await readFile(this.dbPath) : null;
-    this.db = bytes?.length ? new this.sql.Database(bytes) : new this.sql.Database();
-    await this.repairDatabaseIfNeeded("startup-integrity-check");
-    this.migrateSchema();
-    await this.migrateLegacyJson();
-    await this.importLegacyData().catch(() => undefined);
-    this.compactStoredPayloads();
-    await this.repairDatabaseIfNeeded("post-migration-integrity-check");
-    await this.persist();
+    try {
+      this.db = bytes?.length ? new this.sql.Database(bytes) : new this.sql.Database();
+      await this.repairDatabaseIfNeeded("startup-integrity-check");
+      this.migrateSchema();
+      await this.migrateLegacyJson();
+      await this.importLegacyData().catch(() => undefined);
+      await this.repairDatabaseIfNeeded("post-migration-integrity-check");
+      await this.persist();
+    } catch (error) {
+      await this.recoverFromStartupOpenFailure(error);
+    }
   }
 
   private async database(): Promise<Database> {
@@ -859,6 +979,30 @@ export class RiftLiteStore {
     }
   }
 
+  private parseStoredMatch(raw: unknown): MatchDraft | null {
+    if (typeof raw !== "string") {
+      return null;
+    }
+    try {
+      return normalizeStoredMatch(JSON.parse(raw) as MatchDraft);
+    } catch (error) {
+      console.warn("Skipping unreadable stored match row", error);
+      return null;
+    }
+  }
+
+  private parseStoredReplay(raw: unknown): ReplayRecord | null {
+    if (typeof raw !== "string") {
+      return null;
+    }
+    try {
+      return compactReplayForStorage(JSON.parse(raw) as ReplayRecord);
+    } catch (error) {
+      console.warn("Skipping unreadable stored replay row", error);
+      return null;
+    }
+  }
+
   private writeDeckNotebook(db: Database, deckId: string, notebook: DeckNotebook): void {
     const next = normalizeDeckNotebook(deckId, notebook);
     const updatedAt = next.updatedAt || new Date().toISOString();
@@ -927,6 +1071,24 @@ export class RiftLiteStore {
     }
     await mkdir(dirname(this.dbPath), { recursive: true });
     await writeFile(this.dbPath, Buffer.from(this.db.export()));
+  }
+
+  private async recoverFromStartupOpenFailure(error: unknown): Promise<void> {
+    await this.backupDatabase("startup-open-failed");
+    const failurePath = join(dirname(this.dbPath), `riftlite-startup-open-failed-${Date.now()}.log`);
+    await writeFile(
+      failurePath,
+      error instanceof Error ? `${error.message}\n${error.stack ?? ""}` : String(error),
+      "utf8"
+    ).catch(() => undefined);
+    if (!this.sql) {
+      throw error;
+    }
+    this.db = new this.sql.Database();
+    this.settingsCache = null;
+    this.migrateSchema();
+    await this.migrateLegacyJson().catch(() => undefined);
+    await this.persist();
   }
 
   private async backupDatabase(context: string): Promise<void> {

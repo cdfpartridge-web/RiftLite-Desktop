@@ -1,4 +1,5 @@
 import type { CaptureEvent, GamePlatform, MatchDraft, MatchGame, ReplayStructuredEvent, RiftboundSimEvent, UserSettings } from "../../shared/types.js";
+import { legendFromImageUrl } from "../../shared/legendImages.js";
 import { normalizeLegendName } from "../../shared/legendNames.js";
 import { privateHubSyncEnabled, publicCommunitySyncEnabled, teamSyncEnabled } from "../../shared/syncPolicy.js";
 import { readTcgaLocalPlayerName, readTcgaProfileName } from "../../shared/tcgaIdentity.js";
@@ -110,11 +111,23 @@ export class MatchSessionTracker {
     if (!session || platform !== "atlas" || endEvent.platform !== "atlas") {
       return false;
     }
+    if (isAtlasAmbiguousGameResultContinuationCandidate(session, endEvent)) {
+      return true;
+    }
     if (readString(endEvent.payload.reason) !== "inactive-debounce") {
       return false;
     }
     if (isAtlasBetweenGameEnd(platform, endEvent.payload) || readString(endEvent.payload.atlasResultKind) === "match-terminal") {
       return false;
+    }
+    if (isAtlasSideboardingPayload(endEvent.payload)) {
+      return previewGames(session).some(gameHasNonZeroScore);
+    }
+    if (isAtlasRetainedBetweenGameResult(session, endEvent)) {
+      return true;
+    }
+    if (isAtlasContinuationAfterHeldGame(session, endEvent)) {
+      return true;
     }
     const games = previewGames(session);
     if (isBo3Complete(games)) {
@@ -126,6 +139,9 @@ export class MatchSessionTracker {
     }
     const onlyGame = playedGames[0];
     const total = (onlyGame.myPoints ?? 0) + (onlyGame.oppPoints ?? 0);
+    if (isAtlasRootLandingBo1Exit(session, endEvent, games)) {
+      return false;
+    }
     return total >= 6 && !resultFromText(readString(session.sticky.endText));
   }
 
@@ -168,6 +184,11 @@ export class MatchSessionTracker {
 
   getReplayEvents(platform: GamePlatform): ReplayStructuredEvent[] {
     return [...(this.sessions.get(platform)?.replayEvents ?? [])];
+  }
+
+  previewGames(platform: GamePlatform): MatchGame[] {
+    const session = this.sessions.get(platform);
+    return session ? previewGames(session) : [];
   }
 
   getLiveOverlayMatch(): Record<string, unknown> | null {
@@ -218,8 +239,17 @@ export class MatchSessionTracker {
     updateCurrentGame(session, endEvent.payload);
     const hasTerminalResult = Boolean(resultFromText(session.sticky.endText));
     const finalGame = normalizeAmbiguousInactiveGame(finishCurrentGame(session.currentGame), hasTerminalResult);
-    const keptGames = [...session.completedGames, finalGame].filter(isWorthKeeping);
-    const capturedGames = session.platform === "atlas" ? collapseAtlasDuplicateBridgeGames(keptGames) : keptGames;
+    const shouldSkipFinalGame = shouldSkipDuplicateAtlasFinalGame(session, endEvent, finalGame);
+    const keptGames = [
+      ...session.completedGames,
+      ...(shouldSkipFinalGame ? [] : [finalGame])
+    ].filter(isWorthKeeping);
+    const atlasRepaired = session.platform === "atlas"
+      ? applyAtlasConfirmedGameEvidence(keptGames, [...session.evidence, endEvent])
+      : { games: keptGames, confirmedGameNumbers: new Set<number>() };
+    const capturedGames = session.platform === "atlas"
+      ? collapseAtlasDuplicateBridgeGames(atlasRepaired.games, atlasRepaired.confirmedGameNumbers)
+      : keptGames;
     const rawGames = capturedGames.length ? capturedGames : [finalGame];
     const format = inferFormat(session.sticky, rawGames);
     const games = format === "Bo3" ? applyBo3BattlefieldConfidenceGuard(rawGames) : rawGames;
@@ -229,6 +259,16 @@ export class MatchSessionTracker {
     const status = result === "Incomplete" ? "incomplete" : "pending-review";
     const myName = readMyName(session.sticky, settings.username);
     const opponentName = readOpponentName(session.sticky, myName, settings.username);
+    const myChampion = normalizeLegendName(
+      readString(resolved.myChampion) ||
+      readString(session.sticky.myChampion) ||
+      legendFromImageUrl(session.sticky.myChampionImage)
+    );
+    const opponentChampion = normalizeLegendName(
+      readString(resolved.opponentChampion) ||
+      readString(session.sticky.opponentChampion) ||
+      legendFromImageUrl(session.sticky.opponentChampionImage)
+    );
     return {
       id: crypto.randomUUID(),
       platform,
@@ -240,8 +280,8 @@ export class MatchSessionTracker {
       score: scoreFromGames(games),
       myName,
       opponentName,
-      myChampion: normalizeLegendName(readString(resolved.myChampion) || readString(session.sticky.myChampion)),
-      opponentChampion: normalizeLegendName(readString(resolved.opponentChampion) || readString(session.sticky.opponentChampion)),
+      myChampion,
+      opponentChampion,
       myBattlefield: primaryGame?.myBattlefield || readString(session.sticky.myBattlefield) || readString(resolved.myBattlefield),
       opponentBattlefield: primaryGame?.oppBattlefield || readString(session.sticky.opponentBattlefield) || readString(resolved.opponentBattlefield),
       deckName: readDeckName(session.sticky),
@@ -250,7 +290,7 @@ export class MatchSessionTracker {
       deckSourceUrl: readDeckSourceUrl(session.sticky),
       deckSnapshotJson: "",
       flags: "",
-      notes: status === "incomplete" ? "Incomplete capture. Please review details." : "",
+      notes: "",
       games,
       rawEvidence: [...session.evidence, endEvent].slice(-160),
       sync: {
@@ -292,12 +332,20 @@ function shouldStartFreshSession(session: SessionState, event: CaptureEvent): bo
   if (!readBoolean(event.payload.active)) {
     return false;
   }
+  if (isAtlasContinuationAfterHeldGame(session, event)) {
+    return false;
+  }
+  if (isAtlasSameOpponentBo3ContinuationCandidate(session, event)) {
+    return false;
+  }
   if (isFreshAtlasMatchAfterCompletedSession(session, event)) {
     return true;
   }
-  const existingOpponent = normalizeNameKey(readString(session.sticky.opponentName));
-  const nextOpponent = normalizeNameKey(readString(event.payload.opponentName));
-  if (event.platform === "atlas" && isLikelyAtlasActionText(nextOpponent)) {
+  const existingOpponent = normalizePlayerNameKey(readString(session.sticky.opponentName));
+  const nextOpponent = normalizePlayerNameKey(readString(event.payload.opponentName));
+  const existingOpponentIsNoise = isLikelyAtlasActionText(existingOpponent) || isLikelyAtlasPlayerNameNoise(existingOpponent);
+  const nextOpponentIsNoise = isLikelyAtlasActionText(nextOpponent) || isLikelyAtlasPlayerNameNoise(nextOpponent);
+  if (event.platform === "atlas" && (existingOpponentIsNoise || nextOpponentIsNoise)) {
     return false;
   }
   if (!existingOpponent || !nextOpponent || existingOpponent === nextOpponent) {
@@ -318,6 +366,106 @@ function shouldStartFreshSession(session: SessionState, event: CaptureEvent): bo
   return nextLooksFresh;
 }
 
+function isAtlasSameOpponentBo3ContinuationCandidate(session: SessionState, event: CaptureEvent): boolean {
+  if (session.platform !== "atlas" || event.platform !== "atlas") {
+    return false;
+  }
+  const existingGames = previewGames(session);
+  if (!session.completedGames.length || existingGames.length >= 3) {
+    return false;
+  }
+  const previousGameNumber = atlasConfirmGameNumber(session.sticky);
+  const previousWasGameConfirm = readString(session.sticky.atlasResultKind) === "game-result" ||
+    isAtlasBo3QueuePayload(session.sticky) ||
+    previousGameNumber > 0 ||
+    atlasGameWinnerPattern().test(readString(session.sticky.endText));
+  const currentIsCommittedAtlasChildGame = previousWasGameConfirm && previousGameNumber > 0 && previousGameNumber < 3;
+  if (isWorthKeeping(finishCurrentGame(session.currentGame)) && gameStateHasNonZeroScore(session.currentGame) && !currentIsCommittedAtlasChildGame) {
+    return false;
+  }
+  const continuationMarker = isAtlasSideboardingPayload(event.payload) || isAtlasBo3QueuePayload(event.payload);
+  if ((readString(event.payload.atlasResultKind) || readString(event.payload.endText)) && !continuationMarker) {
+    return false;
+  }
+  const existingOpponent = normalizePlayerNameKey(readString(session.sticky.opponentName));
+  const nextOpponent = normalizePlayerNameKey(readString(event.payload.opponentName));
+  const existingOpponentIsNoise = isLikelyAtlasActionText(existingOpponent) || isLikelyAtlasPlayerNameNoise(existingOpponent);
+  const nextOpponentIsNoise = isLikelyAtlasActionText(nextOpponent) || isLikelyAtlasPlayerNameNoise(nextOpponent);
+  if (existingOpponent && nextOpponent && existingOpponent !== nextOpponent && !existingOpponentIsNoise && !nextOpponentIsNoise) {
+    return false;
+  }
+  const existingMyLegend = normalizeNameKey(readString(session.sticky.myChampion));
+  const nextMyLegend = normalizeNameKey(readString(event.payload.myChampion));
+  if (existingMyLegend && nextMyLegend && existingMyLegend !== nextMyLegend) {
+    return false;
+  }
+  const existingOppLegend = normalizeNameKey(readString(session.sticky.opponentChampion));
+  const nextOppLegend = normalizeNameKey(readString(event.payload.opponentChampion));
+  if (existingOppLegend && nextOppLegend && existingOppLegend !== nextOppLegend) {
+    return false;
+  }
+  const eventAt = new Date(event.capturedAt).getTime();
+  const sessionAt = new Date(session.updatedAt).getTime();
+  if (Number.isFinite(eventAt) && Number.isFinite(sessionAt) && eventAt - sessionAt > 120_000) {
+    return false;
+  }
+  const score = readScore(event.payload);
+  const scoreTotal = (score.me ?? 0) + (score.opp ?? 0);
+  return event.kind === "match-start" ||
+    readString(event.payload.reason) === "active-returned" ||
+    isAtlasBo3QueuePayload(event.payload) ||
+    isAtlasSideboardingPayload(event.payload) ||
+    scoreTotal <= 1;
+}
+
+function isAtlasContinuationAfterHeldGame(session: SessionState, event: CaptureEvent): boolean {
+  if (session.platform !== "atlas" || event.platform !== "atlas") {
+    return false;
+  }
+  if (!session.completedGames.length) {
+    return false;
+  }
+  const continuationMarker = isAtlasSideboardingPayload(event.payload) || isAtlasBo3QueuePayload(event.payload);
+  if ((readString(event.payload.atlasResultKind) || readString(event.payload.endText)) && !continuationMarker) {
+    return false;
+  }
+  const previousResultText = readString(session.sticky.endText);
+  const previousGameNumber = atlasConfirmGameNumber(session.sticky);
+  if (previousGameNumber >= 3) {
+    return false;
+  }
+  const previousWasGameConfirm = readString(session.sticky.atlasResultKind) === "game-result" ||
+    isAtlasBo3QueuePayload(session.sticky) ||
+    atlasConfirmGameNumber(session.sticky) > 0 ||
+    atlasGameWinnerPattern().test(previousResultText);
+  if (!previousWasGameConfirm) {
+    return false;
+  }
+  const currentIsCommittedAtlasChildGame = previousGameNumber > 0 && previousGameNumber < 3;
+  if (isWorthKeeping(finishCurrentGame(session.currentGame)) && gameStateHasNonZeroScore(session.currentGame) && !currentIsCommittedAtlasChildGame) {
+    return false;
+  }
+  const eventAt = new Date(event.capturedAt).getTime();
+  const sessionAt = new Date(session.updatedAt).getTime();
+  if (Number.isFinite(eventAt) && Number.isFinite(sessionAt) && eventAt - sessionAt > 120_000) {
+    return false;
+  }
+  const existingOpponent = normalizePlayerNameKey(readString(session.sticky.opponentName));
+  const nextOpponent = normalizePlayerNameKey(readString(event.payload.opponentName));
+  const existingOpponentIsNoise = isLikelyAtlasActionText(existingOpponent) || isLikelyAtlasPlayerNameNoise(existingOpponent);
+  const nextOpponentIsNoise = isLikelyAtlasActionText(nextOpponent) || isLikelyAtlasPlayerNameNoise(nextOpponent);
+  if (existingOpponent && nextOpponent && existingOpponent !== nextOpponent && !existingOpponentIsNoise && !nextOpponentIsNoise) {
+    return false;
+  }
+  const score = readScore(event.payload);
+  const scoreTotal = (score.me ?? 0) + (score.opp ?? 0);
+  return event.kind === "match-start" ||
+    readString(event.payload.reason) === "active-returned" ||
+    isAtlasBo3QueuePayload(event.payload) ||
+    isAtlasSideboardingPayload(event.payload) ||
+    scoreTotal <= 1;
+}
+
 function isFreshAtlasMatchAfterCompletedSession(session: SessionState, event: CaptureEvent): boolean {
   if (session.platform !== "atlas" || event.platform !== "atlas") {
     return false;
@@ -326,9 +474,13 @@ function isFreshAtlasMatchAfterCompletedSession(session: SessionState, event: Ca
     return false;
   }
   const existingGames = previewGames(session);
-  const sessionComplete = isBo3Complete(existingGames) || readString(session.sticky.atlasResultKind) === "match-terminal" ||
+  const terminalComplete = readString(session.sticky.atlasResultKind) === "match-terminal" ||
     /match complete/i.test(readString(session.sticky.endText));
+  const sessionComplete = isBo3Complete(existingGames) || terminalComplete;
   if (!sessionComplete) {
+    return false;
+  }
+  if (!terminalComplete && isBo3Complete(existingGames) && highestAtlasConfirmedGameNumber(session) < 2) {
     return false;
   }
   const score = readScore(event.payload);
@@ -337,6 +489,14 @@ function isFreshAtlasMatchAfterCompletedSession(session: SessionState, event: Ca
 }
 
 function mergeSticky(target: Record<string, unknown>, source: Record<string, unknown>): void {
+  const sourceHasAtlasResult = hasValue(source.atlasResultKind) || hasValue(source.endText);
+  const sourceIsActiveAtlasGame = readBoolean(source.active) && !isAtlasSideboardingPayload(source);
+  if (sourceIsActiveAtlasGame && !sourceHasAtlasResult) {
+    delete target.atlasResultKind;
+    delete target.endText;
+    delete target.atlasBo3GameNumber;
+    delete target.atlasSideboarding;
+  }
   const keys = [
     "myName",
     "opponentName",
@@ -359,16 +519,29 @@ function mergeSticky(target: Record<string, unknown>, source: Record<string, unk
     "localPlayerName",
     "configuredUsername",
     "format",
+    "atlasBo3Queue",
+    "atlasBo3GameNumber",
+    "atlasSideboarding",
     "atlasResultKind",
     "endText"
   ];
   for (const key of keys) {
     const value = source[key];
     if ((key === "atlasResultKind" || key === "endText") && typeof value === "string") {
-      target[key] = value;
+      if (hasValue(value)) {
+        target[key] = value;
+      }
       continue;
     }
-    if (key === "opponentName" && isLikelyAtlasActionText(readString(value))) {
+    if (key === "opponentName") {
+      const rawOpponentName = readString(value);
+      if (isLikelyAtlasActionText(rawOpponentName) || isLikelyAtlasPlayerNameNoise(rawOpponentName)) {
+        continue;
+      }
+      const cleanedOpponentName = cleanPlayerName(rawOpponentName);
+      if (hasValue(cleanedOpponentName)) {
+        target[key] = cleanedOpponentName;
+      }
       continue;
     }
     if ((key === "myBattlefield" || key === "opponentBattlefield") && isGeneratedBattlefieldName(readString(value))) {
@@ -390,7 +563,12 @@ function updateCurrentGame(session: SessionState, payload: Record<string, unknow
   if (isAtlasTerminalEchoAfterHeldGame(session, payload)) {
     return;
   }
-  if (session.platform === "atlas" && session.atlasHeldResultSignature && readString(payload.atlasResultKind) !== "game-result") {
+  if (
+    session.platform === "atlas" &&
+    session.atlasHeldResultSignature &&
+    readString(payload.atlasResultKind) !== "game-result" &&
+    shouldClearAtlasHeldResultSignature(payload)
+  ) {
     session.atlasHeldResultSignature = "";
   }
   if (readString(payload.reason) === "active-returned") {
@@ -1033,7 +1211,7 @@ function replaySideFromText(value: string, payload: Record<string, unknown>): Re
   const owner = value.match(/^(.{1,48}?)['\u2019]s turn\b/i)?.[1] ?? "";
   const ownerKey = normalizeNameKey(owner);
   const myKey = normalizeNameKey(readString(payload.configuredUsername) || readString(payload.myName));
-  const oppKey = normalizeNameKey(readString(payload.opponentName));
+  const oppKey = normalizePlayerNameKey(readString(payload.opponentName));
   if (ownerKey && myKey && ownerKey === myKey) return "me";
   if (ownerKey && oppKey && ownerKey === oppKey) return "opponent";
   return "system";
@@ -1238,6 +1416,48 @@ function gameHasNonZeroScore(game: MatchGame): boolean {
   return (game.myPoints ?? 0) > 0 || (game.oppPoints ?? 0) > 0;
 }
 
+function isAtlasRootLandingBo1Exit(session: SessionState, endEvent: CaptureEvent, games: MatchGame[]): boolean {
+  const eventFormat = readString(endEvent.payload.format).toLowerCase();
+  if (!isAtlasRootLandingUrl(endEvent.url) || !eventFormat.includes("bo1")) {
+    return false;
+  }
+  return !hasAtlasBo3ContinuationEvidence(session, endEvent, games);
+}
+
+function hasAtlasBo3ContinuationEvidence(session: SessionState, endEvent: CaptureEvent, games: MatchGame[]): boolean {
+  const rawFormat = `${readString(session.sticky.format)} ${readString(endEvent.payload.format)}`.toLowerCase();
+  const rawBo3QueueText = `${atlasBo3QueueText(session.sticky)} ${atlasBo3QueueText(endEvent.payload)}`.toLowerCase();
+  return session.completedGames.length > 0 ||
+    games.length > 1 ||
+    rawFormat.includes("bo3") ||
+    rawFormat.includes("best of 3") ||
+    rawBo3QueueText.includes("bo3") ||
+    rawBo3QueueText.includes("best of 3") ||
+    readString(session.sticky.atlasResultKind) === "game-result" ||
+    readString(endEvent.payload.atlasResultKind) === "game-result" ||
+    atlasConfirmGameNumber(session.sticky) > 0 ||
+    atlasConfirmGameNumber(endEvent.payload) > 0 ||
+    isAtlasBo3QueuePayload(session.sticky) ||
+    isAtlasBo3QueuePayload(endEvent.payload) ||
+    isAtlasSideboardingPayload(session.sticky) ||
+    isAtlasSideboardingPayload(endEvent.payload) ||
+    atlasGameWinnerPattern().test(readString(session.sticky.endText)) ||
+    atlasGameWinnerPattern().test(readString(endEvent.payload.endText));
+}
+
+function isAtlasRootLandingUrl(value: string): boolean {
+  const raw = readString(value).trim();
+  if (!raw) {
+    return false;
+  }
+  try {
+    const parsed = new URL(raw);
+    return parsed.hostname === "play.riftatlas.com" && (parsed.pathname === "/" || parsed.pathname === "");
+  } catch {
+    return /^https:\/\/play\.riftatlas\.com\/?$/i.test(raw);
+  }
+}
+
 function gameStateHasNonZeroScore(game: GameDraftState): boolean {
   return (game.myPoints ?? 0) > 0 || (game.oppPoints ?? 0) > 0;
 }
@@ -1300,7 +1520,90 @@ function applyBo3BattlefieldConfidenceGuard(games: MatchGame[]): MatchGame[] {
   });
 }
 
-function collapseAtlasDuplicateBridgeGames(games: MatchGame[]): MatchGame[] {
+function applyAtlasConfirmedGameEvidence(
+  games: MatchGame[],
+  evidence: CaptureEvent[]
+): { games: MatchGame[]; confirmedGameNumbers: Set<number> } {
+  const confirmed = new Map<number, MatchGame>();
+  for (const event of evidence) {
+    if (event.platform !== "atlas") {
+      continue;
+    }
+    const gameNumber = atlasConfirmGameNumber(event.payload);
+    if (gameNumber < 1 || gameNumber > 3) {
+      continue;
+    }
+    const kind = readString(event.payload.atlasResultKind);
+    if (kind !== "game-result" && !atlasGameWinnerPattern().test(readString(event.payload.endText))) {
+      continue;
+    }
+    const game = atlasConfirmedPayloadToGame(event.payload, gameNumber);
+    if (!isWorthKeeping(game)) {
+      continue;
+    }
+    const previous = confirmed.get(gameNumber);
+    confirmed.set(gameNumber, previous ? mergeAtlasGameDetails(game, previous) : game);
+  }
+  if (!confirmed.size) {
+    return { games, confirmedGameNumbers: new Set<number>() };
+  }
+  const confirmedGameNumbers = new Set(confirmed.keys());
+  const highestConfirmedGameNumber = Math.max(...confirmedGameNumbers);
+  const lastExistingGame = games[games.length - 1];
+  const highestConfirmedGame = confirmed.get(highestConfirmedGameNumber);
+  const hasTrailingUnconfirmedGame =
+    Boolean(lastExistingGame && highestConfirmedGame && games.length <= highestConfirmedGameNumber && !sameGameCapture(lastExistingGame, highestConfirmedGame));
+  const maxSlots = Math.max(games.length, highestConfirmedGameNumber + (hasTrailingUnconfirmedGame ? 1 : 0));
+  const repaired: MatchGame[] = [];
+  for (let gameNumber = 1; gameNumber <= maxSlots; gameNumber += 1) {
+    const existing = games[gameNumber - 1];
+    const confirmedGame = confirmed.get(gameNumber);
+    if (confirmedGame) {
+      repaired.push(mergeAtlasGameDetails(confirmedGame, existing));
+    } else if (existing) {
+      repaired.push({ ...existing, gameNumber });
+    } else if (hasTrailingUnconfirmedGame && gameNumber === highestConfirmedGameNumber + 1 && lastExistingGame) {
+      repaired.push({ ...lastExistingGame, gameNumber });
+    }
+  }
+  return { games: repaired.filter(isWorthKeeping), confirmedGameNumbers };
+}
+
+function atlasConfirmedPayloadToGame(payload: Record<string, unknown>, gameNumber: number): MatchGame {
+  const score = readScore(payload);
+  const textResult = resultFromText(payload.endText);
+  return normalizeAmbiguousInactiveGame({
+    gameNumber,
+    result: textResult ?? inferResult(score.me, score.opp),
+    myPoints: score.me,
+    oppPoints: score.opp,
+    myBattlefield: readString(payload.myBattlefield),
+    oppBattlefield: readString(payload.opponentBattlefield),
+    myBattlefieldImage: readBattlefieldImage(payload, "me"),
+    oppBattlefieldImage: readBattlefieldImage(payload, "opponent"),
+    wentFirst: readWentFirst(payload.wentFirst)
+  }, Boolean(textResult));
+}
+
+function mergeAtlasGameDetails(primary: MatchGame, fallback?: MatchGame): MatchGame {
+  if (!fallback) {
+    return primary;
+  }
+  return {
+    ...fallback,
+    ...primary,
+    result: primary.result !== "Incomplete" ? primary.result : fallback.result,
+    myPoints: typeof primary.myPoints === "number" ? primary.myPoints : fallback.myPoints,
+    oppPoints: typeof primary.oppPoints === "number" ? primary.oppPoints : fallback.oppPoints,
+    myBattlefield: primary.myBattlefield || fallback.myBattlefield,
+    oppBattlefield: primary.oppBattlefield || fallback.oppBattlefield,
+    myBattlefieldImage: primary.myBattlefieldImage || fallback.myBattlefieldImage,
+    oppBattlefieldImage: primary.oppBattlefieldImage || fallback.oppBattlefieldImage,
+    wentFirst: primary.wentFirst || fallback.wentFirst
+  };
+}
+
+function collapseAtlasDuplicateBridgeGames(games: MatchGame[], protectedGameNumbers = new Set<number>()): MatchGame[] {
   if (games.length < 3) {
     return games;
   }
@@ -1308,13 +1611,32 @@ function collapseAtlasDuplicateBridgeGames(games: MatchGame[]): MatchGame[] {
   for (let index = 0; index < games.length; index += 1) {
     const game = games[index];
     const previous = collapsed[collapsed.length - 1];
-    const next = games[index + 1];
-    if (previous && sameGameCapture(previous, game) && (!next || !sameGameCapture(game, next))) {
+    if (previous && sameGameCapture(previous, game)) {
+      collapsed[collapsed.length - 1] = mergeAtlasGameDetails(game, previous);
       continue;
     }
     collapsed.push(game);
   }
-  return collapsed.map((game, index) => ({ ...game, gameNumber: index + 1 }));
+
+  if (collapsed.length > 3 && protectedGameNumbers.size) {
+    const confirmedSlots = [1, 2, 3]
+      .map((gameNumber) => collapsed.find((game) => game.gameNumber === gameNumber && isWorthKeeping(game)))
+      .filter((game): game is MatchGame => Boolean(game));
+    if (confirmedSlots.length === 3) {
+      return confirmedSlots.map((game, index) => ({ ...game, gameNumber: index + 1 }));
+    }
+  }
+
+  if (collapsed.length <= 3) {
+    return collapsed.map((game, index) => ({ ...game, gameNumber: index + 1 }));
+  }
+
+  const renumbered = collapsed.map((game, index) => ({ ...game, gameNumber: index + 1 }));
+  return [
+    renumbered[0],
+    renumbered[1],
+    renumbered[renumbered.length - 1]
+  ].map((game, index) => ({ ...game, gameNumber: index + 1 }));
 }
 
 function sameGameCapture(a: MatchGame, b: MatchGame): boolean {
@@ -1367,7 +1689,7 @@ function resultFromText(value: unknown): MatchDraft["result"] | null {
   if (!raw) {
     return null;
   }
-  if (/confirm\s+game\s+\d+\s+winner/.test(raw)) {
+  if (/(?:confirm|choose|select|report)\s+game\s+\d+\s+winner|(?:confirm|choose|select|report)\s+(?:the\s+)?winner\s+(?:for|of)\s+game\s+\d+|game\s+\d+.{0,48}(?:winner|choose|select|confirm|report)/.test(raw)) {
     return null;
   }
   if (/you win|victory|winner|won/.test(raw) && !/opponent.*win|you lose/.test(raw)) {
@@ -1536,7 +1858,7 @@ function readMyName(sticky: Record<string, unknown>, settingsUsername: string): 
 
 function readOpponentName(sticky: Record<string, unknown>, myName: string, settingsUsername: string): string {
   const excluded = [myName, settingsUsername].filter(Boolean);
-  const direct = readString(sticky.opponentName);
+  const direct = cleanPlayerName(readString(sticky.opponentName));
   if (isDistinctName(direct, excluded)) {
     return direct;
   }
@@ -1640,9 +1962,71 @@ function shouldHoldAtlasGameResult(session: SessionState, payload: Record<string
   return !isBo3Complete(games);
 }
 
+function isAtlasRetainedBetweenGameResult(session: SessionState, event: CaptureEvent): boolean {
+  const payload = event.payload;
+  if (session.platform !== "atlas" || event.platform !== "atlas" || readString(payload.reason) !== "inactive-debounce") {
+    return false;
+  }
+  if (!isAtlasContinuationSurfaceUrl(event.url)) {
+    return false;
+  }
+  const kind = readString(payload.atlasResultKind);
+  if (kind !== "game-result" && !isAtlasBo3QueuePayload(payload)) {
+    return false;
+  }
+  const gameNumber = atlasConfirmGameNumber(payload);
+  if (gameNumber >= 3) {
+    return false;
+  }
+  return session.completedGames.length > 0;
+}
+
+function isAtlasContinuationSurfaceUrl(value: string): boolean {
+  if (!value) {
+    return true;
+  }
+  try {
+    const url = new URL(value);
+    return /\/(?:play|game|room|lobby)\b/i.test(url.pathname);
+  } catch {
+    return true;
+  }
+}
+
 function atlasConfirmGameNumber(payload: Record<string, unknown>): number {
-  const match = readString(payload.endText).match(/confirm\s+game\s+(\d+)\s+winner/i);
-  return match ? Number.parseInt(match[1], 10) : 0;
+  const direct = readOptionalNumber(payload.atlasBo3GameNumber);
+  if (direct && direct >= 1 && direct <= 3) {
+    return direct;
+  }
+  const text = atlasBo3QueueText(payload);
+  const patterns = [
+    /(?:confirm|choose|select|report)\s+game\s+([123])\s+winner/i,
+    /(?:confirm|choose|select|report)\s+(?:the\s+)?winner\s+(?:for|of)\s+game\s+([123])/i,
+    /game\s+([123])\s+(?:winner|of\s+3)/i,
+    /game\s+([123]).{0,48}(?:confirm|choose|select|report).{0,24}winner/i,
+    /(?:confirm|choose|select|report).{0,24}winner.{0,48}game\s+([123])/i
+  ];
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match) {
+      return Number.parseInt(match[1], 10);
+    }
+  }
+  return 0;
+}
+
+function highestAtlasConfirmedGameNumber(session: SessionState): number {
+  let highest = atlasConfirmGameNumber(session.sticky);
+  for (const event of session.evidence) {
+    if (event.platform !== "atlas") {
+      continue;
+    }
+    if (readString(event.payload.atlasResultKind) !== "game-result" && !atlasGameWinnerPattern().test(readString(event.payload.endText))) {
+      continue;
+    }
+    highest = Math.max(highest, atlasConfirmGameNumber(event.payload));
+  }
+  return highest;
 }
 
 function isAtlasBetweenGameEnd(platform: GamePlatform, payload: Record<string, unknown>): boolean {
@@ -1653,18 +2037,125 @@ function isAtlasBetweenGameEnd(platform: GamePlatform, payload: Record<string, u
   if (kind === "match-terminal") {
     return false;
   }
-  return kind === "game-result" || /you win|you lose|you won|you lost|victory|defeat|wins!|winner/i.test(readString(payload.endText));
+  return kind === "game-result" || atlasGameWinnerPattern().test(readString(payload.endText));
+}
+
+function isAtlasAmbiguousGameResultContinuationCandidate(session: SessionState, endEvent: CaptureEvent): boolean {
+  if (session.platform !== "atlas" || endEvent.platform !== "atlas") {
+    return false;
+  }
+  if (readString(endEvent.payload.reason) !== "result-text-detected") {
+    return false;
+  }
+  if (readString(endEvent.payload.atlasResultKind) === "match-terminal") {
+    return false;
+  }
+  if (atlasConfirmGameNumber(endEvent.payload) > 0 || isAtlasBo3QueuePayload(endEvent.payload)) {
+    return false;
+  }
+  const text = atlasBo3QueueText(endEvent.payload);
+  const looksLikeGameResult = readString(endEvent.payload.atlasResultKind) === "game-result" ||
+    atlasGameWinnerPattern().test(text);
+  if (!looksLikeGameResult) {
+    return false;
+  }
+  const games = previewGames(session);
+  if (games.length >= 3) {
+    return false;
+  }
+  return games.some(isWorthKeeping);
+}
+
+function isAtlasBo3QueuePayload(payload: Record<string, unknown>): boolean {
+  if (readBoolean(payload.atlasBo3Queue)) {
+    return true;
+  }
+  const gameNumber = atlasConfirmGameNumber(payload);
+  if (gameNumber > 0 && gameNumber < 3) {
+    return true;
+  }
+  const text = atlasBo3QueueText(payload);
+  const hasBetweenGameText = /sideboarding|lock in sideboard|locked in sideboarding|waiting for .*lock in sideboard|next game|start game|continue/i.test(text);
+  if (hasBetweenGameText && /\bgame\s+[23]\b/i.test(text)) {
+    return true;
+  }
+  return /(?:best\s+of\s+3|bo3)/i.test(text) &&
+    /sideboarding|lock in sideboard|locked in sideboarding|waiting for .*lock in sideboard|next game|game\s+[12]\s+of\s+3/i.test(text);
+}
+
+function atlasBo3QueueText(payload: Record<string, unknown>): string {
+  const rows = Array.isArray(payload.rows) ? payload.rows : [];
+  const rowText = rows.map((row) => {
+    if (row && typeof row === "object" && !Array.isArray(row)) {
+      return readString((row as Record<string, unknown>).text);
+    }
+    return readString(row);
+  }).join(" ");
+  return [
+    readString(payload.endText),
+    readString(payload.pageText),
+    readString(payload.statusText),
+    rowText
+  ].join(" ");
+}
+
+function atlasGameWinnerPattern(): RegExp {
+  return /(?:confirm|choose|select|report)\s+game\s+\d+\s+winner|(?:confirm|choose|select|report)\s+(?:the\s+)?winner\s+(?:for|of)\s+game\s+\d+|game\s+\d+.{0,48}(?:winner|choose|select|confirm|report)|you win|you lose|you won|you lost|victory|defeat|wins!|winner/i;
+}
+
+function isAtlasSideboardingPayload(payload: Record<string, unknown>): boolean {
+  if (readBoolean(payload.atlasSideboarding)) {
+    return true;
+  }
+  const text = [
+    readString(payload.endText),
+    readString(payload.pageText),
+    readString(payload.statusText)
+  ].join(" ");
+  if (/sideboard|sideboarding|sideboards are locked|locked in sideboarding/i.test(text)) {
+    return true;
+  }
+  const rows = Array.isArray(payload.rows) ? payload.rows : [];
+  return rows.some((row) => {
+    const rowText = row && typeof row === "object" && !Array.isArray(row)
+      ? readString((row as Record<string, unknown>).text)
+      : readString(row);
+    return /sideboard|sideboarding|sideboards are locked|locked in sideboarding/i.test(rowText);
+  });
 }
 
 function isAtlasGameResultHold(session: SessionState, payload: Record<string, unknown>): boolean {
   if (session.platform !== "atlas" || readString(payload.reason) !== "result-text-detected") {
     return false;
   }
-  if (readString(payload.atlasResultKind) !== "game-result") {
+  if (readString(payload.atlasResultKind) !== "game-result" && !isAtlasBo3QueuePayload(payload)) {
     return false;
   }
-  const raw = `${readString(session.sticky.format)} ${readString(payload.format)} ${readString(payload.endText)}`.toLowerCase();
-  return raw.includes("bo3") || raw.includes("best of 3") || /confirm\s+game\s+\d+\s+winner/.test(raw);
+  const raw = `${readString(session.sticky.format)} ${readString(payload.format)} ${atlasBo3QueueText(payload)}`.toLowerCase();
+  return raw.includes("bo3") || raw.includes("best of 3") || isAtlasBo3QueuePayload(payload);
+}
+
+function shouldSkipDuplicateAtlasFinalGame(session: SessionState, endEvent: CaptureEvent, finalGame: MatchGame): boolean {
+  if (session.platform !== "atlas" || !session.completedGames.length || !isWorthKeeping(finalGame)) {
+    return false;
+  }
+  if (
+    finalGame.result === "Incomplete" &&
+    !gameHasNonZeroScore(finalGame) &&
+    readString(endEvent.payload.reason) === "inactive-debounce" &&
+    isAtlasRootLandingUrl(endEvent.url)
+  ) {
+    return true;
+  }
+  const lastCompleted = session.completedGames[session.completedGames.length - 1];
+  if (!lastCompleted) {
+    return false;
+  }
+  const finalGameNumber = atlasConfirmGameNumber(endEvent.payload) || finalGame.gameNumber;
+  const sameHeldSignature = Boolean(session.atlasHeldResultSignature) &&
+    atlasPayloadResultSignature(endEvent.payload) === session.atlasHeldResultSignature;
+  return sameHeldSignature ||
+    (lastCompleted.gameNumber === finalGameNumber && sameGameCapture(lastCompleted, finalGame));
 }
 
 function shouldUseExactAtlasResultScore(session: SessionState, payload: Record<string, unknown>): boolean {
@@ -1672,8 +2163,25 @@ function shouldUseExactAtlasResultScore(session: SessionState, payload: Record<s
     return false;
   }
   const kind = readString(payload.atlasResultKind);
-  const text = readString(payload.endText);
-  return kind === "game-result" || kind === "match-terminal" || /confirm\s+game\s+\d+\s+winner/i.test(text);
+  return kind === "game-result" || kind === "match-terminal" || isAtlasBo3QueuePayload(payload);
+}
+
+function shouldClearAtlasHeldResultSignature(payload: Record<string, unknown>): boolean {
+  const score = readScore(payload);
+  return typeof score.me === "number" ||
+    typeof score.opp === "number" ||
+    Boolean(
+      readString(payload.myBattlefield) ||
+      readString(payload.opponentBattlefield) ||
+      readBattlefieldImage(payload, "me") ||
+      readBattlefieldImage(payload, "opponent") ||
+      readString(payload.myChampion) ||
+      readString(payload.opponentChampion) ||
+      readString(payload.myChampionImage) ||
+      readString(payload.opponentChampionImage) ||
+      readString(payload.opponentName) ||
+      readString(payload.myName)
+    );
 }
 
 function isAtlasHeldResultEcho(session: SessionState, payload: Record<string, unknown>): boolean {
@@ -1681,11 +2189,36 @@ function isAtlasHeldResultEcho(session: SessionState, payload: Record<string, un
     return false;
   }
   const kind = readString(payload.atlasResultKind);
-  const text = readString(payload.endText);
-  if (kind !== "game-result" && !/confirm\s+game\s+\d+\s+winner/i.test(text)) {
+  if (kind === "game-result" || isAtlasBo3QueuePayload(payload)) {
+    return atlasPayloadResultSignature(payload) === session.atlasHeldResultSignature;
+  }
+  if (kind || readString(payload.endText) || gameStateHasNonZeroScore(session.currentGame)) {
     return false;
   }
-  return atlasPayloadResultSignature(payload) === session.atlasHeldResultSignature;
+  const lastCompleted = session.completedGames[session.completedGames.length - 1];
+  return Boolean(lastCompleted && atlasPayloadMatchesCompletedGameEcho(payload, lastCompleted));
+}
+
+function atlasPayloadMatchesCompletedGameEcho(payload: Record<string, unknown>, game: MatchGame): boolean {
+  const score = readScore(payload);
+  if (typeof score.me !== "number" || typeof score.opp !== "number") {
+    return false;
+  }
+  if (score.me !== game.myPoints || score.opp !== game.oppPoints) {
+    return false;
+  }
+  const payloadGame: MatchGame = {
+    gameNumber: game.gameNumber,
+    result: game.result,
+    myPoints: score.me,
+    oppPoints: score.opp,
+    myBattlefield: readString(payload.myBattlefield),
+    oppBattlefield: readString(payload.opponentBattlefield),
+    myBattlefieldImage: readBattlefieldImage(payload, "me"),
+    oppBattlefieldImage: readBattlefieldImage(payload, "opponent")
+  };
+  const payloadHasBattlefield = hasBattlefieldPair(payloadGame);
+  return !payloadHasBattlefield || sameBattlefieldPair(payloadGame, game);
 }
 
 function isAtlasTerminalEchoAfterHeldGame(session: SessionState, payload: Record<string, unknown>): boolean {
@@ -1723,12 +2256,23 @@ function atlasGameResultSignature(game: MatchGame): string {
 }
 
 function isDistinctName(candidate: string, excluded: string[]): boolean {
-  const normalized = normalizeNameKey(candidate);
-  return Boolean(normalized) && !excluded.some((name) => normalizeNameKey(name) === normalized);
+  const normalized = normalizePlayerNameKey(candidate);
+  return Boolean(normalized) && !excluded.some((name) => normalizePlayerNameKey(name) === normalized);
 }
 
 function normalizeNameKey(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function normalizePlayerNameKey(value: string): string {
+  return normalizeNameKey(cleanPlayerName(value));
+}
+
+function cleanPlayerName(value: string): string {
+  let cleaned = value.trim().replace(/\s+/g, " ");
+  cleaned = cleaned.replace(/\s*(?:[-:]\s*)?(?:disconnected|reconnecting|reconnected|connection lost|offline)\s*\d*\s*s?$/i, "").trim();
+  cleaned = cleaned.replace(/\s*(?:[-:]\s*)?(?:disconnected|reconnecting|reconnected|connection lost|offline)\d+\s*s$/i, "").trim();
+  return cleaned;
 }
 
 function isLikelyAtlasActionText(value: string): boolean {
@@ -1736,8 +2280,18 @@ function isLikelyAtlasActionText(value: string): boolean {
   if (!normalized) {
     return false;
   }
-  return /^(locked|chose|must choose|both players|finalized|rolled|played|moved|drew|ended|conquered|scored|set your score)\b/.test(normalized) ||
+  return /^(locked|chose|auto[-\s]?selected|selected|must choose|both players|finalized|rolled|played|moved|drew|ended|conquered|scored|set your score)\b/.test(normalized) ||
     /\b(take the first|locked in|locked a battlefield|mulligan|sideboarding|sideboard|their turn|your turn)\b/.test(normalized);
+}
+
+function isLikelyAtlasPlayerNameNoise(value: string): boolean {
+  const normalized = normalizeNameKey(value);
+  if (!normalized) {
+    return false;
+  }
+  return /^\d+\s*\/\s*\d+$/.test(normalized) ||
+    /^\d+\s*locked\b/.test(normalized) ||
+    /^\d+\s*(?:cards?|runes?|energy|power)\b/.test(normalized);
 }
 
 function battlefieldChanged(current: string, nextValue: unknown): boolean {

@@ -972,6 +972,7 @@ function readTcgaTurnText(bodyText: string): string {
 
 function readAtlasSnapshot(): Record<string, unknown> {
   const bodyText = documentText();
+  const nonGamePage = isAtlasNonGamePage();
   const logRows = Array.from(document.querySelectorAll("ul li, [role='log'] li, [class*='log' i] li, [class*='matchLog' i] li"))
     .slice(-28)
     .map((row, index) => ({ key: `${index}:${textOf(row).slice(0, 120)}`, text: textOf(row) }))
@@ -981,14 +982,21 @@ function readAtlasSnapshot(): Record<string, unknown> {
     includeText: true,
     includeClasses: true
   });
-  const rawTerminalText = findText(/you win|you lose|you won|you lost|victory|defeat|wins!|winner|match complete|game over|opponent.*left|left the game|disconnected/i);
+  const rawTerminalText = findText(/(?:confirm|choose|select|report)\s+game\s+\d+\s+winner|(?:confirm|choose|select|report)\s+(?:the\s+)?winner\s+(?:for|of)\s+game\s+\d+|game\s+\d+.{0,48}(?:winner|choose|select|confirm|report)|you win|you lose|you won|you lost|victory|defeat|wins!|winner|match complete|game over|opponent.*left|left the game|disconnected/i);
   const terminalText = normalizeAtlasTerminalText(rawTerminalText);
-  const sideboarding = isAtlasSideboarding(bodyText);
+  const sideboarding = !nonGamePage && isAtlasSideboarding(bodyText);
+  const atlasBo3Queue = !nonGamePage && isAtlasBo3QueueScreen(bodyText, terminalText);
+  const atlasBo3GameNumberValue = atlasBo3GameNumber(`${terminalText} ${bodyText}`);
+  const atlasContinuationText = !nonGamePage &&
+    (atlasBo3Queue ||
+      sideboarding ||
+      atlasBo3GameNumberValue > 0 ||
+      /(?:best\s+of\s+3|bo3|sideboarding|next game|\bgame\s+[23]\b)/i.test(`${terminalText} ${bodyText}`));
   const gameplayRows = logRows.some((row) =>
     /starting turn|mulligan|played|wins!|reported|round|combat|attack|block|left the game|opponent.*left/i.test(row.text) &&
     !/sideboarding|locked in sideboarding|lock in sideboard/i.test(row.text)
   );
-  const inGameText = !sideboarding && /concede|report winner|request rematch|opponent.*left|left the game|disconnected|\bturn\b|mulligan|played|wins!|winner|\bround\b|combat|attack|block/i.test(bodyText);
+  const inGameText = !nonGamePage && !sideboarding && /concede|report winner|request rematch|opponent.*left|left the game|disconnected|\bturn\b|mulligan|played|wins!|winner|\bround\b|combat|attack|block/i.test(bodyText);
   const atlasScoreCandidates = sideboarding ? [] : readAtlasScoreTrackCandidates();
   const score = sideboarding ? { me: "", opp: "", raw: [], source: "none" } : readAtlasScore(bodyText, logRows, atlasScoreCandidates);
   const hasScoreEvidence = Number.parseInt(score.me, 10) > 0 || Number.parseInt(score.opp, 10) > 0;
@@ -1017,7 +1025,8 @@ function readAtlasSnapshot(): Record<string, unknown> {
     !gameplayRows &&
     !hasScoreEvidence;
   const boardEvidence = Boolean(
-    !hardLobby &&
+    !nonGamePage &&
+      !hardLobby &&
       (ownedBoardSelector ||
       realZoneCards ||
       cardZoneOverlay ||
@@ -1027,7 +1036,8 @@ function readAtlasSnapshot(): Record<string, unknown> {
       terminalText)
   );
   const active = Boolean(
-    boardEvidence &&
+    !nonGamePage &&
+      boardEvidence &&
       (ownedBoardSelector ||
         realZoneCards ||
         cardZoneOverlay ||
@@ -1036,7 +1046,9 @@ function readAtlasSnapshot(): Record<string, unknown> {
         inGameText ||
         terminalText)
   );
-  const atlasPlayers = readAtlasPlayers(bodyText, logRows, active || boardEvidence || hasScoreEvidence || gameplayRows);
+  const atlasPlayers = nonGamePage
+    ? { me: "", opponent: "", candidates: [] }
+    : readAtlasPlayers(bodyText, logRows, active || boardEvidence || hasScoreEvidence || gameplayRows);
   const myLegendCard = atlasCardByZone(zoneCards, "self", "legend");
   const opponentLegendCard = atlasCardByZone(zoneCards, "opponent", "legend");
   const battlefieldCards = readAtlasBattlefieldCards(zoneCards);
@@ -1058,6 +1070,9 @@ function readAtlasSnapshot(): Record<string, unknown> {
     roomCode: readRoomCode(bodyText),
     format: readAtlasFormat(bodyText),
     atlasSideboarding: sideboarding,
+    atlasBo3Queue,
+    atlasBo3GameNumber: atlasBo3GameNumberValue,
+    pageText: atlasContinuationText ? bodyText.slice(0, 1200) : "",
     atlasCardZoneOverlay: cardZoneOverlay,
     atlasResultKind: classifyAtlasResult(terminalText),
     myName: atlasPlayers.me,
@@ -1076,6 +1091,18 @@ function readAtlasSnapshot(): Record<string, unknown> {
     ...(DECK_TRACKER_FEATURE_ENABLED ? { deckTrackerCards: collectAtlasDeckTrackerCards(zoneCards) } : {}),
     endText: terminalText
   };
+}
+
+function isAtlasNonGamePage(): boolean {
+  const host = location.hostname.toLowerCase();
+  const path = location.pathname.toLowerCase();
+  if (host === "riftatlas.com" || host === "www.riftatlas.com") {
+    return /^\/decks(?:\/|$)/.test(path) ||
+      /^\/collection(?:\/|$)/.test(path) ||
+      /^\/cards(?:\/|$)/.test(path) ||
+      /^\/profile(?:\/|$)/.test(path);
+  }
+  return false;
 }
 
 function collectTcgaVisibleCards(): Array<Record<string, string>> {
@@ -1222,6 +1249,9 @@ function classifyAtlasResult(value: string): "game-result" | "match-terminal" | 
   if (/opponent.*left|left the game|disconnected|match complete|game over/i.test(value)) {
     return "match-terminal";
   }
+  if (atlasBo3GameNumber(value) > 0 || /(?:confirm|choose|select|report)\s+(?:the\s+)?winner/i.test(value)) {
+    return "game-result";
+  }
   if (/you win|you lose|you won|you lost|victory|defeat|wins!|winner/i.test(value)) {
     return "game-result";
   }
@@ -1241,6 +1271,40 @@ function normalizeAtlasTerminalText(value: string): string {
 
 function isAtlasSideboarding(bodyText: string): boolean {
   return /sideboarding|lock in sideboard|locked in sideboarding|waiting for .*lock in sideboard|main deck\s*\d+\s*\/\s*\d+|sideboard\s*\d+\s*\/\s*\d+/i.test(bodyText);
+}
+
+function isAtlasBo3QueueScreen(bodyText: string, terminalText = ""): boolean {
+  const text = `${terminalText} ${bodyText}`;
+  if (/match complete|game over|opponent.*left|left the game|disconnected/i.test(text)) {
+    return false;
+  }
+  const gameNumber = atlasBo3GameNumber(text);
+  if (gameNumber > 0 && gameNumber < 3) {
+    return true;
+  }
+  const hasBetweenGameText = /sideboarding|lock in sideboard|locked in sideboarding|waiting for .*lock in sideboard|next game|start game|continue/i.test(text);
+  if (hasBetweenGameText && /\bgame\s+[23]\b/i.test(text)) {
+    return true;
+  }
+  return /(?:best\s+of\s+3|bo3)/i.test(text) &&
+    /sideboarding|lock in sideboard|locked in sideboarding|waiting for .*lock in sideboard|next game|game\s+[12]\s+of\s+3/i.test(text);
+}
+
+function atlasBo3GameNumber(text: string): number {
+  const patterns = [
+    /(?:confirm|choose|select|report)\s+game\s+([123])\s+winner/i,
+    /(?:confirm|choose|select|report)\s+(?:the\s+)?winner\s+(?:for|of)\s+game\s+([123])/i,
+    /game\s+([123])\s+(?:winner|of\s+3)/i,
+    /game\s+([123]).{0,48}(?:confirm|choose|select|report).{0,24}winner/i,
+    /(?:confirm|choose|select|report).{0,24}winner.{0,48}game\s+([123])/i
+  ];
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match) {
+      return Number.parseInt(match[1], 10);
+    }
+  }
+  return 0;
 }
 
 function emptyAtlasCard(): { text: string; image: string; code: string; zone?: string } {

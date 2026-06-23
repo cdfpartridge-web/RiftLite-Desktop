@@ -1,5 +1,4 @@
 import type { BrowserWindow } from "electron";
-import { createHash } from "node:crypto";
 import { normalizeLegendName } from "../../shared/legendNames.js";
 import { publicCommunitySyncEnabled } from "../../shared/syncPolicy.js";
 import type {
@@ -143,6 +142,21 @@ export class FirebaseSyncService {
       }
     }
 
+    if (next.manualRepair && next.combinedFromMatchIds?.length) {
+      try {
+        await this.markCombinedOriginalsSuperseded(next, settings);
+      } catch {
+        next = {
+          ...next,
+          sync: {
+            community: next.sync.community === "synced" ? "failed" : next.sync.community,
+            hubs: Object.fromEntries(Object.entries(next.sync.hubs).map(([hubId, state]) => [hubId, state === "synced" ? "failed" : state])),
+            teams: Object.fromEntries(Object.entries(next.sync.teams ?? {}).map(([teamId, state]) => [teamId, state === "synced" ? "failed" : state]))
+          }
+        };
+      }
+    }
+
     const saved = await this.store.saveMatch(next);
     if (!options.quiet) {
       this.getWindow()?.webContents.send("match:draft", saved);
@@ -150,30 +164,22 @@ export class FirebaseSyncService {
     return saved;
   }
 
+  async markMatchesSuperseded(localMatchIds: string[], combinedMatchId: string): Promise<void> {
+    const settings = await this.store.getSettings();
+    await this.markOriginalMatchIdsSuperseded(localMatchIds, combinedMatchId, settings);
+  }
+
   async createHub(name: string, password: string, settings: UserSettings): Promise<HubActionResult> {
-    const auth = await this.getAuth(settings);
-    const hub = buildHub(name, password, "owner");
-    try {
-      await this.firestoreRequest(`hubs/${hub.id}`, auth.idToken, { method: "GET" });
-      throw new Error("A private hub with that exact name already exists");
-    } catch (error) {
-      if (!isFirestoreMissing(error)) {
-        throw error;
-      }
-    }
-    await this.firestoreRequest(`hubs/${hub.id}`, auth.idToken, {
-      method: "PATCH",
+    const fallbackHub = buildHub(name, "owner");
+    const payload = await this.authenticatedWebsiteRequest("/api/hubs", {
+      method: "POST",
       body: {
-        fields: toFirestoreFields({
-          id: hub.id,
-          name: hub.name,
-          password_hash: hub.passwordHash,
-          created_by: auth.uid,
-          created_at: Math.floor(Date.now() / 1000),
-          hidden: true
-        })
+        action: "create",
+        name,
+        password
       }
     });
+    const hub = normalizePrivateHubPayload(payload.hub, fallbackHub);
     const nextSettings = await this.store.saveSettings({
       activeHubs: upsertHub(settings.activeHubs, hub),
       syncMode: publicCommunitySyncEnabled(settings) ? "community-and-hubs" : "private-hubs-only",
@@ -183,16 +189,16 @@ export class FirebaseSyncService {
   }
 
   async joinHub(name: string, password: string, settings: UserSettings): Promise<HubActionResult> {
-    const auth = await this.getAuth(settings);
-    const hub = buildHub(name, password, "member");
-    const doc = await this.firestoreRequest(`hubs/${hub.id}`, auth.idToken, { method: "GET" });
-    const fields = doc.fields && typeof doc.fields === "object" ? doc.fields as Record<string, unknown> : {};
-    const remoteHash = readFirestoreString(fields.password_hash);
-    if (!remoteHash || remoteHash !== hub.passwordHash) {
-      throw new Error("Private hub name or password did not match");
-    }
-    const remoteName = readFirestoreString(fields.name) || hub.name;
-    const nextHub = { ...hub, name: remoteName };
+    const fallbackHub = buildHub(name, "member");
+    const payload = await this.authenticatedWebsiteRequest("/api/hubs", {
+      method: "POST",
+      body: {
+        action: "join",
+        name,
+        password
+      }
+    });
+    const nextHub = normalizePrivateHubPayload(payload.hub, fallbackHub);
     const nextSettings = await this.store.saveSettings({
       activeHubs: upsertHub(settings.activeHubs, nextHub),
       syncMode: publicCommunitySyncEnabled(settings) ? "community-and-hubs" : "private-hubs-only",
@@ -205,7 +211,7 @@ export class FirebaseSyncService {
     const settings = await this.store.getSettings();
     const webMatches = await this.getCommunityMatchesFromWebsite(forceRefresh);
     if (webMatches) {
-      return repairCommunityMatchesForSettings(webMatches, settings);
+      return repairCommunityMatchesForSettings(webMatches.filter((match) => !match.superseded), settings);
     }
     const auth = await this.getAuth(settings);
     const response = await this.firestoreRunQuery("", auth.idToken, {
@@ -215,7 +221,7 @@ export class FirebaseSyncService {
         limit
       }
     });
-    return repairCommunityMatchesForSettings(response.map((doc) => fromFirestoreDoc(doc, "community")), settings);
+    return repairCommunityMatchesForSettings(response.map((doc) => fromFirestoreDoc(doc, "community")).filter((match) => !match.superseded), settings);
   }
 
   private async getCommunityMatchesFromWebsite(forceRefresh: boolean): Promise<CommunityMatch[] | null> {
@@ -242,7 +248,7 @@ export class FirebaseSyncService {
           }
           const payload = await response.json() as unknown;
           const items = webCommunityItems(payload);
-          return dedupeCommunityMatches(items.filter(isRecord).map((item) => fromWebMatch(item, "community")));
+          return dedupeCommunityMatches(items.filter(isRecord).map((item) => fromWebMatch(item, "community")).filter((match) => !match.superseded));
         } catch {
           // Try the next public API variant, then fall back to capped Firestore.
         }
@@ -262,7 +268,7 @@ export class FirebaseSyncService {
         limit
       }
     });
-    return response.map((doc) => fromFirestoreDoc(doc, "hub", hubId));
+    return response.map((doc) => fromFirestoreDoc(doc, "hub", hubId)).filter((match) => !match.superseded);
   }
 
   async getTeamMatches(teamId: string, forceRefresh = false, limit = 1000): Promise<CommunityMatch[]> {
@@ -273,7 +279,8 @@ export class FirebaseSyncService {
     const payload = await this.authenticatedWebsiteRequest(`/api/teams/${encodeURIComponent(teamId)}/matches?${query}`, { method: "GET" });
     return webCommunityItems(payload)
       .filter(isRecord)
-      .map((item) => fromWebMatch(item, "team", teamId));
+      .map((item) => fromWebMatch(item, "team", teamId))
+      .filter((match) => !match.superseded);
   }
 
   async deleteHubMatch(hubId: string, matchId: string): Promise<void> {
@@ -282,6 +289,9 @@ export class FirebaseSyncService {
     const safeHubId = encodeURIComponent(hubId);
     const safeMatchId = encodeURIComponent(matchId);
     await this.firestoreRequest(`hubs/${safeHubId}/matches/${safeMatchId}`, auth.idToken, { method: "DELETE" });
+    await this.updatePrivateHubAggregate("delete", hubId, matchId, auth.idToken, {
+      uid: auth.uid
+    }).catch(() => undefined);
     const local = (await this.store.getMatches()).find((match) => match.id === matchId);
     if (local?.sync.hubs[hubId]) {
       const hubs = { ...local.sync.hubs };
@@ -431,16 +441,19 @@ export class FirebaseSyncService {
       : [];
   }
 
-  async claimHub(hubId: string, passwordHash?: string): Promise<void> {
+  async claimHub(hubId: string, password?: string): Promise<void> {
     const settings = await this.store.getSettings();
     const hub = settings.activeHubs.find((item) => item.id === hubId);
-    const hash = passwordHash || hub?.passwordHash || "";
+    const cleanPassword = String(password ?? "").trim();
+    if (!cleanPassword) {
+      throw new Error("Enter the hub password to claim ownership.");
+    }
     const profile = await this.getAccountProfile().catch(() => null);
     await this.authenticatedWebsiteRequest("/api/hubs/claim", {
       method: "POST",
       body: {
         hubId,
-        passwordHash: hash,
+        password: cleanPassword,
         displayName: bestLocalAccountDisplayName(settings, profile)
       }
     });
@@ -775,6 +788,10 @@ export class FirebaseSyncService {
       method: "PATCH",
       body: { fields: toFirestoreFields(doc) }
     });
+    await this.updatePrivateHubAggregate("upsert", hubId, match.id, auth.idToken, {
+      uid: auth.uid,
+      username: readString(doc.username)
+    }).catch(() => undefined);
     const name = typeof response.name === "string" ? response.name : "";
     return name.split("/").pop() ?? "";
   }
@@ -788,6 +805,58 @@ export class FirebaseSyncService {
     });
     const matchPayload = isRecord(payload.match) ? payload.match : {};
     return readString(matchPayload.id) || match.id;
+  }
+
+  private async markCombinedOriginalsSuperseded(match: MatchDraft, settings: UserSettings): Promise<void> {
+    await this.markOriginalMatchIdsSuperseded(match.combinedFromMatchIds ?? [], match.id, settings);
+  }
+
+  private async markOriginalMatchIdsSuperseded(localMatchIds: string[], combinedMatchId: string, settings: UserSettings): Promise<void> {
+    const ids = Array.from(new Set(localMatchIds.filter(Boolean)));
+    if (!ids.length || !combinedMatchId) {
+      return;
+    }
+    const auth = await this.getAuth(settings);
+    const originals = (await this.store.getMatches()).filter((match) => ids.includes(match.id));
+    const now = new Date().toISOString();
+    for (const original of originals) {
+      const superseded: MatchDraft = {
+        ...original,
+        mergedIntoMatchId: original.mergedIntoMatchId || combinedMatchId,
+        hiddenFromStats: true,
+        hiddenFromHistory: true,
+        updatedAt: now
+      };
+      const doc = buildSyncDoc(superseded, settings, auth.uid, { includeFlags: true });
+      if (original.sync.community === "synced") {
+        const publicDocId = await this.findPublicMatchDocId(original.id, auth.idToken, auth.uid);
+        if (publicDocId) {
+          await this.firestoreRequest(`matches/${encodeURIComponent(publicDocId)}`, auth.idToken, {
+            method: "PATCH",
+            body: { fields: toFirestoreFields(doc) }
+          });
+          await this.appendCommunityAggregate(publicDocId, doc, auth.idToken).catch(() => undefined);
+        }
+      }
+      for (const [hubId, state] of Object.entries(original.sync.hubs ?? {})) {
+        if (state !== "synced") {
+          continue;
+        }
+        await this.firestoreRequest(`hubs/${encodeURIComponent(hubId)}/matches/${encodeURIComponent(original.id)}`, auth.idToken, {
+          method: "PATCH",
+          body: { fields: toFirestoreFields(doc) }
+        });
+      }
+      for (const [teamId, state] of Object.entries(original.sync.teams ?? {})) {
+        if (state !== "synced") {
+          continue;
+        }
+        await this.authenticatedWebsiteRequest(`/api/teams/${encodeURIComponent(teamId)}/matches/${encodeURIComponent(original.id)}`, {
+          method: "PATCH",
+          body: { match: doc }
+        });
+      }
+    }
   }
 
   private async getAuth(settings: UserSettings): Promise<AuthState> {
@@ -960,19 +1029,59 @@ export class FirebaseSyncService {
       throw new Error(`Community append ${response.status}`);
     }
   }
+
+  private async updatePrivateHubAggregate(
+    action: "upsert" | "delete",
+    hubId: string,
+    matchId: string,
+    idToken: string,
+    details: { uid?: string; username?: string } = {}
+  ): Promise<void> {
+    const response = await fetch(`${COMMUNITY_API_BASE}/api/community/aggregate/private-hub`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${idToken}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        action,
+        hubId,
+        matchId,
+        uid: details.uid,
+        username: details.username
+      })
+    });
+    if (!response.ok) {
+      throw new Error(`Private hub aggregate ${response.status}`);
+    }
+  }
 }
 
-function buildHub(name: string, password: string, role: PrivateHub["role"]): PrivateHub {
+function buildHub(name: string, role: PrivateHub["role"]): PrivateHub {
   const cleanName = name.trim();
-  const passwordHash = createHash("sha256").update(password).digest("hex");
   const id = cleanName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 40);
   return {
     id,
     name: cleanName,
     sync: true,
-    passwordHash,
     role,
     joinedAt: new Date().toISOString()
+  };
+}
+
+function normalizePrivateHubPayload(value: unknown, fallback: PrivateHub): PrivateHub {
+  const raw = isRecord(value) ? value : {};
+  const role = readString(raw.role);
+  const hubRole: PrivateHub["role"] = role === "owner" || role === "admin" || role === "member" ? role : fallback.role;
+  return {
+    id: readString(raw.id) || fallback.id,
+    name: readString(raw.name) || fallback.name,
+    sync: typeof raw.sync === "boolean" ? raw.sync : fallback.sync,
+    joinedAt: readString(raw.joinedAt) || fallback.joinedAt || new Date().toISOString(),
+    role: hubRole,
+    claimed: Boolean(raw.claimed),
+    imageDataUrl: readString(raw.imageDataUrl) || fallback.imageDataUrl,
+    imageUpdatedAt: readString(raw.imageUpdatedAt) || fallback.imageUpdatedAt
   };
 }
 
@@ -1015,6 +1124,11 @@ function fromWebMatch(match: Record<string, unknown>, scope: CommunityMatch["sco
     deckSourceKey,
     deckSnapshotJson: snapshot,
     createdAt: readNumber(match.created_at ?? match.createdAt),
+    manualRepair: readBoolean(match.manual_repair ?? match.manualRepair),
+    combinedFromMatchIds: readStringArray(match.combined_from_match_ids ?? match.combinedFromMatchIds),
+    mergedIntoMatchId: readString(match.merged_into_match_id) || readString(match.mergedIntoMatchId),
+    superseded: readBoolean(match.superseded),
+    supersededAt: readString(match.superseded_at) || readString(match.supersededAt),
     scope,
     hubId
   };
@@ -1120,9 +1234,31 @@ function fromFirestoreDoc(doc: Record<string, unknown>, scope: CommunityMatch["s
     deckSourceKey,
     deckSnapshotJson: readFirestoreString(fields.my_deck_snapshot_json),
     createdAt: readFirestoreNumber(fields.created_at),
+    manualRepair: readFirestoreBool(fields.manual_repair),
+    combinedFromMatchIds: readFirestoreStringArray(fields.combined_from_match_ids),
+    mergedIntoMatchId: readFirestoreString(fields.merged_into_match_id),
+    superseded: readFirestoreBool(fields.superseded),
+    supersededAt: readFirestoreString(fields.superseded_at),
     scope,
     hubId
   };
+}
+
+function readFirestoreBool(value: unknown): boolean {
+  if (value && typeof value === "object") {
+    return Boolean((value as Record<string, unknown>).booleanValue);
+  }
+  return false;
+}
+
+function readFirestoreStringArray(value: unknown): string[] {
+  if (!value || typeof value !== "object") {
+    return [];
+  }
+  const raw = value as Record<string, unknown>;
+  const arrayValue = isRecord(raw.arrayValue) ? raw.arrayValue : {};
+  const values = Array.isArray(arrayValue.values) ? arrayValue.values : [];
+  return values.map(readFirestoreString).filter(Boolean);
 }
 
 function readFirestoreNumber(value: unknown): number {
@@ -1135,6 +1271,17 @@ function readFirestoreNumber(value: unknown): number {
 
 function readString(value: unknown): string {
   return String(value ?? "").trim();
+}
+
+function readBoolean(value: unknown): boolean {
+  return value === true || value === "true" || value === 1 || value === "1";
+}
+
+function readStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.map(readString).filter(Boolean);
 }
 
 function isGenericDisplayName(value: unknown): boolean {
@@ -1162,9 +1309,9 @@ function bestLocalAccountDisplayName(settings: UserSettings, profile?: AccountPr
     ...candidates,
     profile?.displayName,
     settings.accountDisplayName,
-    settings.username,
     profile?.handle,
     settings.accountHandle,
+    settings.username,
     fallbackAccountName(profile?.uid || settings.accountUid || settings.firebaseUid)
   );
 }
@@ -1226,10 +1373,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
-function isFirestoreMissing(error: unknown): boolean {
-  return error instanceof Error && error.message.includes("Firestore 404");
-}
-
 function buildSyncDoc(match: MatchDraft, settings: UserSettings, uid: string, options: { includeFlags: boolean }): Record<string, unknown> {
   const username = bestLocalAccountDisplayName(settings, undefined, match.myName);
   const opponentName = sameName(match.opponentName, username) ? "" : match.opponentName;
@@ -1263,11 +1406,19 @@ function buildSyncDoc(match: MatchDraft, settings: UserSettings, uid: string, op
     my_deck_source_key: hasDeckAttachment ? deckSourceKey : "",
     my_deck_snapshot_json: hasDeckAttachment ? match.deckSnapshotJson ?? "" : "",
     platform: match.platform,
+    manual_repair: Boolean(match.manualRepair),
+    combined_from_match_ids: match.combinedFromMatchIds ?? [],
+    merged_into_match_id: match.mergedIntoMatchId ?? "",
+    superseded: Boolean(match.mergedIntoMatchId || match.hiddenFromStats || match.hiddenFromHistory),
+    superseded_at: match.mergedIntoMatchId || match.hiddenFromStats || match.hiddenFromHistory ? match.updatedAt : "",
     created_at: Math.floor(new Date(match.capturedAt).getTime() / 1000) || Math.floor(Date.now() / 1000)
   };
 }
 
 function isManualSource(match: MatchDraft): boolean {
+  if (match.manualRepair) {
+    return false;
+  }
   return match.source === "scorepad" || match.source === "manual";
 }
 

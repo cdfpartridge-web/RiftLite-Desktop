@@ -22,6 +22,7 @@ import {
   Globe2,
   GripVertical,
   History,
+  Home,
   Images,
   Keyboard,
   Layers,
@@ -38,13 +39,16 @@ import {
   Radio,
   RefreshCw,
   RotateCcw,
+  RotateCw,
   Save,
+  Scissors,
   Settings,
   Shield,
   SlidersHorizontal,
   Smartphone,
   Upload,
   Video,
+  Trash2,
   Volume2,
   Users,
   X,
@@ -67,7 +71,10 @@ import type {
   DeckGuideNote,
   DeckMatchupGuide,
   DeckNotebook,
+  DeckSnapshot,
   DeckTestingGoalStatus,
+  DeckTrackerObservation,
+  DeckTrackerPerformanceMode,
   DeckTrackerState,
   GamePlatform,
   HubActionResult,
@@ -112,8 +119,13 @@ import type {
   TeamModerationAction,
   TeamModerationRecord,
   TeamSyncTarget,
+  TestingSession,
   UpdateStatus,
-  UserSettings
+  UserSettings,
+  VisionDeckTrackerStatus,
+  VisionFrameCandidate,
+  VisionFrameSample,
+  VisionRenderedCardObservation
 } from "../shared/types";
 import { buildAtlasReplay, replaySnapshotCardCount, type AtlasReplayViewModel, type ReplayTimelineEvent, type ReplayTurnView } from "../shared/atlasReplay";
 import { activeDeckOverlayStats, buildDeckPerformance, type DeckBattlefieldPairStat, type DeckBattlefieldStat, type DeckPerformanceStats, type DeckRecordStats } from "../shared/deckPerformance";
@@ -128,13 +140,45 @@ import {
   emptyDeckNotebook,
   resolveDeckMatchupGuide
 } from "../shared/deckNotebook";
+import {
+  buildCommunityDeckMeta,
+  communityBattlefieldStatsForLegend,
+  communityCardStatsForLegend,
+  communityDeckGroupsForLegend,
+  parseCommunityDeckSnapshot,
+  type CommunityDeckBattlefieldStat,
+  type CommunityDeckCardStat,
+  type CommunityDeckGroup,
+  type CommunityDeckLegendSummary
+} from "../shared/communityDecks";
+import type { VisionDeckTrackerMatchResult } from "../shared/visionDeckTracker";
 import { CANONICAL_LEGEND_NAMES, canonicalLegendName, legendAliasesFor, normalizeLegendName } from "../shared/legendNames";
 import { legendFromImageUrl, legendImageUrl } from "../shared/legendImages";
+import {
+  buildMatchCombinePreview,
+  isCombinedOriginal,
+  isCombinedRepairMatch,
+  type MatchCombineSavePayload,
+  type MatchCombineWarning
+} from "../shared/matchCombine";
 import { upsertMatchPreservingOrder } from "../shared/matchList";
 import { publicCommunitySyncEnabled, syncModePatch } from "../shared/syncPolicy";
 import "./styles/app.css";
 
-type ActiveView = "play" | "scorepad" | "matches" | "stats" | "spotlight" | "community" | "social" | "hubs" | "decks" | "replays" | "stream" | "account" | "settings";
+type ActiveView = "home" | "play" | "scorepad" | "matches" | "stats" | "matchup-lab" | "spotlight" | "community" | "social" | "hubs" | "decks" | "replays" | "stream" | "account" | "settings";
+type DeckFocusTarget = "library" | "prep" | "notebook" | "performance";
+type MatchFocusTarget = {
+  myLegend?: string;
+  opponentLegend?: string;
+  search?: string;
+  nonce: number;
+};
+type NavigationOptions = {
+  communityTab?: CommunityTab;
+  deckFocus?: DeckFocusTarget;
+  communityDeckLegend?: string | null;
+  matchFocus?: Omit<MatchFocusTarget, "nonce"> | null;
+};
 
 const GAME_URLS: Record<GamePlatform, string> = {
   tcga: "https://tcg-arena.fr",
@@ -153,29 +197,443 @@ const DECK_TRACKER_FEATURE_ENABLED = false;
 
 const DEFAULT_UPDATE_STATUS: UpdateStatus = {
   state: "idle",
-  currentVersion: "0.7.60",
+  currentVersion: "0.7.80",
   message: "Updater ready"
 };
 
-const APP_VERSION_META = "0.7.60";
+const FALLBACK_BOOT_SETTINGS: UserSettings = {
+  username: "",
+  firstRunComplete: true,
+  lastSeenVersion: "0.7.80",
+  syncMode: "community-and-hubs",
+  communitySyncEnabled: true,
+  firebaseUid: "",
+  firebaseRefreshToken: "",
+  accountUid: "",
+  accountEmail: "",
+  accountHandle: "",
+  accountDisplayName: "",
+  accountProfilePublic: false,
+  anonymousDiagnosticsEnabled: true,
+  anonymousInstallId: "",
+  anonymousInstallCreatedAt: "",
+  anonymousUsageLastHeartbeatAt: "",
+  anonymousUsageLastHeartbeatVersion: "",
+  debugMode: false,
+  confirmationEnabled: true,
+  replayCaptureEnabled: true,
+  replayKeyframesEnabled: true,
+  replayFramePreset: "standard",
+  replayVideoEnabled: true,
+  replayVideoMode: "game-frame",
+  replayVideoQuality: "sharp",
+  replayMicAudioEnabled: false,
+  replayCustomFlagTypes: ["Mistake Consequence", "Question", "Alternative Line"],
+  deckTrackerEnabled: false,
+  deckTrackerAutoStart: false,
+  deckTrackerSaveToReplay: false,
+  deckTrackerPerformanceMode: "balanced",
+  deckTrackerPinnedCards: {},
+  microphoneDeviceId: "",
+  gameZoomFactor: 1,
+  autoSaveAfterSeconds: 45,
+  overlaySessionStartedAt: "",
+  overlayDisplay: {
+    profile: "grind",
+    showBranding: true,
+    showWebsite: true,
+    showSession: true,
+    showLatestMatch: true,
+    showResult: true,
+    showOpponentName: true,
+    showScore: true,
+    showPlatform: true,
+    showDeck: true,
+    showLegendWinRate: true,
+    showMatchupWinRate: true,
+    showActiveDeckStats: false,
+    showDeckSessionStats: true,
+    showDeckMatchups: true,
+    showFooter: true
+  },
+  screenshotDirectory: "",
+  replayDirectory: "",
+  screenshotHotkey: "F9",
+  screenshotHotkeyEnabled: true,
+  scorepadDeviceId: "",
+  scorepadDeviceSecret: "",
+  scorepadLinkedAt: "",
+  activeDeckId: "",
+  activeHubs: [],
+  activeTeams: []
+};
+
+const APP_VERSION_META = "0.7.80";
+type HomeFeaturedVideo = {
+  title: string;
+  embedUrl: string;
+  url: string;
+  thumbnailUrl?: string;
+  videoId: string;
+};
+
+type HomeFeaturedPartner = {
+  title: string;
+  eyebrow: string;
+  description: string;
+  ctaLabel: string;
+  url: string;
+  imageUrl?: string;
+};
+
+type HomeFeaturedStream = {
+  title: string;
+  channel: string;
+  url: string;
+  playerUrl: string;
+  thumbnailUrl?: string;
+  isLive?: boolean;
+};
+
+const DEFAULT_HOME_FEATURED_VIDEOS: HomeFeaturedVideo[] = [
+  {
+    title: "Featured RiftLite video",
+    embedUrl: youtubeEmbedUrlFromId("jQdNVS7R9nE"),
+    url: "https://www.youtube.com/watch?v=jQdNVS7R9nE",
+    thumbnailUrl: "https://img.youtube.com/vi/jQdNVS7R9nE/hqdefault.jpg",
+    videoId: "jQdNVS7R9nE"
+  },
+  {
+    title: "Featured RiftLite video",
+    embedUrl: youtubeEmbedUrlFromId("XPvo24lfN9A"),
+    url: "https://www.youtube.com/watch?v=XPvo24lfN9A",
+    thumbnailUrl: "https://img.youtube.com/vi/XPvo24lfN9A/hqdefault.jpg",
+    videoId: "XPvo24lfN9A"
+  }
+];
+const HOME_CONFIG_URL = "https://www.riftlite.com/api/app/home";
 const RELEASE_NOTES = {
   version: APP_VERSION_META,
-  title: "RiftLite 0.7.60",
-  intro: "This update starts the Social Hub groundwork while keeping capture, replays, and private hubs as they are.",
+  title: "RiftLite 0.7.80",
+  intro: "This polish update parks the Vision beta while tightening testing, prep, replay review, syncing, and profiles.",
   items: [
-    "Find Match lets linked users post short-lived TCGA or RiftAtlas room codes.",
-    "Teams adds public team profiles with applications, members, and a low-read message board.",
-    "Private hubs stay separate and unchanged.",
-    "Social actions require a linked RiftLite account so usernames stay tied to a real profile."
+    "Deck tracker beta is parked for now so game windows stay smooth while the code stays ready for later testing.",
+    "Testing sessions help group practice matches with a goal, summary, replay links, and CSV export.",
+    "Replay library filters, health badges, and flagged moments make coaching packs easier to review.",
+    "Bulk hub/team sync and profile naming have been polished without changing core match capture."
   ]
 };
 const RIOT_LEGAL_NOTICE = `RiftLite was created under Riot Games' "Legal Jibber Jabber" policy using assets owned by Riot Games. Riot Games does not endorse or sponsor this project.`;
 const REVIEW_DISMISS_PREFIX = "riftlite-dismissed-review:";
+
+function normalizeYoutubeVideoId(value: string): string {
+  const trimmed = value.trim();
+  const id = trimmed.match(/^[A-Za-z0-9_-]{11}$/)?.[0] ?? "";
+  return id;
+}
+
+function youtubeVideoIdFromUrl(value: string): string {
+  const raw = value.trim();
+  if (!raw) {
+    return "";
+  }
+  const directId = normalizeYoutubeVideoId(raw);
+  if (directId) {
+    return directId;
+  }
+  try {
+    const url = new URL(raw);
+    const host = url.hostname.replace(/^www\./, "");
+    if (host === "youtu.be") {
+      const id = url.pathname.split("/").filter(Boolean)[0] ?? "";
+      return normalizeYoutubeVideoId(id);
+    }
+    if (host === "youtube.com" || host === "youtube-nocookie.com" || host === "m.youtube.com") {
+      const embedParts = url.pathname.split("/").filter(Boolean);
+      const embedIndex = embedParts.indexOf("embed");
+      const shortsIndex = embedParts.indexOf("shorts");
+      const liveIndex = embedParts.indexOf("live");
+      const id = embedIndex >= 0
+        ? embedParts[embedIndex + 1]
+        : shortsIndex >= 0
+          ? embedParts[shortsIndex + 1]
+          : liveIndex >= 0
+            ? embedParts[liveIndex + 1]
+            : url.searchParams.get("v") ?? "";
+      return normalizeYoutubeVideoId(id);
+    }
+  } catch {
+    return "";
+  }
+  return "";
+}
+
+function youtubeEmbedUrlFromId(id: string): string {
+  const params = new URLSearchParams({
+    rel: "0",
+    modestbranding: "1",
+    playsinline: "1",
+    autoplay: "0",
+    enablejsapi: "0",
+    origin: "https://www.riftlite.com",
+    widget_referrer: "https://www.riftlite.com"
+  });
+  return `https://www.youtube.com/embed/${id}?${params.toString()}`;
+}
+
+function twitchChannelFromUrl(value: string): string {
+  const raw = value.trim();
+  if (!raw) {
+    return "";
+  }
+  const direct = raw.match(/^[A-Za-z0-9_]{3,30}$/)?.[0] ?? "";
+  if (direct) {
+    return direct;
+  }
+  try {
+    const url = new URL(raw);
+    const host = url.hostname.replace(/^www\./, "").toLowerCase();
+    if (host !== "twitch.tv") {
+      return "";
+    }
+    const parts = url.pathname.split("/").filter(Boolean);
+    return parts[0]?.match(/^[A-Za-z0-9_]{3,30}$/)?.[0] ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function twitchPlayerUrl(channel: string): string {
+  const params = new URLSearchParams({
+    channel,
+    parent: "www.riftlite.com",
+    muted: "true",
+    autoplay: "false"
+  });
+  return `https://player.twitch.tv/?${params.toString()}`;
+}
+
+function homeFeaturedVideoFromRecord(video: Record<string, unknown>): HomeFeaturedVideo | null {
+  const url = typeof video.url === "string" ? video.url.trim() : "";
+  const embedSource = typeof video.embedUrl === "string" ? video.embedUrl.trim() : url;
+  const videoId = youtubeVideoIdFromUrl(embedSource) || youtubeVideoIdFromUrl(url);
+  if (!videoId) {
+    return null;
+  }
+  return {
+    title: typeof video.title === "string" && video.title.trim() ? video.title.trim() : "Featured RiftLite video",
+    embedUrl: youtubeEmbedUrlFromId(videoId),
+    url: url || `https://www.youtube.com/watch?v=${videoId}`,
+    thumbnailUrl: `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`,
+    videoId
+  };
+}
+
+function homeFeaturedVideosFromConfig(value: unknown): HomeFeaturedVideo[] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return [];
+  }
+  const payload = value as Record<string, unknown>;
+  const rawVideos = Array.isArray(payload.featuredVideos)
+    ? payload.featuredVideos
+    : payload.featuredVideo
+      ? [payload.featuredVideo]
+      : [payload];
+  const seen = new Set<string>();
+  return rawVideos
+    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item))
+    .map(homeFeaturedVideoFromRecord)
+    .filter((item): item is HomeFeaturedVideo => Boolean(item))
+    .filter((video) => {
+      if (seen.has(video.videoId)) {
+        return false;
+      }
+      seen.add(video.videoId);
+      return true;
+    })
+    .slice(0, 2);
+}
+
+function fillHomeFeaturedVideos(videos: HomeFeaturedVideo[]): HomeFeaturedVideo[] {
+  const seen = new Set(videos.map((video) => video.videoId));
+  return [
+    ...videos,
+    ...DEFAULT_HOME_FEATURED_VIDEOS.filter((video) => !seen.has(video.videoId))
+  ].slice(0, 2);
+}
+
+function homeFeaturedPartnersFromConfig(value: unknown): HomeFeaturedPartner[] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return [];
+  }
+  const payload = value as Record<string, unknown>;
+  const rawPartners = Array.isArray(payload.featuredPartners)
+    ? payload.featuredPartners
+    : payload.featuredPartner
+      ? [payload.featuredPartner]
+      : [];
+  return rawPartners
+    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item))
+    .map((item) => {
+      const title = typeof item.title === "string" ? item.title.trim() : "";
+      const url = typeof item.url === "string" ? item.url.trim() : "";
+      if (!title || !url) {
+        return null;
+      }
+      return {
+        title,
+        eyebrow: typeof item.eyebrow === "string" && item.eyebrow.trim() ? item.eyebrow.trim() : "Featured partner",
+        description: typeof item.description === "string" ? item.description.trim() : "",
+        ctaLabel: typeof item.ctaLabel === "string" && item.ctaLabel.trim() ? item.ctaLabel.trim() : "Learn more",
+        url,
+        imageUrl: typeof item.imageUrl === "string" && item.imageUrl.trim() ? item.imageUrl.trim() : undefined
+      };
+    })
+    .filter((item): item is HomeFeaturedPartner => Boolean(item));
+}
+
+function homeFeaturedStreamsFromConfig(value: unknown): HomeFeaturedStream[] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return [];
+  }
+  const payload = value as Record<string, unknown>;
+  const rawStreams = Array.isArray(payload.featuredStreams)
+    ? payload.featuredStreams
+    : payload.featuredStream
+      ? [payload.featuredStream]
+      : [];
+  return rawStreams
+    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item))
+    .map((item) => {
+      const url = typeof item.url === "string" ? item.url.trim() : "";
+      const channel = twitchChannelFromUrl(typeof item.channel === "string" ? item.channel : url);
+      if (!channel) {
+        return null;
+      }
+      return {
+        title: typeof item.title === "string" && item.title.trim() ? item.title.trim() : `${channel} live`,
+        channel,
+        url: url || `https://www.twitch.tv/${channel}`,
+        playerUrl: twitchPlayerUrl(channel),
+        thumbnailUrl: typeof item.thumbnailUrl === "string" && item.thumbnailUrl.trim() ? item.thumbnailUrl.trim() : undefined,
+        isLive: item.isLive === true || item.live === true || item.online === true || item.status === "live"
+      };
+    })
+    .filter((item): item is HomeFeaturedStream => Boolean(item))
+    .sort((a, b) => Number(Boolean(b.isLive)) - Number(Boolean(a.isLive)) || a.title.localeCompare(b.title));
+}
 const DIRECT_REPLAY_MODE_MIGRATION_KEY = "riftlite-direct-replay-mode-v2";
 const VIDEO_REPLAY_DEFAULTS_MIGRATION_KEY = "riftlite-video-replay-defaults-v070";
+const GAME_ZOOM_RESET_MIGRATION_KEY = "riftlite-game-zoom-reset-v0760";
+const VISION_TRACKER_DEFAULT_OFF_MIGRATION_KEY = "riftlite-vision-tracker-default-off-v0770";
+const DECK_TRACKER_POSITION_KEY = "riftlite-deck-tracker-position-v1";
+const DECK_TRACKER_SIZE_KEY = "riftlite-deck-tracker-size-v1";
 const MATCHUP_PREP_POSITION_KEY = "riftlite-matchup-prep-position-v1";
+const MATCHUP_PREP_SIZE_KEY = "riftlite-matchup-prep-size-v1";
 const MATCHUP_PREP_HIDDEN_KEY = "riftlite-matchup-prep-hidden-v1";
+const VISION_DEBUG_POSITION_KEY = "riftlite-vision-debug-position-v1";
+const TESTING_SESSIONS_KEY = "riftlite-testing-sessions-v1";
+const ACTIVE_TESTING_SESSION_KEY = "riftlite-active-testing-session-v1";
 const STARTUP_VALUE_TIMEOUT_MS = 6_000;
+
+type VisionDebugItem = {
+  name: string;
+  code: string;
+  zone: string;
+  confidenceScore: number;
+};
+
+type VisionDebugMatchItem = VisionDebugItem & {
+  source: string;
+  rect: string;
+};
+
+type VisionTrackerDebugPanelState = {
+  frameId: string;
+  capturedAt: string;
+  platform: GamePlatform;
+  healthState: CaptureHealth["state"];
+  renderedCount: number;
+  frameCandidateCount: number;
+  observationCount: number;
+  suggestionCount: number;
+  confidenceScore: number;
+  frameCaptured: boolean;
+  message: string;
+  observations: VisionDebugItem[];
+  suggestions: VisionDebugItem[];
+  bestMatches: VisionDebugMatchItem[];
+  ignoredMatches: string[];
+};
+
+function readTestingSessions(): TestingSession[] {
+  try {
+    const raw = window.localStorage.getItem(TESTING_SESSIONS_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed)
+      ? parsed
+          .map((session) => normalizeTestingSession(session))
+          .filter((session): session is TestingSession => Boolean(session))
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeTestingSessions(sessions: TestingSession[]) {
+  try {
+    window.localStorage.setItem(TESTING_SESSIONS_KEY, JSON.stringify(sessions));
+  } catch {
+    // Local-only helper; failing to persist should not block match review.
+  }
+}
+
+function readActiveTestingSessionId(): string {
+  try {
+    return window.localStorage.getItem(ACTIVE_TESTING_SESSION_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function writeActiveTestingSessionId(id: string) {
+  try {
+    if (id) {
+      window.localStorage.setItem(ACTIVE_TESTING_SESSION_KEY, id);
+    } else {
+      window.localStorage.removeItem(ACTIVE_TESTING_SESSION_KEY);
+    }
+  } catch {
+    // Local-only helper; failing to persist should not block match review.
+  }
+}
+
+function normalizeTestingSession(value: unknown): TestingSession | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const raw = value as Partial<TestingSession>;
+  const id = String(raw.id ?? "").trim();
+  const startedAt = String(raw.startedAt ?? "").trim();
+  if (!id || !startedAt) {
+    return null;
+  }
+  return {
+    id,
+    label: String(raw.label ?? "Testing session").trim().slice(0, 80) || "Testing session",
+    goal: String(raw.goal ?? "").trim().slice(0, 240),
+    deckId: String(raw.deckId ?? "").trim() || undefined,
+    deckName: String(raw.deckName ?? "").trim().slice(0, 120) || undefined,
+    startedAt,
+    endedAt: String(raw.endedAt ?? "").trim() || undefined,
+    notes: String(raw.notes ?? "").trim().slice(0, 500) || undefined
+  };
+}
+
+function createLocalId(prefix: string): string {
+  const randomId = window.crypto?.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  return `${prefix}-${randomId}`;
+}
 
 async function startupValue<T>(label: string, promise: Promise<T>, fallback: T): Promise<T> {
   try {
@@ -203,6 +661,398 @@ function clampGameZoom(value: unknown): number {
   return Math.min(GAME_ZOOM_MAX, Math.max(GAME_ZOOM_MIN, rounded));
 }
 
+function visionDeckTrackerIntervalMs(mode: DeckTrackerPerformanceMode | undefined): number {
+  if (mode === "responsive") {
+    return 4500;
+  }
+  if (mode === "light") {
+    return 12000;
+  }
+  return 8000;
+}
+
+function visionDeckTrackerShouldScan(state: CaptureHealth["state"]): boolean {
+  return state === "match-detected" || state === "watching";
+}
+
+function visionDeckTrackerUrlLooksPlayable(platform: GamePlatform, url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.toLowerCase();
+    const path = parsed.pathname.toLowerCase();
+    if (platform === "tcga") {
+      return host.includes("tcg-arena") && path.startsWith("/play");
+    }
+    if (platform === "atlas") {
+      return true;
+    }
+    return true;
+  } catch {
+    return true;
+  }
+}
+
+function collectVisionRenderedCardsScript(platform: GamePlatform): string {
+  return `(() => {
+    const platform = ${JSON.stringify(platform)};
+    const viewportWidth = Math.max(1, window.innerWidth || document.documentElement.clientWidth || 1);
+    const viewportHeight = Math.max(1, window.innerHeight || document.documentElement.clientHeight || 1);
+    const selectorCounts = {};
+    const codeFrom = (value) => {
+      const text = String(value || "");
+      const match = text.match(/\\b([A-Z]{2,5}-\\d{1,4}[A-Z]?)\\b/i);
+      return match ? match[1].toUpperCase() : "";
+    };
+    const textFrom = (node) => {
+      const source = [
+        node?.getAttribute?.("aria-label"),
+        node?.getAttribute?.("title"),
+        node?.getAttribute?.("alt"),
+        node?.dataset?.cardName,
+        node?.dataset?.name,
+        node?.textContent
+      ].filter(Boolean).join(" ");
+      return String(source || "").replace(/\\s+/g, " ").trim().slice(0, 120);
+    };
+    const backgroundImage = (node) => {
+      const style = window.getComputedStyle(node);
+      const value = style.backgroundImage || "";
+      const match = value.match(/url\\(["']?([^"')]+)["']?\\)/i);
+      return match ? match[1] : "";
+    };
+    const imageUrlsFrom = (node) => {
+      const urls = [];
+      const push = (value) => {
+        const text = String(value || "");
+        if (text && !urls.includes(text)) urls.push(text);
+      };
+      if (node?.matches?.("img")) {
+        push(node.currentSrc || node.src);
+      }
+      push(backgroundImage(node));
+      node?.querySelectorAll?.("img, [style*='/cards/'], [style*='.webp'], [style*='.png']").forEach((child) => {
+        if (child.matches?.("img")) {
+          push(child.currentSrc || child.src);
+        }
+        push(backgroundImage(child));
+      });
+      return urls.sort((a, b) => {
+        const aCode = codeFrom(a) ? 1 : 0;
+        const bCode = codeFrom(b) ? 1 : 0;
+        return bCode - aCode;
+      });
+    };
+    const actionOnlyName = (value) => /^(tap|untap|target|attack|block|exhaust|ready|cancel|confirm|ok|done)$/i.test(String(value || "").trim());
+    const ownerFrom = (node) => {
+      const value = [
+        node?.dataset?.zoneOwner,
+        node?.dataset?.owner,
+        node?.dataset?.player,
+        node?.getAttribute?.("data-zone-owner"),
+        node?.getAttribute?.("data-owner"),
+        node?.className
+      ].filter(Boolean).join(" ").toLowerCase();
+      if (/opponent|enemy|opp|remote/.test(value)) return "opponent";
+      if (/self|me|mine|player|local|you|own/.test(value)) return "me";
+      return "";
+    };
+    const zoneFrom = (node, rect) => {
+      const value = [
+        node?.dataset?.dropZone,
+        node?.dataset?.zone,
+        node?.getAttribute?.("data-drop-zone"),
+        node?.getAttribute?.("data-zone"),
+        node?.className
+      ].filter(Boolean).join(" ").toLowerCase();
+      if (/discard|trash|grave/.test(value)) return value.includes("discard") ? "discard" : "trash";
+      if (/stack/.test(value)) return "stack";
+      if (/base/.test(value)) return "base";
+      if (/board|battlefield|play/.test(value)) return "board";
+      if (/hand|mulligan|sideboard/.test(value)) return "hand";
+      const centerY = (rect.top + rect.height / 2) / viewportHeight;
+      if (centerY > 0.68) return "hand";
+      if (centerY > 0.38) return "board";
+      return "unknown";
+    };
+    const includeLocalCard = (node, rect) => {
+      const owner = ownerFrom(node);
+      if (owner === "opponent") return false;
+      if (owner === "me") return true;
+      const zone = zoneFrom(node, rect);
+      const centerY = (rect.top + rect.height / 2) / viewportHeight;
+      if (platform === "tcga") {
+        if (zone === "hand") return centerY > 0.62;
+        if (zone === "board" || zone === "base" || zone === "stack") return centerY > 0.42;
+        return centerY > 0.56;
+      }
+      if (zone === "hand") return centerY > 0.55;
+      if (zone === "board" || zone === "base" || zone === "stack") return centerY > 0.48;
+      return centerY > 0.52;
+    };
+    const elements = new Set();
+    const selectors = [
+      ".game-card",
+      ".card",
+      ".Card",
+      "[data-card-id]",
+      "[data-cardid]",
+      "[data-card]",
+      "[data-card-name]",
+      "[data-name]",
+      "[data-code]",
+      "[data-testid*='card' i]",
+      "[data-test*='card' i]",
+      "img[src*='/cards/']",
+      "img[src*='cards']",
+      "img[src*='.webp']",
+      "img[src*='.png']",
+      "[style*='/cards/']",
+      "[style*='.webp']",
+      "[style*='.png']"
+    ];
+    for (const selector of selectors) {
+      try {
+        const found = document.querySelectorAll(selector);
+        selectorCounts[selector] = found.length;
+        found.forEach((node) => elements.add(node));
+      } catch {}
+    }
+    if (elements.size < 8) {
+      try {
+        const found = document.querySelectorAll("[class*='card' i]");
+        selectorCounts["[class*='card' i]"] = found.length;
+        found.forEach((node) => elements.add(node));
+      } catch {}
+    }
+    const sampleNode = (node) => {
+      const rect = node.getBoundingClientRect?.();
+      const imageUrls = imageUrlsFrom(node);
+      const imgNode = node.matches?.("img") ? node : node.querySelector?.("img");
+      return {
+        tag: String(node.tagName || "").slice(0, 20),
+        className: String(node.className || "").slice(0, 120),
+        dataCardId: String(node.dataset?.cardId || node.dataset?.cardid || node.getAttribute?.("data-card-id") || "").slice(0, 80),
+        dataCard: String(node.dataset?.card || node.getAttribute?.("data-card") || "").slice(0, 80),
+        dataName: String(node.dataset?.cardName || node.dataset?.name || node.getAttribute?.("data-card-name") || "").slice(0, 80),
+        srcCode: codeFrom(String(imageUrls[0] || imgNode?.currentSrc || imgNode?.src || backgroundImage(node) || "")),
+        text: textFrom(node).slice(0, 80),
+        rect: rect ? [Math.round(rect.left), Math.round(rect.top), Math.round(rect.width), Math.round(rect.height)].join(",") : ""
+      };
+    };
+    const cards = [];
+    const frameCandidates = [];
+    const frameCandidateKeys = new Set();
+    const addFrameCandidate = (rect, zone, reason) => {
+      const minWidth = platform === "tcga" ? 32 : 34;
+      const minHeight = platform === "tcga" ? 44 : 48;
+      if (!rect || rect.width < minWidth || rect.height < minHeight) return;
+      if (rect.width > viewportWidth * 0.28 || rect.height > viewportHeight * 0.58) return;
+      const ratio = rect.width / Math.max(1, rect.height);
+      if (ratio < 0.35 || ratio > 1.25) return;
+      const key = [Math.round(rect.left / 4), Math.round(rect.top / 4), Math.round(rect.width / 4), Math.round(rect.height / 4), zone].join(":");
+      if (frameCandidateKeys.has(key)) return;
+      frameCandidateKeys.add(key);
+      frameCandidates.push({
+        zone,
+        platform,
+        confidenceScore: reason === "card-element" ? 0.72 : 0.62,
+        reason,
+        zoneRect: {
+          x: Math.round(rect.left),
+          y: Math.round(rect.top),
+          width: Math.round(rect.width),
+          height: Math.round(rect.height)
+        }
+      });
+    };
+    for (const rawNode of elements) {
+      const node = rawNode.closest?.(".game-card, .card, .Card, [data-card-id], [data-cardid], [data-card], [data-card-name], [data-name], [data-code], [data-testid*='card' i], [data-test*='card' i]") || rawNode;
+      const rect = node.getBoundingClientRect?.();
+      if (!rect || rect.width < 22 || rect.height < 30 || rect.bottom < 0 || rect.right < 0 || rect.top > viewportHeight || rect.left > viewportWidth) {
+        continue;
+      }
+      if (!includeLocalCard(node, rect)) {
+        continue;
+      }
+      const imageUrls = [...imageUrlsFrom(node), ...imageUrlsFrom(rawNode)];
+      const imageUrl = String(imageUrls.find((url, index) => codeFrom(url) || index === 0) || "");
+      const cardId = String(
+        node.dataset?.cardId ||
+        node.dataset?.cardid ||
+        node.dataset?.card ||
+        node.dataset?.code ||
+        node.getAttribute?.("data-card-id") ||
+        node.getAttribute?.("data-cardid") ||
+        node.getAttribute?.("data-card") ||
+        node.getAttribute?.("data-code") ||
+        codeFrom(imageUrl) ||
+        ""
+      );
+      const name = textFrom(node);
+      const code = codeFrom(cardId) || codeFrom(imageUrl) || codeFrom(name);
+      const hasStrongIdentity = Boolean(cardId || code);
+      const zone = zoneFrom(node, rect);
+      if (!hasStrongIdentity && actionOnlyName(name)) {
+        continue;
+      }
+      if (!hasStrongIdentity && rect.width > 260 && rect.height > 380) {
+        continue;
+      }
+      if (!hasStrongIdentity && rect.width > viewportWidth * 0.22 && rect.height > viewportHeight * 0.32) {
+        continue;
+      }
+      addFrameCandidate(rect, zone, hasStrongIdentity || imageUrl || name ? "card-element" : "unidentified-card");
+      if (!cardId && !code && !name && !imageUrl) {
+        continue;
+      }
+      const confidenceScore = code || cardId ? 0.96 : imageUrl ? 0.84 : 0.7;
+      cards.push({
+        name,
+        code,
+        cardId,
+        imageUrl,
+        zone,
+        platform,
+        confidenceScore,
+        zoneRect: {
+          x: Math.round(rect.left),
+          y: Math.round(rect.top),
+          width: Math.round(rect.width),
+          height: Math.round(rect.height)
+        }
+      });
+    }
+    return {
+      cards: cards.slice(0, 80),
+      frameCandidates: frameCandidates.slice(0, 80),
+      diagnostics: {
+        url: String(window.location.href || ""),
+        title: String(document.title || "").slice(0, 120),
+        viewport: [viewportWidth, viewportHeight].join("x"),
+        viewportWidth,
+        viewportHeight,
+        selectorCounts,
+        elementCount: elements.size,
+        frameCandidateCount: frameCandidates.length,
+        samples: Array.from(elements).slice(0, 12).map(sampleNode)
+      }
+    };
+  })()`;
+}
+
+function visionCodeFromValue(value: string): string {
+  const match = value.match(/\b([A-Z]{2,5}-\d{1,4}[A-Z]?)\b/i);
+  return match?.[1]?.toUpperCase() ?? "";
+}
+
+function isVisionActionOnlyName(value: string): boolean {
+  return /^(tap|untap|target|attack|block|exhaust|ready|cancel|confirm|ok|done)$/i.test(value.trim());
+}
+
+function sanitizeVisionRenderedCards(value: unknown[], platform: GamePlatform): VisionRenderedCardObservation[] {
+  return value
+    .map((item): VisionRenderedCardObservation | null => {
+      const record = item && typeof item === "object" && !Array.isArray(item) ? item as Record<string, unknown> : {};
+      const name = typeof record.name === "string" ? record.name.trim() : "";
+      const imageUrl = typeof record.imageUrl === "string" ? record.imageUrl.trim() : "";
+      const rawCode = typeof record.code === "string" ? record.code.trim().toUpperCase() : "";
+      const code = rawCode || visionCodeFromValue(imageUrl);
+      const cardId = typeof record.cardId === "string" ? record.cardId.trim() : "";
+      if (!name && !code && !cardId && !imageUrl) {
+        return null;
+      }
+      const zoneRect = sanitizeVisionRect(record.zoneRect);
+      const hasStrongIdentity = Boolean(cardId || code);
+      if (!hasStrongIdentity && isVisionActionOnlyName(name)) {
+        return null;
+      }
+      if (!hasStrongIdentity && zoneRect && zoneRect.width > 260 && zoneRect.height > 380) {
+        return null;
+      }
+      return {
+        name,
+        code,
+        cardId,
+        imageUrl,
+        zone: sanitizeVisionZone(record.zone),
+        platform,
+        confidenceScore: typeof record.confidenceScore === "number" ? Math.max(0, Math.min(1, record.confidenceScore)) : 0.7,
+        zoneRect
+      };
+    })
+    .filter((item): item is VisionRenderedCardObservation => Boolean(item));
+}
+
+type VisionRenderedCardsScan = {
+  cards: VisionRenderedCardObservation[];
+  frameCandidates: VisionFrameCandidate[];
+  viewportWidth: number;
+  viewportHeight: number;
+  diagnostics: Record<string, unknown>;
+};
+
+function sanitizeVisionRenderedCardsScan(value: unknown, platform: GamePlatform): VisionRenderedCardsScan {
+  if (Array.isArray(value)) {
+    return { cards: sanitizeVisionRenderedCards(value, platform), frameCandidates: [], viewportWidth: 0, viewportHeight: 0, diagnostics: {} };
+  }
+  const record = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  const cards = Array.isArray(record.cards) ? sanitizeVisionRenderedCards(record.cards, platform) : [];
+  const frameCandidates = Array.isArray(record.frameCandidates)
+    ? sanitizeVisionFrameCandidates(record.frameCandidates, platform)
+    : [];
+  const diagnostics = record.diagnostics && typeof record.diagnostics === "object" && !Array.isArray(record.diagnostics)
+    ? record.diagnostics as Record<string, unknown>
+    : {};
+  const viewportWidth = numberFromUnknown(diagnostics.viewportWidth);
+  const viewportHeight = numberFromUnknown(diagnostics.viewportHeight);
+  return { cards, frameCandidates, viewportWidth, viewportHeight, diagnostics };
+}
+
+function sanitizeVisionFrameCandidates(value: unknown[], platform: GamePlatform): VisionFrameCandidate[] {
+  return value
+    .map((item): VisionFrameCandidate | null => {
+      const record = item && typeof item === "object" && !Array.isArray(item) ? item as Record<string, unknown> : {};
+      const zoneRect = sanitizeVisionRect(record.zoneRect);
+      if (!zoneRect) {
+        return null;
+      }
+      if (zoneRect.width < 38 || zoneRect.height < 52) {
+        return null;
+      }
+      return {
+        zone: sanitizeVisionZone(record.zone),
+        platform,
+        confidenceScore: typeof record.confidenceScore === "number" ? Math.max(0, Math.min(1, record.confidenceScore)) : 0.6,
+        zoneRect,
+        reason: typeof record.reason === "string" ? record.reason.slice(0, 80) : undefined
+      };
+    })
+    .filter((item): item is VisionFrameCandidate => Boolean(item))
+    .slice(0, 80);
+}
+
+function numberFromUnknown(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function sanitizeVisionZone(value: unknown): DeckTrackerObservation["zone"] {
+  return value === "hand" || value === "board" || value === "base" || value === "stack" || value === "trash" || value === "discard" ? value : "unknown";
+}
+
+function sanitizeVisionRect(value: unknown): DeckTrackerObservation["zoneRect"] | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const x = Number(record.x);
+  const y = Number(record.y);
+  const width = Number(record.width);
+  const height = Number(record.height);
+  return [x, y, width, height].every(Number.isFinite) && width > 0 && height > 0
+    ? { x, y, width, height }
+    : undefined;
+}
+
 type ReplayRecorderFormat = {
   recorderMimeType: string;
   fileMimeType: ReplayVideoMimeType;
@@ -211,18 +1061,18 @@ type ReplayRecorderFormat = {
 
 function supportedReplayVideoFormats(includeAudio = false): ReplayRecorderFormat[] {
   const videoOnlyCandidates = [
-    { recorderMimeType: "video/mp4;codecs=avc1.640028", fileMimeType: "video/mp4" as const, codec: "H.264 MP4" },
-    { recorderMimeType: "video/mp4;codecs=avc1.4D4028", fileMimeType: "video/mp4" as const, codec: "H.264 MP4" },
-    { recorderMimeType: "video/mp4", fileMimeType: "video/mp4" as const, codec: "MP4" },
     { recorderMimeType: "video/webm;codecs=vp8", fileMimeType: "video/webm" as const, codec: "VP8 WebM" },
     { recorderMimeType: "video/webm;codecs=vp9", fileMimeType: "video/webm" as const, codec: "VP9 WebM" },
-    { recorderMimeType: "video/webm", fileMimeType: "video/webm" as const, codec: "WebM" }
+    { recorderMimeType: "video/webm", fileMimeType: "video/webm" as const, codec: "WebM" },
+    { recorderMimeType: "video/mp4;codecs=avc1.640028", fileMimeType: "video/mp4" as const, codec: "H.264 MP4 fallback" },
+    { recorderMimeType: "video/mp4;codecs=avc1.4D4028", fileMimeType: "video/mp4" as const, codec: "H.264 MP4 fallback" },
+    { recorderMimeType: "video/mp4", fileMimeType: "video/mp4" as const, codec: "MP4 fallback" }
   ];
   const audioCandidates = [
-    { recorderMimeType: "video/mp4;codecs=avc1.640028,mp4a.40.2", fileMimeType: "video/mp4" as const, codec: "H.264 MP4 + mic" },
-    { recorderMimeType: "video/mp4;codecs=avc1.4D4028,mp4a.40.2", fileMimeType: "video/mp4" as const, codec: "H.264 MP4 + mic" },
     { recorderMimeType: "video/webm;codecs=vp8,opus", fileMimeType: "video/webm" as const, codec: "VP8 WebM + mic" },
-    { recorderMimeType: "video/webm;codecs=vp9,opus", fileMimeType: "video/webm" as const, codec: "VP9 WebM + mic" }
+    { recorderMimeType: "video/webm;codecs=vp9,opus", fileMimeType: "video/webm" as const, codec: "VP9 WebM + mic" },
+    { recorderMimeType: "video/mp4;codecs=avc1.640028,mp4a.40.2", fileMimeType: "video/mp4" as const, codec: "H.264 MP4 + mic fallback" },
+    { recorderMimeType: "video/mp4;codecs=avc1.4D4028,mp4a.40.2", fileMimeType: "video/mp4" as const, codec: "H.264 MP4 + mic fallback" }
   ];
   const candidates = includeAudio ? [...audioCandidates, ...videoOnlyCandidates] : videoOnlyCandidates;
   return candidates.filter((candidate) => MediaRecorder.isTypeSupported(candidate.recorderMimeType));
@@ -330,10 +1180,12 @@ type MatchHistoryFilters = {
   range: string;
   sync: string;
   notes: string;
+  testingSession: string;
+  combinedOriginals: string;
   search: string;
 };
 
-type CommunityTab = "legend-meta" | "match-matrix" | "recent-matches";
+type CommunityTab = "legend-meta" | "match-matrix" | "recent-matches" | "community-decks";
 
 type LeaderboardSort = "score" | "winRate" | "games" | "wins" | "name";
 
@@ -369,6 +1221,8 @@ const DEFAULT_MATCH_HISTORY_FILTERS: MatchHistoryFilters = {
   range: "all",
   sync: "",
   notes: "",
+  testingSession: "",
+  combinedOriginals: "",
   search: ""
 };
 
@@ -511,6 +1365,8 @@ const REPLAY_FLAG_TYPES: Array<{ value: ReplayFlagType; label: string }> = [
   { value: "rules-check", label: "Rules check" },
   { value: "custom", label: "Custom" }
 ];
+const REPLAY_PLAYBACK_RATES = [1, 2, 4, 6] as const;
+const CUSTOM_REPLAY_FLAG_PREFIX = "custom:";
 const REPLAY_ANNOTATION_TOOLS: Array<{ value: ReplayAnnotationTool; label: string }> = [
   { value: "pen", label: "Pen" },
   { value: "arrow", label: "Arrow" },
@@ -544,12 +1400,16 @@ const REPLAY_VIDEO_ARM_THROTTLE_MS = 7_500;
 const REPLAY_VIDEO_RESIZE_GUARD_MS = 2_500;
 const REPLAY_VIDEO_RESIZE_RESUME_MS = 3_000;
 const REPLAY_VIDEO_RESIZE_DELTA_PX = 32;
+const REPLAY_VIDEO_START_MAX_AGE_MS = 120_000;
+const REPLAY_VIDEO_START_FUTURE_TOLERANCE_MS = 30_000;
+const REPLAY_VIDEO_WRITE_CHUNK_MS = 5_000;
 
 type ReplayVideoRuntime = {
   mode: ReplayVideoCaptureMode;
   source: ReplayVideoFinalizeOptions["source"];
   session: ReplayVideoSession;
   platform: GamePlatform;
+  startEvent: CaptureEvent;
   profile: typeof REPLAY_VIDEO_PROFILES[ReplayVideoQuality];
   quality: ReplayVideoQuality;
   fileMimeType: ReplayVideoMimeType;
@@ -580,6 +1440,13 @@ type ReplayVideoRuntime = {
   chunkMs: number;
 };
 
+type PendingReplayVideoSegment = {
+  video: ReplayVideoAsset;
+  startEvent: CaptureEvent | null;
+  retainedAt: string;
+  reason?: string;
+};
+
 type ReplaySourceVideoElement = HTMLVideoElement & {
   requestVideoFrameCallback?: (callback: (now: number, metadata: unknown) => void) => number;
   cancelVideoFrameCallback?: (handle: number) => void;
@@ -608,6 +1475,91 @@ type SystemReplayCrop = {
   cacheKey: string;
   expiresAt: number;
 };
+
+function replayPayloadString(payload: Record<string, unknown>, key: string): string {
+  const value = payload[key];
+  if (typeof value === "string") {
+    return value.trim();
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(value);
+  }
+  return "";
+}
+
+function normalizeReplayIdentity(value: string): string {
+  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
+function atlasReplayEventsLookLikeSameMatch(startEvent: CaptureEvent, nextEvent: CaptureEvent): boolean {
+  if (startEvent.platform !== "atlas" || nextEvent.platform !== "atlas") {
+    return false;
+  }
+  const startOpponent = normalizeReplayIdentity(replayPayloadString(startEvent.payload, "opponentName"));
+  const nextOpponent = normalizeReplayIdentity(replayPayloadString(nextEvent.payload, "opponentName"));
+  if (startOpponent && nextOpponent && startOpponent !== nextOpponent) {
+    return false;
+  }
+  const startMyLegend = normalizeReplayIdentity(normalizeLegendName(replayPayloadString(startEvent.payload, "myChampion")));
+  const nextMyLegend = normalizeReplayIdentity(normalizeLegendName(replayPayloadString(nextEvent.payload, "myChampion")));
+  if (startMyLegend && nextMyLegend && startMyLegend !== nextMyLegend) {
+    return false;
+  }
+  const startOppLegend = normalizeReplayIdentity(normalizeLegendName(replayPayloadString(startEvent.payload, "opponentChampion")));
+  const nextOppLegend = normalizeReplayIdentity(normalizeLegendName(replayPayloadString(nextEvent.payload, "opponentChampion")));
+  if (startOppLegend && nextOppLegend && startOppLegend !== nextOppLegend) {
+    return false;
+  }
+  return Boolean(
+    (startOpponent && nextOpponent && startOpponent === nextOpponent) ||
+    (startMyLegend && nextMyLegend && startMyLegend === nextMyLegend) ||
+    (startOppLegend && nextOppLegend && startOppLegend === nextOppLegend)
+  );
+}
+
+function atlasEvidenceText(event: CaptureEvent): string {
+  const rows = Array.isArray(event.payload.rows)
+    ? event.payload.rows.map((row) => {
+        if (row && typeof row === "object" && "text" in row) {
+          return String((row as { text?: unknown }).text ?? "");
+        }
+        return "";
+      })
+    : [];
+  return [
+    replayPayloadString(event.payload, "reason"),
+    replayPayloadString(event.payload, "endText"),
+    replayPayloadString(event.payload, "pageText"),
+    replayPayloadString(event.payload, "bodyText"),
+    replayPayloadString(event.payload, "text"),
+    ...rows
+  ].join(" ");
+}
+
+function atlasEvidenceGameNumber(event: CaptureEvent): number {
+  const raw = event.payload.atlasBo3GameNumber;
+  const numeric = typeof raw === "number" ? raw : typeof raw === "string" ? Number.parseInt(raw, 10) : 0;
+  if (Number.isFinite(numeric) && numeric > 0) {
+    return numeric;
+  }
+  const match = atlasEvidenceText(event).match(/confirm\s+game\s+([123])\s+winner/i);
+  return match ? Number.parseInt(match[1], 10) : 0;
+}
+
+function atlasDraftHasTerminalEvidence(draft: MatchDraft): boolean {
+  return (draft.rawEvidence ?? []).some((event) => {
+    const resultKind = replayPayloadString(event.payload, "atlasResultKind").toLowerCase();
+    return resultKind === "match-terminal" || /match\s+complete/i.test(atlasEvidenceText(event));
+  });
+}
+
+function atlasDraftHasChildGameEvidence(draft: MatchDraft): boolean {
+  return (draft.rawEvidence ?? []).some((event) => {
+    const resultKind = replayPayloadString(event.payload, "atlasResultKind").toLowerCase();
+    const gameNumber = atlasEvidenceGameNumber(event);
+    return resultKind === "game-result" || (gameNumber > 0 && gameNumber < 3);
+  });
+}
 
 const TOOLKIT_RESOURCES = [
   {
@@ -1170,6 +2122,96 @@ const DUNC_SPOTLIGHT: CommunitySpotlight = {
   ]
 };
 
+const RITUALTCG_SPOTLIGHT: CommunitySpotlight = {
+  id: "ritualtcg",
+  name: "Ritual_TCG",
+  kicker: "Creator spotlight",
+  location: "United Kingdom",
+  description: "Ritual_TCG is a UK content creator and game designer who runs the Below Average Riftbound Community. Known as a Riftbound meme creator, Ritual also runs monthly tournaments and weekly Nexus Nights streamed on Twitch, giving players a regular route into community games, laughs, and event nights.",
+  primaryCta: {
+    id: "discord",
+    label: "Join community",
+    url: "https://discord.gg/XRJEW2CcMt",
+    description: "Join the Below Average Riftbound Community for events, memes, and Riftbound chat.",
+    icon: MessageCircle,
+    featured: true
+  },
+  links: [
+    {
+      id: "discord",
+      label: "Discord",
+      url: "https://discord.gg/XRJEW2CcMt",
+      description: "Below Average Riftbound Community hub for events, memes, deck talk, and games.",
+      icon: MessageCircle,
+      featured: true
+    },
+    {
+      id: "twitch",
+      label: "Twitch",
+      url: "https://www.twitch.tv/ritual_tcg",
+      description: "Weekly Nexus Nights and monthly tournament streams.",
+      icon: Radio,
+      featured: true
+    },
+    {
+      id: "tiktok",
+      label: "TikTok",
+      url: "https://www.tiktok.com/@ritual_tcg",
+      description: "Riftbound memes, community clips, and quick creator updates.",
+      icon: Video,
+      featured: true
+    }
+  ],
+  tags: ["Memes", "Nexus Nights", "Monthly tournaments", "UK community"],
+  highlights: [
+    {
+      title: "#1 Riftbound Meme Creator",
+      text: "Meme-led Riftbound content with a community tone that is easy to share and follow."
+    },
+    {
+      title: "Nexus Nights",
+      text: "Weekly Nexus Nights are streamed on Twitch, giving players a recurring community event."
+    },
+    {
+      title: "Monthly tournaments",
+      text: "Regular tournaments give players a more structured way to play and meet the community."
+    },
+    {
+      title: "Below Average community",
+      text: "A Discord home for players who want events, laughs, and Riftbound conversation."
+    }
+  ],
+  assets: {
+    logo: "community/ritual-tcg-profile.jpg",
+    banner: "community/ritual-tcg-spotlight.svg",
+    tiktok: "community/ritual-tcg-spotlight.svg",
+    youtube: "community/ritual-tcg-spotlight.svg",
+    twitch: "community/ritual-tcg-spotlight.svg"
+  },
+  overviewBanner: "community/ritual-tcg-spotlight.svg",
+  overviewLogo: "community/ritual-tcg-profile.jpg",
+  routes: [
+    {
+      key: "tiktok",
+      title: "TikTok memes",
+      subtitle: "Riftbound meme content, community clips, and quick updates.",
+      linkId: "tiktok"
+    },
+    {
+      key: "twitch",
+      title: "Nexus Nights live",
+      subtitle: "Watch weekly Nexus Nights and monthly tournaments on Twitch.",
+      linkId: "twitch"
+    },
+    {
+      key: "youtube",
+      title: "Below Average Discord",
+      subtitle: "Join the community for events, deck talk, memes, and games.",
+      linkId: "discord"
+    }
+  ]
+};
+
 const AGITOSWIFTLY_SPOTLIGHT: CommunitySpotlight = {
   id: "agitoswiftly",
   name: "AgitoSwiftly",
@@ -1468,10 +2510,16 @@ const COMMUNITY_SPOTLIGHTS: CommunitySpotlight[] = [
   CHALLENGERTCG_SPOTLIGHT,
   NOVEGGIES_SPOTLIGHT,
   DUNC_SPOTLIGHT,
+  RITUALTCG_SPOTLIGHT,
   AGITOSWIFTLY_SPOTLIGHT,
   MRTOOLSHED_SPOTLIGHT,
   DAEMONXGG_SPOTLIGHT
 ];
+
+interface CaptureNotice {
+  title: string;
+  message: string;
+}
 
 function App() {
   const [activePlatform, setActivePlatform] = useState<GamePlatform>("tcga");
@@ -1484,7 +2532,11 @@ function App() {
   const [deletedMatches, setDeletedMatches] = useState<MatchDraft[]>([]);
   const [deletedReplays, setDeletedReplays] = useState<ReplayRecord[]>([]);
   const [decks, setDecks] = useState<SavedDeck[]>([]);
+  const [testingSessions, setTestingSessions] = useState<TestingSession[]>(() => readTestingSessions());
+  const [activeTestingSessionId, setActiveTestingSessionId] = useState(() => readActiveTestingSessionId());
   const [deckTrackerState, setDeckTrackerState] = useState<DeckTrackerState | null>(null);
+  const [visionTrackerStatus, setVisionTrackerStatus] = useState<VisionDeckTrackerStatus | null>(null);
+  const [visionTrackerDebugPanel, setVisionTrackerDebugPanel] = useState<VisionTrackerDebugPanelState | null>(null);
   const [prepNotebook, setPrepNotebook] = useState<DeckNotebook | null>(null);
   const [prepOpponentLegend, setPrepOpponentLegend] = useState("");
   const [prepSideboardHint, setPrepSideboardHint] = useState(false);
@@ -1503,15 +2555,21 @@ function App() {
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus>(DEFAULT_UPDATE_STATUS);
   const [screenshotStatus, setScreenshotStatus] = useState("");
   const [actionFeedback, setActionFeedback] = useState("");
+  const [captureNotice, setCaptureNotice] = useState<CaptureNotice | null>(null);
   const [updatePromptDismissedFor, setUpdatePromptDismissedFor] = useState("");
   const [releaseNotesOpen, setReleaseNotesOpen] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [activeView, setActiveView] = useState<ActiveView>("play");
+  const [activeView, setActiveView] = useState<ActiveView>("home");
+  const [activeCommunityTab, setActiveCommunityTab] = useState<CommunityTab>("community-decks");
+  const [communityDeckLegendTarget, setCommunityDeckLegendTarget] = useState("");
+  const [deckFocusTarget, setDeckFocusTarget] = useState<DeckFocusTarget>("library");
+  const [matchFocusTarget, setMatchFocusTarget] = useState<MatchFocusTarget | null>(null);
   const [focusedReplayId, setFocusedReplayId] = useState("");
   const gameRef = useRef<Electron.WebviewTag | null>(null);
   const autoConfirmingRef = useRef<string>("");
   const actionFeedbackTimerRef = useRef<number | undefined>(undefined);
+  const captureNoticeTimerRef = useRef<number | undefined>(undefined);
   const capturePromptSignatureRef = useRef("");
   const pendingReviewFallbackTimerRef = useRef<number | undefined>(undefined);
   const diagnosticsRefreshTimerRef = useRef<number | undefined>(undefined);
@@ -1519,13 +2577,25 @@ function App() {
   const communityLoadedRef = useRef(false);
   const activeViewRef = useRef<ActiveView>(activeView);
   const settingsRef = useRef<UserSettings | null>(settings);
+  const healthRef = useRef<CaptureHealth>(health);
   const decksRef = useRef<SavedDeck[]>(decks);
+  const testingSessionsRef = useRef<TestingSession[]>(testingSessions);
+  const activeTestingSessionIdRef = useRef(activeTestingSessionId);
   const prepNotebookRef = useRef<DeckNotebook | null>(prepNotebook);
   const prepOpponentLegendRef = useRef("");
   const consumedPrepNoteDraftIdsRef = useRef(new Set<string>());
+  const visionTrackerInFlightRef = useRef(false);
+  const visionTrackerFrameRef = useRef(0);
+  const visionTrackerSkippedRef = useRef(0);
+  const visionTrackerProcessedRef = useRef(0);
+  const visionTrackerWorkerRef = useRef<Worker | null>(null);
+  const visionTrackerWorkerRequestRef = useRef(0);
+  const visionTrackerDebugRef = useRef({ signature: "", at: 0 });
+  const visionTrackerLastFrameCaptureRef = useRef(0);
+  const visionTrackerNoEvidenceUntilRef = useRef(0);
   const replayVideoRef = useRef<ReplayVideoRuntime | null>(null);
-  const pendingReplayVideoRef = useRef<ReplayVideoAsset | null>(null);
-  const pendingReplayVideoSegmentsRef = useRef<ReplayVideoAsset[]>([]);
+  const pendingReplayVideoRef = useRef<PendingReplayVideoSegment | null>(null);
+  const pendingReplayVideoSegmentsRef = useRef<PendingReplayVideoSegment[]>([]);
   const lastReplayStartEventRef = useRef<CaptureEvent | null>(null);
   const armedReplayVideoRef = useRef<Partial<Record<GamePlatform, ArmedReplayVideoSource>>>({});
   const replayVideoPrimeTimerRef = useRef<number | undefined>(undefined);
@@ -1537,18 +2607,70 @@ function App() {
     [decks, settings?.activeDeckId]
   );
   const previousMatchFlags = useMemo(() => previousFlagsFromMatches(matches), [matches]);
+  const activeTestingSession = useMemo(
+    () => testingSessions.find((session) => session.id === activeTestingSessionId && !session.endedAt) ?? null,
+    [testingSessions, activeTestingSessionId]
+  );
+
+  function openView(nextView: ActiveView, options?: NavigationOptions) {
+    if (options?.communityTab) {
+      setActiveCommunityTab(options.communityTab);
+      if (options.communityTab !== "community-decks" || options.communityDeckLegend === undefined) {
+        setCommunityDeckLegendTarget("");
+      }
+    }
+    if (options && "communityDeckLegend" in options) {
+      setCommunityDeckLegendTarget(options.communityDeckLegend ?? "");
+    }
+    if (options?.deckFocus) {
+      setDeckFocusTarget(options.deckFocus);
+    }
+    if (options && "matchFocus" in options) {
+      setMatchFocusTarget(options.matchFocus ? { ...options.matchFocus, nonce: Date.now() } : null);
+    }
+    setActiveView(nextView);
+  }
+
+  function openCommunity(tab: CommunityTab) {
+    openView("community", { communityTab: tab });
+  }
+
+  function openDecks(focus: DeckFocusTarget = "library") {
+    openView("decks", { deckFocus: focus });
+  }
 
   useEffect(() => {
     activeViewRef.current = activeView;
   }, [activeView]);
 
   useEffect(() => {
+    return () => {
+      visionTrackerWorkerRef.current?.terminate();
+      visionTrackerWorkerRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
     settingsRef.current = settings;
   }, [settings]);
 
   useEffect(() => {
+    healthRef.current = health;
+  }, [health]);
+
+  useEffect(() => {
     decksRef.current = decks;
   }, [decks]);
+
+  useEffect(() => {
+    testingSessionsRef.current = testingSessions;
+    writeTestingSessions(testingSessions);
+  }, [testingSessions]);
+
+  useEffect(() => {
+    activeTestingSessionIdRef.current = activeTestingSessionId;
+    writeActiveTestingSessionId(activeTestingSessionId);
+  }, [activeTestingSessionId]);
 
   useEffect(() => {
     prepNotebookRef.current = prepNotebook;
@@ -1559,7 +2681,7 @@ function App() {
   }, [prepOpponentLegend]);
 
   useEffect(() => {
-    void bootstrap();
+    void bootstrap().catch((error) => handleBootstrapFailure(error));
     const offEvent = window.riftlite.onCaptureEvent((event) => {
       void maybeStartReplayVideo(event);
       updatePrepFromCaptureEvent(event);
@@ -1571,9 +2693,15 @@ function App() {
     const offHealth = window.riftlite.onCaptureHealth((nextHealth) => {
       setHealth(nextHealth);
       if (nextHealth.state === "review-needed") {
-        showCapturePrompt(nextHealth, "Match captured - preparing the review. Checking BO3 and replay data...");
+        showCapturePrompt(nextHealth, "Match captured. Preparing the review popup and attaching replay data.");
         schedulePendingReviewFallback();
       } else if (nextHealth.state === "match-detected" && nextHealth.message.toLowerCase().includes("bo3 game captured")) {
+        clearPendingReviewFallback();
+        showCapturePrompt(nextHealth, nextHealth.message);
+      } else if (nextHealth.state === "match-detected" && nextHealth.message.toLowerCase().includes("checking briefly")) {
+        clearPendingReviewFallback();
+        showCapturePrompt(nextHealth, nextHealth.message);
+      } else if (nextHealth.state === "match-detected" && nextHealth.message.toLowerCase().includes("next bo3 game detected")) {
         clearPendingReviewFallback();
         showCapturePrompt(nextHealth, nextHealth.message);
       }
@@ -1581,10 +2709,13 @@ function App() {
     const offDraft = window.riftlite.onMatchDraft((draft) => {
       clearPendingReviewFallback();
       const repairedDraft = prepareDraftForReview(draft);
-      clearDismissedReview(repairedDraft);
-      setReviewDraft(repairedDraft);
       setMatches((current) => upsertMatchPreservingOrder(current, repairedDraft));
       void refreshDecks();
+      if (repairedDraft.status === "saved") {
+        return;
+      }
+      clearDismissedReview(repairedDraft);
+      setReviewDraft(repairedDraft);
       void stopReplayVideoForDraft(repairedDraft);
     });
     const offScreenshot = window.riftlite.onScreenshotSaved((result) => {
@@ -1606,6 +2737,9 @@ function App() {
       offUpdate();
       if (actionFeedbackTimerRef.current) {
         window.clearTimeout(actionFeedbackTimerRef.current);
+      }
+      if (captureNoticeTimerRef.current) {
+        window.clearTimeout(captureNoticeTimerRef.current);
       }
       if (pendingReviewFallbackTimerRef.current) {
         clearPendingReviewFallback();
@@ -1629,10 +2763,6 @@ function App() {
   }, [activePlatform]);
 
   useEffect(() => {
-    if (!DECK_TRACKER_FEATURE_ENABLED) {
-      setDeckTrackerState(null);
-      return;
-    }
     if (!settings) {
       return;
     }
@@ -1641,6 +2771,16 @@ function App() {
   }, [activePlatform, preloadUrl, settings?.gameZoomFactor]);
 
   useEffect(() => {
+    if (!DECK_TRACKER_FEATURE_ENABLED) {
+      setDeckTrackerState(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!DECK_TRACKER_FEATURE_ENABLED) {
+      setDeckTrackerState(null);
+      return;
+    }
     if (!settings) {
       return;
     }
@@ -1653,6 +2793,28 @@ function App() {
     }, 2500);
     return () => window.clearInterval(timer);
   }, [activeView, activePlatform, settings?.activeDeckId, settings?.deckTrackerEnabled, settings?.deckTrackerAutoStart]);
+
+  useEffect(() => {
+    if (!DECK_TRACKER_FEATURE_ENABLED || !settings?.deckTrackerEnabled || !settings.deckTrackerAutoStart) {
+      return;
+    }
+    if (activeView !== "play") {
+      return;
+    }
+    const run = () => {
+      void runVisionDeckTrackerScan();
+    };
+    run();
+    const timer = window.setInterval(run, visionDeckTrackerIntervalMs(settings.deckTrackerPerformanceMode));
+    return () => window.clearInterval(timer);
+  }, [
+    activeView,
+    activePlatform,
+    playActiveDeck?.id,
+    settings?.deckTrackerEnabled,
+    settings?.deckTrackerAutoStart,
+    settings?.deckTrackerPerformanceMode
+  ]);
 
   useEffect(() => {
     if (!settings?.activeDeckId) {
@@ -1742,7 +2904,7 @@ function App() {
   }, [activePlatform, activeView, settings?.replayVideoEnabled]);
 
   async function bootstrap() {
-    const nextSettings = await window.riftlite.getSettings();
+    const nextSettings = await startupValue("settings", window.riftlite.getSettings(), FALLBACK_BOOT_SETTINGS);
     const [
       nextHealth,
       nextMatches,
@@ -1793,12 +2955,33 @@ function App() {
         });
       }
       localStorage.setItem(VIDEO_REPLAY_DEFAULTS_MIGRATION_KEY, "done");
+      if (localStorage.getItem(GAME_ZOOM_RESET_MIGRATION_KEY) !== "done") {
+        const savedZoom = clampGameZoom(bootSettings.gameZoomFactor);
+        if (savedZoom > 1.2) {
+          bootSettings = await window.riftlite.saveSettings({ gameZoomFactor: 1 });
+        }
+        localStorage.setItem(GAME_ZOOM_RESET_MIGRATION_KEY, "done");
+      }
+      if (localStorage.getItem(VISION_TRACKER_DEFAULT_OFF_MIGRATION_KEY) !== "done") {
+        if (bootSettings.deckTrackerEnabled || bootSettings.deckTrackerAutoStart || bootSettings.deckTrackerSaveToReplay) {
+          bootSettings = await window.riftlite.saveSettings({
+            deckTrackerEnabled: false,
+            deckTrackerAutoStart: false,
+            deckTrackerSaveToReplay: false
+          });
+        }
+        localStorage.setItem(VISION_TRACKER_DEFAULT_OFF_MIGRATION_KEY, "done");
+      }
     } catch {
       bootSettings = nextSettings;
     }
     const shouldShowReleaseNotes = bootSettings.firstRunComplete && bootSettings.lastSeenVersion !== APP_VERSION_META;
     if (!bootSettings.firstRunComplete && bootSettings.lastSeenVersion !== APP_VERSION_META) {
-      bootSettings = await window.riftlite.saveSettings({ lastSeenVersion: APP_VERSION_META });
+      bootSettings = await startupValue(
+        "first-run version save",
+        window.riftlite.saveSettings({ lastSeenVersion: APP_VERSION_META }),
+        { ...bootSettings, lastSeenVersion: APP_VERSION_META }
+      );
     }
     setSettings(bootSettings);
     setHealth(nextHealth);
@@ -1826,6 +3009,28 @@ function App() {
     window.setTimeout(() => void checkForUpdates(true), 2500);
   }
 
+  function handleBootstrapFailure(error: unknown) {
+    console.error("RiftLite startup failed; loading fallback shell", error);
+    setSettings(FALLBACK_BOOT_SETTINGS);
+    setHealth(DEFAULT_HEALTH);
+    setMatches([]);
+    setReplays([]);
+    setDeletedMatches([]);
+    setDeletedReplays([]);
+    setDecks([]);
+    setBattlefields([]);
+    setLogoUrl("");
+    setBrowsers([]);
+    setOverlayInfo(null);
+    setDiagnosticsPath("");
+    setDiagnosticsSummary(null);
+    setUpdateStatus({
+      ...DEFAULT_UPDATE_STATUS,
+      state: "error",
+      message: error instanceof Error ? `Startup recovered: ${error.message}` : "Startup recovered with fallback data."
+    });
+  }
+
   function schedulePendingReviewFallback() {
     clearPendingReviewFallback();
     pendingReviewFallbackTimerRef.current = window.setTimeout(() => {
@@ -1848,7 +3053,10 @@ function App() {
       return;
     }
     capturePromptSignatureRef.current = signature;
-    showActionFeedback(message, 4500);
+    showCaptureNotice({
+      title: "Match logger",
+      message: captureNoticeMessage(nextHealth, message)
+    });
   }
 
   function updatePrepFromCaptureEvent(event: CaptureEvent) {
@@ -1905,6 +3113,23 @@ function App() {
       markReviewDismissed(reviewDraft);
     }
     setReviewDraft(null);
+  }
+
+  async function deleteReviewDraft(draft: MatchDraft) {
+    markReviewDismissed(draft);
+    setReviewDraft(null);
+    await window.riftlite.deleteMatch(draft.id);
+    const [nextMatches, nextReplays, nextDeletedMatches, nextDeletedReplays] = await Promise.all([
+      window.riftlite.getMatches(),
+      window.riftlite.getReplays(),
+      window.riftlite.getDeletedMatches(),
+      window.riftlite.getDeletedReplays()
+    ]);
+    setMatches(nextMatches);
+    setReplays(nextReplays);
+    setDeletedMatches(nextDeletedMatches);
+    setDeletedReplays(nextDeletedReplays);
+    showActionFeedback("Captured match deleted.");
   }
 
   function prepareDraftForReview(draft: MatchDraft): MatchDraft {
@@ -2069,16 +3294,78 @@ function App() {
     setSettings(next);
   }
 
-  async function confirmDraft(draft: MatchDraft) {
-    const saved = await window.riftlite.confirmMatch(normalizeReviewDraft(draft));
-    if (draft.keepReplay === false) {
-      await window.riftlite.deleteReplayVideoByMatch(draft.id).catch(() => undefined);
+  function startTestingSession(input: { label: string; goal: string; deckId: string }) {
+    const deck = decksRef.current.find((item) => item.id === input.deckId);
+    const now = new Date().toISOString();
+    const session: TestingSession = {
+      id: createLocalId("test-session"),
+      label: input.label.trim() || "Testing session",
+      goal: input.goal.trim(),
+      deckId: deck?.id,
+      deckName: deck?.title,
+      startedAt: now
+    };
+    setTestingSessions((current) => [session, ...current.map((item) => item.endedAt ? item : { ...item, endedAt: now })]);
+    setActiveTestingSessionId(session.id);
+    showActionFeedback(`Testing session started: ${session.label}`);
+  }
+
+  function stopTestingSession() {
+    const id = activeTestingSessionIdRef.current;
+    if (!id) {
+      return;
     }
+    const now = new Date().toISOString();
+    setTestingSessions((current) => current.map((session) => session.id === id ? { ...session, endedAt: session.endedAt ?? now } : session));
+    setActiveTestingSessionId("");
+    showActionFeedback("Testing session stopped.");
+  }
+
+  async function exportTestingSession(sessionId: string) {
+    const session = testingSessionsRef.current.find((item) => item.id === sessionId);
+    const rows = matches.filter((match) => match.testingSessionId === sessionId);
+    if (!session || !rows.length) {
+      showActionFeedback("No testing-session matches to export yet.");
+      return;
+    }
+    const path = await window.riftlite.exportMatchHistoryCsv({
+      scope: "personal",
+      label: `testing-session-${session.label}`,
+      matches: rows
+    });
+    showActionFeedback(path ? "Testing session CSV exported." : "Testing session export cancelled.");
+  }
+
+  function attachTestingSessionToDraft(draft: MatchDraft): MatchDraft {
+    const session = testingSessionsRef.current.find((item) => item.id === activeTestingSessionIdRef.current && !item.endedAt);
+    if (!session || draft.testingSessionId) {
+      return draft;
+    }
+    return {
+      ...draft,
+      testingSessionId: session.id,
+      testingSessionLabel: session.label
+    };
+  }
+
+  async function confirmDraft(draft: MatchDraft) {
+    const saved = await window.riftlite.confirmMatch(normalizeReviewDraft(attachTestingSessionToDraft(draft)));
     setReviewDraft(null);
     setMatches((current) => upsertMatchPreservingOrder(current, saved));
-    setReplays(await window.riftlite.getReplays());
-    setDeletedReplays(await window.riftlite.getDeletedReplays());
-    setDecks(await window.riftlite.getDecks());
+    showActionFeedback("Match saved.");
+    void (async () => {
+      if (draft.keepReplay === false) {
+        await window.riftlite.deleteReplayVideoByMatch(draft.id).catch(() => undefined);
+      }
+      const [nextReplays, nextDeletedReplays, nextDecks] = await Promise.all([
+        window.riftlite.getReplays(),
+        window.riftlite.getDeletedReplays(),
+        window.riftlite.getDecks()
+      ]);
+      setReplays(nextReplays);
+      setDeletedReplays(nextDeletedReplays);
+      setDecks(nextDecks);
+    })().catch(() => undefined);
   }
 
   async function refreshDecks() {
@@ -2131,6 +3418,436 @@ function App() {
     }
     const state = await window.riftlite.resetDeckTrackerMatch();
     setDeckTrackerState(state);
+  }
+
+  function visionDeckTrackerWorker(): Worker {
+    if (!visionTrackerWorkerRef.current) {
+      visionTrackerWorkerRef.current = new Worker(new URL("./visionDeckTracker.worker.ts", import.meta.url), { type: "module" });
+    }
+    return visionTrackerWorkerRef.current;
+  }
+
+  function visionFrameCaptureBudgetMs(mode: DeckTrackerPerformanceMode | undefined): number {
+    if (mode === "responsive") {
+      return 14000;
+    }
+    if (mode === "light") {
+      return 45000;
+    }
+    return 30000;
+  }
+
+  async function captureVisionFrameSample(
+    webview: Electron.WebviewTag,
+    scan: Pick<VisionRenderedCardsScan, "viewportWidth" | "viewportHeight">,
+    capturedAt: string
+  ): Promise<VisionFrameSample | null> {
+    const capturePage = (webview as unknown as { capturePage?: () => Promise<{ toDataURL?: () => string }> }).capturePage;
+    if (!capturePage) {
+      return null;
+    }
+    const image = await capturePage.call(webview);
+    const sourceDataUrl = image?.toDataURL?.() ?? "";
+    if (!sourceDataUrl) {
+      return null;
+    }
+    const imageElement = await loadVisionFrameImage(sourceDataUrl);
+    const sourceWidth = imageElement.naturalWidth || imageElement.width;
+    const sourceHeight = imageElement.naturalHeight || imageElement.height;
+    if (!sourceWidth || !sourceHeight) {
+      return null;
+    }
+    const mode = settingsRef.current?.deckTrackerPerformanceMode;
+    const maxWidth = mode === "responsive" ? 720 : mode === "light" ? 480 : 600;
+    const scale = Math.min(1, maxWidth / sourceWidth);
+    const width = Math.max(1, Math.round(sourceWidth * scale));
+    const height = Math.max(1, Math.round(sourceHeight * scale));
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext("2d", { alpha: false });
+    if (!context) {
+      return null;
+    }
+    context.imageSmoothingEnabled = true;
+    context.imageSmoothingQuality = "medium";
+    context.drawImage(imageElement, 0, 0, width, height);
+    return {
+      dataUrl: canvas.toDataURL("image/jpeg", mode === "responsive" ? 0.6 : 0.5),
+      width,
+      height,
+      viewportWidth: scan.viewportWidth || width,
+      viewportHeight: scan.viewportHeight || height,
+      capturedAt
+    };
+  }
+
+  function loadVisionFrameImage(dataUrl: string): Promise<HTMLImageElement> {
+    return new Promise((resolve, reject) => {
+      const image = new Image();
+      image.onload = () => resolve(image);
+      image.onerror = () => reject(new Error("Vision tracker could not decode the game frame."));
+      image.src = dataUrl;
+    });
+  }
+
+  async function matchVisionDeckTrackerInWorker(
+    deck: SavedDeck,
+    platform: GamePlatform,
+    renderedCards: VisionRenderedCardObservation[],
+    frameCandidates: VisionFrameCandidate[],
+    frameSample: VisionFrameSample | null,
+    capturedAt: string,
+    frameId: string
+  ): Promise<VisionDeckTrackerMatchResult> {
+    const worker = visionDeckTrackerWorker();
+    const id = `vision-${Date.now()}-${visionTrackerWorkerRequestRef.current += 1}`;
+    return new Promise((resolve, reject) => {
+      let timeout = 0;
+      let onMessage: (event: MessageEvent<{ id: string; result?: VisionDeckTrackerMatchResult; error?: string }>) => void;
+      let onError: (event: ErrorEvent) => void;
+      const cleanup = () => {
+        window.clearTimeout(timeout);
+        worker.removeEventListener("message", onMessage);
+        worker.removeEventListener("error", onError);
+      };
+      onMessage = (event: MessageEvent<{ id: string; result?: VisionDeckTrackerMatchResult; error?: string }>) => {
+        if (event.data?.id !== id) {
+          return;
+        }
+        cleanup();
+        if (event.data.error) {
+          reject(new Error(event.data.error));
+          return;
+        }
+        if (!event.data.result) {
+          reject(new Error("Vision tracker worker returned no result."));
+          return;
+        }
+        resolve(event.data.result);
+      };
+      onError = (event: ErrorEvent) => {
+        cleanup();
+        reject(new Error(event.message || "Vision tracker worker crashed."));
+      };
+      worker.addEventListener("message", onMessage);
+      worker.addEventListener("error", onError);
+      timeout = window.setTimeout(() => {
+        cleanup();
+        reject(new Error("Vision tracker paused because processing exceeded the frame budget."));
+      }, 6500);
+      worker.postMessage({ id, deck, platform, renderedCards, frameCandidates, frameSample, capturedAt, frameId });
+    });
+  }
+
+  function recordVisionDeckTrackerDebug(reason: string, payload: Record<string, unknown> = {}, force = false) {
+    const currentSettings = settingsRef.current;
+    if (!currentSettings?.debugMode) {
+      return;
+    }
+    const activeDeck = currentSettings?.activeDeckId
+      ? decksRef.current.find((deck) => deck.id === currentSettings.activeDeckId) ?? null
+      : null;
+    const now = Date.now();
+    const signature = JSON.stringify({
+      reason,
+      activeView: activeViewRef.current,
+      healthState: healthRef.current.state,
+      deckId: activeDeck?.id ?? "",
+      renderedCount: payload.renderedCount,
+      observationCount: payload.observationCount,
+      suggestionCount: payload.suggestionCount,
+      error: payload.error
+    });
+    if (!force && visionTrackerDebugRef.current.signature === signature && now - visionTrackerDebugRef.current.at < 5000) {
+      return;
+    }
+    visionTrackerDebugRef.current = { signature, at: now };
+    const webview = gameRef.current;
+    void window.riftlite.recordVisionDeckTrackerDebug(activePlatform, {
+      reason,
+      url: webview ? webview.getURL() : "",
+      activeView: activeViewRef.current,
+      healthState: healthRef.current.state,
+      platform: activePlatform,
+      enabled: currentSettings?.deckTrackerEnabled === true,
+      autoStart: currentSettings?.deckTrackerAutoStart === true,
+      saveToReplay: currentSettings?.deckTrackerSaveToReplay === true,
+      performanceMode: currentSettings?.deckTrackerPerformanceMode ?? "",
+      debugMode: currentSettings?.debugMode === true,
+      activeDeckId: activeDeck?.id ?? "",
+      activeDeckTitle: activeDeck?.title ?? "",
+      activeDeckLegend: activeDeck?.legend ?? "",
+      ...payload
+    }).catch(() => undefined);
+  }
+
+  async function runVisionDeckTrackerScan() {
+    if (!DECK_TRACKER_FEATURE_ENABLED) {
+      return;
+    }
+    const currentSettings = settingsRef.current;
+    const activeDeck = currentSettings?.activeDeckId ? decksRef.current.find((deck) => deck.id === currentSettings.activeDeckId) ?? null : null;
+    const webview = gameRef.current;
+    if (!currentSettings?.deckTrackerEnabled || !currentSettings.deckTrackerAutoStart || !activeDeck || !webview) {
+      recordVisionDeckTrackerDebug("vision-scan-blocked", {
+        settingsLoaded: Boolean(currentSettings),
+        hasWebview: Boolean(webview),
+        hasActiveDeck: Boolean(activeDeck),
+        activeDeckId: currentSettings?.activeDeckId ?? "",
+        enabled: currentSettings?.deckTrackerEnabled === true,
+        autoStart: currentSettings?.deckTrackerAutoStart === true
+      });
+      return;
+    }
+    const healthState = healthRef.current.state;
+    if (activeViewRef.current !== "play" || !visionDeckTrackerShouldScan(healthState)) {
+      visionTrackerNoEvidenceUntilRef.current = 0;
+      setVisionTrackerStatus((current) => current ? {
+        ...current,
+        active: false,
+        state: healthState === "review-needed" || healthState === "saved" ? "paused" : current.state,
+        message: healthState === "match-detected"
+          ? current.message
+          : "Vision tracker is paused until an active match is detected.",
+        updatedAt: new Date().toISOString()
+      } : current);
+      recordVisionDeckTrackerDebug("vision-scan-paused", {
+        activeView: activeViewRef.current,
+        healthState
+      });
+      return;
+    }
+    const preScanNow = Date.now();
+    if (preScanNow < visionTrackerNoEvidenceUntilRef.current) {
+      return;
+    }
+    if (visionTrackerInFlightRef.current) {
+      visionTrackerSkippedRef.current += 1;
+      setVisionTrackerStatus((current) => current ? {
+        ...current,
+        skippedFrames: visionTrackerSkippedRef.current,
+        updatedAt: new Date().toISOString()
+      } : current);
+      recordVisionDeckTrackerDebug("vision-scan-skipped", {
+        skippedFrames: visionTrackerSkippedRef.current
+      });
+      return;
+    }
+    const currentUrl = webview.getURL();
+    const playableUrl = visionDeckTrackerUrlLooksPlayable(activePlatform, currentUrl);
+    if (!playableUrl) {
+      visionTrackerNoEvidenceUntilRef.current = Date.now() + 60000;
+      setVisionTrackerStatus((current) => current ? {
+        ...current,
+        active: false,
+        state: "paused",
+        message: "Vision tracker is paused outside an active game page.",
+        updatedAt: new Date().toISOString(),
+        processedFrames: visionTrackerProcessedRef.current,
+        skippedFrames: visionTrackerSkippedRef.current
+      } : current);
+      recordVisionDeckTrackerDebug("vision-scan-non-game-url", {
+        url: currentUrl,
+        healthState
+      });
+      return;
+    }
+    visionTrackerInFlightRef.current = true;
+    const frameNumber = visionTrackerFrameRef.current + 1;
+    visionTrackerFrameRef.current = frameNumber;
+    const frameId = `${activePlatform}-${Date.now()}-${frameNumber}`;
+    const capturedAt = new Date().toISOString();
+    try {
+      const rawCards = await webview.executeJavaScript(collectVisionRenderedCardsScript(activePlatform), true) as unknown;
+      const scan = sanitizeVisionRenderedCardsScan(rawCards, activePlatform);
+      const renderedCards = scan.cards;
+      if (!renderedCards.length && !scan.frameCandidates.length) {
+        visionTrackerNoEvidenceUntilRef.current = Date.now() + (healthState === "match-detected" ? 10000 : 30000);
+        setVisionTrackerStatus((current) => current ? {
+          ...current,
+          active: false,
+          state: "paused",
+          message: "Vision tracker is paused until visible match cards are detected.",
+          updatedAt: capturedAt,
+          processedFrames: visionTrackerProcessedRef.current,
+          skippedFrames: visionTrackerSkippedRef.current
+        } : current);
+        recordVisionDeckTrackerDebug("vision-scan-no-match-evidence", {
+          frameId,
+          healthState,
+          diagnostics: scan.diagnostics
+        });
+        return;
+      }
+      visionTrackerNoEvidenceUntilRef.current = 0;
+      const now = Date.now();
+      const shouldCaptureFrame = now - visionTrackerLastFrameCaptureRef.current >= visionFrameCaptureBudgetMs(currentSettings.deckTrackerPerformanceMode);
+      let frameSample: VisionFrameSample | null = null;
+      if (shouldCaptureFrame) {
+        frameSample = await captureVisionFrameSample(webview, scan, capturedAt).catch((error) => {
+          recordVisionDeckTrackerDebug("vision-frame-capture-failed", {
+            frameId,
+            error: error instanceof Error ? error.message : "Vision frame capture failed."
+          }, true);
+          return null;
+        });
+        if (frameSample) {
+          visionTrackerLastFrameCaptureRef.current = now;
+        }
+      }
+      recordVisionDeckTrackerDebug("vision-frame-read", {
+        frameId,
+        healthState,
+        renderedCount: renderedCards.length,
+        frameCandidateCount: scan.frameCandidates.length,
+        frameCaptured: Boolean(frameSample),
+        frameSize: frameSample ? `${frameSample.width}x${frameSample.height}` : "",
+        diagnostics: scan.diagnostics,
+        renderedSamples: renderedCards.slice(0, 8).map((card) => ({
+          name: card.name,
+          code: card.code,
+          cardId: card.cardId,
+          zone: card.zone,
+          confidenceScore: card.confidenceScore,
+          rect: card.zoneRect ? `${card.zoneRect.x},${card.zoneRect.y},${card.zoneRect.width},${card.zoneRect.height}` : ""
+        })),
+        frameCandidateSamples: scan.frameCandidates.slice(0, 8).map((candidate) => ({
+          zone: candidate.zone,
+          reason: candidate.reason,
+          confidenceScore: candidate.confidenceScore,
+          rect: `${candidate.zoneRect.x},${candidate.zoneRect.y},${candidate.zoneRect.width},${candidate.zoneRect.height}`
+        }))
+      });
+      const result = await matchVisionDeckTrackerInWorker(activeDeck, activePlatform, renderedCards, scan.frameCandidates, frameSample, capturedAt, frameId);
+      visionTrackerProcessedRef.current += 1;
+      const nextStatus: VisionDeckTrackerStatus = {
+        state: result.observations.length ? "active" : result.suggestions.length ? "low-confidence" : "active",
+        enabled: true,
+        active: true,
+        platform: activePlatform,
+        message: result.message,
+        updatedAt: capturedAt,
+        frameId,
+        confidenceScore: result.confidenceScore,
+        processedFrames: visionTrackerProcessedRef.current,
+        skippedFrames: visionTrackerSkippedRef.current,
+        suggestions: result.suggestions
+      };
+      setVisionTrackerStatus(nextStatus);
+      recordVisionDeckTrackerDebug("vision-frame-matched", {
+        frameId,
+        renderedCount: renderedCards.length,
+        observationCount: result.observations.length,
+        suggestionCount: result.suggestions.length,
+        confidenceScore: result.confidenceScore,
+        message: result.message,
+        frameDiagnostics: result.frameDiagnostics,
+        observations: result.observations.slice(0, 8).map((card) => ({
+          name: card.name,
+          code: card.code,
+          zone: card.zone,
+          confidenceScore: card.confidenceScore
+        })),
+        suggestions: result.suggestions.slice(0, 8).map((card) => ({
+          name: card.name,
+          code: card.code,
+          zone: card.zone,
+          confidenceScore: card.confidenceScore
+        })),
+        ignoredMatches: result.ignoredMatches?.slice(0, 8)
+      });
+      const diagnostics = result.frameDiagnostics ?? {};
+      const bestMatches = Array.isArray(diagnostics.bestMatches) ? diagnostics.bestMatches : [];
+      setVisionTrackerDebugPanel({
+        frameId,
+        capturedAt,
+        platform: activePlatform,
+        healthState,
+        renderedCount: renderedCards.length,
+        frameCandidateCount: scan.frameCandidates.length,
+        observationCount: result.observations.length,
+        suggestionCount: result.suggestions.length,
+        confidenceScore: result.confidenceScore,
+        frameCaptured: Boolean(frameSample),
+        message: result.message,
+        observations: result.observations.slice(0, 16).map((card) => ({
+          name: card.name || card.code || card.cardId || "Unknown card",
+          code: card.code || card.cardId || "",
+          zone: card.zone,
+          confidenceScore: card.confidenceScore ?? 0
+        })),
+        suggestions: result.suggestions.slice(0, 10).map((card) => ({
+          name: card.name || card.code || card.cardId || "Unknown card",
+          code: card.code || card.cardId || "",
+          zone: card.zone,
+          confidenceScore: card.confidenceScore
+        })),
+        bestMatches: bestMatches.slice(0, 10).map((item) => {
+          const record = item && typeof item === "object" && !Array.isArray(item) ? item as Record<string, unknown> : {};
+          return {
+            name: typeof record.name === "string" ? record.name : "Unknown card",
+            code: "",
+            zone: typeof record.zone === "string" ? record.zone : "unknown",
+            confidenceScore: typeof record.score === "number" ? record.score : 0,
+            source: typeof record.source === "string" ? record.source : "",
+            rect: typeof record.rect === "string" ? record.rect : ""
+          };
+        }),
+        ignoredMatches: (result.ignoredMatches ?? []).slice(0, 8).map((item) => `${item.name} (${item.role})`)
+      });
+      if (result.observations.length || result.suggestions.length || renderedCards.length) {
+        const state = await window.riftlite.reportVisionDeckTrackerObservations(activePlatform, result.observations, nextStatus);
+        setDeckTrackerState(state);
+        const serviceStatus = await window.riftlite.getVisionDeckTrackerStatus().catch(() => null);
+        if (serviceStatus) {
+          setVisionTrackerStatus(serviceStatus);
+        }
+      }
+    } catch (error) {
+      setVisionTrackerStatus({
+        state: "error",
+        enabled: true,
+        active: false,
+        platform: activePlatform,
+        message: error instanceof Error ? error.message : "Vision scan failed.",
+        updatedAt: new Date().toISOString(),
+        frameId,
+        confidenceScore: 0,
+        processedFrames: visionTrackerProcessedRef.current,
+        skippedFrames: visionTrackerSkippedRef.current,
+        suggestions: []
+      });
+      recordVisionDeckTrackerDebug("vision-scan-error", {
+        frameId,
+        error: error instanceof Error ? error.message : "Vision scan failed."
+      }, true);
+    } finally {
+      visionTrackerInFlightRef.current = false;
+    }
+  }
+
+  async function confirmVisionSuggestion(cardKey: string) {
+    const status = await window.riftlite.confirmVisionDeckTrackerSuggestion(cardKey);
+    recordVisionDeckTrackerDebug("vision-suggestion-confirmed", { cardKey }, true);
+    setVisionTrackerStatus(status);
+    await refreshDeckTrackerState();
+  }
+
+  async function rejectVisionSuggestion(cardKey: string) {
+    const status = await window.riftlite.rejectVisionDeckTrackerSuggestion(cardKey);
+    recordVisionDeckTrackerDebug("vision-suggestion-rejected", { cardKey }, true);
+    setVisionTrackerStatus(status);
+  }
+
+  async function calibrateVisionDeckTracker() {
+    const status = await window.riftlite.calibrateVisionDeckTracker(activePlatform);
+    recordVisionDeckTrackerDebug("vision-calibration-requested", {
+      state: status.state,
+      message: status.message
+    }, true);
+    setVisionTrackerStatus(status);
+    await runVisionDeckTrackerScan();
   }
 
   async function savePrepNotebook(next: DeckNotebook) {
@@ -2220,6 +3937,33 @@ function App() {
     setSettings(nextSettings);
     await refreshCommunityData(nextSettings, true);
     return result;
+  }
+
+  async function saveCombinedMatches(payload: MatchCombineSavePayload): Promise<MatchDraft> {
+    const combined = await window.riftlite.saveCombinedMatches(payload);
+    const [nextMatches, nextReplays, nextSettings] = await Promise.all([
+      window.riftlite.getMatches(),
+      window.riftlite.getReplays(),
+      window.riftlite.getSettings()
+    ]);
+    setMatches(nextMatches);
+    setReplays(nextReplays);
+    setSettings(nextSettings);
+    await refreshCommunityData(nextSettings, true);
+    return combined;
+  }
+
+  async function undoCombinedMatch(combinedMatchId: string): Promise<void> {
+    await window.riftlite.undoCombinedMatch(combinedMatchId);
+    const [nextMatches, nextReplays, nextSettings] = await Promise.all([
+      window.riftlite.getMatches(),
+      window.riftlite.getReplays(),
+      window.riftlite.getSettings()
+    ]);
+    setMatches(nextMatches);
+    setReplays(nextReplays);
+    setSettings(nextSettings);
+    await refreshCommunityData(nextSettings, true);
   }
 
   async function deleteHubMatch(hubId: string, matchId: string): Promise<void> {
@@ -2361,6 +4105,17 @@ function App() {
     }, durationMs);
   }
 
+  function showCaptureNotice(notice: CaptureNotice, durationMs = 8500) {
+    setCaptureNotice(notice);
+    if (captureNoticeTimerRef.current) {
+      window.clearTimeout(captureNoticeTimerRef.current);
+    }
+    captureNoticeTimerRef.current = window.setTimeout(() => {
+      setCaptureNotice(null);
+      captureNoticeTimerRef.current = undefined;
+    }, durationMs);
+  }
+
   function applyGameZoom(zoom = gameZoom) {
     const webview = gameRef.current;
     if (!webview) {
@@ -2368,6 +4123,9 @@ function App() {
     }
     try {
       webview.setZoomFactor(clampGameZoom(zoom));
+      (webview as Electron.WebviewTag & { setVisualZoomLevelLimits?: (minimumLevel: number, maximumLevel: number) => Promise<void> })
+        .setVisualZoomLevelLimits?.(1, 1)
+        .catch(() => undefined);
     } catch {
       // The webview can be between navigations; the next ready event reapplies the saved zoom.
     }
@@ -2524,8 +4282,18 @@ function App() {
     if (event.kind !== "match-start") {
       return;
     }
-    lastReplayStartEventRef.current = event;
     const isResizeResume = event.payload.reason === "replay-video-resize-resume";
+    const blockedReason = replayVideoStartBlockedReason(event);
+    if (blockedReason) {
+      reportReplayVideoDebug(event.platform, "start-skipped", {
+        reason: blockedReason,
+        capturedAt: event.capturedAt,
+        url: event.url,
+        payloadReason: event.payload.reason
+      });
+      return;
+    }
+    lastReplayStartEventRef.current = event;
     if (
       replayVideoRef.current ||
       !currentSettings?.replayCaptureEnabled ||
@@ -2663,6 +4431,7 @@ function App() {
     const runtime: ReplayVideoRuntime = {
       session,
       platform: event.platform,
+      startEvent: event,
       mode,
       source,
       profile,
@@ -2691,7 +4460,7 @@ function App() {
       nextAllowedAt: Date.now() + 1000,
       slowCaptureStreak: 0,
       lastCaptureMs: 0,
-      chunkMs: recorderFormat.fileMimeType === "video/mp4" ? 0 : 5000
+      chunkMs: REPLAY_VIDEO_WRITE_CHUNK_MS
     };
     recorder.ondataavailable = (chunkEvent) => {
       if (!chunkEvent.data.size) {
@@ -2734,7 +4503,7 @@ function App() {
     const recorderTrack = runtime.stream.getVideoTracks()[0] ?? runtime.sourceStream?.getVideoTracks()[0];
     const trackSettings = recorderTrack?.getSettings?.();
     const sourceTrackSettings = runtime.sourceStream?.getVideoTracks()[0]?.getSettings?.();
-    reportReplayVideoDebug(event.platform, "started", {
+      reportReplayVideoDebug(event.platform, "started", {
       mode,
       quality,
       source: runtime.source,
@@ -2756,6 +4525,33 @@ function App() {
       constantFps: Boolean(profile.constantFps),
       chunkMs: runtime.chunkMs
     });
+  }
+
+  function replayVideoStartBlockedReason(event: CaptureEvent): string {
+    const payloadReason = String(event.payload.reason ?? "");
+    const isResizeResume = payloadReason === "replay-video-resize-resume";
+    const capturedAt = Date.parse(event.capturedAt);
+    if (!Number.isFinite(capturedAt)) {
+      return "invalid-captured-at";
+    }
+    const ageMs = Date.now() - capturedAt;
+    if (ageMs > REPLAY_VIDEO_START_MAX_AGE_MS) {
+      return "stale-start";
+    }
+    if (ageMs < -REPLAY_VIDEO_START_FUTURE_TOLERANCE_MS) {
+      return "future-start";
+    }
+    if (!isResizeResume && event.platform === "tcga") {
+      try {
+        const url = new URL(event.url);
+        if (url.hostname.includes("tcg-arena.fr") && !url.pathname.startsWith("/play")) {
+          return "tcga-not-play-page";
+        }
+      } catch {
+        return "invalid-url";
+      }
+    }
+    return "";
   }
 
   async function prepareDisplayReplaySource(
@@ -3133,6 +4929,127 @@ function App() {
     }
   }
 
+  function pendingReplayVideoSegment(video: ReplayVideoAsset, startEvent: CaptureEvent | null, reason?: string): PendingReplayVideoSegment {
+    return {
+      video,
+      startEvent,
+      retainedAt: new Date().toISOString(),
+      reason
+    };
+  }
+
+  function replayVideoDraftTimeLooksClose(draft: MatchDraft, video: ReplayVideoAsset): boolean {
+    const draftAt = Date.parse(draft.capturedAt);
+    const startedAt = Date.parse(video.startedAt);
+    const endedAt = Date.parse(video.endedAt);
+    if (!Number.isFinite(draftAt)) {
+      return true;
+    }
+    if (Number.isFinite(startedAt) && startedAt > draftAt + 60_000) {
+      return false;
+    }
+    if (Number.isFinite(endedAt) && draftAt - endedAt > 20 * 60_000) {
+      return false;
+    }
+    if (Number.isFinite(startedAt) && draftAt - startedAt > 3 * 60 * 60_000) {
+      return false;
+    }
+    return true;
+  }
+
+  function replayVideoSegmentMatchesDraft(draft: MatchDraft, segment: PendingReplayVideoSegment): boolean {
+    if (segment.video.platform !== draft.platform || !replayVideoDraftTimeLooksClose(draft, segment.video)) {
+      return false;
+    }
+    const startEvent = segment.startEvent;
+    if (!startEvent) {
+      return true;
+    }
+    if (startEvent.platform !== draft.platform) {
+      return false;
+    }
+    if (draft.platform === "atlas") {
+      const rawEvidence = draft.rawEvidence ?? [];
+      const hasSameEvidence = rawEvidence.some((event) => atlasReplayEventsLookLikeSameMatch(startEvent, event));
+      if (hasSameEvidence) {
+        return true;
+      }
+      const draftOpponent = normalizeReplayIdentity(draft.opponentName);
+      const startOpponent = normalizeReplayIdentity(replayPayloadString(startEvent.payload, "opponentName"));
+      if (draftOpponent && startOpponent && draftOpponent !== startOpponent) {
+        return false;
+      }
+      const draftMyLegend = normalizeReplayIdentity(normalizeLegendName(draft.myChampion));
+      const startMyLegend = normalizeReplayIdentity(normalizeLegendName(replayPayloadString(startEvent.payload, "myChampion")));
+      if (draftMyLegend && startMyLegend && draftMyLegend !== startMyLegend) {
+        return false;
+      }
+      const draftOppLegend = normalizeReplayIdentity(normalizeLegendName(draft.opponentChampion));
+      const startOppLegend = normalizeReplayIdentity(normalizeLegendName(replayPayloadString(startEvent.payload, "opponentChampion")));
+      if (draftOppLegend && startOppLegend && draftOppLegend !== startOppLegend) {
+        return false;
+      }
+      return Boolean(
+        (draftOpponent && startOpponent && draftOpponent === startOpponent) ||
+        (draftMyLegend && startMyLegend && draftMyLegend === startMyLegend) ||
+        (draftOppLegend && startOppLegend && draftOppLegend === startOppLegend)
+      );
+    }
+    return true;
+  }
+
+  async function takeReplayVideoSegmentsForDraft(draft: MatchDraft): Promise<ReplayVideoAsset[]> {
+    const seenPaths = new Set<string>();
+    const allSegments = [
+      ...pendingReplayVideoSegmentsRef.current,
+      ...(pendingReplayVideoRef.current ? [pendingReplayVideoRef.current] : [])
+    ].filter((segment) => {
+      const key = segment.video.path || segment.video.url;
+      if (!key || seenPaths.has(key)) {
+        return false;
+      }
+      seenPaths.add(key);
+      return true;
+    });
+    const matched = allSegments.filter((segment) => replayVideoSegmentMatchesDraft(draft, segment));
+    const discardSamePlatform = allSegments.filter((segment) => segment.video.platform === draft.platform && !matched.includes(segment));
+    const matchedKeys = new Set(matched.map((segment) => segment.video.path || segment.video.url));
+    const discardedKeys = new Set(discardSamePlatform.map((segment) => segment.video.path || segment.video.url));
+    pendingReplayVideoSegmentsRef.current = pendingReplayVideoSegmentsRef.current.filter((segment) =>
+      segment.video.platform !== draft.platform || matched.includes(segment)
+    );
+    pendingReplayVideoSegmentsRef.current = pendingReplayVideoSegmentsRef.current.filter((segment) => !matched.includes(segment));
+    if (
+      pendingReplayVideoRef.current?.video.platform === draft.platform
+    ) {
+      const pendingKey = pendingReplayVideoRef.current.video.path || pendingReplayVideoRef.current.video.url;
+      if (matchedKeys.has(pendingKey) || discardedKeys.has(pendingKey)) {
+        pendingReplayVideoRef.current = null;
+      }
+    }
+    if (discardSamePlatform.length) {
+      reportReplayVideoDebug(draft.platform, "discarding-stale-pending-segments", {
+        draftId: draft.id,
+        discarded: discardSamePlatform.map((segment) => ({
+          startedAt: segment.video.startedAt,
+          endedAt: segment.video.endedAt,
+          reason: segment.reason,
+          startOpponent: segment.startEvent ? replayPayloadString(segment.startEvent.payload, "opponentName") : ""
+        }))
+      });
+      await Promise.allSettled(discardSamePlatform.map((segment) => window.riftlite.discardReplayVideo(segment.video)));
+    }
+    if (matched.length) {
+      reportReplayVideoDebug(draft.platform, "matched-pending-segments", {
+        draftId: draft.id,
+        segmentCount: matched.length,
+        draftOpponent: draft.opponentName,
+        starts: matched.map((segment) => segment.video.startedAt)
+      });
+    }
+    return matched.map((segment) => segment.video);
+  }
+
   function scheduleReplayVideoResizeResume(platform: GamePlatform): void {
     if (replayVideoResizeResumeTimerRef.current) {
       window.clearTimeout(replayVideoResizeResumeTimerRef.current);
@@ -3162,10 +5079,54 @@ function App() {
         }
       };
       reportReplayVideoDebug(platform, "resize-resuming", {
-        retainedSegments: pendingReplayVideoSegmentsRef.current.filter((segment) => segment.platform === platform).length
+        retainedSegments: pendingReplayVideoSegmentsRef.current.filter((segment) => segment.video.platform === platform).length
       });
       void maybeStartReplayVideo(restartEvent);
     }, REPLAY_VIDEO_RESIZE_RESUME_MS);
+  }
+
+  function replayStartEventAfterRuntime(runtime: ReplayVideoRuntime, draft: MatchDraft | null): CaptureEvent | null {
+    const pendingStart = lastReplayStartEventRef.current;
+    if (!pendingStart || pendingStart.kind !== "match-start" || pendingStart.platform !== runtime.platform) {
+      return null;
+    }
+    if (activeViewRef.current !== "play") {
+      return null;
+    }
+    const currentSettings = settingsRef.current;
+    if (!currentSettings?.replayCaptureEnabled || !currentSettings.replayVideoEnabled) {
+      return null;
+    }
+    const pendingAt = Date.parse(pendingStart.capturedAt);
+    const startedAt = Date.parse(runtime.startedAt);
+    if (!Number.isFinite(pendingAt) || !Number.isFinite(startedAt)) {
+      return null;
+    }
+    const blockedReason = replayVideoStartBlockedReason(pendingStart);
+    if (blockedReason) {
+      reportReplayVideoDebug(runtime.platform, "rollover-start-skipped", {
+        reason: blockedReason,
+        pendingCapturedAt: pendingStart.capturedAt,
+        runtimeStartedAt: runtime.startedAt
+      });
+      return null;
+    }
+    if (
+      runtime.platform === "atlas" &&
+      draft?.platform === "atlas" &&
+      atlasReplayEventsLookLikeSameMatch(runtime.startEvent, pendingStart) &&
+      (draft.format === "Bo3" || atlasDraftHasChildGameEvidence(draft) || atlasDraftHasTerminalEvidence(draft))
+    ) {
+      reportReplayVideoDebug(runtime.platform, "rollover-start-skipped", {
+        reason: "atlas-same-bo3-continuation",
+        draftId: draft.id,
+        draftFormat: draft.format,
+        pendingCapturedAt: pendingStart.capturedAt,
+        runtimeStartedAt: runtime.startedAt
+      });
+      return null;
+    }
+    return pendingAt > startedAt + 1000 ? pendingStart : null;
   }
 
   async function stopReplayVideoForDraft(
@@ -3178,23 +5139,14 @@ function App() {
     }
     const runtime = replayVideoRef.current;
     if (!runtime) {
-      const pendingLegacy = pendingReplayVideoRef.current;
-      const pendingSegments = draft
-        ? [
-            ...pendingReplayVideoSegmentsRef.current.filter((segment) => segment.platform === draft.platform),
-            ...(pendingLegacy && pendingLegacy.platform === draft.platform ? [pendingLegacy] : [])
-          ]
-        : [];
+      const pendingSegments = draft ? await takeReplayVideoSegmentsForDraft(draft) : [];
       if (draft && pendingSegments.length) {
-        pendingReplayVideoSegmentsRef.current = pendingReplayVideoSegmentsRef.current.filter((segment) => segment.platform !== draft.platform);
-        if (pendingReplayVideoRef.current?.platform === draft.platform) {
-          pendingReplayVideoRef.current = null;
-        }
         const video = await mergedReplayVideoForDraft(draft, pendingSegments);
         await attachReplayVideoToDraft(draft, video);
       }
       return;
     }
+    const rolloverStartEvent = draft ? replayStartEventAfterRuntime(runtime, draft) : null;
     replayVideoRef.current = null;
     window.clearInterval(runtime.timer);
     runtime.resizeGuardCleanup?.();
@@ -3247,16 +5199,17 @@ function App() {
         hasAudio: runtime.hasAudio
       });
       if (draft) {
-        const retainedSegments = pendingReplayVideoSegmentsRef.current.filter((segment) => segment.platform === draft.platform);
-        pendingReplayVideoSegmentsRef.current = pendingReplayVideoSegmentsRef.current.filter((segment) => segment.platform !== draft.platform);
-        const finalVideo = await mergedReplayVideoForDraft(draft, [...retainedSegments, video]);
+        const retainedSegments = await takeReplayVideoSegmentsForDraft(draft);
+        const currentSegment = pendingReplayVideoSegment(video, runtime.startEvent, "current-runtime");
+        const finalVideo = await mergedReplayVideoForDraft(draft, [...retainedSegments, currentSegment.video]);
         await attachReplayVideoToDraft(draft, finalVideo);
       } else if (options.retainForLater) {
+        const retainedSegment = pendingReplayVideoSegment(video, runtime.startEvent, options.reason);
         pendingReplayVideoSegmentsRef.current = [
-          ...pendingReplayVideoSegmentsRef.current.filter((segment) => segment.platform !== video.platform || segment.path !== video.path),
-          video
+          ...pendingReplayVideoSegmentsRef.current.filter((segment) => segment.video.platform !== video.platform || segment.video.path !== video.path),
+          retainedSegment
         ];
-        pendingReplayVideoRef.current = video;
+        pendingReplayVideoRef.current = retainedSegment;
         if (!options.resumeAfterResize) {
           showActionFeedback("Partial video replay saved and will attach when the match review appears.");
         }
@@ -3264,8 +5217,26 @@ function App() {
           scheduleReplayVideoResizeResume(video.platform);
         }
       }
-    } catch {
+    } catch (error) {
+      reportReplayVideoDebug(runtime.platform, "stop-attach-failed", {
+        draftId: draft?.id,
+        reason: options.reason,
+        retainForLater: Boolean(options.retainForLater),
+        message: error instanceof Error ? error.message : String(error)
+      });
       showActionFeedback("Video replay stopped, but the video could not be attached.");
+    }
+    if (rolloverStartEvent && !replayVideoRef.current) {
+      reportReplayVideoDebug(rolloverStartEvent.platform, "rollover-resuming", {
+        previousMatchId: draft?.id
+      });
+      void maybeStartReplayVideo({
+        ...rolloverStartEvent,
+        payload: {
+          ...rolloverStartEvent.payload,
+          reason: "replay-video-rollover-resume"
+        }
+      });
     }
   }
 
@@ -3280,28 +5251,32 @@ function App() {
   }, [matches]);
 
   const viewTitle = {
+    home: "Home",
     play: "Play",
     scorepad: "Scorepad",
     matches: "Matches",
     stats: "Stats",
+    "matchup-lab": "Matchup Lab",
     spotlight: "Spotlight",
-    community: "Community",
-    social: "Social Hub",
-    hubs: "Private hubs",
-    decks: "Decks",
+    community: activeCommunityTab === "community-decks" ? "Community Decks" : activeCommunityTab === "recent-matches" ? "Community Matches" : "Meta & Matrix",
+    social: "Find Match & Teams",
+    hubs: "Private Hubs",
+    decks: deckFocusTarget === "prep" ? "Matchup Prep" : "Deck Library",
     replays: "Replays",
-    stream: "Stream",
+    stream: "Overlay",
     account: "Account",
     settings: "Settings"
   }[activeView];
 
   const viewDescription = {
+    home: "Your RiftLite launchpad for playing, reviewing, decks, community data, and social tools.",
     play: "Embedded capture is active automatically for TCGA and Atlas.",
     scorepad: "Score table games or quick-log event matches without sending them to public community stats.",
     matches: "Review, correct, and track locally captured matches.",
     stats: "Personal performance from local RiftLite history.",
+    "matchup-lab": "Study your toughest pairings with personal stats, community context, prep notes, and replay evidence.",
     spotlight: "Featured Riftbound creators, teams, and community projects.",
-    community: "Community data remains compatible with the existing RiftLite website.",
+    community: activeCommunityTab === "community-decks" ? "Visual deck meta from public community-submitted deck data." : "Community data remains compatible with the existing RiftLite website.",
     social: "Find matches and build public team profiles with linked RiftLite accounts.",
     hubs: "Private hub sync uses hidden hub names and passwords, just like the current app.",
     decks: "Import, refresh, and attach decks to captured matches.",
@@ -3320,6 +5295,55 @@ function App() {
   const showUpdatePrompt =
     (updateStatus.state === "available" || updateStatus.state === "downloading" || updateStatus.state === "downloaded") &&
     updatePromptDismissedFor !== updatePromptKey;
+  const navGroups = [
+    {
+      label: "Start",
+      items: [
+        { label: "Home", title: "Home", active: activeView === "home", icon: <Home size={18} />, onClick: () => openView("home") },
+        { label: "Play", title: "Play", active: activeView === "play", icon: <Play size={18} />, onClick: () => openView("play") }
+      ]
+    },
+    {
+      label: "Review",
+      items: [
+        { label: "Matches", title: "Matches", active: activeView === "matches", icon: <ClipboardList size={18} />, onClick: () => openView("matches") },
+        { label: "Replays", title: "Replays", active: activeView === "replays", icon: <Film size={18} />, onClick: () => openView("replays") },
+        { label: "Stats", title: "Stats", active: activeView === "stats", icon: <BarChart3 size={18} />, onClick: () => openView("stats") },
+        { label: "Matchup Lab", title: "Matchup Lab", active: activeView === "matchup-lab", icon: <Activity size={18} />, onClick: () => openView("matchup-lab") }
+      ]
+    },
+    {
+      label: "Decks & Prep",
+      items: [
+        { label: "Deck Library", title: "Deck Library", active: activeView === "decks" && deckFocusTarget !== "prep", icon: <Layers size={18} />, onClick: () => openDecks("library") },
+        { label: "Matchup Prep", title: "Matchup Prep", active: activeView === "decks" && deckFocusTarget === "prep", icon: <BookOpen size={18} />, onClick: () => openDecks("prep") },
+        { label: "Scorepad", title: "Scorepad", active: activeView === "scorepad", icon: <Calculator size={18} />, onClick: () => openView("scorepad") }
+      ]
+    },
+    {
+      label: "Community",
+      items: [
+        { label: "Community Decks", title: "Community Decks", active: activeView === "community" && activeCommunityTab === "community-decks", icon: <Globe2 size={18} />, onClick: () => openCommunity("community-decks") },
+        { label: "Meta & Matrix", title: "Meta & Matrix", active: activeView === "community" && (activeCommunityTab === "legend-meta" || activeCommunityTab === "match-matrix" || activeCommunityTab === "recent-matches"), icon: <Activity size={18} />, onClick: () => openCommunity("legend-meta") },
+        { label: "Spotlight", title: "Spotlight", active: activeView === "spotlight", icon: <Compass size={18} />, onClick: () => openView("spotlight") }
+      ]
+    },
+    {
+      label: "Social",
+      items: [
+        { label: "Find Match & Teams", title: "Find Match & Teams", active: activeView === "social", icon: <Radio size={18} />, onClick: () => openView("social") },
+        { label: "Private Hubs", title: "Private Hubs", active: activeView === "hubs", icon: <Users size={18} />, onClick: () => openView("hubs") }
+      ]
+    },
+    {
+      label: "Tools",
+      items: [
+        { label: "Overlay", title: "Overlay", active: activeView === "stream", icon: <MonitorUp size={18} />, onClick: () => openView("stream") },
+        { label: "Account", title: "Account", active: activeView === "account", icon: <Shield size={18} />, onClick: () => openView("account") },
+        { label: "Settings", title: "Settings", active: activeView === "settings", icon: <Settings size={18} />, onClick: () => openView("settings") }
+      ]
+    }
+  ];
 
   return (
     <main
@@ -3345,25 +5369,25 @@ function App() {
           <span className="brand-version">v{APP_VERSION_META}</span>
           <div>
             <strong>RiftLite</strong>
-            <span>Beta 0.7 replay tools</span>
           </div>
         </div>
-        <nav>
-          <NavButton active={activeView === "play"} title="Play" onClick={() => setActiveView("play")} icon={<Play size={18} />} />
-          <NavButton active={activeView === "matches"} title="Matches" onClick={() => setActiveView("matches")} icon={<ClipboardList size={18} />} />
-          <NavButton active={activeView === "stats"} title="Stats" onClick={() => setActiveView("stats")} icon={<BarChart3 size={18} />} />
-          <NavButton active={activeView === "spotlight"} title="Spotlight" onClick={() => setActiveView("spotlight")} icon={<Compass size={18} />} />
-          <NavButton active={activeView === "community"} title="Community" onClick={() => setActiveView("community")} icon={<Globe2 size={18} />} />
-          <NavButton active={activeView === "social"} title="Social Hub" onClick={() => setActiveView("social")} icon={<Radio size={18} />} />
-          <NavButton active={activeView === "hubs"} title="Hubs" onClick={() => setActiveView("hubs")} icon={<Users size={18} />} />
-          <NavButton active={activeView === "decks"} title="Decks" onClick={() => setActiveView("decks")} icon={<Layers size={18} />} />
-          <NavButton active={activeView === "replays"} title="Replays" onClick={() => setActiveView("replays")} icon={<Film size={18} />} />
-          <NavButton active={activeView === "stream"} title="Stream" onClick={() => setActiveView("stream")} icon={<MonitorUp size={18} />} />
-          <NavButton active={activeView === "account"} title="Account" onClick={() => setActiveView("account")} icon={<Shield size={18} />} />
-          <NavButton active={activeView === "settings"} title="Settings" onClick={() => setActiveView("settings")} icon={<Settings size={18} />} />
+        <nav className="sidebar-nav" aria-label="RiftLite navigation">
+          {navGroups.map((group) => (
+            <div className="nav-group" key={group.label}>
+              <span className="nav-group-label">{group.label}</span>
+              {group.items.map((item) => (
+                <NavButton
+                  active={item.active}
+                  title={item.title}
+                  onClick={item.onClick}
+                  icon={item.icon}
+                  key={item.title}
+                />
+              ))}
+            </div>
+          ))}
         </nav>
         <div className="sidebar-footer">
-          <SidebarScorepadButton active={activeView === "scorepad"} onClick={() => setActiveView("scorepad")} />
           <SidebarZoomMenu zoom={gameZoom} onZoomChange={(zoom) => void setGameZoom(zoom)} />
           <SidebarResourceMenu />
           <CaptureHealthPanel health={health} />
@@ -3444,6 +5468,8 @@ function App() {
                   applyGameZoom();
                   void primeReplayVideoTarget(activePlatform);
                 }}
+                onDidNavigate={() => applyGameZoom()}
+                onDidNavigateInPage={() => applyGameZoom()}
                 onIpcMessage={(event: { channel?: string; args?: unknown[] }) => void handleWebviewIpc(event)}
               />
             ) : (
@@ -3454,11 +5480,22 @@ function App() {
             <SessionCard stats={sessionStats} matches={matches} />
             <SyncCard settings={settings} onSave={saveSettings} onForceReview={forceCaptureReview} />
           </aside>
-          {DECK_TRACKER_FEATURE_ENABLED ? (
+          {DECK_TRACKER_FEATURE_ENABLED && settings.deckTrackerEnabled ? (
             <DeckTrackerOverlay
               state={deckTrackerState}
+              visionStatus={visionTrackerStatus}
               onAdjust={adjustDeckTrackerCard}
               onPinnedChange={setDeckTrackerPins}
+              onReset={resetDeckTrackerMatch}
+              onConfirmSuggestion={confirmVisionSuggestion}
+              onRejectSuggestion={rejectVisionSuggestion}
+            />
+          ) : null}
+          {DECK_TRACKER_FEATURE_ENABLED && settings?.deckTrackerEnabled && settings.debugMode ? (
+            <VisionDeckTrackerDebugWindow
+              state={deckTrackerState}
+              status={visionTrackerStatus}
+              scan={visionTrackerDebugPanel}
               onReset={resetDeckTrackerMatch}
             />
           ) : null}
@@ -3478,6 +5515,8 @@ function App() {
             view={activeView}
             matches={matches}
             replays={replays}
+            testingSessions={testingSessions}
+            activeTestingSession={activeTestingSession}
             deletedMatches={deletedMatches}
             deletedReplays={deletedReplays}
             decks={decks}
@@ -3488,6 +5527,7 @@ function App() {
             communityStatus={communityStatus}
             importSummary={importSummary}
             settings={settings}
+            health={health}
             browsers={browsers}
             overlayInfo={overlayInfo}
             diagnosticsPath={diagnosticsPath}
@@ -3497,6 +5537,22 @@ function App() {
             screenshotStatus={screenshotStatus}
             onSaveSettings={saveSettings}
             onSettingsChanged={setSettings}
+            onNavigate={openView}
+            onPlayPlatform={(platform) => {
+              setActivePlatform(platform);
+              openView("play");
+            }}
+            communityTab={activeCommunityTab}
+            communityDeckLegendTarget={communityDeckLegendTarget}
+            matchFocusTarget={matchFocusTarget}
+            onCommunityTabChange={(tab) => {
+              setActiveCommunityTab(tab);
+              if (tab !== "community-decks") {
+                setCommunityDeckLegendTarget("");
+              }
+            }}
+            deckFocusTarget={deckFocusTarget}
+            onDeckFocusChange={setDeckFocusTarget}
             onDecksChanged={refreshDecks}
             onSaveHubResult={saveHubResult}
             onSyncPrivateHubs={syncPrivateHubsNow}
@@ -3504,6 +5560,11 @@ function App() {
             onDeleteHubMatch={deleteHubMatch}
             onSyncTeams={syncTeamsNow}
             onSyncMatchesToTeams={syncMatchesToTeams}
+            onSaveCombinedMatches={saveCombinedMatches}
+            onUndoCombinedMatch={undoCombinedMatch}
+            onStartTestingSession={startTestingSession}
+            onStopTestingSession={stopTestingSession}
+            onExportTestingSession={exportTestingSession}
             onDeleteTeamMatch={deleteTeamMatch}
             onRefreshTeamMatches={refreshTeamMatches}
             onRefreshCommunity={() => refreshCommunityData(settings, true)}
@@ -3555,6 +5616,7 @@ function App() {
               battlefields={battlefields}
               previousFlags={previousMatchFlags}
               onClose={dismissReviewDraft}
+              onDelete={deleteReviewDraft}
               onConfirm={confirmDraft}
           onChange={setReviewDraft}
         />
@@ -3568,6 +5630,15 @@ function App() {
         />
       ) : null}
       {releaseNotesOpen ? <ReleaseNotesModal onClose={() => void dismissReleaseNotes()} /> : null}
+      {captureNotice ? (
+        <div className="capture-progress-notice" role="status" aria-live="polite">
+          <div className="capture-progress-icon"><Activity size={18} /></div>
+          <div>
+            <strong>{captureNotice.title}</strong>
+            <span>{captureNotice.message}</span>
+          </div>
+        </div>
+      ) : null}
       {actionFeedback ? (
         <div className="action-feedback" role="status" aria-live="polite">
           <Check size={16} />
@@ -3618,16 +5689,21 @@ function UpdatePrompt({ status, onDownload, onInstall, onDismiss }: {
   const version = status.latestVersion ? `v${status.latestVersion}` : "a new version";
   const isDownloaded = status.state === "downloaded";
   const isDownloading = status.state === "downloading";
+  const isManualInstall = Boolean(status.manualInstallOnly);
   return (
     <aside className="update-prompt" role="status" aria-live="polite">
       <Bell size={16} />
       <div>
-        <strong>{isDownloaded ? "Update ready to install" : isDownloading ? "Downloading update" : `Update ${version} available`}</strong>
+        <strong>{isManualInstall ? `Update ${version} available` : isDownloaded ? "Update ready to install" : isDownloading ? "Downloading update" : `Update ${version} available`}</strong>
         <span>{isDownloading && typeof status.progress === "number" ? `${status.progress}% downloaded` : status.message}</span>
       </div>
       <div className="update-prompt-actions">
-        {status.state === "available" ? <button type="button" className="secondary" onClick={() => void onDownload()}>Download</button> : null}
-        {isDownloaded ? <button type="button" className="primary" onClick={() => void onInstall()}>Install</button> : null}
+        {status.state === "available" || isManualInstall ? (
+          <button type="button" className={isManualInstall ? "primary" : "secondary"} onClick={() => void onDownload()}>
+            {isManualInstall ? "Open release" : "Download"}
+          </button>
+        ) : null}
+        {isDownloaded && !isManualInstall ? <button type="button" className="primary" onClick={() => void onInstall()}>Install</button> : null}
         <button type="button" className="icon-button" onClick={onDismiss} title="Dismiss update prompt" aria-label="Dismiss update prompt">
           <X size={15} />
         </button>
@@ -3888,20 +5964,104 @@ function SyncCard({
   );
 }
 
+type FloatingDeckTrackerPosition = { x: number; y: number };
+type FloatingDeckTrackerSize = { width: number; height: number };
+
+function defaultDeckTrackerPosition(): FloatingDeckTrackerPosition {
+  if (typeof window === "undefined") {
+    return { x: 12, y: 420 };
+  }
+  return { x: 12, y: Math.max(96, window.innerHeight - 470) };
+}
+
+function defaultDeckTrackerSize(): FloatingDeckTrackerSize {
+  return { width: 390, height: 560 };
+}
+
+function readDeckTrackerPosition(): FloatingDeckTrackerPosition {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(DECK_TRACKER_POSITION_KEY) || "null") as Partial<FloatingDeckTrackerPosition> | null;
+    if (parsed && Number.isFinite(parsed.x) && Number.isFinite(parsed.y)) {
+      return { x: Number(parsed.x), y: Number(parsed.y) };
+    }
+  } catch {
+    // Position memory is a convenience only.
+  }
+  return defaultDeckTrackerPosition();
+}
+
+function readDeckTrackerSize(): FloatingDeckTrackerSize {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(DECK_TRACKER_SIZE_KEY) || "null") as Partial<FloatingDeckTrackerSize> | null;
+    if (parsed && Number.isFinite(parsed.width) && Number.isFinite(parsed.height)) {
+      return {
+        width: Math.max(320, Math.min(620, Number(parsed.width))),
+        height: Math.max(360, Math.min(760, Number(parsed.height)))
+      };
+    }
+  } catch {
+    // Size memory is a convenience only.
+  }
+  return defaultDeckTrackerSize();
+}
+
+function saveDeckTrackerPosition(position: FloatingDeckTrackerPosition) {
+  try {
+    window.localStorage.setItem(DECK_TRACKER_POSITION_KEY, JSON.stringify(position));
+  } catch {
+    // Non-fatal.
+  }
+}
+
+function saveDeckTrackerSize(size: FloatingDeckTrackerSize) {
+  try {
+    window.localStorage.setItem(DECK_TRACKER_SIZE_KEY, JSON.stringify(size));
+  } catch {
+    // Non-fatal.
+  }
+}
+
 function DeckTrackerOverlay({
   state,
+  visionStatus,
   onAdjust,
   onPinnedChange,
-  onReset
+  onReset,
+  onConfirmSuggestion,
+  onRejectSuggestion
 }: {
   state: DeckTrackerState | null;
+  visionStatus: VisionDeckTrackerStatus | null;
   onAdjust: (cardKey: string, delta: number) => Promise<void>;
   onPinnedChange: (deckId: string, cardKeys: string[]) => Promise<void>;
   onReset: () => Promise<void>;
+  onConfirmSuggestion: (cardKey: string) => Promise<void>;
+  onRejectSuggestion: (cardKey: string) => Promise<void>;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [search, setSearch] = useState("");
   const [busyKey, setBusyKey] = useState("");
+  const [position, setPosition] = useState<FloatingDeckTrackerPosition>(() => readDeckTrackerPosition());
+  const [size, setSize] = useState<FloatingDeckTrackerSize>(() => readDeckTrackerSize());
+  const [dragging, setDragging] = useState(false);
+  const overlayRef = useRef<HTMLDivElement | null>(null);
+  const panelRef = useRef<HTMLElement | null>(null);
+  const positionRef = useRef(position);
+  const sizeRef = useRef(size);
+  const suppressNextClickRef = useRef(false);
+  const dragRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startY: number;
+    origin: FloatingDeckTrackerPosition;
+    moved: boolean;
+  } | null>(null);
+  const resizeRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startY: number;
+    origin: FloatingDeckTrackerSize;
+  } | null>(null);
   const cards = state?.cards ?? [];
   const pinnedCards = cards.filter((card) => card.pinned);
   const needle = search.trim().toLowerCase();
@@ -3910,6 +6070,13 @@ function DeckTrackerOverlay({
     : (pinnedCards.length ? pinnedCards : cards)
   ).slice(0, 10);
   const title = state?.active ? `${state.cardsLeft}/${state.deckSize} left` : "Deck";
+  const visionLabel = visionStatus?.enabled
+    ? visionStatus.state === "low-confidence"
+      ? "Vision needs confirm"
+      : visionStatus.state === "active"
+        ? `Vision ${Math.round((visionStatus.confidenceScore || 0) * 100)}%`
+        : visionStatus.message
+    : "Vision off";
 
   async function adjust(cardKey: string, delta: number) {
     setBusyKey(cardKey);
@@ -3933,22 +6100,216 @@ function DeckTrackerOverlay({
     await onPinnedChange(state.deckId, [...current]);
   }
 
+  useEffect(() => {
+    positionRef.current = position;
+  }, [position]);
+
+  useEffect(() => {
+    sizeRef.current = size;
+  }, [size]);
+
+  useEffect(() => {
+    return () => {
+      document.body.classList.remove("floating-panel-moving");
+    };
+  }, []);
+
+  function clampPosition(next: FloatingDeckTrackerPosition): FloatingDeckTrackerPosition {
+    const parent = overlayRef.current?.parentElement;
+    const bounds = parent?.getBoundingClientRect();
+    const width = overlayRef.current?.offsetWidth || (expanded ? size.width : 130);
+    const height = overlayRef.current?.offsetHeight || (expanded ? size.height : 46);
+    const boundsWidth = bounds?.width || window.innerWidth;
+    const boundsHeight = bounds?.height || window.innerHeight;
+    const margin = 8;
+    return {
+      x: Math.min(Math.max(margin, boundsWidth - width - margin), Math.max(margin, Math.round(next.x))),
+      y: Math.min(Math.max(margin, boundsHeight - height - margin), Math.max(margin, Math.round(next.y)))
+    };
+  }
+
+  function clampSize(next: FloatingDeckTrackerSize): FloatingDeckTrackerSize {
+    const parent = overlayRef.current?.parentElement;
+    const bounds = parent?.getBoundingClientRect();
+    const boundsWidth = bounds?.width || window.innerWidth;
+    const boundsHeight = bounds?.height || window.innerHeight;
+    const maxWidth = Math.max(320, Math.min(620, boundsWidth - 24));
+    const maxHeight = Math.max(360, Math.min(760, boundsHeight - 24));
+    return {
+      width: Math.min(maxWidth, Math.max(320, Math.round(next.width))),
+      height: Math.min(maxHeight, Math.max(360, Math.round(next.height)))
+    };
+  }
+
+  function startDrag(event: React.PointerEvent<HTMLElement>) {
+    if (event.button !== 0) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    window.getSelection()?.removeAllRanges();
+    document.body.classList.add("floating-panel-moving");
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    const target = event.currentTarget;
+    dragRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      origin: positionRef.current,
+      moved: false
+    };
+    setDragging(true);
+
+    const onMove = (nativeEvent: PointerEvent) => {
+      const drag = dragRef.current;
+      if (!drag || drag.pointerId !== nativeEvent.pointerId) {
+        return;
+      }
+      nativeEvent.preventDefault();
+      const dx = nativeEvent.clientX - drag.startX;
+      const dy = nativeEvent.clientY - drag.startY;
+      if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
+        drag.moved = true;
+      }
+      const next = clampPosition({ x: drag.origin.x + dx, y: drag.origin.y + dy });
+      positionRef.current = next;
+      setPosition(next);
+    };
+    const onEnd = (nativeEvent: PointerEvent) => {
+      const drag = dragRef.current;
+      if (!drag || drag.pointerId !== nativeEvent.pointerId) {
+        return;
+      }
+      nativeEvent.preventDefault();
+      target.releasePointerCapture?.(nativeEvent.pointerId);
+      window.removeEventListener("pointermove", onMove, true);
+      window.removeEventListener("pointerup", onEnd, true);
+      window.removeEventListener("pointercancel", onEnd, true);
+      dragRef.current = null;
+      setDragging(false);
+      document.body.classList.remove("floating-panel-moving");
+      const next = clampPosition(positionRef.current);
+      setPosition(next);
+      positionRef.current = next;
+      saveDeckTrackerPosition(next);
+      if (drag.moved) {
+        suppressNextClickRef.current = true;
+        window.setTimeout(() => {
+          suppressNextClickRef.current = false;
+        }, 0);
+      }
+    };
+    window.addEventListener("pointermove", onMove, true);
+    window.addEventListener("pointerup", onEnd, true);
+    window.addEventListener("pointercancel", onEnd, true);
+  }
+
+  function startResize(event: React.PointerEvent<HTMLElement>) {
+    if (event.button !== 0) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    window.getSelection()?.removeAllRanges();
+    document.body.classList.add("floating-panel-moving");
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    const target = event.currentTarget;
+    resizeRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      origin: sizeRef.current
+    };
+    setDragging(true);
+
+    const onMove = (nativeEvent: PointerEvent) => {
+      const resize = resizeRef.current;
+      if (!resize || resize.pointerId !== nativeEvent.pointerId) {
+        return;
+      }
+      nativeEvent.preventDefault();
+      const next = clampSize({
+        width: resize.origin.width + nativeEvent.clientX - resize.startX,
+        height: resize.origin.height + nativeEvent.clientY - resize.startY
+      });
+      sizeRef.current = next;
+      setSize(next);
+    };
+    const onEnd = (nativeEvent: PointerEvent) => {
+      const resize = resizeRef.current;
+      if (!resize || resize.pointerId !== nativeEvent.pointerId) {
+        return;
+      }
+      nativeEvent.preventDefault();
+      target.releasePointerCapture?.(nativeEvent.pointerId);
+      window.removeEventListener("pointermove", onMove, true);
+      window.removeEventListener("pointerup", onEnd, true);
+      window.removeEventListener("pointercancel", onEnd, true);
+      resizeRef.current = null;
+      setDragging(false);
+      document.body.classList.remove("floating-panel-moving");
+      const next = clampSize(sizeRef.current);
+      setSize(next);
+      sizeRef.current = next;
+      saveDeckTrackerSize(next);
+    };
+    window.addEventListener("pointermove", onMove, true);
+    window.addEventListener("pointerup", onEnd, true);
+    window.addEventListener("pointercancel", onEnd, true);
+  }
+
+  function openFromPill(event: React.MouseEvent<HTMLButtonElement>) {
+    if (suppressNextClickRef.current) {
+      suppressNextClickRef.current = false;
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+    setExpanded(true);
+  }
+
   return (
-    <div className="deck-tracker-overlay" data-expanded={expanded}>
+    <div
+      ref={overlayRef}
+      className="deck-tracker-overlay"
+      data-expanded={expanded}
+      data-dragging={dragging}
+      style={{ left: position.x, top: position.y }}
+    >
       {!expanded ? (
-        <button type="button" className="deck-tracker-pill" onClick={() => setExpanded(true)} title="Open My Deck Tracker">
+        <button
+          type="button"
+          className="deck-tracker-pill"
+          onClick={openFromPill}
+          onPointerDown={startDrag}
+          title="Open or drag My Deck Tracker"
+        >
           <BookOpen size={16} />
           <span>{title}</span>
         </button>
       ) : (
-        <section className="deck-tracker-panel" aria-label="My Deck Tracker">
-          <header>
+        <section
+          ref={panelRef}
+          className="deck-tracker-panel"
+          aria-label="My Deck Tracker"
+          style={{ width: size.width, height: size.height }}
+        >
+          <header
+            onPointerDown={startDrag}
+            title="Drag My Deck Tracker"
+          >
             <div>
               <span>My Deck Tracker</span>
               <h2>{state?.deckTitle || "Set active deck"}</h2>
               <p>{state?.reason || "Waiting for an active match."}</p>
             </div>
-            <button type="button" className="icon-button" onClick={() => setExpanded(false)} aria-label="Collapse deck tracker">
+            <button
+              type="button"
+              className="icon-button"
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={() => setExpanded(false)}
+              aria-label="Collapse deck tracker"
+            >
               <X size={15} />
             </button>
           </header>
@@ -3957,6 +6318,26 @@ function DeckTrackerOverlay({
             <Metric label="Seen" value={state?.active ? String(state.seenCount) : "-"} />
             <Metric label="Confidence" value={state?.confidence === "tracked" ? "Tracked" : "Estimated"} />
           </div>
+          <div className="deck-tracker-vision-status" data-state={visionStatus?.state ?? "disabled"}>
+            <span>{visionLabel}</span>
+            <small>{visionStatus?.processedFrames ?? 0} frames checked{visionStatus?.skippedFrames ? `, ${visionStatus.skippedFrames} skipped` : ""}</small>
+          </div>
+          {visionStatus?.suggestions.length ? (
+            <div className="deck-tracker-suggestions">
+              <strong>Confirm suggested cards</strong>
+              {visionStatus.suggestions.slice(0, 4).map((suggestion) => (
+                <div className="deck-tracker-suggestion" key={`${suggestion.cardKey}-${suggestion.frameId}`}>
+                  {suggestion.imageUrl ? <img src={suggestion.imageUrl} alt="" loading="lazy" /> : <span className="deck-tracker-card-fallback">{suggestion.name.slice(0, 2)}</span>}
+                  <div>
+                    <strong>{suggestion.name}</strong>
+                    <small>{suggestion.zone} - {Math.round(suggestion.confidenceScore * 100)}%</small>
+                  </div>
+                  <button type="button" className="secondary" onClick={() => void onConfirmSuggestion(suggestion.cardKey)}>Confirm</button>
+                  <button type="button" className="secondary" onClick={() => void onRejectSuggestion(suggestion.cardKey)}>Ignore</button>
+                </div>
+              ))}
+            </div>
+          ) : null}
           <label className="deck-tracker-search">
             Search or pin cards
             <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Card name or code..." />
@@ -3986,10 +6367,168 @@ function DeckTrackerOverlay({
             {!state?.active ? <p className="muted">Pick an active deck in Decks, then start a TCGA or Atlas match.</p> : null}
           </div>
           <footer>
-            <button type="button" className="secondary" onClick={() => void onReset()}><RefreshCw size={14} /> Reset match</button>
+            <button type="button" className="secondary" onClick={() => void onReset()}><RefreshCw size={14} /> Reset game / BO3</button>
           </footer>
+          <button
+            type="button"
+            className="floating-resize-handle"
+            onPointerDown={startResize}
+            aria-label="Resize deck tracker"
+            title="Resize deck tracker"
+          />
         </section>
       )}
+    </div>
+  );
+}
+
+function VisionDeckTrackerDebugWindow({
+  state,
+  status,
+  scan,
+  onReset
+}: {
+  state: DeckTrackerState | null;
+  status: VisionDeckTrackerStatus | null;
+  scan: VisionTrackerDebugPanelState | null;
+  onReset: () => Promise<void>;
+}) {
+  const [collapsed, setCollapsed] = useState(false);
+  const [position, setPosition] = useState(() => {
+    try {
+      const stored = JSON.parse(window.localStorage.getItem(VISION_DEBUG_POSITION_KEY) || "null") as { x?: number; y?: number } | null;
+      if (stored && typeof stored.x === "number" && typeof stored.y === "number") {
+        return {
+          x: Math.max(90, Math.min(window.innerWidth - 360, stored.x)),
+          y: Math.max(90, Math.min(window.innerHeight - 220, stored.y))
+        };
+      }
+    } catch {
+      // Keep the test panel usable even if local storage has bad data.
+    }
+    return { x: Math.max(120, window.innerWidth - 390), y: 118 };
+  });
+  const countedCards = (state?.cards ?? []).filter((card) => card.seenCount > 0).slice(0, 12);
+  const recentReads = scan?.observations ?? [];
+  const suggestions = scan?.suggestions ?? [];
+  const bestMatches = scan?.bestMatches ?? [];
+
+  if (!state && !status && !scan) {
+    return null;
+  }
+
+  function persist(next: { x: number; y: number }) {
+    try {
+      window.localStorage.setItem(VISION_DEBUG_POSITION_KEY, JSON.stringify(next));
+    } catch {
+      // Non-fatal; the panel just falls back to its default spot next launch.
+    }
+  }
+
+  function startDrag(event: React.PointerEvent<HTMLElement>) {
+    if (event.button !== 0) {
+      return;
+    }
+    event.preventDefault();
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const origin = position;
+    let latest = origin;
+    const onMove = (moveEvent: PointerEvent) => {
+      const next = {
+        x: Math.max(84, Math.min(window.innerWidth - 320, origin.x + moveEvent.clientX - startX)),
+        y: Math.max(74, Math.min(window.innerHeight - 180, origin.y + moveEvent.clientY - startY))
+      };
+      latest = next;
+      setPosition(next);
+    };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      persist(latest);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp, { once: true });
+  }
+
+  const statusText = status?.state
+    ? `${status.state}${typeof status.confidenceScore === "number" ? ` - ${Math.round(status.confidenceScore * 100)}%` : ""}`
+    : "waiting";
+
+  return (
+    <section
+      className="vision-debug-window"
+      data-collapsed={collapsed}
+      style={{ left: `${position.x}px`, top: `${position.y}px` }}
+      aria-label="Vision deck tracker debug"
+    >
+      <header onPointerDown={startDrag}>
+        <GripVertical size={15} />
+        <div>
+          <strong>Vision reads</strong>
+          <span>{statusText}</span>
+        </div>
+        <button
+          type="button"
+          className="icon-button"
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={() => setCollapsed((value) => !value)}
+          aria-label={collapsed ? "Expand vision reads" : "Collapse vision reads"}
+        >
+          {collapsed ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
+        </button>
+      </header>
+      {!collapsed ? (
+        <div className="vision-debug-body">
+          <div className="vision-debug-meta">
+            <span>{scan?.frameCaptured ? "frame" : "DOM only"}</span>
+            <span>{scan ? `${scan.observationCount} reads` : "no scan yet"}</span>
+            <span>{scan ? `${scan.frameCandidateCount} crops` : ""}</span>
+          </div>
+          <button type="button" className="secondary vision-debug-reset" onClick={() => void onReset()}>
+            <RefreshCw size={13} /> Reset game / BO3
+          </button>
+          <VisionDebugList title="Just picked up" items={recentReads} empty="No confident reads this scan." />
+          <VisionDebugList title="Suggestions" items={suggestions} empty="No pending suggestions." />
+          <div className="vision-debug-section">
+            <strong>Counted in deck</strong>
+            {countedCards.length ? countedCards.map((card) => (
+              <div className="vision-debug-row" key={card.cardKey}>
+                <span>{card.name}</span>
+                <small>{card.seenCount}/{card.deckCount} seen</small>
+              </div>
+            )) : <p className="muted">Nothing counted yet.</p>}
+          </div>
+          <VisionDebugList title="Best frame matches" items={bestMatches} empty="No frame matches yet." showSource />
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function VisionDebugList({
+  title,
+  items,
+  empty,
+  showSource = false
+}: {
+  title: string;
+  items: Array<VisionDebugItem | VisionDebugMatchItem>;
+  empty: string;
+  showSource?: boolean;
+}) {
+  return (
+    <div className="vision-debug-section">
+      <strong>{title}</strong>
+      {items.length ? items.map((item, index) => (
+        <div className="vision-debug-row" key={`${item.name}-${item.zone}-${index}`}>
+          <span>{item.name}</span>
+          <small>
+            {item.zone} - {Math.round(item.confidenceScore * 100)}%
+            {showSource && "source" in item && item.source ? ` - ${item.source}` : ""}
+          </small>
+        </div>
+      )) : <p className="muted">{empty}</p>}
     </div>
   );
 }
@@ -4024,10 +6563,1344 @@ function SyncModeControl({ settings, onSave, compact = false }: { settings: User
   );
 }
 
+function HomeView({
+  matches,
+  replays,
+  decks,
+  settings,
+  health,
+  communityMatches,
+  activeTestingSession,
+  onNavigate,
+  onPlayPlatform,
+  onOpenReplayForMatch
+}: {
+  matches: MatchDraft[];
+  replays: ReplayRecord[];
+  decks: SavedDeck[];
+  settings: UserSettings;
+  health: CaptureHealth;
+  communityMatches: CommunityMatch[];
+  activeTestingSession: TestingSession | null;
+  onNavigate: (view: ActiveView, options?: NavigationOptions) => void;
+  onPlayPlatform: (platform: GamePlatform) => void;
+  onOpenReplayForMatch: (matchId: string) => void;
+}) {
+  const latestMatch = useMemo(
+    () => [...matches].sort((a, b) => b.capturedAt.localeCompare(a.capturedAt))[0] ?? null,
+    [matches]
+  );
+  const latestReplay = useMemo(
+    () => [...replays].sort((a, b) => b.capturedAt.localeCompare(a.capturedAt))[0] ?? null,
+    [replays]
+  );
+  const activeDeck = settings.activeDeckId ? decks.find((deck) => deck.id === settings.activeDeckId) ?? null : null;
+  const EmbedWebview = "webview" as unknown as React.ElementType;
+  const featuredCreators = COMMUNITY_SPOTLIGHTS;
+  const [featuredCreatorIndex, setFeaturedCreatorIndex] = useState(() => {
+    const ritualIndex = COMMUNITY_SPOTLIGHTS.findIndex((item) => item.id === RITUALTCG_SPOTLIGHT.id);
+    return ritualIndex >= 0 ? ritualIndex : 0;
+  });
+  const featuredCreator = featuredCreators[featuredCreatorIndex % Math.max(1, featuredCreators.length)] ?? RITUALTCG_SPOTLIGHT;
+  const [featuredVideos, setFeaturedVideos] = useState<HomeFeaturedVideo[]>(DEFAULT_HOME_FEATURED_VIDEOS);
+  const [playingHomeVideos, setPlayingHomeVideos] = useState<Record<string, boolean>>({});
+  const [featuredPartners, setFeaturedPartners] = useState<HomeFeaturedPartner[]>([]);
+  const [featuredPartnerIndex, setFeaturedPartnerIndex] = useState(0);
+  const spotlightStreams = useMemo<HomeFeaturedStream[]>(() => COMMUNITY_SPOTLIGHTS.flatMap((item) => {
+    const twitchLink = item.links.find((link) => link.id === "twitch");
+    const channel = twitchLink ? twitchChannelFromUrl(twitchLink.url) : "";
+    if (!twitchLink || !channel) {
+      return [];
+    }
+    return [{
+      title: `${item.name} live`,
+      channel,
+      url: twitchLink.url,
+      playerUrl: twitchPlayerUrl(channel),
+      thumbnailUrl: item.assets.twitch,
+      isLive: false
+    }];
+  }), []);
+  const [featuredStreams, setFeaturedStreams] = useState<HomeFeaturedStream[]>([]);
+  const visibleFeaturedStreams = featuredStreams.length ? featuredStreams : spotlightStreams;
+  const [featuredStreamIndex, setFeaturedStreamIndex] = useState(0);
+  const [featuredStreamPlaying, setFeaturedStreamPlaying] = useState(false);
+  const featuredStream = visibleFeaturedStreams[featuredStreamIndex % Math.max(1, visibleFeaturedStreams.length)] ?? null;
+  const [featuredStreamThumbs, setFeaturedStreamThumbs] = useState<Record<string, string>>({});
+  const discordResource = TOOLKIT_RESOURCES.find((item) => item.id === "discord") ?? TOOLKIT_RESOURCES[0];
+  const FeaturedCreatorIcon = featuredCreator.primaryCta.icon;
+  const [featuredAssets, setFeaturedAssets] = useState<Record<string, { logo?: string; banner?: string }>>({});
+  const [metafyLogoUrl, setMetafyLogoUrl] = useState("");
+  const featuredAsset = featuredAssets[featuredCreator.id] ?? {};
+  const featuredPartner = featuredPartners[featuredPartnerIndex % Math.max(1, featuredPartners.length)] ?? null;
+  const communityDeckSummary = useMemo(() => {
+    const deckRows = filterCommunityDeckMatches(communityMatches, "", "with", true);
+    const meta = buildCommunityDeckMeta(deckRows);
+    const hasCommunityRows = communityMatches.length > 0;
+    const deckCount = meta.totalDecks;
+    const legendCount = meta.legends.length;
+    return {
+      label: deckCount
+        ? `${deckCount} deck${deckCount === 1 ? "" : "s"} across ${legendCount} legend${legendCount === 1 ? "" : "s"}`
+        : hasCommunityRows
+          ? "Deck data is refreshing"
+          : "Community deck meta",
+      legends: meta.legends.slice(0, 8).map((row) => row.legend)
+    };
+  }, [communityMatches]);
+  const communityDeckVisualLegends = communityDeckSummary.legends.length
+    ? communityDeckSummary.legends
+    : ["Diana", "Vex", "Irelia", "Annie", "Pyke", "LeBlanc", "Kai'Sa", "Ahri"];
+
+  useEffect(() => {
+    if (featuredCreators.length <= 1) {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      setFeaturedCreatorIndex((index) => (index + 1) % featuredCreators.length);
+    }, 10_000);
+    return () => window.clearInterval(timer);
+  }, [featuredCreators.length]);
+
+  useEffect(() => {
+    if (featuredPartners.length <= 1) {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      setFeaturedPartnerIndex((index) => (index + 1) % featuredPartners.length);
+    }, 12_000);
+    return () => window.clearInterval(timer);
+  }, [featuredPartners.length]);
+
+  useEffect(() => {
+    let mounted = true;
+    fetch(HOME_CONFIG_URL, { cache: "no-store" })
+      .then((response) => response.ok ? response.json() as Promise<unknown> : null)
+      .then((payload) => {
+        const nextVideos = homeFeaturedVideosFromConfig(payload);
+        if (mounted) {
+          setFeaturedVideos(fillHomeFeaturedVideos(nextVideos));
+        }
+        if (mounted) {
+          const nextPartners = homeFeaturedPartnersFromConfig(payload);
+          setFeaturedPartners(nextPartners);
+          setFeaturedPartnerIndex((index) => nextPartners.length ? index % nextPartners.length : 0);
+          const nextStreams = homeFeaturedStreamsFromConfig(payload);
+          setFeaturedStreams(nextStreams);
+          setFeaturedStreamIndex((index) => {
+            const length = nextStreams.length || spotlightStreams.length;
+            return length ? index % length : 0;
+          });
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (featuredStreamPlaying || visibleFeaturedStreams.length <= 1) {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      setFeaturedStreamIndex((index) => (index + 1) % visibleFeaturedStreams.length);
+    }, 10_000);
+    return () => window.clearInterval(timer);
+  }, [featuredStreamPlaying, visibleFeaturedStreams.length]);
+
+  useEffect(() => {
+    let mounted = true;
+    void Promise.all(COMMUNITY_SPOTLIGHTS.map(async (item) => {
+      const [logo, banner] = await Promise.all([
+        window.riftlite.getAssetUrl(item.overviewLogo ?? item.assets.logo),
+        window.riftlite.getAssetUrl(item.overviewBanner ?? item.assets.banner)
+      ]);
+      return [item.id, { logo, banner }] as const;
+    })).then((entries) => {
+      if (mounted) {
+        setFeaturedAssets(Object.fromEntries(entries));
+      }
+    }).catch(() => undefined);
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    const localThumbs = Array.from(new Set(visibleFeaturedStreams
+      .map((item) => item.thumbnailUrl?.trim() ?? "")
+      .filter((url) => url && !/^(https?:|file:|data:)/i.test(url))));
+    if (!localThumbs.length) {
+      return;
+    }
+    let mounted = true;
+    void Promise.all(localThumbs.map(async (path) => [path, await window.riftlite.getAssetUrl(path)] as const))
+      .then((entries) => {
+        if (mounted) {
+          setFeaturedStreamThumbs((current) => ({ ...current, ...Object.fromEntries(entries) }));
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      mounted = false;
+    };
+  }, [visibleFeaturedStreams]);
+
+  useEffect(() => {
+    let mounted = true;
+    void window.riftlite.getAssetUrl("metafy-symbol.png")
+      .then((url) => {
+        if (mounted) {
+          setMetafyLogoUrl(url);
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  function openFeaturedCreator(creator: CommunitySpotlight, link: SpotlightLink, source: string) {
+    void window.riftlite.trackSpotlightClick({
+      spotlightId: creator.id,
+      linkId: link.id,
+      appVersion: APP_VERSION_META,
+      source
+    });
+    void window.riftlite.openExternalResource(link.url);
+  }
+
+  function openDiscord() {
+    void window.riftlite.openExternalResource(discordResource.url);
+  }
+
+  function openMetafySupport() {
+    void window.riftlite.openExternalResource("https://mfy.gg/@bmu/t/1");
+  }
+
+  function setCreatorCarouselOffset(delta: number) {
+    setFeaturedCreatorIndex((index) => (index + delta + featuredCreators.length) % featuredCreators.length);
+  }
+
+  function setPartnerCarouselOffset(delta: number) {
+    setFeaturedPartnerIndex((index) => featuredPartners.length ? (index + delta + featuredPartners.length) % featuredPartners.length : 0);
+  }
+
+  function setStreamCarouselOffset(delta: number) {
+    setFeaturedStreamPlaying(false);
+    setFeaturedStreamIndex((index) => visibleFeaturedStreams.length ? (index + delta + visibleFeaturedStreams.length) % visibleFeaturedStreams.length : 0);
+  }
+
+  return (
+    <section className="dashboard-page home-page">
+      <section className="home-hero">
+        <div>
+          <span className="eyebrow">RiftLite dashboard</span>
+          <h2>Know your matchups. Improve every game.</h2>
+          <p>Jump into a match, review the last one, check public deck trends, or follow the latest community feature.</p>
+        </div>
+        <div className="home-hero-actions">
+          <button className="primary home-play-now" onClick={() => onNavigate("play")}><Play size={18} /> Play now</button>
+          <button className="secondary" onClick={openDiscord}><MessageCircle size={16} /> Join Discord</button>
+        </div>
+      </section>
+
+      <section className="home-grid">
+        <article
+          className={`home-card home-sponsor-card home-card-wide ${featuredPartner ? "home-partner-active" : ""}`}
+          style={featuredPartner?.imageUrl ? { backgroundImage: `linear-gradient(135deg, rgb(7 12 22 / 94%), rgb(18 20 32 / 82%)), url(${featuredPartner.imageUrl})` } : undefined}
+        >
+          <div className="home-card-heading">
+            <Shield size={18} />
+            <div>
+              <h3>{featuredPartner?.title ?? "Featured partner"}</h3>
+              {featuredPartner ? <span>{featuredPartner.eyebrow}</span> : null}
+            </div>
+          </div>
+          <p className="home-sponsor-copy">{featuredPartner?.description || "Interested in sponsoring RiftLite or featuring your product, video or stream here?"}</p>
+          <strong className="home-sponsor-email">BMUCasts@gmail.com</strong>
+          <div className="home-card-actions">
+            <button className="primary" onClick={() => void window.riftlite.openExternalResource(featuredPartner?.url ?? "mailto:BMUCasts@gmail.com?subject=RiftLite%20sponsorship")}>
+              <ExternalLink size={16} /> {featuredPartner?.ctaLabel ?? "Partner with RiftLite"}
+            </button>
+          </div>
+          {featuredPartners.length > 1 ? (
+            <div className="home-carousel-controls" aria-label="Featured partner carousel controls">
+              <button type="button" className="secondary icon-button" onClick={() => setPartnerCarouselOffset(-1)} aria-label="Previous partner"><ChevronLeft size={15} /></button>
+              <span>{featuredPartnerIndex + 1} / {featuredPartners.length}</span>
+              <button type="button" className="secondary icon-button" onClick={() => setPartnerCarouselOffset(1)} aria-label="Next partner"><ChevronRight size={15} /></button>
+            </div>
+          ) : null}
+        </article>
+
+        <article className="home-card home-featured-creator home-featured-compact home-card-wide" style={featuredAsset.banner ? { backgroundImage: `linear-gradient(90deg, rgb(5 10 19 / 98%) 0%, rgb(5 10 19 / 94%) 62%, rgb(5 10 19 / 72%) 100%), url(${featuredAsset.banner})` } : undefined}>
+          <div className="home-featured-copy">
+            <div className="home-card-heading">
+              <span className="home-featured-logo">
+                {featuredAsset.logo ? <img src={featuredAsset.logo} alt="" /> : <Compass size={20} />}
+              </span>
+              <div>
+                <h3>Featured creator: {featuredCreator.name}</h3>
+                <span>{featuredCreator.kicker} - {featuredCreator.location}</span>
+              </div>
+            </div>
+            <p>{featuredCreator.description}</p>
+            <div className="home-card-actions">
+              <button className="primary" onClick={() => openFeaturedCreator(featuredCreator, featuredCreator.primaryCta, "home-featured-primary")}>
+                <FeaturedCreatorIcon size={16} /> {featuredCreator.primaryCta.label}
+              </button>
+              <button className="secondary" onClick={() => onNavigate("spotlight")}><Compass size={16} /> More spotlights</button>
+            </div>
+            <div className="home-carousel-controls" aria-label="Featured creator carousel controls">
+              <button type="button" className="secondary icon-button" onClick={() => setCreatorCarouselOffset(-1)} aria-label="Previous creator"><ChevronLeft size={15} /></button>
+              <span>{featuredCreatorIndex + 1} / {featuredCreators.length}</span>
+              <button type="button" className="secondary icon-button" onClick={() => setCreatorCarouselOffset(1)} aria-label="Next creator"><ChevronRight size={15} /></button>
+            </div>
+          </div>
+        </article>
+
+        <article className="home-card home-video-card home-card-wide">
+          <div className="home-card-heading">
+            <Video size={18} />
+            <div>
+              <h3>Featured RiftLite Videos</h3>
+            </div>
+          </div>
+          <div className="home-featured-video-grid">
+            {featuredVideos.map((video) => (
+              <div className="home-video-cell" key={video.videoId}>
+                <strong className="home-video-title" title={video.title}>{video.title}</strong>
+                {playingHomeVideos[video.videoId] ? (
+                  <div className="home-video-frame">
+                    <EmbedWebview
+                      className="home-embed-webview"
+                      src={video.embedUrl}
+                      allow="accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                      allowpopups="true"
+                      httpreferrer="https://www.riftlite.com/"
+                      partition={`persist:riftlite-home-video-${video.videoId}`}
+                      webpreferences="backgroundThrottling=false"
+                    />
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    className="home-video-frame home-video-preview"
+                    onClick={() => setPlayingHomeVideos((current) => ({ ...current, [video.videoId]: true }))}
+                    aria-label={`Play ${video.title}`}
+                  >
+                    {video.thumbnailUrl ? <img src={video.thumbnailUrl} alt="" draggable={false} /> : null}
+                    <span><Play size={15} /> Play</span>
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+          <button type="button" className="home-metafy-support" onClick={openMetafySupport} aria-label="Support RiftLite on Metafy">
+            <span className="home-metafy-logo">
+              {metafyLogoUrl ? <img src={metafyLogoUrl} alt="" /> : "M"}
+            </span>
+            <span className="home-metafy-copy">
+              <strong>Support RiftLite on Metafy</strong>
+              <span>Tips help cover servers, development time, and community tools.</span>
+            </span>
+            <span className="home-metafy-cta"><ExternalLink size={14} /> Support</span>
+          </button>
+        </article>
+
+        <article className="home-card home-stream-card home-card-wide">
+          <div className="home-card-heading">
+            <Radio size={18} />
+            <div>
+              <h3>{featuredStream?.title ?? "Featured stream"}</h3>
+              <span>{featuredStream ? `${featuredStream.isLive ? "Live now - " : ""}twitch.tv/${featuredStream.channel}` : "Community streams"}</span>
+            </div>
+          </div>
+          {featuredStream ? (
+            featuredStreamPlaying ? (
+              <div className="home-video-frame">
+              <EmbedWebview
+                key={featuredStream.playerUrl}
+                className="home-embed-webview"
+                src={featuredStream.playerUrl}
+                allowpopups="true"
+                partition={`persist:riftlite-twitch-${featuredStream.channel}`}
+                webpreferences="backgroundThrottling=false"
+              />
+              </div>
+            ) : (
+              <button
+                type="button"
+                className="home-video-frame home-video-preview home-stream-preview"
+                onClick={() => setFeaturedStreamPlaying(true)}
+                aria-label={`Play ${featuredStream.title}`}
+              >
+                {featuredStream.thumbnailUrl ? <img src={featuredStreamThumbs[featuredStream.thumbnailUrl] ?? featuredStream.thumbnailUrl} alt="" draggable={false} /> : null}
+                <strong className="home-stream-status">{featuredStream.isLive ? "Live now" : "Featured stream"}</strong>
+                <em>{featuredStream.title}</em>
+                <span><Play size={15} /> {featuredStream.isLive ? "Watch live" : "Play"}</span>
+              </button>
+            )
+          ) : (
+            <div className="home-video-frame">
+              <div className="home-stream-empty">No featured streams configured.</div>
+            </div>
+          )}
+          {visibleFeaturedStreams.length > 1 ? (
+            <div className="home-carousel-controls" aria-label="Featured streamer carousel controls">
+              <button type="button" className="secondary icon-button" onClick={() => setStreamCarouselOffset(-1)} aria-label="Previous stream"><ChevronLeft size={15} /></button>
+              <span>{featuredStreamIndex + 1} / {visibleFeaturedStreams.length}</span>
+              <button type="button" className="secondary icon-button" onClick={() => setStreamCarouselOffset(1)} aria-label="Next stream"><ChevronRight size={15} /></button>
+            </div>
+          ) : null}
+        </article>
+
+        <article className="home-card">
+          <div className="home-card-heading">
+            <Globe2 size={18} />
+            <div>
+              <h3>Community Decks</h3>
+              <span>{communityDeckSummary.label}</span>
+            </div>
+          </div>
+          <div className="home-legend-strip" aria-label="Community deck legend preview">
+            {communityDeckVisualLegends.map((legend) => (
+              <button
+                type="button"
+                key={legend}
+                className="home-legend-token"
+                title={`Open ${legend} decks`}
+                onClick={() => onNavigate("community", { communityTab: "community-decks", communityDeckLegend: legend })}
+              >
+                <img src={legendImageUrl(legend)} alt="" />
+              </button>
+            ))}
+          </div>
+          <div className="home-card-actions">
+            <button className="primary" onClick={() => onNavigate("community", { communityTab: "community-decks" })}><Globe2 size={16} /> Explore deck meta</button>
+            <button className="secondary" onClick={() => onNavigate("community", { communityTab: "legend-meta" })}>Meta</button>
+          </div>
+        </article>
+
+        <article className="home-card home-discord-card">
+          <div className="home-card-heading">
+            <MessageCircle size={18} />
+            <div>
+              <h3>RiftLite Discord</h3>
+              <span>Support, setup help, tester feedback, and community chat</span>
+            </div>
+          </div>
+          <p className="muted">The fastest place to get help, report bugs, find updates, and talk through new features with other players.</p>
+          <div className="home-card-actions">
+            <button className="primary" onClick={openDiscord}><MessageCircle size={16} /> Join Discord</button>
+          </div>
+        </article>
+
+        <article className="home-card">
+          <div className="home-card-heading">
+            <ClipboardList size={18} />
+            <div>
+              <h3>Recent capture</h3>
+              <span>{latestMatch ? new Date(latestMatch.capturedAt).toLocaleString() : "No local match yet"}</span>
+            </div>
+          </div>
+          {latestMatch ? (
+            <div className="home-match-summary">
+              <strong>{normalizeLegendName(latestMatch.myChampion) || "Unknown"} vs {normalizeLegendName(latestMatch.opponentChampion) || "Unknown"}</strong>
+              <span>{latestMatch.result} {displayMatchRecord(latestMatch)} - {latestMatch.format}</span>
+              <em>{latestMatch.deckName || "No deck logged"}</em>
+            </div>
+          ) : (
+            <p className="muted">Captured matches and pending reviews will show up here.</p>
+          )}
+          <div className="home-card-actions">
+            <button className="secondary" onClick={() => onNavigate("matches")}><ClipboardList size={16} /> Matches</button>
+            <button className="secondary" disabled={!latestMatch} onClick={() => latestMatch ? onOpenReplayForMatch(latestMatch.id) : undefined}><Film size={16} /> Replay</button>
+          </div>
+        </article>
+
+        <article className="home-card">
+          <div className="home-card-heading">
+            <BookOpen size={18} />
+            <div>
+              <h3>Active deck & prep</h3>
+              <span>{activeDeck ? activeDeck.title : "No active deck selected"}</span>
+            </div>
+          </div>
+          <p className="muted">Prepare your sideboard, mulligan options, battlefield plan, and matchup notes before the game starts.</p>
+          <div className="home-card-actions">
+            <button className="primary" onClick={() => onNavigate("decks", { deckFocus: activeDeck ? "prep" : "library" })}><BookOpen size={16} /> {activeDeck ? "Open prep" : "Import deck"}</button>
+            <button className="secondary" onClick={() => onNavigate("decks", { deckFocus: "performance" })}>Performance</button>
+          </div>
+        </article>
+
+        <article className="home-card">
+          <div className="home-card-heading">
+            <Calculator size={18} />
+            <div>
+              <h3>Scorepad</h3>
+              <span>Table games and event logging</span>
+            </div>
+          </div>
+          <p className="muted">Use your phone or desktop to score local matches, then review before saving.</p>
+          <div className="home-card-actions">
+            <button className="primary" onClick={() => onNavigate("scorepad")}><Calculator size={16} /> Open Scorepad</button>
+          </div>
+        </article>
+
+        <article className="home-card">
+          <div className="home-card-heading">
+            <Radio size={18} />
+            <div>
+              <h3>Social</h3>
+              <span>{activeTestingSession ? `Testing: ${activeTestingSession.label}` : "Find matches and teams"}</span>
+            </div>
+          </div>
+          <p className="muted">Post an LFG room, manage teams, or sync matches to private groups.</p>
+          <div className="home-card-actions">
+            <button className="primary" onClick={() => onNavigate("social")}><Radio size={16} /> Find Match</button>
+            <button className="secondary" onClick={() => onNavigate("hubs")}><Users size={16} /> Private Hubs</button>
+          </div>
+        </article>
+      </section>
+    </section>
+  );
+}
+
+type DeckComparisonSourceKind = "saved" | "community-average" | "community-deck";
+
+type DeckComparisonCardSide = {
+  key: string;
+  name: string;
+  imageUrl: string;
+  section: string;
+  qty: number;
+  label: string;
+  inclusionRate?: number;
+};
+
+type DeckComparisonSource = {
+  key: string;
+  kind: DeckComparisonSourceKind;
+  label: string;
+  subLabel: string;
+  legend: string;
+  cards: Map<string, DeckComparisonCardSide>;
+};
+
+type DeckComparisonRow = {
+  key: string;
+  name: string;
+  imageUrl: string;
+  section: string;
+  status: "shared" | "left-only" | "right-only";
+  left?: DeckComparisonCardSide;
+  right?: DeckComparisonCardSide;
+  delta: number;
+  importance: number;
+};
+
+function deckComparisonKeyFromName(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
+function deckComparisonSectionLabel(section: string): string {
+  if (section === "mainDeck") return "Main";
+  if (section === "sideboard") return "Sideboard";
+  if (section === "battlefields") return "Battlefield";
+  if (section === "runes") return "Rune";
+  if (section === "champions") return "Champion";
+  return "Deck";
+}
+
+function entriesForDeckComparison(snapshot: DeckSnapshot): Array<{ entry: DeckEntry; section: string }> {
+  return [
+    ...(snapshot.mainDeck ?? []).map((entry) => ({ entry, section: "mainDeck" })),
+    ...(snapshot.sideboard ?? []).map((entry) => ({ entry, section: "sideboard" })),
+    ...(snapshot.battlefields ?? []).map((entry) => ({ entry, section: "battlefields" }))
+  ];
+}
+
+function buildSavedDeckComparisonSource(deck: SavedDeck): DeckComparisonSource | null {
+  const snapshot = parseCommunityDeckSnapshot(deck.snapshotJson);
+  if (!snapshot) {
+    return null;
+  }
+  const cards = new Map<string, DeckComparisonCardSide>();
+  for (const { entry, section } of entriesForDeckComparison(snapshot)) {
+    const key = deckComparisonKeyFromName(entry.name);
+    if (!key) {
+      continue;
+    }
+    const current = cards.get(key);
+    const qty = Math.max(0, entry.qty ?? 1);
+    cards.set(key, {
+      key,
+      name: current?.name || entry.name,
+      imageUrl: current?.imageUrl || entry.imageUrl || "",
+      section: current?.section || section,
+      qty: (current?.qty ?? 0) + qty,
+      label: `${(current?.qty ?? 0) + qty}x`
+    });
+  }
+  return {
+    key: `saved:${deck.id}`,
+    kind: "saved",
+    label: deck.title,
+    subLabel: `${snapshot.legend || deck.legend || "Saved deck"} - ${cards.size} cards`,
+    legend: snapshot.legend || deck.legend,
+    cards
+  };
+}
+
+function buildCommunityDeckComparisonSource(group: CommunityDeckGroup): DeckComparisonSource | null {
+  if (!group.snapshot) {
+    return null;
+  }
+  const cards = new Map<string, DeckComparisonCardSide>();
+  for (const { entry, section } of entriesForDeckComparison(group.snapshot)) {
+    const key = deckComparisonKeyFromName(entry.name);
+    if (!key) {
+      continue;
+    }
+    const current = cards.get(key);
+    const qty = Math.max(0, entry.qty ?? 1);
+    cards.set(key, {
+      key,
+      name: current?.name || entry.name,
+      imageUrl: current?.imageUrl || entry.imageUrl || "",
+      section: current?.section || section,
+      qty: (current?.qty ?? 0) + qty,
+      label: `${(current?.qty ?? 0) + qty}x`
+    });
+  }
+  return {
+    key: `community-deck:${group.key}`,
+    kind: "community-deck",
+    label: group.title || `${group.legend} deck`,
+    subLabel: `${group.legend} - ${group.total} public matches`,
+    legend: group.legend,
+    cards
+  };
+}
+
+function buildCommunityAverageComparisonSource(legend: string, groups: CommunityDeckGroup[]): DeckComparisonSource | null {
+  const snapshotGroups = groups.filter((group) => group.snapshot);
+  if (!snapshotGroups.length) {
+    return null;
+  }
+  const aggregate = new Map<string, {
+    name: string;
+    imageUrl: string;
+    section: string;
+    totalQty: number;
+    deckCount: number;
+  }>();
+  for (const group of snapshotGroups) {
+    if (!group.snapshot) continue;
+    const perDeck = new Map<string, DeckComparisonCardSide>();
+    for (const { entry, section } of entriesForDeckComparison(group.snapshot)) {
+      const key = deckComparisonKeyFromName(entry.name);
+      if (!key) continue;
+      const current = perDeck.get(key);
+      const qty = Math.max(0, entry.qty ?? 1);
+      perDeck.set(key, {
+        key,
+        name: current?.name || entry.name,
+        imageUrl: current?.imageUrl || entry.imageUrl || "",
+        section: current?.section || section,
+        qty: (current?.qty ?? 0) + qty,
+        label: ""
+      });
+    }
+    for (const card of perDeck.values()) {
+      const current = aggregate.get(card.key) ?? {
+        name: card.name,
+        imageUrl: card.imageUrl,
+        section: card.section,
+        totalQty: 0,
+        deckCount: 0
+      };
+      current.totalQty += card.qty;
+      current.deckCount += 1;
+      if (!current.imageUrl && card.imageUrl) {
+        current.imageUrl = card.imageUrl;
+      }
+      aggregate.set(card.key, current);
+    }
+  }
+  const cards = new Map<string, DeckComparisonCardSide>();
+  for (const [key, card] of aggregate) {
+    const inclusionRate = Math.round((card.deckCount / snapshotGroups.length) * 1000) / 10;
+    const averageCopies = Math.round((card.totalQty / card.deckCount) * 10) / 10;
+    cards.set(key, {
+      key,
+      name: card.name,
+      imageUrl: card.imageUrl,
+      section: card.section,
+      qty: averageCopies,
+      label: `${inclusionRate}% / ${averageCopies}x avg`,
+      inclusionRate
+    });
+  }
+  return {
+    key: `community-average:${legend}`,
+    kind: "community-average",
+    label: `${legend} community average`,
+    subLabel: `${snapshotGroups.length} unique public decklists`,
+    legend,
+    cards
+  };
+}
+
+function buildDeckComparisonRows(left: DeckComparisonSource | null, right: DeckComparisonSource | null): DeckComparisonRow[] {
+  if (!left || !right) {
+    return [];
+  }
+  const keys = new Set([...left.cards.keys(), ...right.cards.keys()]);
+  return [...keys].map((key) => {
+    const leftCard = left.cards.get(key);
+    const rightCard = right.cards.get(key);
+    const status: DeckComparisonRow["status"] = leftCard && rightCard ? "shared" : leftCard ? "left-only" : "right-only";
+    const primary = rightCard ?? leftCard;
+    const rightWeight = rightCard?.inclusionRate ?? rightCard?.qty ?? 0;
+    const leftWeight = leftCard?.inclusionRate ?? leftCard?.qty ?? 0;
+    return {
+      key,
+      name: primary?.name ?? "Unknown card",
+      imageUrl: primary?.imageUrl ?? "",
+      section: primary?.section ?? "mainDeck",
+      status,
+      left: leftCard,
+      right: rightCard,
+      delta: Math.round(((leftCard?.qty ?? 0) - (rightCard?.qty ?? 0)) * 10) / 10,
+      importance: Math.max(leftWeight, rightWeight)
+    };
+  }).sort((a, b) => {
+    const statusOrder = { "right-only": 0, shared: 1, "left-only": 2 } as const;
+    return statusOrder[a.status] - statusOrder[b.status] || b.importance - a.importance || a.name.localeCompare(b.name);
+  });
+}
+
+function MatchupLabView({
+  matches,
+  communityMatches,
+  decks,
+  replays,
+  settings,
+  onNavigate,
+  onRefreshCommunity
+}: {
+  matches: MatchDraft[];
+  communityMatches: CommunityMatch[];
+  decks: SavedDeck[];
+  replays: ReplayRecord[];
+  settings: UserSettings;
+  onNavigate: (view: ActiveView, options?: NavigationOptions) => void;
+  onRefreshCommunity: () => Promise<void>;
+}) {
+  const activeDeck = settings.activeDeckId ? decks.find((deck) => deck.id === settings.activeDeckId) ?? null : null;
+  const [comparisonLeftKey, setComparisonLeftKey] = useState("");
+  const [comparisonRightKey, setComparisonRightKey] = useState("");
+  const [matchupLegendFilter, setMatchupLegendFilter] = useState("all");
+  const winRate = (wins: number, completed: number) => completed ? Math.round((wins / completed) * 100) : 0;
+  const cleanLegend = (value: string) => {
+    const canonical = canonicalLegendName(value);
+    return canonical && canonical !== "Unknown" ? canonical : "";
+  };
+  const mapTopValue = (values: Map<string, number>) => [...values.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0]?.[0] ?? "";
+
+  const replayMatchIds = useMemo(() => {
+    return new Set(replays.filter((replay) => replay.video || replay.frames?.length).map((replay) => replay.matchId).filter(Boolean));
+  }, [replays]);
+
+  const personalRows = useMemo(() => {
+    const rows = new Map<string, {
+      mine: string;
+      opponent: string;
+      matches: number;
+      wins: number;
+      losses: number;
+      draws: number;
+      replayCount: number;
+      latestAt: number;
+      battlefields: Map<string, number>;
+      decks: Map<string, number>;
+    }>();
+    for (const match of matches) {
+      const mine = cleanLegend(match.myChampion);
+      const opponent = cleanLegend(match.opponentChampion);
+      if (!mine || !opponent || match.hiddenFromStats) {
+        continue;
+      }
+      const key = `${mine}__${opponent}`;
+      const current = rows.get(key) ?? {
+        mine,
+        opponent,
+        matches: 0,
+        wins: 0,
+        losses: 0,
+        draws: 0,
+        replayCount: 0,
+        latestAt: 0,
+        battlefields: new Map<string, number>(),
+        decks: new Map<string, number>()
+      };
+      current.matches += 1;
+      if (match.result === "Win") current.wins += 1;
+      if (match.result === "Loss") current.losses += 1;
+      if (match.result === "Draw") current.draws += 1;
+      if (replayMatchIds.has(match.id)) current.replayCount += 1;
+      current.latestAt = Math.max(current.latestAt, Date.parse(match.capturedAt) || 0);
+      for (const battlefield of [match.myBattlefield, match.opponentBattlefield]) {
+        if (battlefield && battlefield !== "Unknown") {
+          current.battlefields.set(battlefield, (current.battlefields.get(battlefield) ?? 0) + 1);
+        }
+      }
+      if (match.deckName && match.deckName !== "Deck pending" && match.deckName !== "No deck logged") {
+        current.decks.set(match.deckName, (current.decks.get(match.deckName) ?? 0) + 1);
+      }
+      rows.set(key, current);
+    }
+    return [...rows.values()].sort((a, b) => b.matches - a.matches || b.latestAt - a.latestAt);
+  }, [matches, replayMatchIds]);
+
+  const personalLegendOptions = useMemo(() => {
+    const totals = new Map<string, number>();
+    for (const row of personalRows) {
+      totals.set(row.mine, (totals.get(row.mine) ?? 0) + row.matches);
+    }
+    return [...totals.entries()]
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .map(([legend, matches]) => ({ legend, matches }));
+  }, [personalRows]);
+
+  const matchupBoardRows = useMemo(
+    () => matchupLegendFilter === "all" ? personalRows : personalRows.filter((row) => row.mine === matchupLegendFilter),
+    [matchupLegendFilter, personalRows]
+  );
+  const matchupBoardMatchCount = matchupBoardRows.reduce((sum, row) => sum + row.matches, 0);
+
+  const communityRows = useMemo(() => {
+    const rows = new Map<string, { mine: string; opponent: string; matches: number; wins: number; losses: number; deckRows: number }>();
+    for (const match of communityMatches) {
+      if (match.scope !== "community" || match.superseded) {
+        continue;
+      }
+      const mine = cleanLegend(match.myChampion);
+      const opponent = cleanLegend(match.opponentChampion);
+      if (!mine || !opponent || isMirrorLegendPair(mine, opponent)) {
+        continue;
+      }
+      const key = `${mine}__${opponent}`;
+      const current = rows.get(key) ?? { mine, opponent, matches: 0, wins: 0, losses: 0, deckRows: 0 };
+      current.matches += 1;
+      if (match.result === "Win") current.wins += 1;
+      if (match.result === "Loss") current.losses += 1;
+      if (match.deckSnapshotJson || match.deckSourceUrl || match.deckName) {
+        current.deckRows += 1;
+      }
+      rows.set(key, current);
+    }
+    return [...rows.values()].sort((a, b) => b.matches - a.matches || b.wins - a.wins).slice(0, 6);
+  }, [communityMatches]);
+
+  const activeDeckPreview = useMemo(() => {
+    if (!activeDeck?.snapshotJson) {
+      return { legend: activeDeck?.legend ?? "", cards: [] as DeckEntry[] };
+    }
+    try {
+      const snapshot = JSON.parse(activeDeck.snapshotJson) as { legend?: string; mainDeck?: DeckEntry[]; sideboard?: DeckEntry[]; battlefields?: DeckEntry[] };
+      const cards = [...(snapshot.mainDeck ?? []), ...(snapshot.sideboard ?? []), ...(snapshot.battlefields ?? [])]
+        .filter((card) => card.imageUrl)
+        .slice(0, 7);
+      return { legend: snapshot.legend ?? activeDeck.legend, cards };
+    } catch {
+      return { legend: activeDeck.legend, cards: [] as DeckEntry[] };
+    }
+  }, [activeDeck]);
+
+  const communityDeckMeta = useMemo(
+    () => buildCommunityDeckMeta(filterCommunityDeckMatches(communityMatches, "", "with", true)),
+    [communityMatches]
+  );
+
+  const savedDeckSources = useMemo(
+    () => decks.map(buildSavedDeckComparisonSource).filter((source): source is DeckComparisonSource => Boolean(source)),
+    [decks]
+  );
+
+  const communityAverageSources = useMemo(() => {
+    return communityDeckMeta.legends
+      .map((summary) => buildCommunityAverageComparisonSource(summary.legend, communityDeckGroupsForLegend(communityDeckMeta, summary.legend)))
+      .filter((source): source is DeckComparisonSource => Boolean(source));
+  }, [communityDeckMeta]);
+
+  const communityDeckSources = useMemo(
+    () => communityDeckMeta.groups
+      .filter((group) => group.snapshot)
+      .slice(0, 120)
+      .map(buildCommunityDeckComparisonSource)
+      .filter((source): source is DeckComparisonSource => Boolean(source)),
+    [communityDeckMeta]
+  );
+
+  const comparisonSources = useMemo(
+    () => [...savedDeckSources, ...communityAverageSources, ...communityDeckSources],
+    [communityAverageSources, communityDeckSources, savedDeckSources]
+  );
+
+  const comparisonSourceByKey = useMemo(
+    () => new Map(comparisonSources.map((source) => [source.key, source])),
+    [comparisonSources]
+  );
+
+  const activeDeckSourceKey = activeDeck ? `saved:${activeDeck.id}` : "";
+  const activeDeckLegend = normalizeLegendName(activeDeckPreview.legend || activeDeck?.legend || "");
+  const defaultLeftComparisonKey = comparisonSourceByKey.has(activeDeckSourceKey)
+    ? activeDeckSourceKey
+    : savedDeckSources[0]?.key ?? communityAverageSources[0]?.key ?? communityDeckSources[0]?.key ?? "";
+  const preferredCommunityAverageKey = activeDeckLegend ? `community-average:${activeDeckLegend}` : "";
+  const defaultRightComparisonKey = comparisonSourceByKey.has(preferredCommunityAverageKey)
+    ? preferredCommunityAverageKey
+    : communityAverageSources[0]?.key ?? communityDeckSources[0]?.key ?? savedDeckSources.find((source) => source.key !== defaultLeftComparisonKey)?.key ?? "";
+  const selectedLeftComparisonKey = comparisonSourceByKey.has(comparisonLeftKey) ? comparisonLeftKey : defaultLeftComparisonKey;
+  const selectedRightComparisonKey = comparisonSourceByKey.has(comparisonRightKey) ? comparisonRightKey : defaultRightComparisonKey;
+  const leftComparisonSource = comparisonSourceByKey.get(selectedLeftComparisonKey) ?? null;
+  const rightComparisonSource = comparisonSourceByKey.get(selectedRightComparisonKey) ?? null;
+  const comparisonRows = useMemo(
+    () => buildDeckComparisonRows(leftComparisonSource, rightComparisonSource),
+    [leftComparisonSource, rightComparisonSource]
+  );
+  const comparisonSummary = useMemo(() => ({
+    shared: comparisonRows.filter((row) => row.status === "shared").length,
+    leftOnly: comparisonRows.filter((row) => row.status === "left-only").length,
+    rightOnly: comparisonRows.filter((row) => row.status === "right-only").length
+  }), [comparisonRows]);
+  const comparisonSections = useMemo(() => [
+    {
+      key: "right-only" as const,
+      title: "Missing from left",
+      hint: "Cards the comparison source plays that the left deck does not.",
+      rows: comparisonRows.filter((row) => row.status === "right-only")
+    },
+    {
+      key: "shared" as const,
+      title: "Shared cards",
+      hint: "Cards found in both sources. Check quantities and average copies here.",
+      rows: comparisonRows.filter((row) => row.status === "shared")
+    },
+    {
+      key: "left-only" as const,
+      title: "Only on left",
+      hint: "Cards in the left deck that are not present in the comparison source.",
+      rows: comparisonRows.filter((row) => row.status === "left-only")
+    }
+  ], [comparisonRows]);
+
+  const recentReplayMatches = useMemo(() => {
+    return matches
+      .filter((match) => replayMatchIds.has(match.id))
+      .sort((a, b) => (Date.parse(b.capturedAt) || 0) - (Date.parse(a.capturedAt) || 0))
+      .slice(0, 3);
+  }, [matches, replayMatchIds]);
+
+  const totalKnownLocalMatches = personalRows.reduce((sum, row) => sum + row.matches, 0);
+  const totalCommunityMatches = communityRows.reduce((sum, row) => sum + row.matches, 0);
+  const deckContextRows = communityRows.reduce((sum, row) => sum + row.deckRows, 0);
+  const replayEvidenceCount = matches.filter((match) => replayMatchIds.has(match.id)).length;
+  const heroRow = personalRows[0] ?? communityRows[0] ?? null;
+  const personalTopMatchup = personalRows[0] ?? null;
+  const personalWinRate = personalTopMatchup ? winRate(personalTopMatchup.wins, personalTopMatchup.wins + personalTopMatchup.losses + personalTopMatchup.draws) : 0;
+  const communitySummary = { matchups: communityRows.length, deckRows: deckContextRows };
+  const communityRefreshRequestedRef = useRef(false);
+
+  useEffect(() => {
+    if (communityMatches.length || communityRefreshRequestedRef.current) {
+      return;
+    }
+    communityRefreshRequestedRef.current = true;
+    void onRefreshCommunity();
+  }, [communityMatches.length, onRefreshCommunity]);
+
+  return (
+    <section className="dashboard-page home-page matchup-lab-page">
+      <section className="home-hero matchup-lab-hero">
+        <div>
+          <span className="eyebrow">RiftLite lab</span>
+          <h2>Matchup Lab</h2>
+          <p>Bring your personal records, deck prep, public trends, and replay evidence into one matchup workspace.</p>
+        </div>
+        {heroRow ? (
+          <div className="matchup-lab-hero-art" aria-hidden="true">
+            <LegendAvatar legend={heroRow.mine} size="large" />
+            <span>vs</span>
+            <LegendAvatar legend={heroRow.opponent} size="large" />
+          </div>
+        ) : null}
+        <div className="home-hero-actions">
+          <button className="primary" onClick={() => onNavigate("stats")}><BarChart3 size={16} /> Personal stats</button>
+          <button className="secondary" onClick={() => onNavigate("community", { communityTab: "match-matrix" })}><Activity size={16} /> Matrix</button>
+        </div>
+      </section>
+
+      <section className="matchup-lab-stat-strip">
+        <article className="matchup-lab-stat">
+          <span>Local matchups</span>
+          <strong>{personalRows.length}</strong>
+          <small>{totalKnownLocalMatches} known matches</small>
+        </article>
+        <article className="matchup-lab-stat">
+          <span>Replay evidence</span>
+          <strong>{replayEvidenceCount}</strong>
+          <small>matches with media</small>
+        </article>
+        <article className="matchup-lab-stat">
+          <span>Community pairs</span>
+          <strong>{communityRows.length}</strong>
+          <small>{totalCommunityMatches} public rows</small>
+        </article>
+        <article className="matchup-lab-stat">
+          <span>Deck context</span>
+          <strong>{deckContextRows}</strong>
+          <small>rows with deck data</small>
+        </article>
+      </section>
+
+      <section className="matchup-lab-showcase">
+        <article className="matchup-lab-panel">
+          <div className="home-card-heading">
+            <Activity size={18} />
+            <div>
+              <h3>Visual matchup board</h3>
+              <span>{personalRows.length ? "Filter by your legend to inspect each matchup point" : "Waiting for match history"}</span>
+            </div>
+          </div>
+          {personalRows.length ? (
+            <>
+              <div className="matchup-lab-filter-row">
+                <label>
+                  My legend
+                  <select value={matchupLegendFilter} onChange={(event) => setMatchupLegendFilter(event.target.value)}>
+                    <option value="all">All legends</option>
+                    {personalLegendOptions.map((option) => (
+                      <option value={option.legend} key={option.legend}>{option.legend} - {option.matches}</option>
+                    ))}
+                  </select>
+                </label>
+                <span>{matchupBoardRows.length} pairings · {matchupBoardMatchCount} matches</span>
+              </div>
+              <div className="matchup-lab-card-list matchup-lab-board-list">
+              {matchupBoardRows.map((row) => {
+                const completed = row.wins + row.losses + row.draws;
+                return (
+                  <button
+                    className="matchup-lab-matchup-card"
+                    key={`${row.mine}-${row.opponent}`}
+                    onClick={() => onNavigate("matches", { matchFocus: { myLegend: row.mine, opponentLegend: row.opponent } })}
+                  >
+                    <div className="matchup-lab-legend-pair">
+                      <LegendAvatar legend={row.mine} />
+                      <span>vs</span>
+                      <LegendAvatar legend={row.opponent} />
+                    </div>
+                    <div className="matchup-lab-matchup-copy">
+                      <strong>{row.mine} into {row.opponent}</strong>
+                      <span>{mapTopValue(row.battlefields) || "No battlefield pattern yet"}</span>
+                      <div className="matchup-lab-data-points">
+                        <small>{row.matches} matches</small>
+                        <small>{winRate(row.wins, completed)}% WR</small>
+                        <small>{row.wins}-{row.losses}{row.draws ? `-${row.draws}` : ""}</small>
+                        <small>{row.replayCount} replays</small>
+                      </div>
+                    </div>
+                    <div className="matchup-lab-chip">{winRate(row.wins, completed)}%</div>
+                  </button>
+                );
+              })}
+              </div>
+            </>
+          ) : (
+            <p className="matchup-lab-empty">Saved matches with both legends will appear here, ranked by how often you face the pairing.</p>
+          )}
+        </article>
+
+        <article className="matchup-lab-panel">
+          <div className="home-card-heading">
+            <Globe2 size={18} />
+            <div>
+              <h3>Community pressure points</h3>
+              <span>{communityRows.length ? "Top public pairings in the loaded window" : "Loading public context"}</span>
+            </div>
+          </div>
+          {communityRows.length ? (
+            <div className="matchup-lab-community-list">
+              {communityRows.slice(0, 5).map((row) => {
+                const completed = row.wins + row.losses;
+                return (
+                  <button
+                    className="matchup-lab-community-row"
+                    key={`${row.mine}-${row.opponent}`}
+                    onClick={() => onNavigate("community", { communityTab: "match-matrix" })}
+                  >
+                    <span className="matchup-lab-community-legends">
+                      <LegendAvatar legend={row.mine} />
+                      <span>{row.mine} vs {row.opponent}</span>
+                    </span>
+                    <span>{row.matches} matches</span>
+                    <strong>{winRate(row.wins, completed)}% WR</strong>
+                  </button>
+                );
+              })}
+            </div>
+          ) : (
+            <p className="matchup-lab-empty">RiftLite is loading the same cached public deck and matrix window used by Community.</p>
+          )}
+        </article>
+      </section>
+
+      <section className="matchup-lab-panel matchup-lab-compare-panel">
+        <div className="home-card-heading">
+          <Layers size={18} />
+          <div>
+            <h3>Deck comparison</h3>
+            <span>Compare your saved decks, community averages, or specific public decklists.</span>
+          </div>
+        </div>
+        <div className="deck-compare-controls">
+          <label>
+            Left side
+            <select value={selectedLeftComparisonKey} onChange={(event) => setComparisonLeftKey(event.target.value)} disabled={!comparisonSources.length}>
+              <option value="">Choose a deck source</option>
+              {savedDeckSources.length ? (
+                <optgroup label="Your decks">
+                  {savedDeckSources.map((source) => <option value={source.key} key={source.key}>{source.label}</option>)}
+                </optgroup>
+              ) : null}
+              {communityAverageSources.length ? (
+                <optgroup label="Community averages">
+                  {communityAverageSources.map((source) => <option value={source.key} key={source.key}>{source.label}</option>)}
+                </optgroup>
+              ) : null}
+              {communityDeckSources.length ? (
+                <optgroup label="Specific community decks">
+                  {communityDeckSources.map((source) => <option value={source.key} key={source.key}>{source.label}</option>)}
+                </optgroup>
+              ) : null}
+            </select>
+          </label>
+          <label>
+            Compare against
+            <select value={selectedRightComparisonKey} onChange={(event) => setComparisonRightKey(event.target.value)} disabled={!comparisonSources.length}>
+              <option value="">Choose comparison source</option>
+              {communityAverageSources.length ? (
+                <optgroup label="Community averages">
+                  {communityAverageSources.map((source) => <option value={source.key} key={source.key}>{source.label}</option>)}
+                </optgroup>
+              ) : null}
+              {communityDeckSources.length ? (
+                <optgroup label="Specific community decks">
+                  {communityDeckSources.map((source) => <option value={source.key} key={source.key}>{source.label}</option>)}
+                </optgroup>
+              ) : null}
+              {savedDeckSources.length ? (
+                <optgroup label="Your decks">
+                  {savedDeckSources.map((source) => <option value={source.key} key={source.key}>{source.label}</option>)}
+                </optgroup>
+              ) : null}
+            </select>
+          </label>
+          <button
+            className="secondary"
+            disabled={!rightComparisonSource?.legend}
+            onClick={() => onNavigate("community", { communityTab: "community-decks", communityDeckLegend: rightComparisonSource?.legend ?? null })}
+          >
+            <Globe2 size={16} /> Open deck meta
+          </button>
+        </div>
+        {leftComparisonSource && rightComparisonSource ? (
+          <>
+            <div className="deck-compare-summary">
+              <span data-status="right-only"><strong>{comparisonSummary.rightOnly}</strong> missing from left</span>
+              <span data-status="shared"><strong>{comparisonSummary.shared}</strong> shared cards</span>
+              <span data-status="left-only"><strong>{comparisonSummary.leftOnly}</strong> only on left</span>
+            </div>
+            <div className="deck-compare-source-row">
+              <div>
+                <strong>{leftComparisonSource.label}</strong>
+                <span>{leftComparisonSource.subLabel}</span>
+              </div>
+              <div>
+                <strong>{rightComparisonSource.label}</strong>
+                <span>{rightComparisonSource.subLabel}</span>
+              </div>
+            </div>
+            <div className="deck-compare-sections">
+              {comparisonSections.map((section) => {
+                const shouldShowAllRows = section.key === "right-only" || section.key === "shared";
+                const visibleRows = shouldShowAllRows ? section.rows : section.rows.slice(0, 12);
+                if (!section.rows.length) {
+                  return null;
+                }
+                return (
+                  <section className="deck-compare-section" data-status={section.key} key={section.key}>
+                    <div className="deck-compare-section-heading">
+                      <div>
+                        <h4>{section.title}</h4>
+                        <small>{section.hint}</small>
+                      </div>
+                      <span>{section.rows.length}</span>
+                    </div>
+                    <div className="deck-compare-card-grid">
+                      {visibleRows.map((row) => {
+                        const statusLabel = row.status === "shared" ? "In both" : row.status === "left-only" ? "Only left" : "Missing";
+                        const deltaLabel = row.status === "shared"
+                          ? row.delta === 0
+                            ? "Same copies"
+                            : row.delta > 0
+                              ? `Left +${row.delta}`
+                              : `Left ${row.delta}`
+                          : row.status === "right-only"
+                            ? "Consider adding"
+                            : "Meta does not show it";
+                        return (
+                          <article className="deck-compare-card" data-status={row.status} key={row.key}>
+                            <div className="deck-compare-card-art">
+                              {row.imageUrl ? <img src={row.imageUrl} alt="" loading="lazy" /> : <span>{row.name.slice(0, 2).toUpperCase()}</span>}
+                            </div>
+                            <div className="deck-compare-card-copy">
+                              <div className="deck-compare-card-topline">
+                                <strong>{row.name}</strong>
+                                <em>{statusLabel}</em>
+                              </div>
+                              <span>{deckComparisonSectionLabel(row.section)} - {deltaLabel}</span>
+                              <div className="deck-compare-quantities">
+                                <small>Left <strong>{row.left?.label ?? "0x"}</strong></small>
+                                <small>Compare <strong>{row.right?.label ?? "0x"}</strong></small>
+                              </div>
+                            </div>
+                          </article>
+                        );
+                      })}
+                    </div>
+                    {section.rows.length > visibleRows.length ? (
+                      <p className="deck-compare-more">Showing top {visibleRows.length} of {section.rows.length} by comparison weight.</p>
+                    ) : null}
+                  </section>
+                );
+              })}
+            </div>
+          </>
+        ) : (
+          <p className="matchup-lab-empty">Add a deck or load public Community Decks data to compare lists visually.</p>
+        )}
+      </section>
+
+      <section className="home-grid matchup-lab-grid">
+        <article className="home-card home-card-wide">
+          <div className="home-card-heading">
+            <Activity size={18} />
+            <div>
+              <h3>{personalTopMatchup ? `${personalTopMatchup.mine} vs ${personalTopMatchup.opponent}` : "Personal matchup focus"}</h3>
+              <span>{personalTopMatchup ? `${personalTopMatchup.matches} local matches · ${personalWinRate}% WR` : "Capture matches to build your lab"}</span>
+            </div>
+          </div>
+          <p className="muted">
+            {personalTopMatchup
+              ? `${personalTopMatchup.wins}-${personalTopMatchup.losses} from saved matches. Use this as the starting point for matchup review.`
+              : "Your most-played pairings will appear here once RiftLite has saved match history."}
+          </p>
+          <div className="home-card-actions">
+            <button className="primary" onClick={() => onNavigate("matches")}><ClipboardList size={16} /> Open matches</button>
+            <button className="secondary" onClick={() => onNavigate("replays")}><Film size={16} /> Review replays</button>
+          </div>
+        </article>
+
+        <article className="home-card">
+          <div className="home-card-heading">
+            <Globe2 size={18} />
+            <div>
+              <h3>Community context</h3>
+              <span>{communitySummary.matchups || "Public"} matchup pairs</span>
+            </div>
+          </div>
+          <p className="muted">{communitySummary.deckRows ? `${communitySummary.deckRows} public rows with deck context are available for comparison.` : "Community deck and matrix views are ready when public data loads."}</p>
+          <div className="home-card-actions">
+            <button className="primary" onClick={() => onNavigate("community", { communityTab: "community-decks" })}><Globe2 size={16} /> Deck meta</button>
+          </div>
+        </article>
+
+        <article className="home-card">
+          <div className="home-card-heading">
+            <BookOpen size={18} />
+            <div>
+              <h3>Prep notes</h3>
+              <span>{activeDeck ? activeDeck.title : "No active deck"}</span>
+            </div>
+          </div>
+          {activeDeck ? (
+            <div className="matchup-lab-deck-preview">
+              <div className="matchup-lab-deck-title">
+                <LegendAvatar legend={activeDeckPreview.legend || activeDeck.legend} />
+                <div>
+                  <strong>{activeDeck.title}</strong>
+                  <span>{activeDeck.legend || activeDeckPreview.legend || "Deck prep"}</span>
+                </div>
+              </div>
+              <div className="matchup-lab-card-strip" aria-hidden="true">
+                {activeDeckPreview.cards.length ? activeDeckPreview.cards.map((card, index) => (
+                  <span key={`${card.cardId ?? card.name}-${index}`} title={card.name}>
+                    {card.imageUrl ? <img src={card.imageUrl} alt="" loading="lazy" /> : <strong>{card.name.slice(0, 2).toUpperCase()}</strong>}
+                  </span>
+                )) : <small>No card art in this snapshot yet.</small>}
+              </div>
+            </div>
+          ) : (
+            <p className="matchup-lab-empty">Set an active deck to bring mulligan notes, sideboard plans, and battlefield prep into the lab.</p>
+          )}
+          <div className="home-card-actions">
+            <button className="primary" onClick={() => onNavigate("decks", { deckFocus: activeDeck ? "prep" : "library" })}><BookOpen size={16} /> {activeDeck ? "Open prep" : "Pick deck"}</button>
+            <button className="secondary" onClick={() => onNavigate("decks", { deckFocus: "performance" })}><BarChart3 size={16} /> Performance</button>
+          </div>
+        </article>
+
+        <article className="home-card">
+          <div className="home-card-heading">
+            <Film size={18} />
+            <div>
+              <h3>Replay evidence</h3>
+              <span>{replayEvidenceCount} matches with media</span>
+            </div>
+          </div>
+          {recentReplayMatches.length ? (
+            <div className="matchup-lab-replay-list">
+              {recentReplayMatches.map((match) => (
+                <button className="matchup-lab-replay-row" key={match.id} onClick={() => onNavigate("replays")}>
+                  <span>{cleanLegend(match.myChampion) || match.myChampion} vs {cleanLegend(match.opponentChampion) || match.opponentChampion}</span>
+                  <small>{new Date(match.capturedAt).toLocaleDateString()} - {match.result} {match.score}</small>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <p className="matchup-lab-empty">Replays with media will appear here as review evidence for your toughest matchups.</p>
+          )}
+          <div className="home-card-actions">
+            <button className="primary" onClick={() => onNavigate("replays")}><Film size={16} /> Open replays</button>
+            <button className="secondary" onClick={() => onNavigate("matches")}><Flag size={16} /> Flag matches</button>
+          </div>
+        </article>
+      </section>
+    </section>
+  );
+}
+
 function DashboardView({
   view,
   matches,
   replays,
+  testingSessions,
+  activeTestingSession,
   deletedMatches,
   deletedReplays,
   decks,
@@ -4038,6 +7911,7 @@ function DashboardView({
   communityStatus,
   importSummary,
   settings,
+  health,
   browsers,
   overlayInfo,
   diagnosticsPath,
@@ -4047,6 +7921,14 @@ function DashboardView({
   screenshotStatus,
   onSaveSettings,
   onSettingsChanged,
+  onNavigate,
+  onPlayPlatform,
+  communityTab,
+  communityDeckLegendTarget,
+  matchFocusTarget,
+  onCommunityTabChange,
+  deckFocusTarget,
+  onDeckFocusChange,
   onDecksChanged,
   onSaveHubResult,
   onSyncPrivateHubs,
@@ -4054,6 +7936,11 @@ function DashboardView({
   onDeleteHubMatch,
   onSyncTeams,
   onSyncMatchesToTeams,
+  onSaveCombinedMatches,
+  onUndoCombinedMatch,
+  onStartTestingSession,
+  onStopTestingSession,
+  onExportTestingSession,
   onDeleteTeamMatch,
   onRefreshTeamMatches,
   onRefreshCommunity,
@@ -4084,6 +7971,8 @@ function DashboardView({
   view: ActiveView;
   matches: MatchDraft[];
   replays: ReplayRecord[];
+  testingSessions: TestingSession[];
+  activeTestingSession: TestingSession | null;
   deletedMatches: MatchDraft[];
   deletedReplays: ReplayRecord[];
   decks: SavedDeck[];
@@ -4094,6 +7983,7 @@ function DashboardView({
   communityStatus: string;
   importSummary: ImportSummary | null;
   settings: UserSettings;
+  health: CaptureHealth;
   browsers: BrowserInfo[];
   overlayInfo: OverlayInfo | null;
   diagnosticsPath: string;
@@ -4103,6 +7993,14 @@ function DashboardView({
   screenshotStatus: string;
   onSaveSettings: (patch: Partial<UserSettings>) => Promise<void>;
   onSettingsChanged: (settings: UserSettings) => void;
+  onNavigate: (view: ActiveView, options?: NavigationOptions) => void;
+  onPlayPlatform: (platform: GamePlatform) => void;
+  communityTab: CommunityTab;
+  communityDeckLegendTarget: string;
+  matchFocusTarget: MatchFocusTarget | null;
+  onCommunityTabChange: (tab: CommunityTab) => void;
+  deckFocusTarget: DeckFocusTarget;
+  onDeckFocusChange: (focus: DeckFocusTarget) => void;
   onDecksChanged: () => Promise<void>;
   onSaveHubResult: (result: HubActionResult) => Promise<void>;
   onSyncPrivateHubs: () => Promise<PrivateHubSyncResult>;
@@ -4110,6 +8008,11 @@ function DashboardView({
   onDeleteHubMatch: (hubId: string, matchId: string) => Promise<void>;
   onSyncTeams: () => Promise<PrivateHubSyncResult>;
   onSyncMatchesToTeams: (matchIds: string[], teamIds: string[]) => Promise<PrivateHubSyncResult>;
+  onSaveCombinedMatches: (payload: MatchCombineSavePayload) => Promise<MatchDraft>;
+  onUndoCombinedMatch: (combinedMatchId: string) => Promise<void>;
+  onStartTestingSession: (input: { label: string; goal: string; deckId: string }) => void;
+  onStopTestingSession: () => void;
+  onExportTestingSession: (sessionId: string) => Promise<void>;
   onDeleteTeamMatch: (teamId: string, matchId: string) => Promise<void>;
   onRefreshTeamMatches: (teamId: string, forceRefresh?: boolean) => Promise<CommunityMatch[]>;
   onRefreshCommunity: () => Promise<void>;
@@ -4137,29 +8040,69 @@ function DashboardView({
   onReview: (draft: MatchDraft) => void;
   onDelete: (id: string) => Promise<void>;
 }) {
+  const visibleMatches = activeLocalMatches(matches);
+  if (view === "home") {
+    return (
+      <HomeView
+        matches={visibleMatches}
+        replays={replays}
+        decks={decks}
+        settings={settings}
+        health={health}
+        communityMatches={communityMatches}
+        activeTestingSession={activeTestingSession}
+        onNavigate={onNavigate}
+        onPlayPlatform={onPlayPlatform}
+        onOpenReplayForMatch={onOpenReplayForMatch}
+      />
+    );
+  }
   if (view === "scorepad") {
     return <ScorepadView settings={settings} decks={decks} battlefields={battlefields} onSaveSettings={onSaveSettings} onMatchesChanged={onMatchesChanged} onReview={onReview} />;
   }
   if (view === "matches") {
-    return <MatchesView matches={matches} replays={replays} settings={settings} onReview={onReview} onDelete={onDelete} onOpenReplay={onOpenReplayForMatch} onSyncMatchesToHubs={onSyncMatchesToHubs} />;
+    return (
+      <MatchesView
+        matches={matches}
+        replays={replays}
+        decks={decks}
+        testingSessions={testingSessions}
+        activeTestingSession={activeTestingSession}
+        settings={settings}
+        focusTarget={matchFocusTarget}
+        onReview={onReview}
+        onDelete={onDelete}
+        onOpenReplay={onOpenReplayForMatch}
+        onSyncMatchesToHubs={onSyncMatchesToHubs}
+        onSyncMatchesToTeams={onSyncMatchesToTeams}
+        onSaveCombinedMatches={onSaveCombinedMatches}
+        onUndoCombinedMatch={onUndoCombinedMatch}
+        onStartTestingSession={onStartTestingSession}
+        onStopTestingSession={onStopTestingSession}
+        onExportTestingSession={onExportTestingSession}
+      />
+    );
   }
   if (view === "stats") {
-    return <StatsView matches={matches} />;
+    return <StatsView matches={visibleMatches} />;
+  }
+  if (view === "matchup-lab") {
+    return <MatchupLabView matches={visibleMatches} communityMatches={communityMatches} decks={decks} replays={replays} settings={settings} onNavigate={onNavigate} onRefreshCommunity={onRefreshCommunity} />;
   }
   if (view === "spotlight") {
     return <SpotlightView />;
   }
   if (view === "stream") {
-    return <StreamView overlayInfo={overlayInfo} matches={matches} decks={decks} settings={settings} onSaveSettings={onSaveSettings} />;
+    return <StreamView overlayInfo={overlayInfo} matches={visibleMatches} decks={decks} settings={settings} onSaveSettings={onSaveSettings} />;
   }
   if (view === "decks") {
-    return <DecksView decks={decks} matches={matches} settings={settings} onDecksChanged={onDecksChanged} />;
+    return <DecksView decks={decks} matches={visibleMatches} settings={settings} focusTarget={deckFocusTarget} onFocusChange={onDeckFocusChange} onDecksChanged={onDecksChanged} />;
   }
   if (view === "replays") {
     return (
       <ReplayView
         replays={replays}
-        matches={matches}
+        matches={visibleMatches}
         settings={settings}
         focusReplayId={replayFocusId}
         onFocusConsumed={onReplayFocusConsumed}
@@ -4204,13 +8147,13 @@ function DashboardView({
     );
   }
   if (view === "hubs") {
-    return <HubsView settings={settings} matches={matches} hubMatches={hubMatches} onSave={onSaveSettings} onHubResult={onSaveHubResult} onSyncPrivateHubs={onSyncPrivateHubs} onSyncMatchesToHubs={onSyncMatchesToHubs} onDeleteHubMatch={onDeleteHubMatch} onRefresh={onRefreshCommunity} />;
+    return <HubsView settings={settings} matches={visibleMatches} hubMatches={hubMatches} onSave={onSaveSettings} onHubResult={onSaveHubResult} onSyncPrivateHubs={onSyncPrivateHubs} onSyncMatchesToHubs={onSyncMatchesToHubs} onDeleteHubMatch={onDeleteHubMatch} onRefresh={onRefreshCommunity} />;
   }
   if (view === "social") {
     return (
       <SocialHubView
         settings={settings}
-        matches={matches}
+        matches={visibleMatches}
         teamMatches={teamMatches}
         onSaveSettings={onSaveSettings}
         onSyncTeams={onSyncTeams}
@@ -4220,7 +8163,7 @@ function DashboardView({
       />
     );
   }
-  return <CommunityView matches={matches} communityMatches={communityMatches} hubMatches={hubMatches} settings={settings} status={communityStatus} onRefresh={onRefreshCommunity} />;
+  return <CommunityView matches={visibleMatches} communityMatches={communityMatches} hubMatches={hubMatches} settings={settings} status={communityStatus} activeTab={communityTab} deckLegendTarget={communityDeckLegendTarget} onTabChange={onCommunityTabChange} onRefresh={onRefreshCommunity} />;
 }
 
 function SocialHubView({
@@ -4400,7 +8343,7 @@ function FindMatchPanel({ settings }: { settings: UserSettings }) {
     void refresh(false);
     const interval = window.setInterval(() => {
       void refresh(false, false);
-    }, 20_000);
+    }, 60_000);
     return () => window.clearInterval(interval);
   }, [ownUid]);
 
@@ -6262,7 +10205,7 @@ function CaptureLabView({ summary, bundlePath, settings, embedded = false, onSav
           <span>{summary?.totalEvents ?? 0} events retained{summary?.lastEventAt ? ` - last ${new Date(summary.lastEventAt).toLocaleTimeString()}` : ""}</span>
         </div>
         <div className="row-actions">
-          <label className="inline-toggle" title="Record extra page state, selector counts, URL changes, and browser errors while testing">
+          <label className="inline-toggle" title="Record extra page state, selector counts, URL changes, replay state, and browser errors while testing">
             <span>Debug capture</span>
             <input
               type="checkbox"
@@ -6286,7 +10229,7 @@ function CaptureLabView({ summary, bundlePath, settings, embedded = false, onSav
       {settings.debugMode ? (
         <section className="rail-card">
           <h2>Debug capture is on</h2>
-          <p className="muted">Leave this enabled while testing TCGA or Atlas. After a missed match, use Create bundle and send the generated JSON file.</p>
+          <p className="muted">Leave this enabled while testing TCGA, Atlas, replay capture, or match review. After a missed match or capture issue, use Create bundle and send the generated JSON file.</p>
         </section>
       ) : null}
 
@@ -6694,28 +10637,55 @@ function ScorepadView({
 function MatchesView({
   matches,
   replays,
+  decks,
+  testingSessions,
+  activeTestingSession,
   settings,
+  focusTarget,
   onReview,
   onDelete,
   onOpenReplay,
-  onSyncMatchesToHubs
+  onSyncMatchesToHubs,
+  onSyncMatchesToTeams,
+  onSaveCombinedMatches,
+  onUndoCombinedMatch,
+  onStartTestingSession,
+  onStopTestingSession,
+  onExportTestingSession
 }: {
   matches: MatchDraft[];
   replays: ReplayRecord[];
+  decks: SavedDeck[];
+  testingSessions: TestingSession[];
+  activeTestingSession: TestingSession | null;
   settings: UserSettings;
+  focusTarget: MatchFocusTarget | null;
   onReview: (draft: MatchDraft) => void;
   onDelete: (id: string) => Promise<void>;
   onOpenReplay: (matchId: string) => void;
   onSyncMatchesToHubs: (matchIds: string[], hubIds: string[]) => Promise<PrivateHubSyncResult>;
+  onSyncMatchesToTeams: (matchIds: string[], teamIds: string[]) => Promise<PrivateHubSyncResult>;
+  onSaveCombinedMatches: (payload: MatchCombineSavePayload) => Promise<void>;
+  onUndoCombinedMatch: (combinedMatchId: string) => Promise<void>;
+  onStartTestingSession: (input: { label: string; goal: string; deckId: string }) => void;
+  onStopTestingSession: () => void;
+  onExportTestingSession: (sessionId: string) => Promise<void>;
 }) {
   const [filters, setFilters] = useState<MatchHistoryFilters>(DEFAULT_MATCH_HISTORY_FILTERS);
   const [selectedMatchId, setSelectedMatchId] = useState("");
   const [selectedSyncIds, setSelectedSyncIds] = useState<string[]>([]);
+  const [combineModalOpen, setCombineModalOpen] = useState(false);
+  const [replayPickerMatchId, setReplayPickerMatchId] = useState("");
   const [targetHubId, setTargetHubId] = useState(ALL_ENABLED_HUBS_VALUE);
+  const [targetTeamId, setTargetTeamId] = useState(ALL_ENABLED_HUBS_VALUE);
   const [syncStatus, setSyncStatus] = useState("");
   const [syncingSelection, setSyncingSelection] = useState(false);
   const [exportStatus, setExportStatus] = useState("");
-  const analyticsMatches = useMemo(() => validAnalytics(matches.map(localToAnalytics)), [matches]);
+  const [sessionLabel, setSessionLabel] = useState("");
+  const [sessionGoal, setSessionGoal] = useState("");
+  const [sessionDeckId, setSessionDeckId] = useState("");
+  const activeMatches = useMemo(() => activeLocalMatches(matches), [matches]);
+  const analyticsMatches = useMemo(() => validAnalytics(activeMatches.map(localToAnalytics)), [activeMatches]);
   const filteredMatches = useMemo(() => filterLocalMatches(matches, filters), [matches, filters]);
   const legendOptions = useMemo(() => matrixLegendOptions(analyticsMatches), [analyticsMatches]);
   const myLegendOptions = useMemo(() => sideLegendOptions(analyticsMatches, "me"), [analyticsMatches]);
@@ -6727,14 +10697,56 @@ function MatchesView({
   const selectedMatch = selectedMatchId ? filteredMatches.find((match) => match.id === selectedMatchId) : undefined;
   const selectedAnalyticsMatch = useMemo(() => selectedMatch ? localToAnalytics(selectedMatch) : null, [selectedMatch]);
   const replayByMatch = useMemo(() => new Map(replays.map((replay) => [replay.matchId, replay])), [replays]);
+  const matchById = useMemo(() => new Map(matches.map((match) => [match.id, match])), [matches]);
+  const allMatchIds = useMemo(() => new Set(matches.map((match) => match.id)), [matches]);
+  const selectedReplaySegments = useMemo(
+    () => selectedMatch ? replaySegmentsForMatch(selectedMatch, replayByMatch) : [],
+    [replayByMatch, selectedMatch]
+  );
+  const replayPickerMatch = replayPickerMatchId ? matchById.get(replayPickerMatchId) : undefined;
+  const replayPickerSegments = useMemo(
+    () => replayPickerMatch ? replaySegmentsForMatch(replayPickerMatch, replayByMatch) : [],
+    [replayByMatch, replayPickerMatch]
+  );
   const stats = useMemo(() => localMatchStats(filteredMatches), [filteredMatches]);
   const filtersActive = Object.entries(filters).some(([key, value]) => value && !(key === "range" && value === "all"));
   const enabledHubs = useMemo(() => settings.activeHubs.filter((hub) => hub.sync), [settings.activeHubs]);
+  const enabledTeams = useMemo(() => (settings.activeTeams ?? []).filter((team) => team.sync && team.role), [settings.activeTeams]);
   const syncableMatches = useMemo(() => filteredMatches.filter(isPrivateHubSyncableMatch), [filteredMatches]);
   const syncableIds = useMemo(() => new Set(syncableMatches.map((match) => match.id)), [syncableMatches]);
+  const combineSelectableMatches = useMemo(() => filteredMatches.filter(isMatchCombineSelectable), [filteredMatches]);
+  const combineSelectableIds = useMemo(() => new Set(combineSelectableMatches.map((match) => match.id)), [combineSelectableMatches]);
+  const selectedCombineMatches = useMemo(
+    () => selectedSyncIds
+      .map((id) => matchById.get(id))
+      .filter((match): match is MatchDraft => Boolean(match) && combineSelectableIds.has(match.id))
+      .sort((a, b) => new Date(a.capturedAt).getTime() - new Date(b.capturedAt).getTime()),
+    [combineSelectableIds, matchById, selectedSyncIds]
+  );
+  const combinePreview = useMemo(() => buildMatchCombinePreview(selectedCombineMatches), [selectedCombineMatches]);
   const selectedSyncableCount = selectedSyncIds.filter((id) => syncableIds.has(id)).length;
   const allShownSyncableSelected = Boolean(syncableMatches.length) && syncableMatches.every((match) => selectedSyncIds.includes(match.id));
   const targetHubs = targetHubId === ALL_ENABLED_HUBS_VALUE ? enabledHubs : enabledHubs.filter((hub) => hub.id === targetHubId);
+  const targetTeams = targetTeamId === ALL_ENABLED_HUBS_VALUE ? enabledTeams : enabledTeams.filter((team) => team.id === targetTeamId);
+  const activeSessionMatches = useMemo(
+    () => activeTestingSession ? activeLocalMatches(matches).filter((match) => match.testingSessionId === activeTestingSession.id) : [],
+    [activeTestingSession, matches]
+  );
+  const latestSession = useMemo(() => testingSessions[0] ?? null, [testingSessions]);
+  const historyTotal = filters.combinedOriginals ? matches.length : activeMatches.length;
+
+  useEffect(() => {
+    if (!focusTarget) {
+      return;
+    }
+    setFilters({
+      ...DEFAULT_MATCH_HISTORY_FILTERS,
+      myLegend: focusTarget.myLegend ?? "",
+      opponentLegend: focusTarget.opponentLegend ?? "",
+      search: focusTarget.search ?? ""
+    });
+    setSelectedMatchId("");
+  }, [focusTarget?.nonce]);
 
   function setFilter(key: keyof MatchHistoryFilters, value: string) {
     setFilters((current) => ({ ...current, [key]: value }));
@@ -6755,27 +10767,60 @@ function MatchesView({
     });
   }
 
-  async function syncSelectedMatchesToHubs() {
+  async function syncSelectedMatchesToDestinations() {
     const matchIds = selectedSyncIds.filter((id) => syncableIds.has(id));
     const hubIds = targetHubs.map((hub) => hub.id);
+    const teamIds = targetTeams.map((team) => team.id);
     if (!matchIds.length) {
       setSyncStatus("Select at least one saved completed match.");
       return;
     }
-    if (!hubIds.length) {
-      setSyncStatus("Enable a private hub before syncing selected matches.");
+    if (!hubIds.length && !teamIds.length) {
+      setSyncStatus("Enable a private hub or team destination before syncing selected matches.");
       return;
     }
     setSyncingSelection(true);
-    setSyncStatus("Syncing selected matches to private hub data...");
+    setSyncStatus("Syncing selected matches...");
     try {
-      const result = await onSyncMatchesToHubs(matchIds, hubIds);
+      const results: string[] = [];
+      if (hubIds.length) {
+        const result = await onSyncMatchesToHubs(matchIds, hubIds);
+        results.push(result.message);
+      }
+      if (teamIds.length) {
+        const result = await onSyncMatchesToTeams(matchIds, teamIds);
+        results.push(result.message);
+      }
       setSelectedSyncIds([]);
-      setSyncStatus(result.message);
+      setSyncStatus(results.join(" "));
     } catch (error) {
-      setSyncStatus(error instanceof Error ? error.message : "Selected hub sync failed.");
+      setSyncStatus(error instanceof Error ? error.message : "Selected sync failed.");
     } finally {
       setSyncingSelection(false);
+    }
+  }
+
+  function openReplayForMatchRow(match: MatchDraft) {
+    const segments = replaySegmentsForMatch(match, replayByMatch);
+    if (!segments.length) {
+      return;
+    }
+    if (segments.length === 1) {
+      onOpenReplay(segments[0].matchId);
+      return;
+    }
+    setReplayPickerMatchId(match.id);
+  }
+
+  async function undoCombinedSelectedMatch(matchId: string) {
+    setSyncStatus("Undoing combined repair...");
+    try {
+      await onUndoCombinedMatch(matchId);
+      setSelectedMatchId("");
+      setSelectedSyncIds([]);
+      setSyncStatus("Combined repair undone. Original rows are back in history.");
+    } catch (error) {
+      setSyncStatus(error instanceof Error ? error.message : "Undo combine failed.");
     }
   }
 
@@ -6794,8 +10839,8 @@ function MatchesView({
   }
 
   useEffect(() => {
-    setSelectedSyncIds((current) => current.filter((id) => syncableIds.has(id)));
-  }, [syncableIds]);
+    setSelectedSyncIds((current) => current.filter((id) => allMatchIds.has(id)));
+  }, [allMatchIds]);
 
   useEffect(() => {
     if (targetHubId === ALL_ENABLED_HUBS_VALUE || enabledHubs.some((hub) => hub.id === targetHubId)) {
@@ -6803,6 +10848,13 @@ function MatchesView({
     }
     setTargetHubId(enabledHubs.length === 1 ? enabledHubs[0].id : ALL_ENABLED_HUBS_VALUE);
   }, [enabledHubs, targetHubId]);
+
+  useEffect(() => {
+    if (targetTeamId === ALL_ENABLED_HUBS_VALUE || enabledTeams.some((team) => team.id === targetTeamId)) {
+      return;
+    }
+    setTargetTeamId(enabledTeams.length === 1 ? enabledTeams[0].id : ALL_ENABLED_HUBS_VALUE);
+  }, [enabledTeams, targetTeamId]);
 
   useEffect(() => {
     if (!selectedMatchId) {
@@ -6822,7 +10874,7 @@ function MatchesView({
       <div className="panel-header">
         <div>
           <h2>Local match history</h2>
-          <span>{filteredMatches.length} of {matches.length} match{matches.length === 1 ? "" : "es"} shown</span>
+          <span>{filteredMatches.length} of {historyTotal} match{historyTotal === 1 ? "" : "es"} shown</span>
         </div>
         <div className="row-actions">
           <button className="secondary" disabled={!filteredMatches.length} onClick={() => void exportFilteredMatches()}>
@@ -6832,6 +10884,52 @@ function MatchesView({
         </div>
       </div>
       {exportStatus ? <p className="muted">{exportStatus}</p> : null}
+      <section className="rail-card testing-session-card">
+        <div className="testing-session-header">
+          <div>
+            <h2>Testing session</h2>
+            <span>{activeTestingSession ? `Active: ${activeTestingSession.label}` : "Group practice games without syncing extra session data"}</span>
+          </div>
+          {activeTestingSession ? (
+            <div className="row-actions">
+              <button className="secondary" disabled={!activeSessionMatches.length} onClick={() => void onExportTestingSession(activeTestingSession.id)}>
+                <FileText size={16} /> Export session CSV
+              </button>
+              <button className="secondary" onClick={onStopTestingSession}>Stop session</button>
+            </div>
+          ) : null}
+        </div>
+        {activeTestingSession ? (
+          <TestingSessionSummary session={activeTestingSession} matches={activeSessionMatches} replays={replays} />
+        ) : (
+          <div className="testing-session-start-grid">
+            <label>Session name<input value={sessionLabel} onChange={(event) => setSessionLabel(event.target.value)} placeholder="Vex testing night" /></label>
+            <label>Goal<input value={sessionGoal} onChange={(event) => setSessionGoal(event.target.value)} placeholder="Test Kai'Sa and Irelia matchups" /></label>
+            <label>Deck<select value={sessionDeckId} onChange={(event) => setSessionDeckId(event.target.value)}>
+              <option value="">Optional deck</option>
+              {decks.map((deck) => <option value={deck.id} key={deck.id}>{deck.title}</option>)}
+            </select></label>
+            <button
+              className="primary"
+              onClick={() => {
+                onStartTestingSession({ label: sessionLabel, goal: sessionGoal, deckId: sessionDeckId });
+                setSessionLabel("");
+                setSessionGoal("");
+              }}
+            >
+              <Plus size={16} /> Start session
+            </button>
+          </div>
+        )}
+        {!activeTestingSession && latestSession ? (
+          <div className="testing-session-last">
+            <span>Last session: {latestSession.label}</span>
+            <button className="secondary compact-button" onClick={() => void onExportTestingSession(latestSession.id)}>
+              <FileText size={14} /> Export CSV
+            </button>
+          </div>
+        ) : null}
+      </section>
       <section className="metric-grid">
         <Metric label="Shown" value={String(filteredMatches.length)} />
         <Metric label="Win rate" value={stats.winRate} />
@@ -6915,13 +11013,23 @@ function MatchesView({
             <option value="with">Has notes</option>
             <option value="without">No notes</option>
           </select></label>
+          <label>Testing session<select value={filters.testingSession} onChange={(event) => setFilter("testingSession", event.target.value)}>
+            <option value="">Any session</option>
+            <option value="none">No session</option>
+            {testingSessions.map((session) => <option value={session.id} key={session.id}>{session.label}</option>)}
+          </select></label>
+          <label>Combined originals<select value={filters.combinedOriginals} onChange={(event) => setFilter("combinedOriginals", event.target.value)}>
+            <option value="">Hide combined originals</option>
+            <option value="all">Show with normal history</option>
+            <option value="only">Show only combined originals</option>
+          </select></label>
         </div>
       </section>
       <section className="rail-card local-bulk-sync-card">
         <div className="bulk-sync-title">
           <div>
-            <h2>Sync selected to private hubs</h2>
-            <span>{selectedSyncableCount} selected from {syncableMatches.length} saved completed match{syncableMatches.length === 1 ? "" : "es"} in this view</span>
+            <h2>Sync selected</h2>
+            <span>{selectedSyncableCount} syncable selected. {selectedCombineMatches.length} selected for Bo3 repair.</span>
           </div>
           <label className="mini-checkbox">
             <input
@@ -6934,7 +11042,7 @@ function MatchesView({
           </label>
         </div>
         <div className="bulk-sync-controls">
-          <label>Destination<select value={targetHubId} onChange={(event) => setTargetHubId(event.target.value)} disabled={!enabledHubs.length}>
+          <label>Private hub<select value={targetHubId} onChange={(event) => setTargetHubId(event.target.value)} disabled={!enabledHubs.length}>
             <option value={ALL_ENABLED_HUBS_VALUE}>All enabled private hubs</option>
             {settings.activeHubs.map((hub) => (
               <option value={hub.id} key={hub.id} disabled={!hub.sync}>
@@ -6942,17 +11050,33 @@ function MatchesView({
               </option>
             ))}
           </select></label>
+          <label>Team<select value={targetTeamId} onChange={(event) => setTargetTeamId(event.target.value)} disabled={!enabledTeams.length}>
+            <option value={ALL_ENABLED_HUBS_VALUE}>All enabled teams</option>
+            {settings.activeTeams.map((team) => (
+              <option value={team.id} key={team.id} disabled={!team.sync || !team.role}>
+                {team.name}{team.sync && team.role ? "" : " (disabled)"}
+              </option>
+            ))}
+          </select></label>
           <button
             className="primary"
-            disabled={syncingSelection || !selectedSyncableCount || !targetHubs.length}
-            onClick={() => void syncSelectedMatchesToHubs()}
+            disabled={syncingSelection || !selectedSyncableCount || (!targetHubs.length && !targetTeams.length)}
+            onClick={() => void syncSelectedMatchesToDestinations()}
           >
             <Users size={16} /> {syncingSelection ? "Syncing..." : `Sync ${selectedSyncableCount || "selected"}`}
           </button>
-          {selectedSyncableCount ? <button className="secondary" onClick={() => setSelectedSyncIds([])}>Clear selection</button> : null}
+          <button
+            className="secondary"
+            disabled={!combinePreview.canSave}
+            onClick={() => setCombineModalOpen(true)}
+            title={combinePreview.canSave ? "Review selected games as one Bo3" : "Select 2 or 3 saved matches to combine"}
+          >
+            <Layers size={16} /> Combine into Bo3
+          </button>
+          {selectedSyncIds.length ? <button className="secondary" onClick={() => setSelectedSyncIds([])}>Clear selection</button> : null}
         </div>
         <p className="muted">
-          This sends only the selected local matches to private hub data. Public community data is not changed.
+          This sends only the selected local matches to enabled private hub or team data. Public community data is not changed and the review popup is not reopened.
         </p>
         {syncStatus ? <p className="muted">{syncStatus}</p> : null}
       </section>
@@ -6961,9 +11085,17 @@ function MatchesView({
           const myLegend = normalizeLegendName(match.myChampion);
           const opponentLegend = normalizeLegendName(match.opponentChampion);
           const syncable = isPrivateHubSyncableMatch(match);
+          const combineSelectable = combineSelectableIds.has(match.id);
+          const selectionTitle = matchSelectionTitle(match, syncable, combineSelectable);
           const checked = selectedSyncIds.includes(match.id);
-          const replay = replayByMatch.get(match.id);
-          const matchTimerLabel = matchTimerLabelFromReplay(replay);
+          const replaySegments = replaySegmentsForMatch(match, replayByMatch);
+          const primaryReplay = replaySegments[0]?.replay;
+          const matchTimerLabel = matchTimerLabelFromReplay(primaryReplay);
+          const replayLabel = isCombinedRepairMatch(match)
+            ? replaySegments.length >= (match.combinedFromMatchIds?.length ?? 0)
+              ? "Replays"
+              : "Partial replay"
+            : "Replay";
           return (
           <div
             className="match-row interactive-row"
@@ -6980,12 +11112,18 @@ function MatchesView({
               }
             }}
           >
-            <label className="match-select-cell" onClick={(event) => event.stopPropagation()} title={syncable ? "Select for private hub sync" : "Only saved completed matches can sync to hubs"}>
+            <label
+              className="match-select-cell"
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={(event) => event.stopPropagation()}
+              title={selectionTitle}
+            >
               <input
                 type="checkbox"
                 checked={checked}
-                disabled={!syncable}
-                aria-label={`Select ${myLegend || "Unknown"} vs ${opponentLegend || "unknown"} for private hub sync`}
+                disabled={!syncable && !combineSelectable}
+                aria-label={`${selectionTitle}: ${myLegend || "Unknown"} vs ${opponentLegend || "unknown"}`}
+                onClick={(event) => event.stopPropagation()}
                 onChange={(event) => toggleSyncMatch(match.id, event.target.checked)}
               />
             </label>
@@ -7008,13 +11146,13 @@ function MatchesView({
             </div>
             <div>
               <strong>{match.deckName || "Deck pending"}</strong>
-              <span>{match.notes ? `Notes: ${match.notes}` : match.flags || "No flags"}</span>
+              <span>{match.testingSessionLabel ? `Testing: ${match.testingSessionLabel}` : match.notes ? `Notes: ${match.notes}` : match.flags || "No flags"}</span>
             </div>
             <SyncPill match={match} />
             <div className="row-actions">
-              {replay ? (
-                <button className="secondary" onClick={(event) => { event.stopPropagation(); onOpenReplay(match.id); }}>
-                  <Images size={14} /> Replay
+              {replaySegments.length ? (
+                <button className="secondary" onClick={(event) => { event.stopPropagation(); openReplayForMatchRow(match); }}>
+                  <Images size={14} /> {replayLabel}
                 </button>
               ) : null}
               <button className="secondary" onClick={(event) => { event.stopPropagation(); onReview(match); }}>Edit</button>
@@ -7023,8 +11161,8 @@ function MatchesView({
           </div>
           );
         })}
-        {!matches.length ? <p className="empty-state">Captured matches will appear here after review.</p> : null}
-        {matches.length && !filteredMatches.length ? <p className="empty-state">No matches match those filters.</p> : null}
+        {!historyTotal ? <p className="empty-state">Captured matches will appear here after review.</p> : null}
+        {historyTotal && !filteredMatches.length ? <p className="empty-state">No matches match those filters.</p> : null}
       </div>
       {selectedMatch ? (
         <div
@@ -7039,35 +11177,236 @@ function MatchesView({
             <LocalMatchDrilldown
               match={selectedAnalyticsMatch}
               relatedMatches={relatedOpponentLegendMatches(analyticsMatches, selectedAnalyticsMatch)}
-              hasReplay={replayByMatch.has(selectedMatch.id)}
-              matchTimerLabel={matchTimerLabelFromReplay(replayByMatch.get(selectedMatch.id))}
-              onOpenReplay={() => onOpenReplay(selectedMatch.id)}
+              sourceMatch={selectedMatch}
+              replayCount={selectedReplaySegments.length}
+              hasPartialReplay={isCombinedRepairMatch(selectedMatch) && selectedReplaySegments.length < (selectedMatch.combinedFromMatchIds?.length ?? 0)}
+              matchTimerLabel={matchTimerLabelFromReplay(selectedReplaySegments[0]?.replay)}
+              onOpenReplay={() => openReplayForMatchRow(selectedMatch)}
+              onUndoCombinedMatch={() => void undoCombinedSelectedMatch(selectedMatch.id)}
               onClose={() => setSelectedMatchId("")}
             />
           ) : null}
         </div>
       ) : null}
+      {combineModalOpen ? (
+        <CombineBo3Modal
+          matches={selectedCombineMatches}
+          replayByMatch={replayByMatch}
+          onClose={() => setCombineModalOpen(false)}
+          onSave={async (payload) => {
+            setSyncStatus("Saving combined Bo3...");
+            const combined = await onSaveCombinedMatches(payload);
+            setCombineModalOpen(false);
+            setSelectedSyncIds([]);
+            setFilters(DEFAULT_MATCH_HISTORY_FILTERS);
+            setSelectedMatchId(combined.id);
+            setSyncStatus(`Combined Bo3 saved as ${combined.result} ${displayMatchRecord(combined) || "record pending"}. Original split rows are hidden from normal stats.`);
+          }}
+        />
+      ) : null}
+      {replayPickerMatch && replayPickerSegments.length > 1 ? (
+        <ReplaySegmentPicker
+          match={replayPickerMatch}
+          segments={replayPickerSegments}
+          onClose={() => setReplayPickerMatchId("")}
+          onOpen={(matchId) => {
+            setReplayPickerMatchId("");
+            onOpenReplay(matchId);
+          }}
+        />
+      ) : null}
     </section>
+  );
+}
+
+function CombineBo3Modal({
+  matches,
+  replayByMatch,
+  onClose,
+  onSave
+}: {
+  matches: MatchDraft[];
+  replayByMatch: Map<string, ReplayRecord>;
+  onClose: () => void;
+  onSave: (payload: MatchCombineSavePayload) => Promise<void>;
+}) {
+  const initialIds = useMemo(() => matches.map((match) => match.id), [matches]);
+  const [orderedIds, setOrderedIds] = useState(initialIds);
+  const [saving, setSaving] = useState(false);
+  const [status, setStatus] = useState("");
+
+  useEffect(() => {
+    setOrderedIds(initialIds);
+  }, [initialIds]);
+
+  const matchById = useMemo(() => new Map(matches.map((match) => [match.id, match])), [matches]);
+  const orderedMatches = orderedIds
+    .map((id) => matchById.get(id))
+    .filter((match): match is MatchDraft => Boolean(match));
+  const preview = useMemo(() => buildMatchCombinePreview(orderedMatches), [orderedMatches]);
+
+  function move(index: number, delta: number) {
+    setOrderedIds((current) => {
+      const nextIndex = index + delta;
+      if (nextIndex < 0 || nextIndex >= current.length) {
+        return current;
+      }
+      const next = [...current];
+      const [item] = next.splice(index, 1);
+      next.splice(nextIndex, 0, item);
+      return next;
+    });
+  }
+
+  async function save() {
+    if (!preview.canSave || saving) {
+      setStatus("Select 2 or 3 saved rows before combining.");
+      return;
+    }
+    setSaving(true);
+    setStatus("Combining selected rows...");
+    try {
+      await onSave({ orderedMatchIds: orderedIds });
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Combine failed.");
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="modal-backdrop matrix-popup-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+      <section className="matrix-drilldown stats-drilldown local-match-popup combine-bo3-modal">
+        <header>
+          <div>
+            <h3>Combine into Bo3</h3>
+            <span>Review the selected rows, put them in game order, then save one repaired Bo3.</span>
+          </div>
+          <button className="icon-button" onClick={onClose}>x</button>
+        </header>
+        <div className="combine-warning-list">
+          {preview.warnings.length ? preview.warnings.map((warning) => (
+            <span className="source-badge" data-tone={warning.severity === "error" ? "danger" : "warning"} key={`${warning.code}-${warning.message}`}>
+              {combineWarningLabel(warning)}
+            </span>
+          )) : <span className="source-badge">Looks ready to combine</span>}
+        </div>
+        <div className="combine-game-list">
+          {orderedMatches.map((match, index) => {
+            const segments = replaySegmentsForMatch(match, replayByMatch);
+            return (
+              <article className="combine-game-card" key={match.id}>
+                <div className="combine-game-title">
+                  <strong>Game {index + 1}</strong>
+                  <span>{new Date(match.capturedAt).toLocaleString()}</span>
+                </div>
+                <div className="combine-game-summary">
+                  <LegendAvatar legend={normalizeLegendName(match.myChampion) || "Unknown"} />
+                  <div>
+                    <strong>{normalizeLegendName(match.myChampion) || "Unknown"} vs {normalizeLegendName(match.opponentChampion) || "Unknown"}</strong>
+                    <span>{match.opponentName || "Unknown opponent"} - {match.platform} - {match.format}</span>
+                    <span>{match.result} {displayMatchRecord(match) || "Score pending"} - {matchGameBattlefieldSummary(match)}</span>
+                    <span>{segments.length ? `${segments.length} replay${segments.length === 1 ? "" : "s"} linked` : "No replay linked"}</span>
+                  </div>
+                </div>
+                <div className="row-actions">
+                  <button className="secondary compact-button" disabled={index === 0} onClick={() => move(index, -1)}>Move up</button>
+                  <button className="secondary compact-button" disabled={index === orderedMatches.length - 1} onClick={() => move(index, 1)}>Move down</button>
+                  <button className="secondary compact-button" disabled={orderedMatches.length <= 2} onClick={() => setOrderedIds((current) => current.filter((id) => id !== match.id))}>Remove</button>
+                </div>
+              </article>
+            );
+          })}
+        </div>
+        <p className="muted">Original rows are kept for audit/undo, but hidden from normal history and stats after saving.</p>
+        {status ? <p className="muted">{status}</p> : null}
+        <div className="row-actions">
+          <button className="secondary" onClick={onClose}>Cancel</button>
+          <button className="primary" disabled={!preview.canSave || saving} onClick={() => void save()}>
+            <Layers size={16} /> {saving ? "Saving..." : "Save repaired Bo3"}
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function ReplaySegmentPicker({
+  match,
+  segments,
+  onClose,
+  onOpen
+}: {
+  match: MatchDraft;
+  segments: Array<{ label: string; matchId: string; replay: ReplayRecord }>;
+  onClose: () => void;
+  onOpen: (matchId: string) => void;
+}) {
+  return (
+    <div className="modal-backdrop matrix-popup-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+      <section className="matrix-drilldown stats-drilldown local-match-popup replay-segment-picker">
+        <header>
+          <div>
+            <h3>Open replay segment</h3>
+            <span>{normalizeLegendName(match.myChampion) || "Unknown"} vs {normalizeLegendName(match.opponentChampion) || "Unknown"}</span>
+          </div>
+          <button className="icon-button" onClick={onClose}>x</button>
+        </header>
+        <div className="replay-segment-list">
+          {segments.map((segment) => (
+            <button className="secondary" key={`${segment.matchId}-${segment.replay.id}`} onClick={() => onOpen(segment.matchId)}>
+              <Images size={16} /> {segment.label} - {matchTimerLabelFromReplay(segment.replay) || "Replay"}
+            </button>
+          ))}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function TestingSessionSummary({ session, matches, replays }: { session: TestingSession; matches: MatchDraft[]; replays: ReplayRecord[] }) {
+  const stats = localMatchStats(matches);
+  const replayMatchIds = new Set(replays.map((replay) => replay.matchId));
+  const legendsFaced = topValueList(matches.map((match) => normalizeLegendName(match.opponentChampion)).filter(Boolean)).slice(0, 4);
+  const replayCount = matches.filter((match) => replayMatchIds.has(match.id)).length;
+  return (
+    <div className="testing-session-summary">
+      <Metric label="Record" value={stats.record} />
+      <Metric label="Win rate" value={stats.winRate} />
+      <Metric label="Matches" value={String(matches.length)} />
+      <Metric label="Replays" value={String(replayCount)} />
+      <div className="testing-session-notes">
+        <strong>{session.goal || "No goal set"}</strong>
+        <span>{session.deckName ? `Deck: ${session.deckName}` : "No deck pinned to session"}</span>
+        <span>{legendsFaced.length ? `Faced: ${legendsFaced.map(([legend, count]) => `${legend} (${count})`).join(", ")}` : "No opponents logged yet"}</span>
+      </div>
+    </div>
   );
 }
 
 function LocalMatchDrilldown({
   match,
   relatedMatches,
-  hasReplay = false,
+  sourceMatch,
+  replayCount = 0,
+  hasPartialReplay = false,
   matchTimerLabel = "",
   onOpenReplay,
+  onUndoCombinedMatch,
   onClose
 }: {
   match: AnalyticsMatch;
   relatedMatches: AnalyticsMatch[];
-  hasReplay?: boolean;
+  sourceMatch?: MatchDraft;
+  replayCount?: number;
+  hasPartialReplay?: boolean;
   matchTimerLabel?: string;
   onOpenReplay?: () => void;
+  onUndoCombinedMatch?: () => void;
   onClose: () => void;
 }) {
   const games = match.games.length || 1;
   const relatedStats = analyticsResultStats(relatedMatches);
+  const combinedRepair = Boolean(sourceMatch && isCombinedRepairMatch(sourceMatch));
   return (
     <section className="matrix-drilldown stats-drilldown local-match-popup">
       <header>
@@ -7080,9 +11419,14 @@ function LocalMatchDrilldown({
           <LegendAvatar legend={match.opponentChampion || "Unknown"} size="large" />
         </div>
         <div className="row-actions">
-          {hasReplay ? (
+          {combinedRepair ? (
+            <button className="secondary" onClick={onUndoCombinedMatch}>
+              <RotateCcw size={16} /> Undo combine
+            </button>
+          ) : null}
+          {replayCount ? (
             <button className="secondary" onClick={onOpenReplay}>
-              <Images size={16} /> View replay
+              <Images size={16} /> {combinedRepair ? hasPartialReplay ? "Partial replay" : "View replays" : "View replay"}
             </button>
           ) : null}
           <button className="icon-button" onClick={onClose}>x</button>
@@ -7092,6 +11436,7 @@ function LocalMatchDrilldown({
         <Metric label="Result" value={`${match.result}${match.score ? ` ${match.score}` : ""}`} />
         <Metric label="Format" value={match.format} />
         <Metric label="Games" value={String(games)} />
+        {combinedRepair ? <Metric label="Repair" value="Manual Bo3 combine" /> : null}
         {matchTimerLabel ? <Metric label="Match timer" value={matchTimerLabel} /> : null}
         <Metric label={opponentLegendRecordLabel(match)} value={`${relatedStats.wins}-${relatedStats.losses}${relatedStats.draws ? `-${relatedStats.draws}` : ""}`} />
       </div>
@@ -7101,7 +11446,70 @@ function LocalMatchDrilldown({
 }
 
 function isPrivateHubSyncableMatch(match: MatchDraft): boolean {
-  return match.status === "saved" && match.result !== "Incomplete";
+  return match.status === "saved" && match.result !== "Incomplete" && !isCombinedOriginal(match);
+}
+
+function isMatchCombineSelectable(match: MatchDraft): boolean {
+  return match.status !== "pending-review" && !isCombinedOriginal(match) && !isCombinedRepairMatch(match);
+}
+
+function matchSelectionDisabledReason(match: MatchDraft): string {
+  if (match.status === "pending-review") {
+    return "Save or dismiss the pending review before selecting this row.";
+  }
+  if (isCombinedOriginal(match)) {
+    return "This game is already part of a combined Bo3. Undo that combine first.";
+  }
+  if (isCombinedRepairMatch(match)) {
+    return "Combined Bo3 rows cannot be combined again. Select the original split games instead.";
+  }
+  return "This row cannot be selected.";
+}
+
+function matchSelectionTitle(match: MatchDraft, syncable: boolean, combineSelectable: boolean): string {
+  if (syncable && combineSelectable) {
+    return "Select for sync or Bo3 repair";
+  }
+  if (combineSelectable) {
+    return "Select for Bo3 repair";
+  }
+  if (syncable) {
+    return "Select for sync";
+  }
+  return matchSelectionDisabledReason(match);
+}
+
+function activeLocalMatches(matches: MatchDraft[]): MatchDraft[] {
+  return matches.filter((match) => !isCombinedOriginal(match));
+}
+
+function replaySegmentsForMatch(
+  match: MatchDraft,
+  replayByMatch: Map<string, ReplayRecord>
+): Array<{ label: string; matchId: string; replay: ReplayRecord }> {
+  const matchIds = isCombinedRepairMatch(match) && match.combinedFromMatchIds?.length
+    ? match.combinedFromMatchIds
+    : [match.id];
+  return matchIds
+    .map((matchId, index) => {
+      const replay = replayByMatch.get(matchId);
+      return replay ? { label: `Game ${index + 1} replay`, matchId, replay } : null;
+    })
+    .filter((segment): segment is { label: string; matchId: string; replay: ReplayRecord } => Boolean(segment));
+}
+
+function combineWarningLabel(warning: MatchCombineWarning): string {
+  return warning.severity === "error" ? `Blocked: ${warning.message}` : warning.message;
+}
+
+function matchGameBattlefieldSummary(match: MatchDraft): string {
+  const firstGame = match.games[0];
+  const myBattlefield = firstGame?.myBattlefield || match.myBattlefield || "";
+  const opponentBattlefield = firstGame?.opponentBattlefield || match.opponentBattlefield || "";
+  if (!myBattlefield && !opponentBattlefield) {
+    return "Battlefields pending";
+  }
+  return `BF: ${myBattlefield || "unknown"} vs ${opponentBattlefield || "unknown"}`;
 }
 
 function matchDraftMatchesSeat(match: MatchDraft, filter: string): boolean {
@@ -7157,6 +11565,9 @@ function filterLocalMatches(matches: MatchDraft[], filters: MatchHistoryFilters)
   return matches.filter((match) => {
     const myLegend = normalizeLegendName(match.myChampion);
     const opponentLegend = normalizeLegendName(match.opponentChampion);
+    const combinedOriginal = isCombinedOriginal(match);
+    if (!filters.combinedOriginals && combinedOriginal) return false;
+    if (filters.combinedOriginals === "only" && !combinedOriginal) return false;
     if (filters.result && match.result !== filters.result) return false;
     if (filters.platform && match.platform !== filters.platform) return false;
     if (filters.format && match.format !== filters.format) return false;
@@ -7164,6 +11575,8 @@ function filterLocalMatches(matches: MatchDraft[], filters: MatchHistoryFilters)
     if (filters.seat && !matchDraftMatchesSeat(match, filters.seat)) return false;
     if (filters.sync && match.sync.community !== filters.sync) return false;
     if (filters.deck && match.deckName.trim() !== filters.deck) return false;
+    if (filters.testingSession === "none" && match.testingSessionId) return false;
+    if (filters.testingSession && filters.testingSession !== "none" && match.testingSessionId !== filters.testingSession) return false;
     if (filters.deckPresence === "with" && !matchDraftHasDeck(match)) return false;
     if (filters.deckPresence === "without" && matchDraftHasDeck(match)) return false;
     if (filters.notes === "with" && !match.notes.trim()) return false;
@@ -7185,6 +11598,7 @@ function filterLocalMatches(matches: MatchDraft[], filters: MatchHistoryFilters)
         match.deckName,
         match.flags,
         match.notes,
+        match.testingSessionLabel,
         match.myBattlefield,
         match.opponentBattlefield
       ].join(" ").toLowerCase();
@@ -8027,7 +12441,21 @@ function buildCaptureSupportSummary({
   ].join("\n");
 }
 
-function DecksView({ decks, matches, settings, onDecksChanged }: { decks: SavedDeck[]; matches: MatchDraft[]; settings: UserSettings; onDecksChanged: () => Promise<void> }) {
+function DecksView({
+  decks,
+  matches,
+  settings,
+  focusTarget,
+  onFocusChange,
+  onDecksChanged
+}: {
+  decks: SavedDeck[];
+  matches: MatchDraft[];
+  settings: UserSettings;
+  focusTarget: DeckFocusTarget;
+  onFocusChange: (focus: DeckFocusTarget) => void;
+  onDecksChanged: () => Promise<void>;
+}) {
   const [url, setUrl] = useState("");
   const [textDeck, setTextDeck] = useState("");
   const [selectedId, setSelectedId] = useState(decks[0]?.id ?? "");
@@ -8042,6 +12470,33 @@ function DecksView({ decks, matches, settings, onDecksChanged }: { decks: SavedD
       setSelectedId(decks[0]?.id ?? "");
     }
   }, [decks, selectedId]);
+
+  useEffect(() => {
+    if (focusTarget === "library") {
+      const timeout = window.setTimeout(() => {
+        document.getElementById("deck-library-import")?.scrollIntoView({ block: "start", behavior: "smooth" });
+      }, 80);
+      return () => window.clearTimeout(timeout);
+    }
+    if (!selected?.id) {
+      return;
+    }
+    const targetId = focusTarget === "prep"
+      ? `matchup-prep-${selected.id}`
+      : focusTarget === "notebook"
+        ? `deck-notebook-${selected.id}`
+        : focusTarget === "performance"
+          ? `deck-performance-${selected.id}`
+          : "deck-library-import";
+    const timeout = window.setTimeout(() => {
+      document.getElementById(targetId)?.scrollIntoView({ block: "start", behavior: "smooth" });
+    }, 80);
+    return () => window.clearTimeout(timeout);
+  }, [focusTarget, selected?.id]);
+
+  function focusDeckSection(target: DeckFocusTarget) {
+    onFocusChange(target);
+  }
 
   async function importDeck() {
     if (!url.trim()) {
@@ -8099,7 +12554,13 @@ function DecksView({ decks, matches, settings, onDecksChanged }: { decks: SavedD
 
   return (
     <section className="dashboard-page decks-page">
-      <section className="rail-card deck-import-card">
+      <section className="deck-workspace-tabs" aria-label="Deck workspace sections">
+        <button className="secondary" data-active={focusTarget === "library"} onClick={() => focusDeckSection("library")}>Library</button>
+        <button className="secondary" data-active={focusTarget === "prep"} onClick={() => focusDeckSection("prep")}><BookOpen size={15} /> Prep Guides</button>
+        <button className="secondary" data-active={focusTarget === "notebook"} onClick={() => focusDeckSection("notebook")}><FileText size={15} /> Notebook</button>
+        <button className="secondary" data-active={focusTarget === "performance"} onClick={() => focusDeckSection("performance")}><BarChart3 size={15} /> Performance</button>
+      </section>
+      <section className="rail-card deck-import-card" id="deck-library-import">
         <div>
           <h2>Deck library</h2>
           <p className="muted">Import public Piltover Archive links. TCGA selected decks can also attach automatically during capture.</p>
@@ -8299,17 +12760,21 @@ function DeckDetail({ deck, matches, active, onSetActive, onRefresh, onDelete, o
         sourceUrl={deck.sourceUrl}
         snapshotJson={deck.snapshotJson}
       />
-      <DeckNotebookPanel
-        deck={deck}
-        notebook={notebook}
-        matches={matches}
-        linkedMatches={performance.matches}
-        status={notebookStatus}
-        onSave={(next) => void saveNotebook(next)}
-        onDecksChanged={onDecksChanged}
-        onDeckImported={onDeckImported}
-      />
-      <DeckPerformancePanel performance={performance} />
+      <div id={`deck-notebook-${deck.id}`}>
+        <DeckNotebookPanel
+          deck={deck}
+          notebook={notebook}
+          matches={matches}
+          linkedMatches={performance.matches}
+          status={notebookStatus}
+          onSave={(next) => void saveNotebook(next)}
+          onDecksChanged={onDecksChanged}
+          onDeckImported={onDeckImported}
+        />
+      </div>
+      <div id={`deck-performance-${deck.id}`}>
+        <DeckPerformancePanel performance={performance} />
+      </div>
       <div className="deck-section-grid">
         {sections.map(([title, entries]) => (
           <section className="deck-section" key={title}>
@@ -9065,6 +13530,7 @@ function GuideNotesEditor({ notes, onChange }: { notes: DeckGuideNote[]; onChang
 }
 
 type FloatingPrepPosition = { x: number; y: number };
+type FloatingPrepSize = { width: number; height: number };
 
 function defaultMatchupPrepPosition(): FloatingPrepPosition {
   if (typeof window === "undefined") {
@@ -9074,6 +13540,10 @@ function defaultMatchupPrepPosition(): FloatingPrepPosition {
     x: 16,
     y: Math.max(72, Math.round(window.innerHeight * 0.44))
   };
+}
+
+function defaultMatchupPrepSize(): FloatingPrepSize {
+  return { width: 430, height: 620 };
 }
 
 function readMatchupPrepPosition(): FloatingPrepPosition {
@@ -9102,6 +13572,38 @@ function saveMatchupPrepPosition(position: FloatingPrepPosition) {
     window.localStorage.setItem(MATCHUP_PREP_POSITION_KEY, JSON.stringify(position));
   } catch {
     // Position memory is a convenience only.
+  }
+}
+
+function readMatchupPrepSize(): FloatingPrepSize {
+  if (typeof window === "undefined") {
+    return defaultMatchupPrepSize();
+  }
+  try {
+    const raw = window.localStorage.getItem(MATCHUP_PREP_SIZE_KEY);
+    if (!raw) {
+      return defaultMatchupPrepSize();
+    }
+    const parsed = JSON.parse(raw) as Partial<FloatingPrepSize>;
+    const width = Number(parsed.width);
+    const height = Number(parsed.height);
+    if (!Number.isFinite(width) || !Number.isFinite(height)) {
+      return defaultMatchupPrepSize();
+    }
+    return {
+      width: Math.max(340, Math.min(680, width)),
+      height: Math.max(380, Math.min(820, height))
+    };
+  } catch {
+    return defaultMatchupPrepSize();
+  }
+}
+
+function saveMatchupPrepSize(size: FloatingPrepSize) {
+  try {
+    window.localStorage.setItem(MATCHUP_PREP_SIZE_KEY, JSON.stringify(size));
+  } catch {
+    // Size memory is a convenience only.
   }
 }
 
@@ -9178,9 +13680,12 @@ function MatchupPrepOverlay({ deck, notebook, opponentLegend, sideboardSuggested
   const [liveNote, setLiveNote] = useState("");
   const [manualLegend, setManualLegend] = useState("");
   const [position, setPosition] = useState<FloatingPrepPosition>(() => readMatchupPrepPosition());
+  const [size, setSize] = useState<FloatingPrepSize>(() => readMatchupPrepSize());
   const [dragging, setDragging] = useState(false);
   const overlayRef = useRef<HTMLDivElement | null>(null);
+  const panelRef = useRef<HTMLElement | null>(null);
   const positionRef = useRef(position);
+  const sizeRef = useRef(size);
   const savedPositionRef = useRef(position);
   const dragRef = useRef<{
     pointerId: number;
@@ -9188,6 +13693,12 @@ function MatchupPrepOverlay({ deck, notebook, opponentLegend, sideboardSuggested
     startY: number;
     origin: FloatingPrepPosition;
     moved: boolean;
+  } | null>(null);
+  const resizeRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startY: number;
+    origin: FloatingPrepSize;
   } | null>(null);
   const suppressNextClickRef = useRef(false);
   const targetLegend = manualLegend === "default" ? "" : normalizeLegendName(manualLegend || opponentLegend);
@@ -9197,12 +13708,17 @@ function MatchupPrepOverlay({ deck, notebook, opponentLegend, sideboardSuggested
   useEffect(() => {
     return () => {
       document.body.classList.remove("matchup-prep-dragging");
+      document.body.classList.remove("floating-panel-moving");
     };
   }, []);
 
   useEffect(() => {
     positionRef.current = position;
   }, [position]);
+
+  useEffect(() => {
+    sizeRef.current = size;
+  }, [size]);
 
   useEffect(() => {
     if (sideboardSuggested) {
@@ -9234,8 +13750,8 @@ function MatchupPrepOverlay({ deck, notebook, opponentLegend, sideboardSuggested
   function clampPrepPosition(next: FloatingPrepPosition): FloatingPrepPosition {
     const parent = overlayRef.current?.parentElement;
     const bounds = parent?.getBoundingClientRect();
-    const width = overlayRef.current?.offsetWidth || (open ? 430 : 58);
-    const height = overlayRef.current?.offsetHeight || (open ? 420 : 112);
+    const width = overlayRef.current?.offsetWidth || (open ? size.width : 58);
+    const height = overlayRef.current?.offsetHeight || (open ? size.height : 112);
     const boundsWidth = bounds?.width || window.innerWidth;
     const boundsHeight = bounds?.height || window.innerHeight;
     const margin = 8;
@@ -9244,6 +13760,19 @@ function MatchupPrepOverlay({ deck, notebook, opponentLegend, sideboardSuggested
     return {
       x: Math.min(maxX, Math.max(margin, Math.round(next.x))),
       y: Math.min(maxY, Math.max(margin, Math.round(next.y)))
+    };
+  }
+
+  function clampPrepSize(next: FloatingPrepSize): FloatingPrepSize {
+    const parent = overlayRef.current?.parentElement;
+    const bounds = parent?.getBoundingClientRect();
+    const boundsWidth = bounds?.width || window.innerWidth;
+    const boundsHeight = bounds?.height || window.innerHeight;
+    const maxWidth = Math.max(340, Math.min(680, boundsWidth - 24));
+    const maxHeight = Math.max(380, Math.min(820, boundsHeight - 24));
+    return {
+      width: Math.min(maxWidth, Math.max(340, Math.round(next.width))),
+      height: Math.min(maxHeight, Math.max(380, Math.round(next.height)))
     };
   }
 
@@ -9259,7 +13788,9 @@ function MatchupPrepOverlay({ deck, notebook, opponentLegend, sideboardSuggested
     event.stopPropagation();
     clearPrepSelection();
     document.body.classList.add("matchup-prep-dragging");
+    document.body.classList.add("floating-panel-moving");
     event.currentTarget.setPointerCapture?.(event.pointerId);
+    const target = event.currentTarget;
     dragRef.current = {
       pointerId: event.pointerId,
       startX: event.clientX,
@@ -9268,61 +13799,111 @@ function MatchupPrepOverlay({ deck, notebook, opponentLegend, sideboardSuggested
       moved: false
     };
     setDragging(true);
+
+    const onMove = (nativeEvent: PointerEvent) => {
+      const drag = dragRef.current;
+      if (!drag || drag.pointerId !== nativeEvent.pointerId) {
+        return;
+      }
+      nativeEvent.preventDefault();
+      clearPrepSelection();
+      const dx = nativeEvent.clientX - drag.startX;
+      const dy = nativeEvent.clientY - drag.startY;
+      if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
+        drag.moved = true;
+      }
+      const next = clampPrepPosition({ x: drag.origin.x + dx, y: drag.origin.y + dy });
+      positionRef.current = next;
+      setPosition(next);
+    };
+    const onEnd = (nativeEvent: PointerEvent) => {
+      const drag = dragRef.current;
+      if (!drag || drag.pointerId !== nativeEvent.pointerId) {
+        return;
+      }
+      nativeEvent.preventDefault();
+      clearPrepSelection();
+      const shouldOpenPill = !open && !drag.moved && target.classList.contains("matchup-prep-pill");
+      target.releasePointerCapture?.(nativeEvent.pointerId);
+      window.removeEventListener("pointermove", onMove, true);
+      window.removeEventListener("pointerup", onEnd, true);
+      window.removeEventListener("pointercancel", onEnd, true);
+      dragRef.current = null;
+      setDragging(false);
+      document.body.classList.remove("matchup-prep-dragging");
+      document.body.classList.remove("floating-panel-moving");
+      const next = clampPrepPosition(positionRef.current);
+      setPosition(next);
+      savedPositionRef.current = next;
+      saveMatchupPrepPosition(next);
+      if (drag.moved) {
+        suppressNextClickRef.current = true;
+        window.setTimeout(() => {
+          suppressNextClickRef.current = false;
+        }, 0);
+      } else if (shouldOpenPill) {
+        setOpen(true);
+      }
+    };
+    window.addEventListener("pointermove", onMove, true);
+    window.addEventListener("pointerup", onEnd, true);
+    window.addEventListener("pointercancel", onEnd, true);
   }
 
-  function moveDrag(event: React.PointerEvent<HTMLElement>) {
-    const drag = dragRef.current;
-    if (!drag || drag.pointerId !== event.pointerId) {
+  function startResize(event: React.PointerEvent<HTMLElement>) {
+    if (event.button !== 0) {
       return;
     }
     event.preventDefault();
     event.stopPropagation();
     clearPrepSelection();
-    const dx = event.clientX - drag.startX;
-    const dy = event.clientY - drag.startY;
-    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
-      drag.moved = true;
-    }
-    const next = clampPrepPosition({ x: drag.origin.x + dx, y: drag.origin.y + dy });
-    positionRef.current = next;
-    setPosition(next);
-  }
+    document.body.classList.add("floating-panel-moving");
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    const target = event.currentTarget;
+    resizeRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      origin: sizeRef.current
+    };
+    setDragging(true);
 
-  function endDrag(event: React.PointerEvent<HTMLElement>) {
-    const drag = dragRef.current;
-    if (!drag || drag.pointerId !== event.pointerId) {
-      return;
-    }
-    event.preventDefault();
-    event.stopPropagation();
-    clearPrepSelection();
-    const shouldOpenPill = !open && !drag.moved && event.currentTarget.classList.contains("matchup-prep-pill");
-    event.currentTarget.releasePointerCapture?.(event.pointerId);
-    dragRef.current = null;
-    setDragging(false);
-    document.body.classList.remove("matchup-prep-dragging");
-    const next = clampPrepPosition(positionRef.current);
-    setPosition(next);
-    savedPositionRef.current = next;
-    saveMatchupPrepPosition(next);
-    if (drag.moved) {
-      suppressNextClickRef.current = true;
-      window.setTimeout(() => {
-        suppressNextClickRef.current = false;
-      }, 0);
-    } else if (shouldOpenPill) {
-      setOpen(true);
-    }
-  }
-
-  function cancelDrag(event: React.PointerEvent<HTMLElement>) {
-    if (dragRef.current?.pointerId !== event.pointerId) {
-      return;
-    }
-    dragRef.current = null;
-    setDragging(false);
-    document.body.classList.remove("matchup-prep-dragging");
-    clearPrepSelection();
+    const onMove = (nativeEvent: PointerEvent) => {
+      const resize = resizeRef.current;
+      if (!resize || resize.pointerId !== nativeEvent.pointerId) {
+        return;
+      }
+      nativeEvent.preventDefault();
+      clearPrepSelection();
+      const next = clampPrepSize({
+        width: resize.origin.width + nativeEvent.clientX - resize.startX,
+        height: resize.origin.height + nativeEvent.clientY - resize.startY
+      });
+      sizeRef.current = next;
+      setSize(next);
+    };
+    const onEnd = (nativeEvent: PointerEvent) => {
+      const resize = resizeRef.current;
+      if (!resize || resize.pointerId !== nativeEvent.pointerId) {
+        return;
+      }
+      nativeEvent.preventDefault();
+      clearPrepSelection();
+      target.releasePointerCapture?.(nativeEvent.pointerId);
+      window.removeEventListener("pointermove", onMove, true);
+      window.removeEventListener("pointerup", onEnd, true);
+      window.removeEventListener("pointercancel", onEnd, true);
+      resizeRef.current = null;
+      setDragging(false);
+      document.body.classList.remove("floating-panel-moving");
+      const next = clampPrepSize(sizeRef.current);
+      setSize(next);
+      sizeRef.current = next;
+      saveMatchupPrepSize(next);
+    };
+    window.addEventListener("pointermove", onMove, true);
+    window.addEventListener("pointerup", onEnd, true);
+    window.addEventListener("pointercancel", onEnd, true);
   }
 
   function openFromPill(event: React.MouseEvent<HTMLButtonElement>) {
@@ -9396,9 +13977,6 @@ function MatchupPrepOverlay({ deck, notebook, opponentLegend, sideboardSuggested
           className="secondary matchup-prep-pill"
           onClick={openFromPill}
           onPointerDown={startDrag}
-          onPointerMove={moveDrag}
-          onPointerUp={endDrag}
-          onPointerCancel={cancelDrag}
           title="Open or drag matchup prep guide"
         >
           <BookOpen size={16} />
@@ -9422,14 +14000,15 @@ function MatchupPrepOverlay({ deck, notebook, opponentLegend, sideboardSuggested
       onDragStart={(event) => event.preventDefault()}
       onPointerDownCapture={clearPrepSelection}
     >
-      <section className="matchup-prep-overlay-panel">
+      <section
+        ref={panelRef}
+        className="matchup-prep-overlay-panel"
+        style={{ width: size.width, height: size.height }}
+      >
         <header>
           <div
             className="matchup-prep-drag-region"
             onPointerDown={startDrag}
-            onPointerMove={moveDrag}
-            onPointerUp={endDrag}
-            onPointerCancel={cancelDrag}
             title="Drag prep widget"
           >
             <GripVertical size={17} />
@@ -9492,6 +14071,13 @@ function MatchupPrepOverlay({ deck, notebook, opponentLegend, sideboardSuggested
             </div>
           </div>
         ) : null}
+        <button
+          type="button"
+          className="floating-resize-handle"
+          onPointerDown={startResize}
+          aria-label="Resize matchup prep"
+          title="Resize matchup prep"
+        />
       </section>
     </div>
   );
@@ -9684,11 +14270,14 @@ function ReplayView({
   onDeleteReplay: (id: string) => Promise<void>;
 }) {
   const [platformFilter, setPlatformFilter] = useState<"all" | GamePlatform>("all");
+  const [mediaFilter, setMediaFilter] = useState("all");
+  const [rangeFilter, setRangeFilter] = useState("all");
+  const [flagFilter, setFlagFilter] = useState("all");
   const [search, setSearch] = useState("");
   const deferredSearch = useDeferredValue(search);
   const [selectedReplayId, setSelectedReplayId] = useState("");
   const [status, setStatus] = useState("");
-  const [exportingReplayId, setExportingReplayId] = useState<string | null>(null);
+  const [exportingReplay, setExportingReplay] = useState<{ id: string; clipStartMs: number } | null>(null);
   const [visibleReplayCount, setVisibleReplayCount] = useState(REPLAY_LIST_PAGE_SIZE);
   const matchById = useMemo(() => new Map(matches.map((match) => [match.id, match])), [matches]);
   const replayItems = useMemo(() => replays.map((replay) => replayListItem(replay, matchById.get(replay.matchId) ?? replay.matchSnapshot)), [matchById, replays]);
@@ -9699,10 +14288,25 @@ function ReplayView({
         if (platformFilter !== "all" && item.replay.platform !== platformFilter) {
           return false;
         }
+        if (mediaFilter !== "all" && replayHealthKind(item.replay) !== mediaFilter) {
+          return false;
+        }
+        if (rangeFilter !== "all" && !dateInRange(item.capturedAt, rangeFilter)) {
+          return false;
+        }
+        if (flagFilter === "flagged" && !(item.replay.flags?.length)) {
+          return false;
+        }
+        if (flagFilter === "audio" && !(item.replay.voiceNotes?.length)) {
+          return false;
+        }
+        if (flagFilter === "drawings" && !(item.replay.annotations?.length)) {
+          return false;
+        }
         return !needle || item.searchText.includes(needle);
       });
     },
-    [deferredSearch, platformFilter, replayItems]
+    [deferredSearch, flagFilter, mediaFilter, platformFilter, rangeFilter, replayItems]
   );
   const selectedItem = filteredItems.find((item) => item.replay.id === selectedReplayId) ?? filteredItems[0] ?? null;
   const selectedIndex = selectedItem ? filteredItems.findIndex((item) => item.replay.id === selectedItem.replay.id) : -1;
@@ -9712,7 +14316,7 @@ function ReplayView({
 
   useEffect(() => {
     setVisibleReplayCount(REPLAY_LIST_PAGE_SIZE);
-  }, [deferredSearch, platformFilter]);
+  }, [deferredSearch, flagFilter, mediaFilter, platformFilter, rangeFilter]);
 
   useEffect(() => {
     if (!focusReplayId) {
@@ -9720,6 +14324,9 @@ function ReplayView({
     }
     setSearch("");
     setPlatformFilter("all");
+    setMediaFilter("all");
+    setRangeFilter("all");
+    setFlagFilter("all");
     setSelectedReplayId(focusReplayId);
     onFocusConsumed();
   }, [focusReplayId, onFocusConsumed]);
@@ -9745,7 +14352,7 @@ function ReplayView({
       await onReplaysChanged(imported.id);
       setStatus("Replay imported.");
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Replay import failed.");
+      setStatus(rendererErrorMessage(error, "Replay import failed."));
     }
   }
 
@@ -9760,29 +14367,42 @@ function ReplayView({
       await onReplaysChanged(imported[0]?.id);
       setStatus(`Imported ${imported.length} replay${imported.length === 1 ? "" : "s"}.`);
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Replay folder import failed.");
+      setStatus(rendererErrorMessage(error, "Replay folder import failed."));
     }
   }
 
   async function exportReplayBundleFile(replayId: string) {
-    setExportingReplayId(null);
+    setExportingReplay(null);
     setStatus("Exporting coaching pack...");
     try {
       const exportedPath = await window.riftlite.exportReplayBundle(replayId);
       setStatus(exportedPath ? `Exported ${exportedPath}` : "");
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Replay export failed.");
+      setStatus(rendererErrorMessage(error, "Replay export failed."));
     }
   }
 
   async function exportReplayMp4File(replayId: string, options: ReplayMp4ExportOptions) {
-    setExportingReplayId(null);
-    setStatus("Exporting MP4 video...");
+    setExportingReplay(null);
+    const clipSeconds = Math.round((options.clipDurationMs ?? 0) / 1000);
+    const isClip = options.mode === "clip";
+    setStatus(isClip ? `Exporting ${clipSeconds || ""}s MP4 clip...` : "Exporting MP4 video...");
     try {
       const exportedPath = await window.riftlite.exportReplayMp4(replayId, options);
-      setStatus(exportedPath ? `Exported MP4 ${exportedPath}` : "");
+      setStatus(exportedPath ? `Exported ${isClip ? "MP4 clip" : "MP4"} ${exportedPath}` : "");
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "MP4 export failed.");
+      setStatus(rendererErrorMessage(error, "MP4 export failed."));
+    }
+  }
+
+  async function exportReplayFlagsTextFile(replayId: string) {
+    setExportingReplay(null);
+    setStatus("Exporting replay timestamps...");
+    try {
+      const exportedPath = await window.riftlite.exportReplayFlagsText(replayId);
+      setStatus(exportedPath ? `Exported replay timestamps ${exportedPath}` : "");
+    } catch (error) {
+      setStatus(rendererErrorMessage(error, "Replay timestamp export failed."));
     }
   }
 
@@ -9793,7 +14413,7 @@ function ReplayView({
       await onReplaysChanged(saved.id);
       setStatus("Replay saved.");
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Replay save failed.");
+      setStatus(rendererErrorMessage(error, "Replay save failed."));
     }
   }
 
@@ -9843,6 +14463,36 @@ function ReplayView({
               placeholder="Legend, player, battlefield, deck..."
             />
           </label>
+          <div className="replay-filter-grid">
+            <label>
+              Media
+              <select value={mediaFilter} onChange={(event) => setMediaFilter(event.target.value)}>
+                <option value="all">Any media</option>
+                <option value="video">Video</option>
+                <option value="frames">Frames</option>
+                <option value="partial">Partial</option>
+                <option value="missing">Missing media</option>
+              </select>
+            </label>
+            <label>
+              Moments
+              <select value={flagFilter} onChange={(event) => setFlagFilter(event.target.value)}>
+                <option value="all">Any replay</option>
+                <option value="flagged">Has flags</option>
+                <option value="audio">Has audio notes</option>
+                <option value="drawings">Has drawings</option>
+              </select>
+            </label>
+            <label>
+              Date
+              <select value={rangeFilter} onChange={(event) => setRangeFilter(event.target.value)}>
+                <option value="all">All time</option>
+                <option value="today">Today</option>
+                <option value="7d">Last 7 days</option>
+                <option value="30d">Last 30 days</option>
+              </select>
+            </label>
+          </div>
           <div className="row-actions">
             <button className="secondary" onClick={() => void importReplay()}><FolderOpen size={14} /> Import</button>
             <button className="secondary" onClick={() => void importReplayFolder()}><FolderOpen size={14} /> Folder</button>
@@ -9862,6 +14512,7 @@ function ReplayView({
               <strong>{item.title}</strong>
               <span>{item.platformLabel} - {new Date(item.capturedAt).toLocaleString()}</span>
               <em>{item.players.me || "Player"} vs {item.players.opponent || "Opponent"}</em>
+              <ReplayHealthBadges replay={item.replay} />
               <small>{item.chips.join(" | ")}</small>
             </button>
           ))}
@@ -9882,46 +14533,292 @@ function ReplayView({
         <ReplayDetail
           model={selectedModel}
           settings={settings}
-          onExport={() => setExportingReplayId(selectedModel.replay.id)}
+          onExport={(clipStartMs) => setExportingReplay({ id: selectedModel.replay.id, clipStartMs })}
           onSaveReplay={saveReplay}
           onDeleteReplay={() => void onDeleteReplay(selectedModel.replay.id)}
         />
       ) : null}
-      {exportingReplayId ? (
+      {exportingReplay ? (
         <ReplayExportDialog
-          replay={replays.find((replay) => replay.id === exportingReplayId) ?? null}
-          onCancel={() => setExportingReplayId(null)}
-          onExportBundle={() => void exportReplayBundleFile(exportingReplayId)}
-          onExportMp4={(options) => void exportReplayMp4File(exportingReplayId, options)}
+          replay={replays.find((replay) => replay.id === exportingReplay.id) ?? null}
+          currentTimeMs={exportingReplay.clipStartMs}
+          onCancel={() => setExportingReplay(null)}
+          onExportBundle={() => void exportReplayBundleFile(exportingReplay.id)}
+          onExportMp4={(options) => void exportReplayMp4File(exportingReplay.id, options)}
+          onExportFlagsText={() => void exportReplayFlagsTextFile(exportingReplay.id)}
         />
       ) : null}
     </section>
   );
 }
 
+type ReplayMp4CropBox = {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  sourceWidth: number;
+  sourceHeight: number;
+};
+
+function replayMp4SourceSize(video: ReplayVideoAsset | undefined): { sourceWidth: number; sourceHeight: number } {
+  const sourceWidth = Math.max(640, video?.width || 1920);
+  const sourceHeight = Math.max(360, video?.height || 1080);
+  return { sourceWidth, sourceHeight };
+}
+
+function replayMp4CropBox(video: ReplayVideoAsset | undefined, options: ReplayMp4ExportOptions): ReplayMp4CropBox {
+  const { sourceWidth, sourceHeight } = replayMp4SourceSize(video);
+  const sourceAspect = sourceWidth / sourceHeight;
+  const targetAspect = 9 / 16;
+  const baseCropHeight = sourceAspect > targetAspect ? sourceHeight : sourceWidth / targetAspect;
+  const baseCropWidth = sourceAspect > targetAspect ? sourceHeight * targetAspect : sourceWidth;
+  const zoom = options.layout === "vertical-custom" ? Math.min(2.5, Math.max(1, options.cropZoom ?? 1)) : 1;
+  const cropWidth = Math.min(sourceWidth, baseCropWidth / zoom);
+  const cropHeight = Math.min(sourceHeight, cropWidth / targetAspect);
+  const maxX = Math.max(0, sourceWidth - cropWidth);
+  const maxY = Math.max(0, sourceHeight - cropHeight);
+  const focusX = options.layout === "vertical-custom" ? Math.min(1, Math.max(0, options.cropFocusX ?? 0.5)) : 0.5;
+  const focusY = options.layout === "vertical-custom" ? Math.min(1, Math.max(0, options.cropFocusY ?? 0.5)) : 0.5;
+  return {
+    left: sourceWidth > cropWidth ? ((maxX * focusX) / sourceWidth) * 100 : 0,
+    top: sourceHeight > cropHeight ? ((maxY * focusY) / sourceHeight) * 100 : 0,
+    width: (cropWidth / sourceWidth) * 100,
+    height: (cropHeight / sourceHeight) * 100,
+    sourceWidth,
+    sourceHeight
+  };
+}
+
+function replayMp4CropPreviewStyle(video: ReplayVideoAsset | undefined, options: ReplayMp4ExportOptions): React.CSSProperties {
+  const box = replayMp4CropBox(video, options);
+  return {
+    width: `${box.width}%`,
+    height: `${box.height}%`,
+    left: `${box.left}%`,
+    top: `${box.top}%`
+  };
+}
+
 function ReplayExportDialog({
   replay,
+  currentTimeMs,
   onCancel,
   onExportBundle,
-  onExportMp4
+  onExportMp4,
+  onExportFlagsText
 }: {
   replay: ReplayRecord | null;
+  currentTimeMs: number;
   onCancel: () => void;
   onExportBundle: () => void;
   onExportMp4: (options: ReplayMp4ExportOptions) => void;
+  onExportFlagsText: () => void;
 }) {
+  const cropPreviewRef = useRef<HTMLDivElement | null>(null);
+  const cropPreviewVideoRef = useRef<HTMLVideoElement | null>(null);
+  const [cropPreviewVideoUrl, setCropPreviewVideoUrl] = useState("");
   const [options, setOptions] = useState<ReplayMp4ExportOptions>({
     includeFlags: true,
     includeDrawings: true,
     includeVoiceNotes: true,
-    includeOriginalAudio: true
+    includeOriginalAudio: true,
+    layout: "landscape",
+    cropFocusX: 0.5,
+    cropFocusY: 0.5,
+    cropZoom: 1
   });
+  const [customClipDurationMs, setCustomClipDurationMs] = useState(30_000);
   const hasVideo = Boolean(replay?.video);
   const flags = replay?.flags?.length ?? 0;
   const drawings = replay?.annotations?.length ?? 0;
   const voiceNotes = replay?.voiceNotes?.length ?? 0;
-  const update = (key: keyof ReplayMp4ExportOptions) => {
+  const videoDurationMs = replay?.video?.durationMs ?? 0;
+  const safeClipStartMs = hasVideo
+    ? Math.min(Math.max(0, currentTimeMs), Math.max(0, videoDurationMs - 1000))
+    : 0;
+  const clipRemainingMs = hasVideo ? Math.max(0, videoDurationMs - safeClipStartMs) : 0;
+  const clipDurations = [15_000, 30_000, 60_000];
+  const maxCustomClipDurationMs = hasVideo && clipRemainingMs > 0
+    ? Math.max(1_000, Math.min(180_000, clipRemainingMs))
+    : 180_000;
+  const safeCustomClipDurationMs = Math.min(Math.max(1_000, customClipDurationMs), maxCustomClipDurationMs);
+  const safeCustomClipSeconds = Math.round(safeCustomClipDurationMs / 1000);
+  const maxCustomClipSeconds = Math.max(1, Math.round(maxCustomClipDurationMs / 1000));
+  const cropBox = replayMp4CropBox(replay?.video, options);
+  const cropPreviewAspect = `${cropBox.sourceWidth} / ${cropBox.sourceHeight}`;
+  const update = (key: "includeFlags" | "includeDrawings" | "includeVoiceNotes" | "includeOriginalAudio") => {
     setOptions((current) => ({ ...current, [key]: !current[key] }));
+  };
+  const updateLayout = (layout: NonNullable<ReplayMp4ExportOptions["layout"]>) => {
+    setOptions((current) => ({
+      ...current,
+      layout,
+      cropFocusX: layout === "vertical-custom" ? current.cropFocusX ?? 0.5 : 0.5,
+      cropFocusY: layout === "vertical-custom" ? current.cropFocusY ?? 0.5 : 0.5,
+      cropZoom: layout === "vertical-custom" ? current.cropZoom ?? 1 : 1
+    }));
+  };
+  const cropBoxStyle = replayMp4CropPreviewStyle(replay?.video, options);
+  useEffect(() => {
+    let cancelled = false;
+    let objectUrl = "";
+    const sourceVideo = replay?.video;
+    setCropPreviewVideoUrl(sourceVideo?.url ?? "");
+    if (!sourceVideo) {
+      return () => undefined;
+    }
+    void window.riftlite.loadReplayVideo(sourceVideo)
+      .then((buffer) => {
+        if (cancelled) {
+          return;
+        }
+        objectUrl = URL.createObjectURL(new Blob([buffer], { type: sourceVideo.mimeType || "video/mp4" }));
+        setCropPreviewVideoUrl(objectUrl);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setCropPreviewVideoUrl(sourceVideo.url);
+        }
+      });
+    return () => {
+      cancelled = true;
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+      }
+    };
+  }, [replay?.video?.path, replay?.video?.url, replay?.video?.mimeType]);
+
+  useEffect(() => {
+    const element = cropPreviewVideoRef.current;
+    if (!element || !replay?.video || !cropPreviewVideoUrl) {
+      return;
+    }
+    const seekTo = Math.max(0, safeClipStartMs / 1000);
+    let attempts = 0;
+    let retryTimer: number | undefined;
+    const syncPreviewTime = () => {
+      attempts += 1;
+      try {
+        element.pause();
+        element.currentTime = seekTo;
+      } catch {
+        if (attempts < 4) {
+          retryTimer = window.setTimeout(syncPreviewTime, 150);
+        }
+      }
+    };
+    if (element.readyState >= 1) {
+      syncPreviewTime();
+    } else {
+      element.addEventListener("loadedmetadata", syncPreviewTime);
+    }
+    element.addEventListener("loadeddata", syncPreviewTime);
+    element.addEventListener("canplay", syncPreviewTime);
+    return () => {
+      if (retryTimer) {
+        window.clearTimeout(retryTimer);
+      }
+      element.removeEventListener("loadedmetadata", syncPreviewTime);
+      element.removeEventListener("loadeddata", syncPreviewTime);
+      element.removeEventListener("canplay", syncPreviewTime);
+    };
+  }, [replay?.video, cropPreviewVideoUrl, safeClipStartMs, options.layout]);
+
+  useEffect(() => {
+    if (!hasVideo || clipRemainingMs <= 0 || customClipDurationMs <= maxCustomClipDurationMs) {
+      return;
+    }
+    setCustomClipDurationMs(maxCustomClipDurationMs);
+  }, [clipRemainingMs, customClipDurationMs, hasVideo, maxCustomClipDurationMs]);
+
+  const applyCropMove = (clientX: number, clientY: number, offsetX: number, offsetY: number) => {
+    const preview = cropPreviewRef.current;
+    if (!preview) {
+      return;
+    }
+    const rect = preview.getBoundingClientRect();
+    const boxWidthPx = (cropBox.width / 100) * rect.width;
+    const boxHeightPx = (cropBox.height / 100) * rect.height;
+    const maxX = Math.max(0, rect.width - boxWidthPx);
+    const maxY = Math.max(0, rect.height - boxHeightPx);
+    const left = Math.min(maxX, Math.max(0, clientX - rect.left - offsetX));
+    const top = Math.min(maxY, Math.max(0, clientY - rect.top - offsetY));
+    setOptions((current) => ({
+      ...current,
+      layout: "vertical-custom",
+      cropFocusX: maxX > 0 ? left / maxX : 0.5,
+      cropFocusY: maxY > 0 ? top / maxY : 0.5
+    }));
+  };
+
+  const applyCropResize = (clientX: number, clientY: number) => {
+    const preview = cropPreviewRef.current;
+    if (!preview) {
+      return;
+    }
+    const rect = preview.getBoundingClientRect();
+    const leftPx = (cropBox.left / 100) * rect.width;
+    const topPx = (cropBox.top / 100) * rect.height;
+    const targetAspect = 9 / 16;
+    const maxWidth = Math.max(72, Math.min(rect.width - leftPx, (rect.height - topPx) * targetAspect));
+    const minWidth = Math.min(maxWidth, Math.max(70, rect.width * 0.18));
+    const rawWidth = Math.min(clientX - rect.left - leftPx, (clientY - rect.top - topPx) * targetAspect);
+    const nextWidthPx = Math.min(maxWidth, Math.max(minWidth, rawWidth));
+    const sourceAspect = cropBox.sourceWidth / cropBox.sourceHeight;
+    const baseCropWidth = sourceAspect > targetAspect ? cropBox.sourceHeight * targetAspect : cropBox.sourceWidth;
+    const nextCropWidth = cropBox.sourceWidth * (nextWidthPx / rect.width);
+    const nextZoom = Math.min(2.5, Math.max(1, baseCropWidth / Math.max(1, nextCropWidth)));
+    const nextHeightPx = nextWidthPx / targetAspect;
+    const maxX = Math.max(0, rect.width - nextWidthPx);
+    const maxY = Math.max(0, rect.height - nextHeightPx);
+    setOptions((current) => ({
+      ...current,
+      layout: "vertical-custom",
+      cropZoom: nextZoom,
+      cropFocusX: maxX > 0 ? Math.min(1, Math.max(0, leftPx / maxX)) : current.cropFocusX ?? 0.5,
+      cropFocusY: maxY > 0 ? Math.min(1, Math.max(0, topPx / maxY)) : current.cropFocusY ?? 0.5
+    }));
+  };
+
+  const startCropDrag = (event: React.PointerEvent<HTMLElement>, mode: "move" | "resize") => {
+    if ((options.layout ?? "landscape") === "landscape") {
+      updateLayout("vertical-custom");
+    }
+    const preview = cropPreviewRef.current;
+    if (!preview) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    const rect = preview.getBoundingClientRect();
+    const boxLeftPx = (cropBox.left / 100) * rect.width;
+    const boxTopPx = (cropBox.top / 100) * rect.height;
+    const offsetX = event.clientX - rect.left - boxLeftPx;
+    const offsetY = event.clientY - rect.top - boxTopPx;
+    const onMove = (moveEvent: PointerEvent) => {
+      if (mode === "move") {
+        applyCropMove(moveEvent.clientX, moveEvent.clientY, offsetX, offsetY);
+      } else {
+        applyCropResize(moveEvent.clientX, moveEvent.clientY);
+      }
+    };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp, { once: true });
+  };
+
+  const exportClip = (durationMs: number) => {
+    onExportMp4({
+      ...options,
+      mode: "clip",
+      clipStartMs: safeClipStartMs,
+      clipDurationMs: durationMs,
+      watermark: true
+    });
   };
   return (
     <div className="modal-backdrop replay-export-backdrop" onClick={onCancel}>
@@ -9940,6 +14837,12 @@ function ReplayExportDialog({
             <FileText size={24} />
             <strong>Coaching pack</strong>
             <span>Exports a `.riftreplay` file with the replay, flags, drawings, voice notes, layers, deck data, and match metadata. Best when the other person will open it in RiftLite.</span>
+          </button>
+          <button type="button" className="replay-export-card" onClick={onExportFlagsText} disabled={!flags}>
+            <Flag size={24} />
+            <strong>Timestamp notes</strong>
+            <span>Exports a simple text file with one line per flag: timestamp, type, and note. Handy for coaching notes, Discord posts, or YouTube descriptions.</span>
+            {!flags ? <small>No replay flags to export yet.</small> : null}
           </button>
           <div className="replay-export-card replay-export-mp4">
             <Video size={24} />
@@ -9963,10 +14866,158 @@ function ReplayExportDialog({
                 <Volume2 size={14} /> Original video audio
               </label>
             </div>
+            <div className="replay-export-layout">
+              <label>
+                Export shape
+                <select value={options.layout ?? "landscape"} onChange={(event) => updateLayout(event.target.value as NonNullable<ReplayMp4ExportOptions["layout"]>)}>
+                  <option value="landscape">Landscape 16:9</option>
+                  <option value="vertical-center">Vertical 9:16 centre crop</option>
+                  <option value="vertical-custom">Vertical 9:16 custom crop</option>
+                </select>
+              </label>
+              {(options.layout ?? "landscape") !== "landscape" ? (
+                <div className="replay-export-crop-tool">
+                  <div
+                    className="replay-export-crop-preview"
+                    ref={cropPreviewRef}
+                    style={{ aspectRatio: cropPreviewAspect }}
+                  >
+                    {replay?.video && cropPreviewVideoUrl ? (
+                      <video
+                        key={`${replay.id}:${Math.round(safeClipStartMs)}`}
+                        ref={cropPreviewVideoRef}
+                        src={cropPreviewVideoUrl}
+                        muted
+                        playsInline
+                        preload="auto"
+                      />
+                    ) : null}
+                    <span
+                      className="replay-export-crop-box"
+                      style={cropBoxStyle}
+                      onPointerDown={(event) => startCropDrag(event, "move")}
+                      title="Drag to move the vertical crop"
+                    >
+                      <span className="replay-export-crop-label">9:16 clip frame</span>
+                      <span
+                        className="replay-export-crop-handle"
+                        onPointerDown={(event) => startCropDrag(event, "resize")}
+                        title="Drag to resize the clip frame"
+                      />
+                    </span>
+                  </div>
+                  <small>Drag the frame to move it. Drag the corner handle to resize the crop.</small>
+                  {options.layout === "vertical-custom" ? (
+                    <div className="replay-export-crop-controls">
+                      <label>
+                        Horizontal focus
+                        <input
+                          type="range"
+                          min="0"
+                          max="1"
+                          step="0.01"
+                          value={options.cropFocusX ?? 0.5}
+                          onChange={(event) => setOptions((current) => ({ ...current, cropFocusX: Number.parseFloat(event.target.value) }))}
+                        />
+                      </label>
+                      <label>
+                        Vertical focus
+                        <input
+                          type="range"
+                          min="0"
+                          max="1"
+                          step="0.01"
+                          value={options.cropFocusY ?? 0.5}
+                          onChange={(event) => setOptions((current) => ({ ...current, cropFocusY: Number.parseFloat(event.target.value) }))}
+                        />
+                      </label>
+                      <label>
+                        Crop zoom
+                        <input
+                          type="range"
+                          min="1"
+                          max="2.5"
+                          step="0.05"
+                          value={options.cropZoom ?? 1}
+                          onChange={(event) => setOptions((current) => ({ ...current, cropZoom: Number.parseFloat(event.target.value) }))}
+                        />
+                      </label>
+                    </div>
+                  ) : (
+                    <small>Uses the centre of the replay. Pick custom crop if the action is off to one side.</small>
+                  )}
+                </div>
+              ) : null}
+            </div>
             <button type="button" className="primary" disabled={!hasVideo} onClick={() => onExportMp4(options)}>
               <Video size={16} /> Export MP4
             </button>
             {!hasVideo ? <small>MP4 export needs a full video replay. Use coaching pack for screenshot-only replays.</small> : null}
+            <div className="replay-export-clip">
+              <div>
+                <Scissors size={17} />
+                <strong>Clip MP4</strong>
+                <span>Starts at {formatDuration(safeClipStartMs)} and adds a subtle RiftLite watermark.</span>
+              </div>
+              <div className="replay-export-durations">
+                {clipDurations.map((durationMs) => {
+                  const availableMs = Math.min(durationMs, clipRemainingMs);
+                  const label = availableMs && availableMs < durationMs
+                    ? `${Math.round(availableMs / 1000)}s`
+                    : `${Math.round(durationMs / 1000)}s`;
+                  return (
+                    <button
+                      type="button"
+                      className="secondary"
+                      key={durationMs}
+                      disabled={!hasVideo || clipRemainingMs <= 0}
+                      onClick={() => {
+                        setCustomClipDurationMs(durationMs);
+                        exportClip(durationMs);
+                      }}
+                      title={availableMs && availableMs < durationMs ? "Clip reaches the end of this replay." : undefined}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="replay-export-custom-clip">
+                <label>
+                  <span>
+                    Custom length <strong>{formatDuration(safeCustomClipDurationMs)}</strong>
+                  </span>
+                  <input
+                    type="range"
+                    min="1"
+                    max={maxCustomClipSeconds}
+                    step="1"
+                    value={safeCustomClipSeconds}
+                    disabled={!hasVideo || clipRemainingMs <= 0}
+                    onChange={(event) => setCustomClipDurationMs(Math.max(1, Number.parseInt(event.target.value, 10) || 1) * 1000)}
+                  />
+                </label>
+                <label className="replay-export-custom-seconds">
+                  Seconds
+                  <input
+                    type="number"
+                    min="1"
+                    max={maxCustomClipSeconds}
+                    value={safeCustomClipSeconds}
+                    disabled={!hasVideo || clipRemainingMs <= 0}
+                    onChange={(event) => setCustomClipDurationMs(Math.max(1, Math.min(maxCustomClipSeconds, Number.parseInt(event.target.value, 10) || 1)) * 1000)}
+                  />
+                </label>
+                <button
+                  type="button"
+                  className="primary"
+                  disabled={!hasVideo || clipRemainingMs <= 0}
+                  onClick={() => exportClip(safeCustomClipDurationMs)}
+                >
+                  <Scissors size={15} /> Export custom clip
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       </section>
@@ -9984,6 +15035,38 @@ type ReplayListItem = {
   chips: string[];
   searchText: string;
 };
+
+function replayHealthKind(replay: ReplayRecord): "video" | "frames" | "partial" | "missing" {
+  if (replay.video?.path) {
+    return replay.video.containerFinalized === false ? "partial" : "video";
+  }
+  if (replay.visualFrames?.length) {
+    return "frames";
+  }
+  return "missing";
+}
+
+function replayHealthLabel(kind: ReturnType<typeof replayHealthKind>): string {
+  if (kind === "video") return "Video";
+  if (kind === "frames") return "Frames";
+  if (kind === "partial") return "Partial";
+  return "Missing media";
+}
+
+function ReplayHealthBadges({ replay }: { replay: ReplayRecord }) {
+  const health = replayHealthKind(replay);
+  const flags = replay.flags?.length ?? 0;
+  const audio = replay.voiceNotes?.length ?? 0;
+  const drawings = replay.annotations?.length ?? 0;
+  return (
+    <span className="replay-item-badges">
+      <span data-health={health}>{replayHealthLabel(health)}</span>
+      {flags ? <span><Flag size={11} /> {flags}</span> : null}
+      {audio ? <span><Mic size={11} /> {audio}</span> : null}
+      {drawings ? <span><SlidersHorizontal size={11} /> {drawings}</span> : null}
+    </span>
+  );
+}
 
 function replayListItem(replay: ReplayRecord, match?: MatchDraft): ReplayListItem {
   const metadata = replay.search;
@@ -10038,11 +15121,14 @@ function ReplayFlagPanel({
   flagType,
   flagCustomType,
   flagNote,
+  customFlagTypes,
   replay,
-  onFlagTypeChange,
+  onFlagTypeSelect,
   onFlagCustomTypeChange,
   onFlagNoteChange,
   onAddReplayFlag,
+  onRememberCustomType,
+  onExportFlagsText,
   onOpenFlag,
   onRemoveFlag
 }: {
@@ -10050,15 +15136,19 @@ function ReplayFlagPanel({
   flagType: ReplayFlagType;
   flagCustomType: string;
   flagNote: string;
+  customFlagTypes: string[];
   replay: ReplayRecord;
-  onFlagTypeChange: (value: ReplayFlagType) => void;
+  onFlagTypeSelect: (value: string) => void;
   onFlagCustomTypeChange: (value: string) => void;
   onFlagNoteChange: (value: string) => void;
   onAddReplayFlag: () => void;
+  onRememberCustomType: () => void;
+  onExportFlagsText: () => void;
   onOpenFlag: (flag: ReplayFlag) => void;
   onRemoveFlag: (id: string) => void;
 }) {
   const sortedFlags = [...flags].sort((a, b) => new Date(a.capturedAt).getTime() - new Date(b.capturedAt).getTime());
+  const selectedType = replayFlagSelectValue(flagType, flagCustomType, customFlagTypes);
   return (
     <section className="rail-card replay-flag-panel">
       <header>
@@ -10066,12 +15156,15 @@ function ReplayFlagPanel({
           <h2>Replay flags</h2>
           <span>{flags.length ? `${flags.length} marked moment${flags.length === 1 ? "" : "s"}` : "Mark frames or the full replay"}</span>
         </div>
+        <button type="button" className="secondary" onClick={onExportFlagsText} disabled={!flags.length}>
+          <FileText size={14} /> Export text
+        </button>
       </header>
       <div className="replay-flag-compose">
         <label>
           Type
-          <select value={flagType} onChange={(event) => onFlagTypeChange(event.target.value as ReplayFlagType)}>
-            {REPLAY_FLAG_TYPES.map((type) => (
+          <select value={selectedType} onChange={(event) => onFlagTypeSelect(event.target.value)}>
+            {replayFlagTypeOptions(customFlagTypes).map((type) => (
               <option value={type.value} key={type.value}>{type.label}</option>
             ))}
           </select>
@@ -10087,7 +15180,14 @@ function ReplayFlagPanel({
           <input value={flagNote} onChange={(event) => onFlagNoteChange(event.target.value)} placeholder="Optional note..." />
         </label>
         <div className="row-actions">
-          <button type="button" className="secondary" onClick={onAddReplayFlag}><Flag size={14} /> Flag replay</button>
+          {flagType === "custom" ? (
+            <button type="button" className="secondary" onClick={onRememberCustomType} disabled={!flagCustomType.trim()}>
+              <Plus size={14} /> Save type
+            </button>
+          ) : null}
+          <button type="button" className="secondary" onClick={onAddReplayFlag} title="Adds a note to the replay record, not a timeline marker. Use the video controls for timestamp flags.">
+            <Flag size={14} /> Flag whole replay
+          </button>
         </div>
       </div>
       <div className="replay-flag-list">
@@ -10180,7 +15280,7 @@ function ReplayDetail({
 }: {
   model: AtlasReplayViewModel;
   settings: UserSettings;
-  onExport: () => void;
+  onExport: (clipStartMs: number) => void;
   onSaveReplay: (replay: ReplayRecord) => Promise<void>;
   onDeleteReplay: () => void;
 }) {
@@ -10194,6 +15294,7 @@ function ReplayDetail({
   const [flagType, setFlagType] = useState<ReplayFlagType>("key-turn");
   const [flagCustomType, setFlagCustomType] = useState("");
   const [flagNote, setFlagNote] = useState("");
+  const [customReplayFlagTypes, setCustomReplayFlagTypes] = useState<string[]>(() => settings.replayCustomFlagTypes ?? []);
   const [editingFlag, setEditingFlag] = useState<ReplayFlag | null>(null);
   const layers = useMemo(() => replayLayersFor(model.replay, settings.username), [model.replay, settings.username]);
   const [activeLayerId, setActiveLayerId] = useState(DEFAULT_REPLAY_LAYER_ID);
@@ -10282,6 +15383,39 @@ function ReplayDetail({
     });
   }, [activeLayerId, layers]);
 
+  useEffect(() => {
+    setCustomReplayFlagTypes(settings.replayCustomFlagTypes ?? []);
+  }, [settings.replayCustomFlagTypes]);
+
+  function selectReplayFlagType(value: string) {
+    if (value.startsWith(CUSTOM_REPLAY_FLAG_PREFIX)) {
+      setFlagType("custom");
+      setFlagCustomType(value.slice(CUSTOM_REPLAY_FLAG_PREFIX.length));
+      return;
+    }
+    setFlagType(value as ReplayFlagType);
+    if (value !== "custom") {
+      return;
+    }
+    setFlagCustomType("");
+  }
+
+  function rememberReplayCustomFlagType(label = flagCustomType): string {
+    const normalized = normaliseCustomReplayFlagType(label);
+    if (!normalized) {
+      return "";
+    }
+    setCustomReplayFlagTypes((current) => {
+      if (current.some((item) => item.toLowerCase() === normalized.toLowerCase())) {
+        return current;
+      }
+      const next = [...current, normalized].slice(-24);
+      void window.riftlite.saveSettings({ replayCustomFlagTypes: next }).catch(() => undefined);
+      return next;
+    });
+    return normalized;
+  }
+
   function openSlideshow(screenshot?: AtlasReplayViewModel["screenshots"][number]) {
     const index = screenshot
       ? allScreenshots.findIndex((item) => screenshotKey(item) === screenshotKey(screenshot))
@@ -10325,6 +15459,21 @@ function ReplayDetail({
     saveAnnotations(replayAnnotations.filter((annotation) => annotation.id !== id));
   }
 
+  function removeAnnotations(ids: string[]) {
+    const deleteIds = new Set(ids);
+    saveAnnotations(replayAnnotationsRef.current.filter((annotation) => !deleteIds.has(annotation.id)));
+  }
+
+  async function exportReplayFlagsTextFile() {
+    setLayerStatus("Exporting replay timestamps...");
+    try {
+      const exportedPath = await window.riftlite.exportReplayFlagsText(model.replay.id);
+      setLayerStatus(exportedPath ? `Exported replay timestamps to ${exportedPath}` : "");
+    } catch (error) {
+      setLayerStatus(rendererErrorMessage(error, "Replay timestamp export failed."));
+    }
+  }
+
   function replayAnnotationBelongsToFlag(annotation: ReplayAnnotation, flag: ReplayFlag, notes: ReplayVoiceNote[]): boolean {
     const clipIds = new Set(notes.filter((note) => note.flagId === flag.id).map((note) => note.id));
     if (annotation.clipId && clipIds.has(annotation.clipId)) {
@@ -10355,7 +15504,7 @@ function ReplayDetail({
     fallbackLabel = "Key moment"
   ) {
     const type = flagType;
-    const customType = type === "custom" ? flagCustomType.trim() : "";
+    const customType = type === "custom" ? rememberReplayCustomFlagType(flagCustomType) : "";
     const label = type === "custom" ? customType || fallbackLabel : REPLAY_FLAG_TYPES.find((item) => item.value === type)?.label || fallbackLabel;
     const exists = replayFlags.some((flag) =>
       flag.targetType === targetType &&
@@ -10459,7 +15608,7 @@ function ReplayDetail({
       return;
     }
     const type = flagType;
-    const customType = type === "custom" ? flagCustomType.trim() : "";
+    const customType = type === "custom" ? rememberReplayCustomFlagType(flagCustomType) : "";
     const label = type === "custom" ? customType || "Video moment" : REPLAY_FLAG_TYPES.find((item) => item.value === type)?.label || "Video moment";
     const targetId = `${video.path || video.url}:${Math.round(timeMs)}`;
     const exists = replayFlags.some((flag) =>
@@ -10664,7 +15813,7 @@ function ReplayDetail({
           >
             <Images size={16} /> Visual replay
           </button>
-          <button type="button" className="secondary" onClick={onExport}>
+          <button type="button" className="secondary" onClick={() => onExport(replayVideoCurrentMs)}>
             <ExternalLink size={16} /> Export
           </button>
           <button type="button" className="secondary" onClick={() => setPresentationMode((value) => !value)}>
@@ -10772,8 +15921,35 @@ function ReplayDetail({
         </div>
       </section>
 
+      {reviewFlags.length ? (
+        <section className="rail-card replay-flagged-moments">
+          <header>
+            <div>
+              <h2>Flagged moments</h2>
+              <span>Jump straight to the teaching points in this replay.</span>
+            </div>
+          </header>
+          <div className="replay-flagged-grid">
+            {reviewFlags.map((flag) => (
+              <button
+                type="button"
+                key={flag.id}
+                data-active={activeReviewFlagId === flag.id}
+                onClick={() => openReviewFlag(flag)}
+              >
+                <span>{flag.timeMs != null ? formatDuration(flag.timeMs) : new Date(flag.capturedAt).toLocaleTimeString()}</span>
+                <strong>{replayFlagTypeLabel(flag)}</strong>
+                <em>{flag.targetLabel}</em>
+                {flag.note ? <small>{flag.note}</small> : null}
+              </button>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
       {model.replay.video ? (
         <ReplayVideoPlayer
+          replayId={model.replay.id}
           video={model.replay.video}
           flags={visibleFlags.filter((flag) => flag.targetType === "video-time")}
           annotations={visibleAnnotations.filter((annotation) => annotation.targetType === "video-time")}
@@ -10781,6 +15957,20 @@ function ReplayDetail({
           seekToMs={videoSeekMs}
           onSeekHandled={() => setVideoSeekMs(null)}
           onTimeChange={setReplayVideoCurrentMs}
+          flagType={flagType}
+          flagCustomType={flagCustomType}
+          flagNote={flagNote}
+          customFlagTypes={customReplayFlagTypes}
+          onFlagTypeSelect={selectReplayFlagType}
+          onFlagCustomTypeChange={setFlagCustomType}
+          onFlagNoteChange={setFlagNote}
+          onRememberCustomType={() => {
+            const saved = rememberReplayCustomFlagType();
+            if (saved) {
+              setFlagType("custom");
+              setFlagCustomType(saved);
+            }
+          }}
           onFlagTime={addVideoTimeFlag}
           onEditFlag={setEditingFlag}
           onSaveKeyframe={saveVideoKeyframe}
@@ -10789,6 +15979,8 @@ function ReplayDetail({
           onSaveTimelineVoiceNote={saveTimelineVoiceNote}
           onAddAnnotation={addAnnotation}
           onRemoveAnnotation={removeAnnotation}
+          onRemoveAnnotations={removeAnnotations}
+          onClip={(timeMs) => onExport(timeMs)}
         />
       ) : null}
 
@@ -10797,11 +15989,20 @@ function ReplayDetail({
         flagType={flagType}
         flagCustomType={flagCustomType}
         flagNote={flagNote}
+        customFlagTypes={customReplayFlagTypes}
         replay={model.replay}
-        onFlagTypeChange={setFlagType}
+        onFlagTypeSelect={selectReplayFlagType}
         onFlagCustomTypeChange={setFlagCustomType}
         onFlagNoteChange={setFlagNote}
         onAddReplayFlag={() => addReplayFlag("replay", model.replay.id, model.title, model.capturedAt, "Replay note")}
+        onRememberCustomType={() => {
+          const saved = rememberReplayCustomFlagType();
+          if (saved) {
+            setFlagType("custom");
+            setFlagCustomType(saved);
+          }
+        }}
+        onExportFlagsText={() => void exportReplayFlagsTextFile()}
         onOpenFlag={(flag) => {
           openFlag(flag);
           setEditingFlag(flag);
@@ -10827,6 +16028,7 @@ function ReplayDetail({
           activeLayerId={activeLayerId}
           onAddAnnotation={addAnnotation}
           onRemoveAnnotation={removeAnnotation}
+          onRemoveAnnotations={removeAnnotations}
           onSaveTrim={saveReplayTrim}
           onClearTrim={clearReplayTrim}
           onClose={() => setSlideshowOpen(false)}
@@ -10990,6 +16192,40 @@ function replayFlagTypeLabel(flag: Pick<ReplayFlag, "type" | "customType" | "lab
   return REPLAY_FLAG_TYPES.find((item) => item.value === flag.type)?.label || flag.label || "Key turn";
 }
 
+function normaliseCustomReplayFlagType(value: string): string {
+  return value.trim().replace(/\s+/g, " ").slice(0, 48);
+}
+
+function replayFlagSelectValue(flagType: ReplayFlagType, customType: string, customFlagTypes: string[]): string {
+  if (flagType !== "custom") {
+    return flagType;
+  }
+  const normalized = normaliseCustomReplayFlagType(customType);
+  const saved = customFlagTypes.find((item) => item.toLowerCase() === normalized.toLowerCase());
+  return saved ? `${CUSTOM_REPLAY_FLAG_PREFIX}${saved}` : "custom";
+}
+
+function replayFlagTypeOptions(customFlagTypes: string[]): Array<{ value: string; label: string }> {
+  const customOptions = customFlagTypes
+    .map(normaliseCustomReplayFlagType)
+    .filter(Boolean)
+    .filter((label, index, all) => all.findIndex((item) => item.toLowerCase() === label.toLowerCase()) === index)
+    .map((label) => ({ value: `${CUSTOM_REPLAY_FLAG_PREFIX}${label}`, label }));
+  return [
+    ...REPLAY_FLAG_TYPES.filter((item) => item.value !== "custom"),
+    ...customOptions,
+    { value: "custom", label: "Custom..." }
+  ];
+}
+
+function rendererErrorMessage(error: unknown, fallback: string): string {
+  if (error instanceof Error) {
+    return error.message || fallback;
+  }
+  const text = String(error ?? "").trim();
+  return text || fallback;
+}
+
 function replayFlagSortMs(flag: ReplayFlag): number {
   if (typeof flag.timeMs === "number") {
     return flag.timeMs;
@@ -11065,7 +16301,12 @@ type VoiceRecorderCapture = {
   cleanup: () => void;
 };
 
-async function createVoiceRecorderCapture(microphoneDeviceId: string): Promise<VoiceRecorderCapture> {
+type VoiceStreamCapture = {
+  stream: MediaStream;
+  cleanup: () => void;
+};
+
+async function createVoiceStreamCapture(microphoneDeviceId: string): Promise<VoiceStreamCapture> {
   const rawAudio: MediaTrackConstraints = {
     ...(microphoneDeviceId ? { deviceId: { exact: microphoneDeviceId } } : {}),
     echoCancellation: false,
@@ -11109,13 +16350,6 @@ async function createVoiceRecorderCapture(microphoneDeviceId: string): Promise<V
     recorderStream = sourceStream;
   }
 
-  const candidates = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"];
-  const mimeType = candidates.find((candidate) => MediaRecorder.isTypeSupported(candidate)) ?? "";
-  const recorder = new MediaRecorder(recorderStream, {
-    ...(mimeType ? { mimeType } : {}),
-    audioBitsPerSecond: 128_000,
-    bitsPerSecond: 128_000
-  });
   let cleaned = false;
   const cleanup = () => {
     if (cleaned) {
@@ -11126,7 +16360,19 @@ async function createVoiceRecorderCapture(microphoneDeviceId: string): Promise<V
     recorderStream.getTracks().forEach((track) => track.stop());
     void audioContext?.close().catch(() => undefined);
   };
-  return { recorder, cleanup };
+  return { stream: recorderStream, cleanup };
+}
+
+async function createVoiceRecorderCapture(microphoneDeviceId: string): Promise<VoiceRecorderCapture> {
+  const capture = await createVoiceStreamCapture(microphoneDeviceId);
+  const candidates = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"];
+  const mimeType = candidates.find((candidate) => MediaRecorder.isTypeSupported(candidate)) ?? "";
+  const recorder = new MediaRecorder(capture.stream, {
+    ...(mimeType ? { mimeType } : {}),
+    audioBitsPerSecond: 128_000,
+    bitsPerSecond: 128_000
+  });
+  return { recorder, cleanup: capture.cleanup };
 }
 
 function replayVoiceNoteForFlag(notes: ReplayVoiceNote[], flagId: string, layerId?: string): ReplayVoiceNote | undefined {
@@ -11323,7 +16569,8 @@ function ReplayAnnotationCanvas({
   playbackClipId,
   playbackOffsetMs,
   onAddAnnotation,
-  onRemoveAnnotation
+  onRemoveAnnotation,
+  onRemoveAnnotations
 }: {
   annotations: ReplayAnnotation[];
   targetId: string;
@@ -11337,6 +16584,7 @@ function ReplayAnnotationCanvas({
   playbackOffsetMs?: number;
   onAddAnnotation: (annotation: ReplayAnnotation) => void;
   onRemoveAnnotation: (id: string) => void;
+  onRemoveAnnotations: (ids: string[]) => void;
 }) {
   const [tool, setTool] = useState<ReplayAnnotationTool>("pen");
   const [color, setColor] = useState(REPLAY_ANNOTATION_COLORS[0]);
@@ -11501,6 +16749,14 @@ function ReplayAnnotationCanvas({
           >
             Undo mark
           </button>
+          <button
+            type="button"
+            className="secondary"
+            disabled={!syncedAnnotations.length}
+            onClick={() => onRemoveAnnotations(syncedAnnotations.map((annotation) => annotation.id))}
+          >
+            Clear marks
+          </button>
         </div>
       ) : null}
       <svg
@@ -11565,6 +16821,7 @@ function ReplayAnnotationShape({ annotation }: { annotation: ReplayAnnotation })
 }
 
 function ReplayVideoPlayer({
+  replayId,
   video,
   flags,
   annotations,
@@ -11572,6 +16829,14 @@ function ReplayVideoPlayer({
   seekToMs,
   onSeekHandled,
   onTimeChange,
+  flagType,
+  flagCustomType,
+  flagNote,
+  customFlagTypes,
+  onFlagTypeSelect,
+  onFlagCustomTypeChange,
+  onFlagNoteChange,
+  onRememberCustomType,
   onFlagTime,
   onEditFlag,
   onSaveKeyframe,
@@ -11579,8 +16844,11 @@ function ReplayVideoPlayer({
   microphoneDeviceId,
   onSaveTimelineVoiceNote,
   onAddAnnotation,
-  onRemoveAnnotation
+  onRemoveAnnotation,
+  onRemoveAnnotations,
+  onClip
 }: {
+  replayId: string;
   video: ReplayVideoAsset;
   flags: ReplayFlag[];
   annotations: ReplayAnnotation[];
@@ -11588,6 +16856,14 @@ function ReplayVideoPlayer({
   seekToMs: number | null;
   onSeekHandled: () => void;
   onTimeChange: (timeMs: number) => void;
+  flagType: ReplayFlagType;
+  flagCustomType: string;
+  flagNote: string;
+  customFlagTypes: string[];
+  onFlagTypeSelect: (value: string) => void;
+  onFlagCustomTypeChange: (value: string) => void;
+  onFlagNoteChange: (value: string) => void;
+  onRememberCustomType: () => void;
   onFlagTime: (timeMs: number) => void;
   onEditFlag: (flag: ReplayFlag) => void;
   onSaveKeyframe: (dataUrl: string, timeMs: number) => Promise<void>;
@@ -11596,6 +16872,8 @@ function ReplayVideoPlayer({
   onSaveTimelineVoiceNote: (flag: ReplayFlag, voiceNote: ReplayVoiceNote) => void;
   onAddAnnotation: (annotation: ReplayAnnotation) => void;
   onRemoveAnnotation: (id: string) => void;
+  onRemoveAnnotations: (ids: string[]) => void;
+  onClip: (timeMs: number) => void;
 }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const videoStageRef = useRef<HTMLDivElement | null>(null);
@@ -11609,9 +16887,17 @@ function ReplayVideoPlayer({
   const voiceTargetClipIdRef = useRef("");
   const voicePlaybackTimerRef = useRef<number | null>(null);
   const lastTimeUpdateRef = useRef(0);
+  const visibleAnnotationsRef = useRef<ReplayAnnotation[]>([]);
+  const presentationRecorderRef = useRef<MediaRecorder | null>(null);
+  const presentationChunksRef = useRef<Blob[]>([]);
+  const presentationCleanupRef = useRef<(() => void) | null>(null);
+  const presentationAnimationRef = useRef<number | null>(null);
+  const presentationStartedAtRef = useRef(0);
   const [playbackUrl, setPlaybackUrl] = useState(video.url);
   const [currentMs, setCurrentMs] = useState(0);
   const [status, setStatus] = useState("");
+  const [presentationRecording, setPresentationRecording] = useState(false);
+  const [presentationStatus, setPresentationStatus] = useState("");
   const [recordingVoice, setRecordingVoice] = useState(false);
   const [activeClipId, setActiveClipId] = useState<string | undefined>();
   const [activeClipStartedAt, setActiveClipStartedAt] = useState<number | undefined>();
@@ -11621,6 +16907,7 @@ function ReplayVideoPlayer({
   const [voiceVolume, setVoiceVolume] = useState(0.9);
   const [videoFullscreen, setVideoFullscreen] = useState(false);
   const [videoPlaying, setVideoPlaying] = useState(false);
+  const [playbackRate, setPlaybackRate] = useState<(typeof REPLAY_PLAYBACK_RATES)[number]>(1);
   const sortedFlags = [...flags].sort((a, b) => (a.timeMs ?? 0) - (b.timeMs ?? 0));
   const currentAnnotationTarget = `${video.path || video.url}:${Math.round(currentMs / 1000)}`;
   const visibleAnnotations = annotations.filter((annotation) =>
@@ -11629,6 +16916,11 @@ function ReplayVideoPlayer({
       || (!annotation.clipId && typeof annotation.timeMs === "number" && Math.abs(annotation.timeMs - currentMs) <= 1000)
   );
   const activeLayerFlags = sortedFlags.filter((flag) => replayLayerId(flag.layerId) === activeLayerId);
+  const selectedFlagType = replayFlagSelectValue(flagType, flagCustomType, customFlagTypes);
+
+  useEffect(() => {
+    visibleAnnotationsRef.current = visibleAnnotations;
+  }, [visibleAnnotations]);
 
   useEffect(() => {
     let cancelled = false;
@@ -11664,6 +16956,10 @@ function ReplayVideoPlayer({
   useEffect(() => () => {
     voiceRecorderRef.current?.state === "recording" && voiceRecorderRef.current.stop();
     voiceRecorderCleanupRef.current?.();
+    if (presentationRecorderRef.current?.state === "recording") {
+      presentationRecorderRef.current.stop();
+    }
+    cleanupPresentationRecording();
     audioRef.current?.pause();
     if (voicePlaybackTimerRef.current) {
       window.clearInterval(voicePlaybackTimerRef.current);
@@ -11700,10 +16996,217 @@ function ReplayVideoPlayer({
   }, [voiceVolume]);
 
   useEffect(() => {
+    if (videoRef.current) {
+      videoRef.current.playbackRate = playbackRate;
+    }
+  }, [playbackRate, playbackUrl]);
+
+  useEffect(() => {
     if (playbackClipId && !voiceNotes.some((note) => note.id === playbackClipId)) {
       stopVoicePlayback();
     }
   }, [playbackClipId, voiceNotes]);
+
+  function cleanupPresentationRecording() {
+    if (presentationAnimationRef.current) {
+      window.cancelAnimationFrame(presentationAnimationRef.current);
+      presentationAnimationRef.current = null;
+    }
+    presentationCleanupRef.current?.();
+    presentationCleanupRef.current = null;
+    presentationRecorderRef.current = null;
+  }
+
+  function drawPresentationAnnotation(
+    context: CanvasRenderingContext2D,
+    annotation: ReplayAnnotation,
+    width: number,
+    height: number
+  ) {
+    const points = annotation.points.map((point) => ({
+      x: point.x * width,
+      y: point.y * height
+    }));
+    const first = points[0];
+    const last = points.at(-1);
+    if (!first) {
+      return;
+    }
+    const strokeWidth = Math.max(4, annotation.width * 3 * (Math.min(width, height) / 1000));
+    context.save();
+    context.strokeStyle = annotation.color || "#6feeff";
+    context.fillStyle = annotation.color || "#6feeff";
+    context.lineWidth = strokeWidth;
+    context.lineCap = "round";
+    context.lineJoin = "round";
+    context.globalAlpha = annotation.tool === "highlight" ? 0.48 : 0.94;
+    if (annotation.tool === "text") {
+      const text = annotation.text?.trim() || annotation.note?.trim() || "";
+      context.globalAlpha = 1;
+      context.font = `900 ${Math.max(34, Math.round(height * 0.046))}px Arial, sans-serif`;
+      context.lineWidth = 10;
+      context.strokeStyle = "#020712";
+      context.strokeText(text, first.x, first.y);
+      context.fillStyle = annotation.color || "#6feeff";
+      context.fillText(text, first.x, first.y);
+      context.restore();
+      return;
+    }
+    if (annotation.tool === "arrow" && last) {
+      context.beginPath();
+      context.moveTo(first.x, first.y);
+      context.lineTo(last.x, last.y);
+      context.stroke();
+      const angle = Math.atan2(last.y - first.y, last.x - first.x);
+      const headLength = Math.max(16, strokeWidth * 3.2);
+      context.beginPath();
+      context.moveTo(last.x, last.y);
+      context.lineTo(last.x - headLength * Math.cos(angle - Math.PI / 6), last.y - headLength * Math.sin(angle - Math.PI / 6));
+      context.lineTo(last.x - headLength * Math.cos(angle + Math.PI / 6), last.y - headLength * Math.sin(angle + Math.PI / 6));
+      context.closePath();
+      context.fill();
+      context.restore();
+      return;
+    }
+    context.beginPath();
+    points.forEach((point, index) => {
+      if (index === 0) {
+        context.moveTo(point.x, point.y);
+      } else {
+        context.lineTo(point.x, point.y);
+      }
+    });
+    context.stroke();
+    context.restore();
+  }
+
+  function drawPresentationFrame(
+    canvas: HTMLCanvasElement,
+    context: CanvasRenderingContext2D,
+    track?: MediaStreamTrack & { requestFrame?: () => void }
+  ) {
+    const element = videoRef.current;
+    context.fillStyle = "#020814";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    if (element && element.readyState >= 2) {
+      context.drawImage(element, 0, 0, canvas.width, canvas.height);
+    }
+    for (const annotation of visibleAnnotationsRef.current) {
+      drawPresentationAnnotation(context, annotation, canvas.width, canvas.height);
+    }
+    track?.requestFrame?.();
+    presentationAnimationRef.current = window.requestAnimationFrame(() => drawPresentationFrame(canvas, context, track));
+  }
+
+  async function startPresentationRecording() {
+    const element = videoRef.current;
+    if (!element || !element.videoWidth || !element.videoHeight) {
+      setPresentationStatus("Replay video is not ready yet.");
+      return;
+    }
+    if (typeof MediaRecorder === "undefined" || typeof HTMLCanvasElement.prototype.captureStream !== "function") {
+      setPresentationStatus("Presentation recording is not available on this system.");
+      return;
+    }
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setPresentationStatus("Microphone access is not available on this system.");
+      return;
+    }
+    stopVoicePlayback();
+    if (recordingVoice) {
+      stopTimelineVoiceNote();
+    }
+    try {
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(2, element.videoWidth - (element.videoWidth % 2));
+      canvas.height = Math.max(2, element.videoHeight - (element.videoHeight % 2));
+      const context = canvas.getContext("2d", { alpha: false });
+      if (!context) {
+        setPresentationStatus("Could not create presentation canvas.");
+        return;
+      }
+      const voiceCapture = await createVoiceStreamCapture(microphoneDeviceId);
+      const fps = Math.min(30, Math.max(15, video.fps || 24));
+      const canvasStream = canvas.captureStream(fps);
+      const canvasTrack = canvasStream.getVideoTracks()[0] as MediaStreamTrack & { requestFrame?: () => void };
+      const combinedStream = new MediaStream([
+        ...canvasStream.getVideoTracks(),
+        ...voiceCapture.stream.getAudioTracks()
+      ]);
+      const mimeCandidates = [
+        "video/webm;codecs=vp9,opus",
+        "video/webm;codecs=vp8,opus",
+        "video/webm"
+      ];
+      const mimeType = mimeCandidates.find((candidate) => MediaRecorder.isTypeSupported(candidate)) ?? "";
+      const recorder = new MediaRecorder(combinedStream, {
+        ...(mimeType ? { mimeType } : {}),
+        videoBitsPerSecond: 8_000_000,
+        audioBitsPerSecond: 160_000
+      });
+      presentationChunksRef.current = [];
+      presentationStartedAtRef.current = Date.now();
+      presentationRecorderRef.current = recorder;
+      presentationCleanupRef.current = () => {
+        combinedStream.getTracks().forEach((track) => track.stop());
+        canvasStream.getTracks().forEach((track) => track.stop());
+        voiceCapture.cleanup();
+      };
+      recorder.ondataavailable = (event) => {
+        if (event.data.size) {
+          presentationChunksRef.current.push(event.data);
+        }
+      };
+      recorder.onstop = () => {
+        const durationMs = Math.max(0, Date.now() - presentationStartedAtRef.current);
+        const blob = new Blob(presentationChunksRef.current, { type: recorder.mimeType || "video/webm" });
+        cleanupPresentationRecording();
+        setPresentationRecording(false);
+        if (!blob.size) {
+          setPresentationStatus("No presentation video was captured.");
+          return;
+        }
+        setPresentationStatus("Preparing presentation MP4...");
+        void blob.arrayBuffer()
+          .then((data) => window.riftlite.exportReplayPresentationMp4(replayId, {
+            data,
+            mimeType: blob.type || "video/webm",
+            durationMs
+          }))
+          .then((outputPath) => {
+            setPresentationStatus(outputPath ? `Presentation MP4 exported to ${outputPath}` : "Presentation export cancelled.");
+          })
+          .catch((error) => {
+            setPresentationStatus(rendererErrorMessage(error, "Presentation export failed."));
+          });
+      };
+      drawPresentationFrame(canvas, context, canvasTrack);
+      recorder.start(1000);
+      setPresentationRecording(true);
+      setPresentationStatus("Presentation recording. Play, pause, draw, and talk; stop to export one MP4.");
+    } catch (error) {
+      cleanupPresentationRecording();
+      setPresentationRecording(false);
+      setPresentationStatus(rendererErrorMessage(error, "Presentation recording could not start."));
+    }
+  }
+
+  function stopPresentationRecording() {
+    if (presentationRecorderRef.current?.state === "recording") {
+      setPresentationStatus("Finalising presentation recording...");
+      presentationRecorderRef.current.stop();
+    }
+  }
+
+  function clearVisiblePresentationDrawings() {
+    const ids = visibleAnnotationsRef.current.map((annotation) => annotation.id);
+    if (!ids.length) {
+      setPresentationStatus("No visible drawings to clear.");
+      return;
+    }
+    onRemoveAnnotations(ids);
+    setPresentationStatus("Cleared visible drawings.");
+  }
 
   async function saveKeyframe() {
     const element = videoRef.current;
@@ -11830,6 +17333,11 @@ function ReplayVideoPlayer({
     lastTimeUpdateRef.current = nextMs;
   }
 
+  function skipVideo(deltaMs: number) {
+    const baseMs = videoRef.current ? Math.round(videoRef.current.currentTime * 1000) : currentMs;
+    seekVideo(baseMs + deltaMs);
+  }
+
   function timelineFlagForVoice(timeMs: number): ReplayFlag {
     const nearby = activeLayerFlags.find((flag) =>
       typeof flag.timeMs === "number" && Math.abs(flag.timeMs - timeMs) <= 1500
@@ -11937,7 +17445,24 @@ function ReplayVideoPlayer({
           <span>{REPLAY_VIDEO_PROFILES[video.quality]?.label ?? video.quality} - {formatDuration(video.durationMs)} - {formatBytes(video.sizeBytes)}</span>
         </div>
         <div className="row-actions">
-          <button type="button" className="secondary" onClick={() => onFlagTime(currentMs)}><Flag size={14} /> Flag timestamp</button>
+          <button
+            type="button"
+            className={presentationRecording ? "danger" : "secondary"}
+            onClick={() => presentationRecording ? stopPresentationRecording() : void startPresentationRecording()}
+            disabled={Boolean(playbackClipId)}
+            title="Record replay playback, pauses, drawings, and microphone narration into one MP4"
+          >
+            <Video size={14} /> {presentationRecording ? "Stop presentation" : "Presentation MP4"}
+          </button>
+          <button
+            type="button"
+            className="secondary"
+            onClick={clearVisiblePresentationDrawings}
+            disabled={!visibleAnnotations.length}
+            title="Clear drawings visible at the current replay timestamp"
+          >
+            <Trash2 size={14} /> Clear drawing
+          </button>
           <button type="button" className={recordingVoice ? "danger" : "secondary"} onClick={() => recordingVoice ? stopTimelineVoiceNote() : void startTimelineVoiceNote()}>
             <Mic size={14} /> {recordingVoice ? "Stop coaching note" : "Record coaching note"}
           </button>
@@ -11958,17 +17483,66 @@ function ReplayVideoPlayer({
             />
             <span>{Math.round(voiceVolume * 100)}%</span>
           </label>
+          {videoFullscreen ? (
+            <>
+              <button type="button" className="secondary" onClick={() => skipVideo(-20000)} title="Go back 20 seconds">
+                <RotateCcw size={14} /> Back 20s
+              </button>
+              <button type="button" className="secondary" onClick={() => skipVideo(20000)} title="Go forward 20 seconds">
+                <RotateCw size={14} /> Forward 20s
+              </button>
+            </>
+          ) : null}
           <button type="button" className="secondary" onClick={() => void toggleVideoFullscreen()}>
             <Maximize2 size={14} /> {videoFullscreen ? "Exit full screen" : "Full screen"}
+          </button>
+          <button type="button" className="secondary" onClick={() => onClip(currentMs)}>
+            <Scissors size={14} /> Clip
           </button>
           <button type="button" className="secondary" onClick={() => void saveKeyframe()}><Save size={14} /> Save keyframe</button>
         </div>
       </header>
+      <div className="replay-video-quick-flag">
+        <label>
+          Type
+          <select value={selectedFlagType} onChange={(event) => onFlagTypeSelect(event.target.value)}>
+            {replayFlagTypeOptions(customFlagTypes).map((type) => (
+              <option value={type.value} key={type.value}>{type.label}</option>
+            ))}
+          </select>
+        </label>
+        {flagType === "custom" ? (
+          <label>
+            Custom label
+            <input value={flagCustomType} onChange={(event) => onFlagCustomTypeChange(event.target.value)} placeholder="Question, alternative line..." />
+          </label>
+        ) : null}
+        <label className="replay-video-quick-note">
+          Note
+          <input value={flagNote} onChange={(event) => onFlagNoteChange(event.target.value)} placeholder="Optional note for this timestamp..." />
+        </label>
+        <div className="row-actions">
+          {flagType === "custom" ? (
+            <button type="button" className="secondary" onClick={onRememberCustomType} disabled={!flagCustomType.trim()}>
+              <Plus size={14} /> Save type
+            </button>
+          ) : null}
+          <button type="button" className="primary" onClick={() => onFlagTime(currentMs)}>
+            <Flag size={14} /> Flag {formatDuration(currentMs)}
+          </button>
+        </div>
+      </div>
       {recordingVoice ? (
         <div className="replay-coaching-status" data-state="recording">
           <Mic size={15} />
           <strong>Recording synced coaching note</strong>
           <span>The replay is paused. Draw, arrow, highlight, or add text now and it will replay with this audio.</span>
+        </div>
+      ) : presentationRecording ? (
+        <div className="replay-coaching-status" data-state="presentation">
+          <Video size={15} />
+          <strong>Recording presentation MP4</strong>
+          <span>Play, pause, draw, and talk. Stop recording to export one continuous video.</span>
         </div>
       ) : playbackClipId ? (
         <div className="replay-coaching-status" data-state="playing">
@@ -11998,6 +17572,7 @@ function ReplayVideoPlayer({
           onEnded={() => setVideoPlaying(false)}
           onLoadedMetadata={(event) => {
             const nextMs = Math.round(event.currentTarget.currentTime * 1000);
+            event.currentTarget.playbackRate = playbackRate;
             setCurrentMs(nextMs);
             onTimeChange(nextMs);
           }}
@@ -12023,12 +17598,30 @@ function ReplayVideoPlayer({
           playbackOffsetMs={playbackOffsetMs}
           onAddAnnotation={onAddAnnotation}
           onRemoveAnnotation={onRemoveAnnotation}
+          onRemoveAnnotations={onRemoveAnnotations}
         />
       </div>
       <div className="replay-video-controls">
+        <button type="button" className="secondary replay-video-skip-button" onClick={() => skipVideo(-20000)} title="Go back 20 seconds">
+          <RotateCcw size={15} /> 20s
+        </button>
         <button type="button" className="secondary" onClick={toggleVideoPlayback} disabled={recordingVoice || Boolean(playbackClipId)}>
           {videoPlaying ? <Pause size={15} /> : <Play size={15} />} {videoPlaying ? "Pause" : "Play"}
         </button>
+        <div className="replay-playback-rate" role="group" aria-label="Replay playback speed">
+          {REPLAY_PLAYBACK_RATES.map((rate) => (
+            <button
+              type="button"
+              key={rate}
+              className="secondary replay-rate-button"
+              data-active={playbackRate === rate}
+              onClick={() => setPlaybackRate(rate)}
+              title={`Play replay at ${rate}x speed`}
+            >
+              {rate}x
+            </button>
+          ))}
+        </div>
         <label>
           <span>{formatDuration(currentMs)}</span>
           <input
@@ -12041,8 +17634,14 @@ function ReplayVideoPlayer({
           />
           <span>{formatDuration(video.durationMs || 0)}</span>
         </label>
+        <button type="button" className="secondary replay-video-skip-button" onClick={() => skipVideo(20000)} title="Go forward 20 seconds">
+          <RotateCw size={15} /> 20s
+        </button>
         <button type="button" className="secondary" onClick={() => void toggleVideoFullscreen()}>
           <Maximize2 size={15} /> {videoFullscreen ? "Exit full screen" : "Full screen"}
+        </button>
+        <button type="button" className="secondary" onClick={() => onClip(currentMs)}>
+          <Scissors size={15} /> Clip
         </button>
       </div>
       <ReplayVideoMarkerTimeline
@@ -12052,13 +17651,7 @@ function ReplayVideoPlayer({
         currentMs={currentMs}
         playbackClipId={playbackClipId}
         voicePlaybackPaused={voicePlaybackPaused}
-        onSeek={(timeMs) => {
-          if (videoRef.current) {
-            videoRef.current.currentTime = Math.max(0, timeMs / 1000);
-          }
-          setCurrentMs(timeMs);
-          onTimeChange(timeMs);
-        }}
+        onSeek={seekVideo}
         onPlayVoice={playVoiceNote}
         onPauseVoice={pauseVoicePlayback}
         onResumeVoice={resumeVoicePlayback}
@@ -12096,6 +17689,7 @@ function ReplayVideoPlayer({
           ))}
         </div>
       ) : null}
+      {presentationStatus ? <p className="muted replay-presentation-status">{presentationStatus}</p> : null}
       {status ? <p className="muted">{status}</p> : null}
     </section>
   );
@@ -12128,9 +17722,64 @@ function ReplayVideoMarkerTimeline({
 }) {
   const durationMs = Math.max(1, video.durationMs || 1);
   const sortedFlags = [...flags].filter((flag) => typeof flag.timeMs === "number").sort((a, b) => (a.timeMs ?? 0) - (b.timeMs ?? 0));
+  const seekFromPointer = (event: React.PointerEvent<HTMLDivElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    if (!rect.width) {
+      return;
+    }
+    const offset = Math.min(Math.max(0, event.clientX - rect.left), rect.width);
+    onSeek((offset / rect.width) * durationMs);
+  };
   return (
     <div className="replay-marker-timeline">
-      <div className="replay-marker-rail" aria-label="Replay markers">
+      <div
+        className="replay-marker-rail"
+        role="slider"
+        tabIndex={0}
+        aria-label="Replay timeline"
+        aria-valuemin={0}
+        aria-valuemax={Math.round(durationMs / 1000)}
+        aria-valuenow={Math.round(currentMs / 1000)}
+        aria-valuetext={`${formatDuration(currentMs)} of ${formatDuration(durationMs)}`}
+        onPointerDown={(event) => {
+          const target = event.target as HTMLElement | null;
+          if (target?.closest(".replay-marker-pin")) {
+            return;
+          }
+          event.currentTarget.setPointerCapture(event.pointerId);
+          seekFromPointer(event);
+        }}
+        onPointerMove={(event) => {
+          if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+            seekFromPointer(event);
+          }
+        }}
+        onPointerUp={(event) => {
+          if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+            event.currentTarget.releasePointerCapture(event.pointerId);
+          }
+        }}
+        onPointerCancel={(event) => {
+          if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+            event.currentTarget.releasePointerCapture(event.pointerId);
+          }
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "ArrowLeft") {
+            event.preventDefault();
+            onSeek(currentMs - 5000);
+          } else if (event.key === "ArrowRight") {
+            event.preventDefault();
+            onSeek(currentMs + 5000);
+          } else if (event.key === "Home") {
+            event.preventDefault();
+            onSeek(0);
+          } else if (event.key === "End") {
+            event.preventDefault();
+            onSeek(durationMs);
+          }
+        }}
+      >
         <span className="replay-marker-progress" style={{ width: `${Math.min(100, Math.max(0, (currentMs / durationMs) * 100))}%` }} />
         {sortedFlags.map((flag) => {
           const note = replayVoiceNoteForFlag(voiceNotes, flag.id, flag.layerId);
@@ -12160,6 +17809,7 @@ function ReplayVideoMarkerTimeline({
                   onPlayVoice(note, flag);
                 }
               }}
+              onPointerDown={(event) => event.stopPropagation()}
               onContextMenu={(event) => {
                 event.preventDefault();
                 onEditFlag(flag);
@@ -12227,6 +17877,7 @@ function ReplaySlideshow({
   activeLayerId,
   onAddAnnotation,
   onRemoveAnnotation,
+  onRemoveAnnotations,
   onSaveTrim,
   onClearTrim,
   onClose
@@ -12244,6 +17895,7 @@ function ReplaySlideshow({
   activeLayerId: string;
   onAddAnnotation: (annotation: ReplayAnnotation) => void;
   onRemoveAnnotation: (id: string) => void;
+  onRemoveAnnotations: (ids: string[]) => void;
   onSaveTrim: (trim: ReplayTrimRange) => void;
   onClearTrim: () => void;
   onClose: () => void;
@@ -12409,6 +18061,7 @@ function ReplaySlideshow({
                 playbackOffsetMs={playbackOffsetMs}
                 onAddAnnotation={onAddAnnotation}
                 onRemoveAnnotation={onRemoveAnnotation}
+                onRemoveAnnotations={onRemoveAnnotations}
               />
             </div>
             <figcaption>
@@ -12982,14 +18635,19 @@ function SettingsView({
         </div>
         {DECK_TRACKER_FEATURE_ENABLED ? (
           <div className="rail-card">
-            <h2>My Deck Tracker</h2>
-            <p className="muted">Local-only draw odds for your active deck. Tracker data only leaves your PC if you export and send a replay file.</p>
+            <h2>Vision Deck Tracker Beta</h2>
+            <p className="muted">Opt-in local card recognition for your active deck. It only scans visible local-player cards and never changes match result capture.</p>
             <label className="toggle-row">
-              <span><BookOpen size={16} /> Deck tracker</span>
+              <span><BookOpen size={16} /> Vision tracker</span>
               <input
                 type="checkbox"
                 checked={settings.deckTrackerEnabled}
-                onChange={(event) => void onSave({ deckTrackerEnabled: event.target.checked })}
+                onChange={(event) => {
+                  const enabled = event.target.checked;
+                  void onSave(enabled
+                    ? { deckTrackerEnabled: true, deckTrackerAutoStart: true, deckTrackerSaveToReplay: true }
+                    : { deckTrackerEnabled: false });
+                }}
               />
             </label>
             <label className="toggle-row">
@@ -12997,6 +18655,7 @@ function SettingsView({
               <input
                 type="checkbox"
                 checked={settings.deckTrackerAutoStart}
+                disabled={!settings.deckTrackerEnabled}
                 onChange={(event) => void onSave({ deckTrackerAutoStart: event.target.checked })}
               />
             </label>
@@ -13005,9 +18664,23 @@ function SettingsView({
               <input
                 type="checkbox"
                 checked={settings.deckTrackerSaveToReplay}
+                disabled={!settings.deckTrackerEnabled}
                 onChange={(event) => void onSave({ deckTrackerSaveToReplay: event.target.checked })}
               />
             </label>
+            <label>
+              Performance mode
+              <select
+                value={settings.deckTrackerPerformanceMode}
+                disabled={!settings.deckTrackerEnabled}
+                onChange={(event) => void onSave({ deckTrackerPerformanceMode: event.target.value as DeckTrackerPerformanceMode })}
+              >
+                <option value="light">Light - slower checks, lowest CPU</option>
+                <option value="balanced">Balanced - recommended beta setting</option>
+                <option value="responsive">Responsive - faster checks, higher CPU</option>
+              </select>
+            </label>
+            <p className="muted">Recognition runs away from the game renderer and skips frames if it falls behind. If confidence is low, suggestions must be confirmed before affecting odds.</p>
           </div>
         ) : null}
         <div className="rail-card">
@@ -13089,7 +18762,7 @@ function SettingsView({
         <LegalNoticePanel />
         <div className="rail-card">
           <h2>Diagnostics</h2>
-          <p className="muted">Advanced capture tools are tucked away for tester reports and support.</p>
+          <p className="muted">Advanced capture tools are tucked away for tester reports, replay diagnostics, and support.</p>
           <label className="toggle-row">
             <span><Activity size={16} /> Debug capture</span>
             <input
@@ -13489,9 +19162,14 @@ function HubsView({ settings, matches, hubMatches, onSave, onHubResult, onSyncPr
       setSyncStatus("Choose a hub to claim.");
       return;
     }
+    const claimPassword = window.prompt("Enter this hub's password to claim ownership for your RiftLite account.");
+    if (!claimPassword?.trim()) {
+      setSyncStatus("Hub claim cancelled.");
+      return;
+    }
     setSyncStatus("Claiming hub for your RiftLite account...");
     try {
-      await window.riftlite.claimHub(hubId);
+      await window.riftlite.claimHub(hubId, claimPassword);
       setSyncStatus("Hub claimed. Account roles are now available.");
       await onRefresh();
       await refreshHubSocial(hubId);
@@ -13942,15 +19620,17 @@ function HubsView({ settings, matches, hubMatches, onSave, onHubResult, onSyncPr
   );
 }
 
-function CommunityView({ matches, communityMatches, hubMatches, settings, status, onRefresh }: {
+function CommunityView({ matches, communityMatches, hubMatches, settings, status, activeTab, deckLegendTarget, onTabChange, onRefresh }: {
   matches: MatchDraft[];
   communityMatches: CommunityMatch[];
   hubMatches: Record<string, CommunityMatch[]>;
   settings: UserSettings;
   status: string;
+  activeTab: CommunityTab;
+  deckLegendTarget: string;
+  onTabChange: (tab: CommunityTab) => void;
   onRefresh: () => Promise<void>;
 }) {
-  const [activeTab, setActiveTab] = useState<CommunityTab>("legend-meta");
   const [formatFilter, setFormatFilter] = useState("");
   const [deckPresenceFilter, setDeckPresenceFilter] = useState("");
   const communityRef = useRef<HTMLElement | null>(null);
@@ -13963,14 +19643,19 @@ function CommunityView({ matches, communityMatches, hubMatches, settings, status
     () => filterAnalyticsByDeckPresence(filterAnalyticsByFormat(analytics, formatFilter), deckPresenceFilter),
     [analytics, formatFilter, deckPresenceFilter]
   );
+  const communityDeckMatches = useMemo(
+    () => filterCommunityDeckMatches(communityMatches, formatFilter, deckPresenceFilter),
+    [communityMatches, formatFilter, deckPresenceFilter]
+  );
   const tabs: Array<{ id: CommunityTab; label: string }> = [
     { id: "legend-meta", label: "Legend Meta" },
     { id: "match-matrix", label: "Match Matrix" },
-    { id: "recent-matches", label: "Recent Matches" }
+    { id: "recent-matches", label: "Recent Matches" },
+    { id: "community-decks", label: "Community Decks" }
   ];
 
   function chooseTab(tab: CommunityTab) {
-    setActiveTab(tab);
+    onTabChange(tab);
     requestAnimationFrame(() => {
       communityRef.current?.scrollTo({ top: 0, behavior: "smooth" });
     });
@@ -14007,8 +19692,36 @@ function CommunityView({ matches, communityMatches, hubMatches, settings, status
       {activeTab === "legend-meta" ? <LegendMetaPanel matches={filteredAnalytics} expanded showFlags={false} /> : null}
       {activeTab === "match-matrix" ? <MatchupMatrixPanel matches={filteredAnalytics} emptyText="Community match data will appear here after Firebase sync returns rows." showFlags={false} /> : null}
       {activeTab === "recent-matches" ? <RecentMatchesPanel matches={filteredAnalytics} showFlags={false} /> : null}
+      {activeTab === "community-decks" ? <CommunityDecksPanel matches={communityDeckMatches} focusLegend={deckLegendTarget} /> : null}
     </section>
   );
+}
+
+function filterCommunityDeckMatches(matches: CommunityMatch[], formatFilter: string, deckPresenceFilter: string, includeUnknownScope = false): CommunityMatch[] {
+  return matches.filter((match) => {
+    if (!includeUnknownScope && match.scope !== "community") {
+      return false;
+    }
+    if (includeUnknownScope && match.scope && match.scope !== "community") {
+      return false;
+    }
+    if (formatFilter && match.format !== formatFilter) {
+      return false;
+    }
+    const hasDeck = Boolean(
+      match.deckSnapshotJson?.trim() ||
+      match.deckSourceKey?.trim() ||
+      match.deckSourceUrl?.trim() ||
+      meaningfulDeckName(match.deckName)
+    );
+    if (deckPresenceFilter === "with" && !hasDeck) {
+      return false;
+    }
+    if (deckPresenceFilter === "without") {
+      return false;
+    }
+    return hasDeck;
+  });
 }
 
 function HubStatsPanel({ matches }: { matches: AnalyticsMatch[] }) {
@@ -14324,6 +20037,334 @@ function RecentMatchesPanel({ matches, showFlags = true }: { matches: AnalyticsM
   );
 }
 
+function CommunityDecksPanel({ matches, focusLegend = "" }: { matches: CommunityMatch[]; focusLegend?: string }) {
+  const [selectedLegend, setSelectedLegend] = useState("");
+  const [search, setSearch] = useState("");
+  const [selectedDeck, setSelectedDeck] = useState<CommunityDeckGroup | null>(null);
+  const [selectedDrilldown, setSelectedDrilldown] = useState<StatsDrilldownSelection | null>(null);
+  const meta = useMemo(() => buildCommunityDeckMeta(matches), [matches]);
+  const visibleLegends = useMemo(
+    () => meta.legends.filter((summary) => communityDeckLegendMatchesSearch(summary, meta.groups, search)),
+    [meta, search]
+  );
+  const selectedGroups = useMemo(
+    () => selectedLegend ? communityDeckGroupsForLegend(meta, selectedLegend) : [],
+    [meta, selectedLegend]
+  );
+  const selectedMatches = useMemo(
+    () => uniqueCommunityAnalytics(selectedGroups.flatMap((group) => group.matches)),
+    [selectedGroups]
+  );
+  const mainStats = useMemo(
+    () => selectedLegend ? communityCardStatsForLegend(meta, selectedLegend, "mainDeck") : [],
+    [meta, selectedLegend]
+  );
+  const sideboardStats = useMemo(
+    () => selectedLegend ? communityCardStatsForLegend(meta, selectedLegend, "sideboard") : [],
+    [meta, selectedLegend]
+  );
+  const runeStats = useMemo(
+    () => selectedLegend ? communityCardStatsForLegend(meta, selectedLegend, "runes") : [],
+    [meta, selectedLegend]
+  );
+  const championStats = useMemo(
+    () => selectedLegend ? communityCardStatsForLegend(meta, selectedLegend, "champions") : [],
+    [meta, selectedLegend]
+  );
+  const battlefieldStats = useMemo(
+    () => selectedLegend ? communityBattlefieldStatsForLegend(meta, selectedLegend) : [],
+    [meta, selectedLegend]
+  );
+
+  useEffect(() => {
+    const nextLegend = normalizeLegendName(focusLegend) || focusLegend.trim();
+    if (!nextLegend) {
+      return;
+    }
+    setSelectedLegend(nextLegend);
+    setSelectedDeck(null);
+    setSelectedDrilldown(null);
+  }, [focusLegend]);
+
+  function openDeck(group: CommunityDeckGroup) {
+    setSelectedDeck(group);
+  }
+
+  function openStat(stat: CommunityDeckCardStat | CommunityDeckBattlefieldStat, titlePrefix = "") {
+    const title = titlePrefix ? `${stat.name} ${titlePrefix}` : `${stat.name} decks`;
+    setSelectedDrilldown({
+      title,
+      subtitle: `${stat.inclusionLabel} | ${stat.record} from ${stat.total} public community match${stat.total === 1 ? "" : "es"}.`,
+      matches: uniqueCommunityAnalytics(stat.matches),
+      primaryLegend: selectedLegend,
+      showFlags: false
+    });
+  }
+
+  return (
+    <section className="rail-card community-decks-panel">
+      <div className="community-decks-header">
+        <div>
+          <h2>Community decks</h2>
+          <span>{meta.totalDecks} public decklist{meta.totalDecks === 1 ? "" : "s"} from {meta.totalMatches} community match{meta.totalMatches === 1 ? "" : "es"}.</span>
+        </div>
+        <label className="community-deck-search">
+          Search
+          <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Legend, deck, card..." />
+        </label>
+      </div>
+      {!selectedLegend ? (
+        <>
+          <div className="community-deck-legend-grid">
+            {visibleLegends.map((summary) => (
+              <button
+                type="button"
+                className="community-deck-legend-card interactive-row"
+                key={summary.legend}
+                onClick={() => setSelectedLegend(summary.legend)}
+              >
+                <LegendAvatar legend={summary.legend} size="large" />
+                <div>
+                  <strong>{summary.legend}</strong>
+                  <span>{summary.deckCount} deck{summary.deckCount === 1 ? "" : "s"} | {summary.matchCount} match{summary.matchCount === 1 ? "" : "es"}</span>
+                </div>
+                <div className="community-deck-mini-stats">
+                  <span>{summary.winRateLabel}</span>
+                  <span>{summary.record}</span>
+                </div>
+                <div className="community-deck-card-notes">
+                  <span>Top card: {summary.topCard?.name ?? "Not enough deck data"}</span>
+                  <span>Top battlefield: {summary.topBattlefield?.name ?? "Not enough battlefield data"}</span>
+                </div>
+              </button>
+            ))}
+          </div>
+          {!visibleLegends.length ? (
+            <p className="empty-state">No public deck snapshots match those filters yet. Community Decks only uses public community-synced deck data.</p>
+          ) : null}
+        </>
+      ) : (
+        <div className="community-deck-detail">
+          <button className="secondary community-deck-back" onClick={() => {
+            setSelectedLegend("");
+            setSelectedDeck(null);
+            setSelectedDrilldown(null);
+          }}>Back to legends</button>
+          <div className="community-deck-detail-hero">
+            <LegendAvatar legend={selectedLegend} size="large" />
+            <div>
+              <h2>{selectedLegend} decks</h2>
+              <span>{selectedGroups.length} decklist{selectedGroups.length === 1 ? "" : "s"} in the current community view.</span>
+            </div>
+          </div>
+          <div className="drilldown-grid community-deck-metrics">
+            <Metric label="Decks" value={String(selectedGroups.length)} />
+            <Metric label="Matches" value={String(selectedMatches.length)} />
+            <Metric label="Win rate" value={`${analyticsResultStats(selectedMatches).winRate}%`} />
+            <Metric label="BO1 / BO3" value={`${selectedGroups.reduce((sum, group) => sum + group.bo1, 0)} / ${selectedGroups.reduce((sum, group) => sum + group.bo3, 0)}`} />
+          </div>
+
+          <section className="community-deck-section">
+            <h3>Decklists</h3>
+            <div className="community-deck-list-grid">
+              {selectedGroups.map((group) => (
+                <div
+                  className="community-deck-list-card interactive-row"
+                  key={group.key}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => openDeck(group)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      openDeck(group);
+                    }
+                  }}
+                >
+                  <LegendAvatar legend={group.legend} />
+                  <div>
+                    <strong>{group.title || `${group.legend} deck`}</strong>
+                    <span>{group.record} | {group.winRateLabel} | {group.total} match{group.total === 1 ? "" : "es"}</span>
+                    <em>{group.snapshot ? "Snapshot available" : "Snapshot missing"}</em>
+                  </div>
+                  {group.sourceUrl?.startsWith("http") ? (
+                    <button
+                      type="button"
+                      className="icon-button"
+                      title="Open source"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void window.riftlite.openExternalResource(group.sourceUrl);
+                      }}
+                    >
+                      <ExternalLink size={16} />
+                    </button>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          </section>
+
+          <CommunityCardMetaSection title="Main deck staples" stats={mainStats} onOpen={openStat} />
+          <CommunityCardMetaSection title="Sideboard cards" stats={sideboardStats} onOpen={(stat) => openStat(stat, "sideboard matches")} />
+          <CommunityCardMetaSection title="Runes and champion cards" stats={[...championStats, ...runeStats]} onOpen={(stat) => openStat(stat, "rune/champion matches")} />
+          <CommunityBattlefieldMetaSection stats={battlefieldStats} onOpen={(stat) => openStat(stat, "battlefield matches")} />
+        </div>
+      )}
+      {selectedDeck ? <CommunityDeckSnapshotPopup group={selectedDeck} onClose={() => setSelectedDeck(null)} /> : null}
+      {selectedDrilldown ? (
+        <div
+          className="modal-backdrop matrix-popup-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              setSelectedDrilldown(null);
+            }
+          }}
+        >
+          <StatsDrilldown {...selectedDrilldown} onClose={() => setSelectedDrilldown(null)} />
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function CommunityCardMetaSection({ title, stats, onOpen }: {
+  title: string;
+  stats: CommunityDeckCardStat[];
+  onOpen: (stat: CommunityDeckCardStat) => void;
+}) {
+  return (
+    <section className="community-deck-section">
+      <h3>{title}</h3>
+      <div className="community-card-meta-grid">
+        {stats.slice(0, 24).map((stat) => (
+          <CommunityCardStatButton key={stat.key} stat={stat} onOpen={() => onOpen(stat)} />
+        ))}
+      </div>
+      {!stats.length ? <p className="muted">No snapshot data for this section yet.</p> : null}
+    </section>
+  );
+}
+
+function CommunityBattlefieldMetaSection({ stats, onOpen }: {
+  stats: CommunityDeckBattlefieldStat[];
+  onOpen: (stat: CommunityDeckBattlefieldStat) => void;
+}) {
+  return (
+    <section className="community-deck-section">
+      <h3>Battlefields</h3>
+      <div className="community-card-meta-grid battlefield-meta-grid">
+        {stats.slice(0, 24).map((stat) => (
+          <CommunityCardStatButton key={stat.key} stat={stat} onOpen={() => onOpen(stat)}>
+            <span>{stat.chosenRateLabel}</span>
+            <span>First {formatOneDecimal(stat.firstChosenRate)}% | Second {formatOneDecimal(stat.secondChosenRate)}%</span>
+          </CommunityCardStatButton>
+        ))}
+      </div>
+      {!stats.length ? <p className="muted">No battlefield snapshot data for this legend yet.</p> : null}
+    </section>
+  );
+}
+
+function CommunityCardStatButton({ stat, onOpen, children }: {
+  stat: CommunityDeckCardStat;
+  onOpen: () => void;
+  children?: React.ReactNode;
+}) {
+  return (
+    <button type="button" className="community-card-stat-card interactive-row" onClick={onOpen}>
+      <CommunityCardArt name={stat.name} imageUrl={stat.imageUrl} />
+      <div>
+        <strong>{stat.name}</strong>
+        <span>{stat.inclusionLabel}</span>
+        <span>{stat.commonCopies ? `${stat.commonCopies}x most common | ${formatOneDecimal(stat.averageCopies)} avg` : "Copy count unknown"}</span>
+        <span>{stat.winRateLabel} | {stat.record}</span>
+        {children}
+      </div>
+    </button>
+  );
+}
+
+function CommunityCardArt({ name, imageUrl }: { name: string; imageUrl: string }) {
+  return imageUrl ? (
+    <img className="community-card-art" src={imageUrl} alt="" loading="lazy" />
+  ) : (
+    <span className="community-card-art placeholder">{name.slice(0, 2).toUpperCase()}</span>
+  );
+}
+
+function CommunityDeckSnapshotPopup({ group, onClose }: { group: CommunityDeckGroup; onClose: () => void }) {
+  const matches = useMemo(() => uniqueCommunityAnalytics(group.matches), [group.matches]);
+  return (
+    <div
+      className="modal-backdrop matrix-popup-backdrop"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) {
+          onClose();
+        }
+      }}
+    >
+      <section className="community-deck-snapshot-popup">
+        <button className="icon-button match-detail-popup-close" onClick={onClose}>x</button>
+        <header>
+          <div>
+            <h3>{group.title || `${group.legend} deck`}</h3>
+            <span>{group.record} | {group.winRateLabel} | {group.total} community match{group.total === 1 ? "" : "es"}</span>
+          </div>
+          {group.sourceUrl?.startsWith("http") ? <button className="secondary" onClick={() => void window.riftlite.openExternalResource(group.sourceUrl)}>Open source</button> : null}
+        </header>
+        {group.snapshotJson ? (
+          <DeckCodePanel title={group.title || "Community deck"} sourceUrl={group.sourceUrl} snapshotJson={group.snapshotJson} />
+        ) : (
+          <p className="empty-state">This deck has source or name data, but no parseable snapshot, so card-level metadata is unavailable.</p>
+        )}
+        <StatsDrilldown
+          title="Matches using this deck"
+          subtitle="Public community matches grouped into this unique decklist."
+          matches={matches}
+          primaryLegend={group.legend}
+          showFlags={false}
+          onClose={onClose}
+        />
+      </section>
+    </div>
+  );
+}
+
+function communityDeckLegendMatchesSearch(summary: CommunityDeckLegendSummary, groups: CommunityDeckGroup[], search: string): boolean {
+  const query = search.trim().toLowerCase();
+  if (!query) {
+    return true;
+  }
+  if (summary.legend.toLowerCase().includes(query)) {
+    return true;
+  }
+  const legendGroups = groups.filter((group) => group.legend === summary.legend);
+  return legendGroups.some((group) => {
+    if (group.title.toLowerCase().includes(query)) {
+      return true;
+    }
+    const snapshot = group.snapshot;
+    if (!snapshot) {
+      return false;
+    }
+    return [...snapshot.mainDeck, ...snapshot.sideboard, ...snapshot.battlefields, ...snapshot.runes]
+      .some((entry) => entry.name.toLowerCase().includes(query));
+  });
+}
+
+function uniqueCommunityAnalytics(matches: CommunityMatch[]): AnalyticsMatch[] {
+  const unique = new Map<string, CommunityMatch>();
+  for (const match of matches) {
+    unique.set(match.id, match);
+  }
+  return [...unique.values()].map(communityToAnalytics);
+}
+
+function formatOneDecimal(value: number): string {
+  return Number.isInteger(value) ? String(value) : value.toFixed(1);
+}
+
 function MetaAlertsPanel({ matches, showFlags = true }: { matches: AnalyticsMatch[]; showFlags?: boolean }) {
   const [selectedTitle, setSelectedTitle] = useState("");
   const alerts = metaAlerts(matches);
@@ -14536,26 +20577,30 @@ function MatchupMatrixPanel({
                     <LegendAvatar legend={row} />
                     <div className="matrix-row-copy" title={row}>
                       <strong>{row}</strong>
+                      <em className="matrix-row-total">{matrix.rowTotals.get(row) ?? 0} match{(matrix.rowTotals.get(row) ?? 0) === 1 ? "" : "es"}</em>
                       <span>{legendRecord(visibleMatches, row)}</span>
                     </div>
                   </th>
                   {matrix.cols.map((col) => {
                     const cell = matrix.lookup.get(`${row}|||${col}`);
+                    const mirror = isMirrorLegendPair(row, col);
                     return (
-                      <td key={`${row}:${col}`} data-tone={cell ? matchupTone(cell.winRate) : "empty"}>
+                      <td key={`${row}:${col}`} data-tone={cell ? matchupTone(cell.winRate, mirror) : "empty"}>
                         {cell ? (
                           <button
                             type="button"
-                            className="matrix-cell-button"
+                            className={`matrix-cell-button ${mirror ? "mirror-cell" : ""}`}
                             onPointerDown={(event) => event.stopPropagation()}
                             onClick={() => setSelectedKey((current) => current === `${row}|||${col}` ? "" : `${row}|||${col}`)}
                             data-active={selectedKey === `${row}|||${col}`}
                             aria-haspopup="dialog"
-                            title={`${row} vs ${col}: ${cell.winRate}% across ${cell.total} matches`}
+                            title={mirror
+                              ? `${row} mirror: submitted perspective only, across ${cell.total} rows`
+                              : `${row} vs ${col}: ${cell.winRate}% across ${cell.total} matches`}
                           >
-                            <strong>{cell.winRate}%</strong>
+                            <strong>{mirror ? "Mirror" : `${cell.winRate}%`}</strong>
                             <span>{cell.total} match{cell.total === 1 ? "" : "es"}</span>
-                            <em>{cell.wins}-{cell.losses}{cell.draws ? `-${cell.draws}` : ""}</em>
+                            <em>{mirror ? "Submitted rows" : `${cell.wins}-${cell.losses}${cell.draws ? `-${cell.draws}` : ""}`}</em>
                           </button>
                         ) : (
                           <span className="matrix-empty">-</span>
@@ -14668,6 +20713,7 @@ function MatrixDrilldown({ myLegend, opponentLegend, cell, showFlags = true, onC
   onClose: () => void;
 }) {
   const [selectedMatch, setSelectedMatch] = useState<AnalyticsMatch | null>(null);
+  const mirror = isMirrorLegendPair(myLegend, opponentLegend);
   const drilldownKey = `${myLegend}|${opponentLegend}|${cell.matches.map((match) => match.id).join("|")}`;
   const drilldownMatches = [...cell.matches].sort((a, b) => new Date(b.capturedAt).getTime() - new Date(a.capturedAt).getTime());
   const flags = topValueList(cell.matches.flatMap((match) => splitFlags(match.flags))).slice(0, 5);
@@ -14680,19 +20726,26 @@ function MatrixDrilldown({ myLegend, opponentLegend, cell, showFlags = true, onC
         <div className="drilldown-title">
           <LegendAvatar legend={myLegend} size="large" />
           <div>
-            <h3>{myLegend} into {opponentLegend}</h3>
-            <span>{cell.wins}-{cell.losses}{cell.draws ? `-${cell.draws}` : ""} record across {cell.total} matches</span>
+            <h3>{mirror ? `${myLegend} mirror` : `${myLegend} into ${opponentLegend}`}</h3>
+            <span>{mirror
+              ? `${cell.total} submitted mirror row${cell.total === 1 ? "" : "s"}; win rate is not treated as a balance signal`
+              : `${cell.wins}-${cell.losses}${cell.draws ? `-${cell.draws}` : ""} record across ${cell.total} matches`}</span>
           </div>
           <LegendAvatar legend={opponentLegend} size="large" />
         </div>
         <button className="icon-button" onClick={onClose}>x</button>
       </header>
       <div className="drilldown-grid">
-        <Metric label="Win rate" value={`${cell.winRate}%`} />
+        <Metric label={mirror ? "Mirror data" : "Win rate"} value={mirror ? "Submitted" : `${cell.winRate}%`} />
         <Metric label="Wins" value={String(cell.wins)} />
         <Metric label="Losses" value={String(cell.losses)} />
         <Metric label="Draws" value={String(cell.draws)} />
       </div>
+      {mirror ? (
+        <p className="muted matrix-mirror-note">
+          Mirror records are shown as submitted rows only. They can drift from 50% when only one side of the match syncs to community data.
+        </p>
+      ) : null}
       <div className="two-column drilldown-lists">
         <section className="drilldown-match-list">
           <h4>Matches</h4>
@@ -15419,6 +21472,7 @@ function matchupMatrix(matches: AnalyticsMatch[]): {
   rows: string[];
   cols: string[];
   lookup: Map<string, MatrixCell>;
+  rowTotals: Map<string, number>;
 } {
   const lookup = new Map<string, MatrixCell>();
   const rowTotals = new Map<string, number>();
@@ -15444,7 +21498,7 @@ function matchupMatrix(matches: AnalyticsMatch[]): {
   }
   const rows = [...rowTotals.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([name]) => name);
   const cols = [...colTotals.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([name]) => name);
-  return { rows, cols, lookup };
+  return { rows, cols, lookup, rowTotals };
 }
 
 function legendRecord(matches: AnalyticsMatch[], legend: string): string {
@@ -15457,7 +21511,14 @@ function legendRecord(matches: AnalyticsMatch[], legend: string): string {
   return `WR: ${winRate}% | Games: ${mine.length} | ${wins}-${losses}${draws ? `-${draws}` : ""}`;
 }
 
-function matchupTone(winRate: number): string {
+function isMirrorLegendPair(myLegend: string, opponentLegend: string): boolean {
+  const mine = normalizeLegendName(myLegend);
+  const opponent = normalizeLegendName(opponentLegend);
+  return Boolean(mine && opponent && mine === opponent);
+}
+
+function matchupTone(winRate: number, mirror = false): string {
+  if (mirror) return "mirror";
   const normalized = Math.max(0, Math.min(100, winRate));
   if (normalized >= 70) return "great";
   if (normalized >= 56) return "good";
@@ -15603,6 +21664,7 @@ function matchupWindow(matches: AnalyticsMatch[]): Map<string, { wins: number; l
   const rows = new Map<string, { wins: number; losses: number }>();
   for (const match of matches) {
     if (!match.myChampion || !match.opponentChampion) continue;
+    if (isMirrorLegendPair(match.myChampion, match.opponentChampion)) continue;
     const key = `${match.myChampion}|||${match.opponentChampion}`;
     const row = rows.get(key) ?? { wins: 0, losses: 0 };
     if (match.result === "Win") row.wins += 1;
@@ -16545,16 +22607,18 @@ function catalogSearchKey(value: string): string {
   return value.toLowerCase().replace(/[’`]/g, "'").replace(/[^a-z0-9]+/g, "");
 }
 
-function MatchReviewModal({ draft, decks, battlefields, previousFlags, onClose, onConfirm, onChange }: {
+function MatchReviewModal({ draft, decks, battlefields, previousFlags, onClose, onDelete, onConfirm, onChange }: {
   draft: MatchDraft;
   decks: SavedDeck[];
   battlefields: BattlefieldOption[];
   previousFlags: string[];
   onClose: () => void;
+  onDelete: (draft: MatchDraft) => Promise<void>;
   onConfirm: (draft: MatchDraft) => Promise<void>;
   onChange: (draft: MatchDraft) => void;
 }) {
   const [isSaving, setIsSaving] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [saveError, setSaveError] = useState("");
   const [seatErrorGames, setSeatErrorGames] = useState<number[]>([]);
   const [previousFlagChoice, setPreviousFlagChoice] = useState("");
@@ -16574,7 +22638,7 @@ function MatchReviewModal({ draft, decks, battlefields, previousFlags, onClose, 
   }
 
   async function saveMatch() {
-    if (isSaving) {
+    if (isSaving || isDeleting) {
       return;
     }
     setSaveError("");
@@ -16592,6 +22656,24 @@ function MatchReviewModal({ draft, decks, battlefields, previousFlags, onClose, 
     } catch {
       setSaveError("Save did not complete. Please try again.");
       setIsSaving(false);
+    }
+  }
+
+  async function deleteCapture() {
+    if (isSaving || isDeleting) {
+      return;
+    }
+    const confirmed = window.confirm("Delete this captured match? Use this for non-games where the opponent left during setup. The match will move to the recycle bin and will not count in stats.");
+    if (!confirmed) {
+      return;
+    }
+    setSaveError("");
+    setIsDeleting(true);
+    try {
+      await onDelete(draft);
+    } catch {
+      setSaveError("Delete did not complete. Please try again.");
+      setIsDeleting(false);
     }
   }
 
@@ -16874,8 +22956,9 @@ function MatchReviewModal({ draft, decks, battlefields, previousFlags, onClose, 
         </div>
         <footer>
           <span className={saveError ? "save-error" : ""}><Flag size={16} /> {saveError || reviewFooterHint(draft, isScorepadDraft)}</span>
-          <button className="secondary" disabled={isSaving} onClick={onClose}>Review later</button>
-          <button className="primary" disabled={isSaving} onClick={() => void saveMatch()}><Check size={16} /> {isSaving ? "Saving..." : "Save match"}</button>
+          <button className="danger" disabled={isSaving || isDeleting} onClick={() => void deleteCapture()}><Trash2 size={16} /> {isDeleting ? "Deleting..." : "Delete capture"}</button>
+          <button className="secondary" disabled={isSaving || isDeleting} onClick={onClose}>Review later</button>
+          <button className="primary" disabled={isSaving || isDeleting} onClick={() => void saveMatch()}><Check size={16} /> {isSaving ? "Saving..." : "Save match"}</button>
         </footer>
       </section>
     </div>
@@ -16890,6 +22973,24 @@ function healthLabel(health: CaptureHealth): string {
   if (health.state === "weaker-mode") return "Weaker mode";
   if (health.state === "error") return "Capture issue";
   return "Ready";
+}
+
+function captureNoticeMessage(health: CaptureHealth, fallback: string): string {
+  const message = fallback.trim() || health.message;
+  const lower = message.toLowerCase();
+  if (health.state === "review-needed") {
+    return "Match captured. Preparing the review popup now.";
+  }
+  if (lower.includes("checking briefly")) {
+    return "Game captured. Waiting a few seconds in case this continues as a BO3.";
+  }
+  if (lower.includes("waiting for next game")) {
+    return message;
+  }
+  if (lower.includes("next bo3 game detected")) {
+    return "Next BO3 game detected. Keeping this as one match.";
+  }
+  return message;
 }
 
 createRoot(document.getElementById("root")!).render(

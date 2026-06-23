@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, desktopCapturer, dialog, globalShortcut, ipcMain, Menu, nativeImage, session as electronSession, shell } from "electron";
+import { app, BrowserWindow, clipboard, desktopCapturer, dialog, globalShortcut, ipcMain, Menu, nativeImage, screen, session as electronSession, shell } from "electron";
 import type { NativeImage, OpenDialogOptions, SaveDialogOptions, WebContents } from "electron";
 import { execFile } from "node:child_process";
 import { once } from "node:events";
@@ -25,6 +25,7 @@ import type {
   DeckPackageExport,
   DeckPackageImportResult,
   DeckSnapshot,
+  DeckTrackerObservation,
   DiscordVoiceJoinResult,
   GamePlatform,
   LfgListing,
@@ -35,6 +36,7 @@ import type {
   ReplayBundleVideo,
   ReplayFlag,
   ReplayMp4ExportOptions,
+  ReplayPresentationRecordingPayload,
   ReplayRecord,
   ReplaySearchMetadata,
   ReplayScreenshotFrame,
@@ -54,7 +56,8 @@ import type {
   SavedDeck,
   ScreenshotResult,
   SpotlightClickPayload,
-  UserSettings
+  UserSettings,
+  VisionDeckTrackerStatus
 } from "../shared/types.js";
 import { emptyDeckMatchupGuide, resolveDeckMatchupGuide, sanitizeDeckNotebookForDeck } from "../shared/deckNotebook.js";
 import { detectBrowsers } from "./services/browserDetection.js";
@@ -110,6 +113,36 @@ const ensuredReplayFrameDirectories = new Set<string>();
 let replayFrameDirectoryCache: { path: string; expiresAt: number } | null = null;
 const replayVideoSessions = new Map<string, ReplayVideoSession>();
 let replayVideoDisplayTarget: { platform: GamePlatform; mode: ReplayVideoCaptureMode; expiresAt: number } | null = null;
+
+function startupLogPath(): string {
+  return join(app.getPath("userData"), "riftlite-startup.log");
+}
+
+function formatStartupError(error: unknown): string {
+  return error instanceof Error ? `${error.message}\n${error.stack ?? ""}` : String(error);
+}
+
+async function logStartupIssue(label: string, error: unknown): Promise<void> {
+  const line = [
+    `[${new Date().toISOString()}] ${label}`,
+    formatStartupError(error),
+    ""
+  ].join("\n");
+  await mkdir(app.getPath("userData"), { recursive: true }).catch(() => undefined);
+  await appendFile(startupLogPath(), line, "utf8").catch(() => undefined);
+}
+
+process.on("uncaughtException", (error) => {
+  void logStartupIssue("uncaught exception", error);
+});
+
+process.on("unhandledRejection", (reason) => {
+  void logStartupIssue("unhandled rejection", reason);
+});
+
+app.on("child-process-gone", (_event, details) => {
+  void logStartupIssue("child process gone", JSON.stringify(details));
+});
 
 const REPLAY_FRAME_DEDUPE_THRESHOLD = 0.012;
 const REPLAY_FRAME_DIRECTORY_CACHE_MS = 30_000;
@@ -213,6 +246,55 @@ function safeAssetPath(relativePath: string): string {
 
 function preloadPath(name: "appPreload" | "gamePreload"): string {
   return join(__dirname, "..", name === "appPreload" ? "preload" : "game-preload", name === "gamePreload" ? "gamePreload.cjs" : "appPreload.js");
+}
+
+function readPayloadString(value: unknown): string {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(value);
+  }
+  return typeof value === "string" ? value.trim().slice(0, 1000) : "";
+}
+
+function sanitizeVisionDebugValue(value: unknown, depth = 0): unknown {
+  if (typeof value === "string") {
+    return value.slice(0, depth > 0 ? 240 : 1000);
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "boolean" || value === null) {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.slice(0, 12).map((item) => sanitizeVisionDebugValue(item, depth + 1));
+  }
+  if (value && typeof value === "object" && depth < 4) {
+    const output: Record<string, unknown> = {};
+    for (const [key, child] of Object.entries(value as Record<string, unknown>).slice(0, 16)) {
+      if (key === "imageUrl" || key === "screenshot" || key === "frameData") {
+        continue;
+      }
+      output[key] = sanitizeVisionDebugValue(child, depth + 1);
+    }
+    return output;
+  }
+  return undefined;
+}
+
+function sanitizeVisionDebugPayload(value: unknown): Record<string, unknown> {
+  const record = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  const output: Record<string, unknown> = { reason: "vision-deck-tracker" };
+  for (const [key, raw] of Object.entries(record)) {
+    if (key === "imageUrl" || key === "screenshot" || key === "frameData") {
+      continue;
+    }
+    const safeValue = sanitizeVisionDebugValue(raw);
+    if (safeValue !== undefined) {
+      output[key] = safeValue;
+    }
+  }
+  output.reason = readPayloadString(record.reason) || "vision-deck-tracker";
+  return output;
 }
 
 async function assetDataUrl(relativePath: string): Promise<string> {
@@ -530,6 +612,60 @@ async function makeReplayVideoSeekable(filePath: string, mimeType: string | unde
     await unlink(tempPath).catch(() => undefined);
     return false;
   }
+}
+
+async function replayVideoDecodeProbe(filePath: string, fromEnd = false): Promise<boolean | null> {
+  const ffmpegPath = replayVideoFfmpegPath();
+  if (!ffmpegPath || !(await pathExists(ffmpegPath))) {
+    return null;
+  }
+  const args = [
+    "-hide_banner",
+    "-loglevel",
+    "error",
+    "-xerror"
+  ];
+  if (fromEnd) {
+    args.push("-sseof", "-3");
+  }
+  args.push(
+    "-i",
+    filePath,
+    "-map",
+    "0:v:0",
+    "-frames:v",
+    "3",
+    "-f",
+    "null",
+    "-"
+  );
+  try {
+    await execFileAsync(ffmpegPath, args, {
+      windowsHide: true,
+      timeout: 45_000,
+      maxBuffer: 1024 * 1024
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function validateReplayVideoReadable(filePath: string, sizeBytes: number, mimeType: string | undefined): Promise<boolean> {
+  if (!await replayVideoPathAllowed(filePath)) {
+    return false;
+  }
+  const startOk = await replayVideoDecodeProbe(filePath, false);
+  if (startOk === false) {
+    return false;
+  }
+  if (replayVideoExtension(mimeType) === "mp4" && sizeBytes > 2 * 1024 * 1024) {
+    const endOk = await replayVideoDecodeProbe(filePath, true);
+    if (endOk === false) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function safeFileComponent(value: string, fallback = "RiftLite Replay"): string {
@@ -898,8 +1034,17 @@ async function finishReplayVideoCaptureFile(sessionId: string, options: ReplayVi
     throw new Error("Replay video session is no longer active.");
   }
   replayVideoSessions.delete(sessionId);
+  let fileStats = await stat(session.path);
+  if (fileStats.size <= 0) {
+    await unlink(session.path).catch(() => undefined);
+    throw new Error("Replay video finished with no media data.");
+  }
   const containerFinalized = await makeReplayVideoSeekable(session.path, options.mimeType);
-  const fileStats = await stat(session.path);
+  fileStats = await stat(session.path);
+  const decodeProbeOk = await validateReplayVideoReadable(session.path, fileStats.size, options.mimeType).catch(() => false);
+  if (!decodeProbeOk) {
+    console.warn("[replay-video] Finished video failed decode probe; marking media as needing review.", session.path);
+  }
   const actualBitrateKbps = actualReplayBitrateKbps(fileStats.size, options.durationMs) ?? options.actualBitrateKbps;
   return {
     path: session.path,
@@ -922,7 +1067,7 @@ async function finishReplayVideoCaptureFile(sessionId: string, options: ReplayVi
     codec: options.codec,
     quality: options.quality,
     hasAudio: Boolean(options.hasAudio),
-    containerFinalized
+    containerFinalized: containerFinalized && decodeProbeOk
   };
 }
 
@@ -1124,6 +1269,14 @@ async function attachReplayVideo(matchId: string, video: ReplayVideoAsset): Prom
   const replay = replays.find((item) => item.matchId === matchId);
   if (!replay) {
     return null;
+  }
+  if (
+    replay.video?.durationMs &&
+    video.durationMs &&
+    replay.video.durationMs > video.durationMs + 10_000
+  ) {
+    await discardReplayVideoAsset(video).catch(() => undefined);
+    return replay;
   }
   return store.saveReplay({ ...replay, video });
 }
@@ -1537,16 +1690,190 @@ async function exportReplayBundle(replayId: string): Promise<string> {
   return filePath;
 }
 
+function replayFlagExportTimestamp(flag: ReplayFlag): string {
+  if (typeof flag.timeMs === "number" && Number.isFinite(flag.timeMs)) {
+    const totalSeconds = Math.max(0, Math.round(flag.timeMs / 1000));
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+  }
+  if (flag.targetType === "replay") {
+    return "Replay";
+  }
+  const captured = new Date(flag.capturedAt);
+  return Number.isFinite(captured.getTime()) ? captured.toLocaleTimeString() : "Unknown time";
+}
+
+function replayFlagExportSortValue(flag: ReplayFlag): number {
+  if (typeof flag.timeMs === "number" && Number.isFinite(flag.timeMs)) {
+    return flag.timeMs;
+  }
+  const captured = new Date(flag.capturedAt).getTime();
+  return Number.isFinite(captured) ? captured : Number.MAX_SAFE_INTEGER;
+}
+
+async function exportReplayFlagsText(replayId: string): Promise<string> {
+  const [replays, matches, settings] = await Promise.all([store.getReplays(), store.getMatches(), store.getSettings()]);
+  const replay = replays.find((item) => item.id === replayId);
+  if (!replay) {
+    throw new Error("Replay not found.");
+  }
+  const match = matches.find((item) => item.id === replay.matchId) ?? replay.matchSnapshot;
+  const search = replaySearchMetadata(replay, match);
+  const flags = [...(replay.flags ?? [])].sort((a, b) => replayFlagExportSortValue(a) - replayFlagExportSortValue(b));
+  const lines = [
+    `RiftLite replay flags - ${search.title}`,
+    `${search.players.join(" vs ")} - ${new Date(search.capturedAt).toLocaleString()}`,
+    "",
+    flags.length ? "Timestamp - Type - Note" : "No replay flags saved.",
+    ...flags.map((flag) => {
+      const note = flag.note?.trim() || flag.targetLabel || "";
+      return `${replayFlagExportTimestamp(flag)} - ${replayMp4ExportLabel(flag)}${note ? ` - ${note}` : ""}`;
+    })
+  ];
+  const directory = replayBundleDirectory(settings);
+  await mkdir(directory, { recursive: true });
+  const defaultPath = join(
+    directory,
+    `${safeFileComponent(`${search.title} ${search.players.join(" vs ")} flags ${search.capturedAt.slice(0, 10)}`, "RiftLite Replay Flags")}.txt`
+  );
+  const options: SaveDialogOptions = {
+    title: "Export replay flags",
+    defaultPath,
+    filters: [{ name: "Text file", extensions: ["txt"] }]
+  };
+  const result = mainWindow ? await dialog.showSaveDialog(mainWindow, options) : await dialog.showSaveDialog(options);
+  if (result.canceled || !result.filePath) {
+    return "";
+  }
+  const filePath = result.filePath.toLowerCase().endsWith(".txt") ? result.filePath : `${result.filePath}.txt`;
+  await writeFile(filePath, `${lines.join("\n")}\n`, "utf8");
+  return filePath;
+}
+
 type ReplayMp4OverlayInput = {
   path: string;
   startSec: number;
   endSec: number;
+  x?: number;
+  y?: number;
+  opacity?: number;
+  transformWithVideo?: boolean;
 };
 
 type ReplayMp4VoiceInput = {
   path: string;
   delayMs: number;
 };
+
+type ReplayMp4ClipRange = {
+  startMs: number;
+  endMs: number;
+  durationMs: number;
+};
+
+type ReplayMp4RenderGeometry = {
+  sourceWidth: number;
+  sourceHeight: number;
+  outputWidth: number;
+  outputHeight: number;
+  layout: NonNullable<ReplayMp4ExportOptions["layout"]>;
+  crop?: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
+};
+
+function clampReplayMp4Unit(value: number | undefined, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return fallback;
+  }
+  return Math.min(1, Math.max(0, value));
+}
+
+function replayMp4Even(value: number, minValue = 2): number {
+  const rounded = Math.max(minValue, Math.round(value));
+  return rounded % 2 === 0 ? rounded : rounded - 1;
+}
+
+function replayMp4RenderGeometry(video: ReplayVideoAsset, options: ReplayMp4ExportOptions): ReplayMp4RenderGeometry {
+  const sourceWidth = replayMp4Even(Math.max(640, video.width || 1920), 640);
+  const sourceHeight = replayMp4Even(Math.max(360, video.height || 1080), 360);
+  const layout = options.layout ?? "landscape";
+  if (layout === "landscape") {
+    return {
+      sourceWidth,
+      sourceHeight,
+      outputWidth: sourceWidth,
+      outputHeight: sourceHeight,
+      layout
+    };
+  }
+
+  const targetAspect = 9 / 16;
+  const sourceAspect = sourceWidth / sourceHeight;
+  const baseCropHeight = sourceAspect > targetAspect ? sourceHeight : sourceWidth / targetAspect;
+  const baseCropWidth = sourceAspect > targetAspect ? sourceHeight * targetAspect : sourceWidth;
+  const zoom = layout === "vertical-custom"
+    ? Math.min(2.5, Math.max(1, options.cropZoom ?? 1))
+    : 1;
+  const cropWidth = replayMp4Even(Math.min(sourceWidth, baseCropWidth / zoom), 64);
+  const cropHeight = replayMp4Even(Math.min(sourceHeight, cropWidth / targetAspect), 114);
+  const focusX = layout === "vertical-custom" ? clampReplayMp4Unit(options.cropFocusX, 0.5) : 0.5;
+  const focusY = layout === "vertical-custom" ? clampReplayMp4Unit(options.cropFocusY, 0.5) : 0.5;
+  const maxX = Math.max(0, sourceWidth - cropWidth);
+  const maxY = Math.max(0, sourceHeight - cropHeight);
+  return {
+    sourceWidth,
+    sourceHeight,
+    outputWidth: 1080,
+    outputHeight: 1920,
+    layout,
+    crop: {
+      x: replayMp4Even(maxX * focusX, 0),
+      y: replayMp4Even(maxY * focusY, 0),
+      width: cropWidth,
+      height: cropHeight
+    }
+  };
+}
+
+async function replayMp4ProbeVideoGeometry(
+  ffmpegPath: string,
+  filePath: string,
+  fallback: ReplayVideoAsset
+): Promise<Pick<ReplayVideoAsset, "width" | "height">> {
+  try {
+    await execFileAsync(ffmpegPath, ["-hide_banner", "-i", filePath], {
+      windowsHide: true,
+      timeout: 30_000,
+      maxBuffer: 1024 * 1024
+    });
+  } catch (error) {
+    const output = error && typeof error === "object"
+      ? `${String((error as { stdout?: unknown }).stdout ?? "")}\n${String((error as { stderr?: unknown }).stderr ?? "")}`
+      : String(error ?? "");
+    const match = output.match(/Video:\s.*?([1-9]\d{2,5})x([1-9]\d{2,5})/i);
+    if (match) {
+      const width = Number.parseInt(match[1] ?? "", 10);
+      const height = Number.parseInt(match[2] ?? "", 10);
+      if (Number.isFinite(width) && Number.isFinite(height) && width >= 320 && height >= 180) {
+        return { width, height };
+      }
+    }
+  }
+  return { width: fallback.width, height: fallback.height };
+}
+
+function replayMp4GeometryFilterBody(geometry: ReplayMp4RenderGeometry): string {
+  if (geometry.crop) {
+    const crop = geometry.crop;
+    return `crop=${crop.width}:${crop.height}:${crop.x}:${crop.y},scale=${geometry.outputWidth}:${geometry.outputHeight}`;
+  }
+  return `scale=${geometry.outputWidth}:${geometry.outputHeight}:force_original_aspect_ratio=decrease,pad=${geometry.outputWidth}:${geometry.outputHeight}:(ow-iw)/2:(oh-ih)/2`;
+}
 
 function replayMp4ExportLabel(flag: Pick<ReplayFlag, "type" | "customType" | "label">): string {
   if (flag.type === "custom") {
@@ -1617,6 +1944,50 @@ function wrapReplayMp4Text(value: string, maxLength: number, maxLines: number): 
   return lines.length ? lines : [""];
 }
 
+function replayMp4ClipRange(video: ReplayVideoAsset, options: ReplayMp4ExportOptions): ReplayMp4ClipRange | null {
+  if (options.mode !== "clip") {
+    return null;
+  }
+  const requestedDurationMs = Math.min(
+    5 * 60_000,
+    Math.max(1_000, Math.round(Number.isFinite(options.clipDurationMs) ? options.clipDurationMs ?? 15_000 : 15_000))
+  );
+  const videoDurationMs = Math.max(1_000, Math.round(video.durationMs || 1_000));
+  const rawStartMs = Number.isFinite(options.clipStartMs) ? Math.round(options.clipStartMs ?? 0) : 0;
+  const startMs = Math.min(Math.max(0, rawStartMs), Math.max(0, videoDurationMs - 1_000));
+  const durationMs = Math.max(1_000, Math.min(requestedDurationMs, videoDurationMs - startMs));
+  return {
+    startMs,
+    endMs: startMs + durationMs,
+    durationMs
+  };
+}
+
+function replayMp4ClipTimestamp(ms: number): string {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes.toString().padStart(2, "0")}m${seconds.toString().padStart(2, "0")}s`;
+}
+
+function replayMp4OverlayTiming(startMs: number, endMs: number, clipRange: ReplayMp4ClipRange | null): { startSec: number; endSec: number } | null {
+  if (!clipRange) {
+    return {
+      startSec: startMs / 1000,
+      endSec: Math.max(endMs, startMs + 1_000) / 1000
+    };
+  }
+  const clippedStartMs = Math.max(startMs, clipRange.startMs);
+  const clippedEndMs = Math.min(Math.max(endMs, startMs + 1_000), clipRange.endMs);
+  if (clippedEndMs <= clippedStartMs) {
+    return null;
+  }
+  return {
+    startSec: (clippedStartMs - clipRange.startMs) / 1000,
+    endSec: Math.max(clippedEndMs - clipRange.startMs, clippedStartMs - clipRange.startMs + 1_000) / 1000
+  };
+}
+
 function replayMp4FlagSvg(flag: ReplayFlag, width: number, height: number): string {
   const title = replayMp4ExportLabel(flag);
   const note = flag.note?.trim() || flag.targetLabel || "";
@@ -1663,10 +2034,30 @@ function replayMp4AnnotationSvg(annotation: ReplayAnnotation, width: number, hei
 </svg>`;
 }
 
+async function writeReplayMp4WatermarkPng(tempDirectory: string, width: number, height: number): Promise<{ path: string; x: number; y: number }> {
+  const logoPath = safeAssetPath("riftlite-logo-transparent.png");
+  const logoBuffer = await readFile(logoPath);
+  const image = nativeImage.createFromBuffer(logoBuffer);
+  const size = image.getSize();
+  const ratio = size.width > 0 && size.height > 0 ? size.height / size.width : 1;
+  const logoWidth = Math.round(Math.min(Math.max(width * 0.11, 92), 180));
+  const logoHeight = Math.round(logoWidth * ratio);
+  const margin = Math.round(Math.max(20, width * 0.018));
+  const x = Math.max(margin, width - logoWidth - margin);
+  const y = Math.max(margin, height - logoHeight - margin);
+  const resized = image.resize({ width: logoWidth, height: logoHeight, quality: "best" });
+  if (resized.isEmpty()) {
+    throw new Error("Could not render RiftLite watermark.");
+  }
+  const filePath = join(tempDirectory, `riftlite-watermark-${randomUUID()}.png`);
+  await writeFile(filePath, resized.toPNG());
+  return { path: filePath, x, y };
+}
+
 async function writeReplayMp4OverlayPng(tempDirectory: string, label: string, svg: string): Promise<string> {
   const image = nativeImage.createFromDataURL(`data:image/svg+xml;base64,${Buffer.from(svg, "utf8").toString("base64")}`);
   if (image.isEmpty()) {
-    throw new Error("Could not render replay export overlay.");
+    throw new Error(`Could not render replay export overlay (${safeFileComponent(label, "overlay")}).`);
   }
   const filePath = join(tempDirectory, `${safeFileComponent(label, "overlay")}-${randomUUID()}.png`);
   await writeFile(filePath, image.toPNG());
@@ -1697,24 +2088,33 @@ async function replayMp4OverlayInputs(
   replay: ReplayRecord,
   video: ReplayVideoAsset,
   options: ReplayMp4ExportOptions,
-  tempDirectory: string
+  tempDirectory: string,
+  clipRange: ReplayMp4ClipRange | null,
+  geometry: ReplayMp4RenderGeometry
 ): Promise<ReplayMp4OverlayInput[]> {
   const overlays: ReplayMp4OverlayInput[] = [];
-  const width = Math.max(640, video.width || 1920);
-  const height = Math.max(360, video.height || 1080);
+  const width = geometry.sourceWidth;
+  const height = geometry.sourceHeight;
   const flags = replay.flags ?? [];
   const flagsById = new Map(flags.map((flag) => [flag.id, flag]));
   const voiceNotesById = new Map((replay.voiceNotes ?? []).map((note) => [note.id, note]));
+  const addOverlay = async (label: string, svg: string, startMs: number, endMs: number): Promise<void> => {
+    const timing = replayMp4OverlayTiming(startMs, endMs, clipRange);
+    if (!timing) {
+      return;
+    }
+    overlays.push({
+      path: await writeReplayMp4OverlayPng(tempDirectory, label, svg),
+      startSec: timing.startSec,
+      endSec: timing.endSec
+    });
+  };
 
   if (options.includeFlags) {
     for (const flag of flags.filter((item) => typeof item.timeMs === "number").slice(0, 80)) {
       const startMs = clampReplayMp4TimeMs(video, (flag.timeMs ?? 0) - 250);
       const endMs = clampReplayMp4TimeMs(video, startMs + 4500);
-      overlays.push({
-        path: await writeReplayMp4OverlayPng(tempDirectory, `flag-${flag.id}`, replayMp4FlagSvg(flag, width, height)),
-        startSec: startMs / 1000,
-        endSec: Math.max(endMs, startMs + 1000) / 1000
-      });
+      await addOverlay(`flag-${flag.id}`, replayMp4FlagSvg(flag, width, height), startMs, endMs);
     }
   }
 
@@ -1724,12 +2124,21 @@ async function replayMp4OverlayInputs(
       if (!time) {
         continue;
       }
-      overlays.push({
-        path: await writeReplayMp4OverlayPng(tempDirectory, `drawing-${annotation.id}`, replayMp4AnnotationSvg(annotation, width, height)),
-        startSec: time.startMs / 1000,
-        endSec: Math.max(time.endMs, time.startMs + 1000) / 1000
-      });
+      await addOverlay(`drawing-${annotation.id}`, replayMp4AnnotationSvg(annotation, width, height), time.startMs, time.endMs);
     }
+  }
+
+  if (clipRange && options.watermark !== false) {
+    const watermark = await writeReplayMp4WatermarkPng(tempDirectory, geometry.outputWidth, geometry.outputHeight);
+    overlays.push({
+      path: watermark.path,
+      startSec: 0,
+      endSec: clipRange.durationMs / 1000,
+      x: watermark.x,
+      y: watermark.y,
+      opacity: 0.16,
+      transformWithVideo: false
+    });
   }
 
   return overlays;
@@ -1748,7 +2157,13 @@ function replayVoiceNoteExtension(mimeType: string): string {
   return "webm";
 }
 
-async function replayMp4VoiceInputs(replay: ReplayRecord, video: ReplayVideoAsset, options: ReplayMp4ExportOptions, tempDirectory: string): Promise<ReplayMp4VoiceInput[]> {
+async function replayMp4VoiceInputs(
+  replay: ReplayRecord,
+  video: ReplayVideoAsset,
+  options: ReplayMp4ExportOptions,
+  tempDirectory: string,
+  clipRange: ReplayMp4ClipRange | null
+): Promise<ReplayMp4VoiceInput[]> {
   if (!options.includeVoiceNotes) {
     return [];
   }
@@ -1760,10 +2175,14 @@ async function replayMp4VoiceInputs(replay: ReplayRecord, video: ReplayVideoAsse
     if (comma < 0 || delayMs == null) {
       continue;
     }
+    const adjustedDelayMs = clipRange ? delayMs - clipRange.startMs : delayMs;
+    if (clipRange && (delayMs < clipRange.startMs || delayMs >= clipRange.endMs)) {
+      continue;
+    }
     const extension = replayVoiceNoteExtension(note.mimeType);
     const filePath = join(tempDirectory, `voice-${safeFileComponent(note.id, "note")}.${extension}`);
     await writeFile(filePath, Buffer.from(note.dataUrl.slice(comma + 1), "base64"));
-    result.push({ path: filePath, delayMs });
+    result.push({ path: filePath, delayMs: Math.max(0, adjustedDelayMs) });
   }
   return result;
 }
@@ -1772,16 +2191,34 @@ function ffmpegSeconds(value: number): string {
   return Math.max(0, value).toFixed(3);
 }
 
+function replayMp4FfmpegError(error: unknown): Error {
+  const details = error && typeof error === "object"
+    ? [
+        (error as { message?: unknown }).message,
+        (error as { stderr?: unknown }).stderr,
+        (error as { stdout?: unknown }).stdout
+      ]
+        .map((item) => String(item ?? "").trim())
+        .filter(Boolean)
+    : [String(error ?? "")];
+  const message = [...new Set(details)].join("\n").trim();
+  return new Error(message ? `MP4 export failed:\n${message}` : "MP4 export failed while running ffmpeg.");
+}
+
 function appendReplayMp4AudioFilters(
   filterParts: string[],
   video: ReplayVideoAsset,
   voiceInputs: ReplayMp4VoiceInput[],
   firstVoiceInputIndex: number,
-  options: ReplayMp4ExportOptions
+  options: ReplayMp4ExportOptions,
+  clipRange: ReplayMp4ClipRange | null
 ): string | null {
   const audioLabels: string[] = [];
   if (options.includeOriginalAudio && video.hasAudio) {
-    filterParts.push("[0:a]aresample=48000,asetpts=PTS-STARTPTS[a_base]");
+    const baseAudioFilter = clipRange
+      ? `[0:a]atrim=start=${ffmpegSeconds(clipRange.startMs / 1000)}:end=${ffmpegSeconds(clipRange.endMs / 1000)},asetpts=PTS-STARTPTS,aresample=48000[a_base]`
+      : "[0:a]aresample=48000,asetpts=PTS-STARTPTS[a_base]";
+    filterParts.push(baseAudioFilter);
     audioLabels.push("[a_base]");
   }
   voiceInputs.forEach((voice, index) => {
@@ -1814,6 +2251,8 @@ async function exportReplayMp4(replayId: string, options: ReplayMp4ExportOptions
   if (!source) {
     throw new Error("MP4 export needs a video replay. Use the RiftLite coaching pack export for screenshot-only replays.");
   }
+  const clipRange = replayMp4ClipRange(source.asset, options);
+  const exportOptions: ReplayMp4ExportOptions = clipRange ? { ...options, mode: "clip", watermark: true } : { ...options, mode: "full" };
   const ffmpegPath = replayVideoFfmpegPath();
   if (!ffmpegPath || !(await pathExists(ffmpegPath))) {
     throw new Error("MP4 export needs ffmpeg.");
@@ -1821,12 +2260,16 @@ async function exportReplayMp4(replayId: string, options: ReplayMp4ExportOptions
 
   const directory = replayBundleDirectory(settings);
   await mkdir(directory, { recursive: true });
+  const layoutFileSuffix = (exportOptions.layout ?? "landscape") === "landscape" ? "" : " vertical";
+  const clipFileSuffix = clipRange
+    ? ` clip ${replayMp4ClipTimestamp(clipRange.startMs)} ${Math.round(clipRange.durationMs / 1000)}s`
+    : "";
   const defaultPath = join(
     directory,
-    `${safeFileComponent(`${search.title} ${search.players.join(" vs ")} ${search.capturedAt.slice(0, 10)}`, "RiftLite Replay")}.mp4`
+    `${safeFileComponent(`${search.title} ${search.players.join(" vs ")} ${search.capturedAt.slice(0, 10)}${layoutFileSuffix}${clipFileSuffix}`, "RiftLite Replay")}.mp4`
   );
   const saveOptions: SaveDialogOptions = {
-    title: "Export YouTube-ready MP4",
+    title: clipRange ? `Export ${Math.round(clipRange.durationMs / 1000)}s replay clip` : "Export YouTube-ready MP4",
     defaultPath,
     filters: [{ name: "MP4 video", extensions: ["mp4"] }]
   };
@@ -1844,16 +2287,17 @@ async function exportReplayMp4(replayId: string, options: ReplayMp4ExportOptions
   await mkdir(tempDirectory, { recursive: true });
   const tempFiles: string[] = [];
   try {
-    const overlayInputs = await replayMp4OverlayInputs(replay, source.asset, options, tempDirectory);
-    const voiceInputs = await replayMp4VoiceInputs(replay, source.asset, options, tempDirectory);
+    const probedVideoSize = await replayMp4ProbeVideoGeometry(ffmpegPath, source.sourcePath, source.asset);
+    const renderVideo: ReplayVideoAsset = { ...source.asset, ...probedVideoSize };
+    const geometry = replayMp4RenderGeometry(renderVideo, exportOptions);
+    const overlayInputs = await replayMp4OverlayInputs(replay, renderVideo, exportOptions, tempDirectory, clipRange, geometry);
+    const voiceInputs = await replayMp4VoiceInputs(replay, renderVideo, exportOptions, tempDirectory, clipRange);
     tempFiles.push(...overlayInputs.map((input) => input.path), ...voiceInputs.map((input) => input.path));
 
     const hasOverlay = overlayInputs.length > 0;
     const hasVoice = voiceInputs.length > 0;
-    const width = Math.max(640, source.asset.width || 1920);
-    const height = Math.max(360, source.asset.height || 1080);
     const fps = Math.max(1, source.asset.fps || 24);
-    const videoDurationSec = Math.max(1, (source.asset.durationMs || 1000) / 1000);
+    const videoDurationSec = Math.max(1, (clipRange?.durationMs ?? source.asset.durationMs ?? 1000) / 1000);
     const args = ["-y", "-hide_banner", "-loglevel", "error", "-fflags", "+genpts", "-i", source.sourcePath];
     overlayInputs.forEach((overlay) => {
       args.push("-loop", "1", "-t", ffmpegSeconds(videoDurationSec + 1), "-i", overlay.path);
@@ -1862,30 +2306,39 @@ async function exportReplayMp4(replayId: string, options: ReplayMp4ExportOptions
       args.push("-i", voice.path);
     });
 
-    if (!hasOverlay && !hasVoice) {
+    const needsVideoFilter = Boolean(clipRange) || geometry.layout !== "landscape" || hasOverlay || hasVoice;
+    if (!needsVideoFilter) {
       args.push("-map", "0:v:0");
-      if (options.includeOriginalAudio) {
+      if (exportOptions.includeOriginalAudio) {
         args.push("-map", "0:a?", "-c:a", "aac", "-b:a", "128k");
       } else {
         args.push("-an");
       }
       args.push("-c:v", "copy", "-movflags", "+faststart", outputPath);
     } else {
+      const sourceVideoFilter = clipRange
+        ? `[0:v]trim=start=${ffmpegSeconds(clipRange.startMs / 1000)}:end=${ffmpegSeconds(clipRange.endMs / 1000)},setpts=PTS-STARTPTS,${replayMp4GeometryFilterBody(geometry)},fps=${fps},setsar=1[v0]`
+        : `[0:v]${replayMp4GeometryFilterBody(geometry)},fps=${fps},setsar=1[v0]`;
       const filterParts: string[] = [
-        `[0:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,fps=${fps},setsar=1[v0]`
+        sourceVideoFilter
       ];
       let currentVideoLabel = "[v0]";
       overlayInputs.forEach((overlay, index) => {
         const inputIndex = 1 + index;
+        const overlayLabel = `[ov${index}]`;
         const nextLabel = `[v${index + 1}]`;
-        filterParts.push(`${currentVideoLabel}[${inputIndex}:v]overlay=0:0:shortest=1:enable='gte(t\\,${ffmpegSeconds(overlay.startSec)})*lte(t\\,${ffmpegSeconds(overlay.endSec)})'${nextLabel}`);
+        const overlayPrep = overlay.transformWithVideo === false
+          ? `[${inputIndex}:v]format=rgba${typeof overlay.opacity === "number" ? `,colorchannelmixer=aa=${Math.min(1, Math.max(0, overlay.opacity)).toFixed(3)}` : ""}${overlayLabel}`
+          : `[${inputIndex}:v]${replayMp4GeometryFilterBody(geometry)},format=rgba${overlayLabel}`;
+        filterParts.push(overlayPrep);
+        filterParts.push(`${currentVideoLabel}${overlayLabel}overlay=${Math.round(overlay.x ?? 0)}:${Math.round(overlay.y ?? 0)}:shortest=1:enable='gte(t\\,${ffmpegSeconds(overlay.startSec)})*lte(t\\,${ffmpegSeconds(overlay.endSec)})'${nextLabel}`);
         currentVideoLabel = nextLabel;
       });
-      const audioLabel = appendReplayMp4AudioFilters(filterParts, source.asset, voiceInputs, 1 + overlayInputs.length, options);
+      const audioLabel = appendReplayMp4AudioFilters(filterParts, source.asset, voiceInputs, 1 + overlayInputs.length, exportOptions, clipRange);
       args.push("-filter_complex", filterParts.join(";"), "-map", currentVideoLabel);
       if (audioLabel) {
         args.push("-map", audioLabel, "-c:a", "aac", "-b:a", "128k");
-      } else if (options.includeOriginalAudio && source.asset.hasAudio) {
+      } else if (exportOptions.includeOriginalAudio && source.asset.hasAudio) {
         args.push("-map", "0:a?", "-c:a", "aac", "-b:a", "128k");
       } else {
         args.push("-an");
@@ -1901,15 +2354,21 @@ async function exportReplayMp4(replayId: string, options: ReplayMp4ExportOptions
         "yuv420p",
         "-movflags",
         "+faststart",
+        "-t",
+        ffmpegSeconds(videoDurationSec),
         outputPath
       );
     }
 
-    await execFileAsync(ffmpegPath, args, {
-      windowsHide: true,
-      timeout: 900_000,
-      maxBuffer: 1024 * 1024
-    });
+    try {
+      await execFileAsync(ffmpegPath, args, {
+        windowsHide: true,
+        timeout: 900_000,
+        maxBuffer: 1024 * 1024
+      });
+    } catch (error) {
+      throw replayMp4FfmpegError(error);
+    }
     const exportedStats = await stat(outputPath);
     if (exportedStats.size <= 0) {
       throw new Error("MP4 export did not create a video.");
@@ -1919,6 +2378,97 @@ async function exportReplayMp4(replayId: string, options: ReplayMp4ExportOptions
     for (const file of tempFiles) {
       await unlink(file).catch(() => undefined);
     }
+  }
+}
+
+async function exportReplayPresentationMp4(replayId: string, payload: ReplayPresentationRecordingPayload): Promise<string> {
+  if (!payload?.data || payload.data.byteLength <= 0) {
+    throw new Error("No presentation recording was received.");
+  }
+  const ffmpegPath = replayVideoFfmpegPath();
+  if (!ffmpegPath || !(await pathExists(ffmpegPath))) {
+    throw new Error("Presentation export needs ffmpeg.");
+  }
+  const [replays, matches, settings] = await Promise.all([store.getReplays(), store.getMatches(), store.getSettings()]);
+  const storedReplay = replays.find((item) => item.id === replayId);
+  if (!storedReplay) {
+    throw new Error("Replay not found.");
+  }
+  const replay = replayForExport(storedReplay);
+  const match = matches.find((item) => item.id === replay.matchId) ?? replay.matchSnapshot;
+  const search = replaySearchMetadata(replay, match);
+  const directory = replayBundleDirectory(settings);
+  await mkdir(directory, { recursive: true });
+  const durationSuffix = payload.durationMs > 0 ? ` ${Math.round(payload.durationMs / 1000)}s` : "";
+  const defaultPath = join(
+    directory,
+    `${safeFileComponent(`${search.title} ${search.players.join(" vs ")} presentation ${search.capturedAt.slice(0, 10)}${durationSuffix}`, "RiftLite Presentation")}.mp4`
+  );
+  const saveOptions: SaveDialogOptions = {
+    title: "Export replay presentation MP4",
+    defaultPath,
+    filters: [{ name: "MP4 video", extensions: ["mp4"] }]
+  };
+  const result = mainWindow ? await dialog.showSaveDialog(mainWindow, saveOptions) : await dialog.showSaveDialog(saveOptions);
+  if (result.canceled || !result.filePath) {
+    return "";
+  }
+  const outputPath = result.filePath.toLowerCase().endsWith(".mp4") ? result.filePath : `${result.filePath}.mp4`;
+  await unlink(outputPath).catch(() => undefined);
+
+  const tempDirectory = join(app.getPath("temp"), `riftlite-presentation-export-${randomUUID()}`);
+  await mkdir(tempDirectory, { recursive: true });
+  const inputExtension = payload.mimeType.toLowerCase().includes("mp4") ? "mp4" : "webm";
+  const inputPath = join(tempDirectory, `presentation.${inputExtension}`);
+  await writeFile(inputPath, Buffer.from(new Uint8Array(payload.data)));
+  try {
+    const args = [
+      "-y",
+      "-hide_banner",
+      "-loglevel",
+      "error",
+      "-fflags",
+      "+genpts",
+      "-i",
+      inputPath,
+      "-map",
+      "0:v:0",
+      "-map",
+      "0:a?",
+      "-vf",
+      "scale=trunc(iw/2)*2:trunc(ih/2)*2,setsar=1",
+      "-c:v",
+      "libx264",
+      "-preset",
+      "veryfast",
+      "-crf",
+      "18",
+      "-pix_fmt",
+      "yuv420p",
+      "-c:a",
+      "aac",
+      "-b:a",
+      "160k",
+      "-movflags",
+      "+faststart",
+      outputPath
+    ];
+    try {
+      await execFileAsync(ffmpegPath, args, {
+        windowsHide: true,
+        timeout: 900_000,
+        maxBuffer: 1024 * 1024
+      });
+    } catch (error) {
+      throw replayMp4FfmpegError(error);
+    }
+    const exportedStats = await stat(outputPath);
+    if (exportedStats.size <= 0) {
+      throw new Error("Presentation export did not create a video.");
+    }
+    return outputPath;
+  } finally {
+    await unlink(inputPath).catch(() => undefined);
   }
 }
 
@@ -3400,6 +3950,8 @@ function matchHistoryCsv(matches: Array<MatchDraft | CommunityMatch>, scope: "pe
     "deck_source_key",
     "flags",
     "notes",
+    "testing_session_id",
+    "testing_session_label",
     "games_json"
   ];
   const lines = [headers.join(",")];
@@ -3445,6 +3997,8 @@ function exportMatchRow(match: MatchDraft | CommunityMatch, scope: "personal" | 
     deck_source_key: match.deckSourceKey ?? "",
     flags: match.flags,
     notes: isCommunity ? "" : match.notes,
+    testing_session_id: isCommunity ? "" : match.testingSessionId ?? "",
+    testing_session_label: isCommunity ? "" : match.testingSessionLabel ?? "",
     games_json: games
   };
 }
@@ -3519,14 +4073,32 @@ function installFullscreenShortcut(webContents: WebContents): void {
   });
 }
 
+function getMainWindowBounds(): { width: number; height: number; minWidth: number; minHeight: number } {
+  const { workAreaSize } = screen.getPrimaryDisplay();
+  const usableWidth = Math.max(900, workAreaSize.width - 16);
+  const usableHeight = Math.max(640, workAreaSize.height - 16);
+  const minWidth = Math.min(1280, usableWidth);
+  const minHeight = Math.min(780, usableHeight);
+  const preferredWidth = Math.max(1560, Math.floor(workAreaSize.width * 0.9));
+  const preferredHeight = Math.max(960, Math.floor(workAreaSize.height * 0.9));
+
+  return {
+    width: Math.max(minWidth, Math.min(1720, preferredWidth, usableWidth)),
+    height: Math.max(minHeight, Math.min(1000, preferredHeight, usableHeight)),
+    minWidth,
+    minHeight
+  };
+}
+
 async function createWindow(): Promise<void> {
   const iconPath = assetPath("riftlite-app.ico");
   const icon = nativeImage.createFromPath(iconPath);
+  const bounds = getMainWindowBounds();
   mainWindow = new BrowserWindow({
-    width: 1440,
-    height: 920,
-    minWidth: 1120,
-    minHeight: 720,
+    width: bounds.width,
+    height: bounds.height,
+    minWidth: bounds.minWidth,
+    minHeight: bounds.minHeight,
     title: "RiftLite Beta 0.7",
     icon,
     backgroundColor: "#0c101a",
@@ -3546,12 +4118,27 @@ async function createWindow(): Promise<void> {
   installFullscreenShortcut(mainWindow.webContents);
   configureDisplayMediaCapture();
 
-  mainWindow.once("ready-to-show", () => {
+  const showMainWindow = () => {
     mainWindow?.show();
-  });
+  };
+  mainWindow.once("ready-to-show", showMainWindow);
+  setTimeout(() => {
+    if (mainWindow && !mainWindow.isVisible()) {
+      showMainWindow();
+    }
+  }, 5000);
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     void openExternalResource(url).catch(() => undefined);
     return { action: "deny" };
+  });
+  mainWindow.webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL) => {
+    void logStartupIssue("renderer did-fail-load", `${errorCode} ${errorDescription} ${validatedURL}`);
+  });
+  mainWindow.webContents.on("render-process-gone", (_event, details) => {
+    void logStartupIssue("renderer process gone", JSON.stringify(details));
+  });
+  mainWindow.webContents.on("preload-error", (_event, preloadPathValue, error) => {
+    void logStartupIssue("app preload error", `${preloadPathValue}\n${formatStartupError(error)}`);
   });
   mainWindow.webContents.on("did-attach-webview", (_event, webContents) => {
     rememberGameWebContents(webContents);
@@ -3616,6 +4203,13 @@ function registerIpc(): void {
   ipcMain.handle("matches:deleted", () => store.getDeletedMatches());
   ipcMain.handle("matches:save-draft", (_event, draft: MatchDraft) => store.saveMatch(draft));
   ipcMain.handle("matches:confirm", (_event, draft: MatchDraft) => capture.confirmMatch(draft));
+  ipcMain.handle("matches:combine-preview", (_event, matchIds: string[]) => store.previewCombinedMatches(matchIds));
+  ipcMain.handle("matches:combine-save", async (_event, payload) => {
+    const combined = await store.combineMatches(payload);
+    const synced = await syncService.syncMatch(combined, { quiet: true }).catch(() => combined);
+    return store.saveMatch(synced);
+  });
+  ipcMain.handle("matches:combine-undo", (_event, combinedMatchId: string) => store.undoCombinedMatch(combinedMatchId));
   ipcMain.handle("matches:delete", (_event, id: string) => store.deleteMatch(id));
   ipcMain.handle("matches:restore", (_event, id: string) => store.restoreMatch(id));
   ipcMain.handle("matches:purge", (_event, id: string) => store.purgeMatch(id));
@@ -3645,6 +4239,26 @@ function registerIpc(): void {
   ipcMain.handle("deck-tracker:set-pinned", (_event, deckId: string, cardKeys: string[]) => deckTrackerService.setPinnedCards(deckId, cardKeys));
   ipcMain.handle("deck-tracker:adjust", (_event, cardKey: string, delta: number) => deckTrackerService.adjustCard(cardKey, delta));
   ipcMain.handle("deck-tracker:reset", () => deckTrackerService.resetMatch());
+  ipcMain.handle("vision-deck-tracker:get-status", () => deckTrackerService.getVisionStatus());
+  ipcMain.handle("vision-deck-tracker:set-enabled", (_event, enabled: boolean) => deckTrackerService.setVisionEnabled(Boolean(enabled)));
+  ipcMain.handle("vision-deck-tracker:calibrate", (_event, platform: GamePlatform) => deckTrackerService.calibrateVisionTracker(platform));
+  ipcMain.handle("vision-deck-tracker:confirm-suggestion", (_event, cardKey: string) => deckTrackerService.confirmVisionSuggestion(cardKey));
+  ipcMain.handle("vision-deck-tracker:reject-suggestion", (_event, cardKey: string) => deckTrackerService.rejectVisionSuggestion(cardKey));
+  ipcMain.handle("vision-deck-tracker:observations", (_event, platform: GamePlatform, observations: DeckTrackerObservation[], status: Partial<VisionDeckTrackerStatus>) => (
+    deckTrackerService.reportVisionObservations(platform, observations, status)
+  ));
+  ipcMain.handle("vision-deck-tracker:debug", async (_event, platform: GamePlatform, payload: unknown) => {
+    const capturedAt = new Date().toISOString();
+    const safePayload = sanitizeVisionDebugPayload(payload);
+    await diagnostics.record({
+      id: `vision-deck-tracker-${Date.now()}-${randomUUID()}`,
+      platform: platform === "atlas" || platform === "tcga" || platform === "sim" ? platform : "tcga",
+      kind: "debug",
+      capturedAt,
+      url: readPayloadString(safePayload.url),
+      payload: safePayload
+    });
+  });
   ipcMain.handle("replays:get", () => store.getReplays());
   ipcMain.handle("replays:deleted", () => store.getDeletedReplays());
   ipcMain.handle("replays:save", (_event, replay: ReplayRecord) => store.saveReplay(replay));
@@ -3653,6 +4267,8 @@ function registerIpc(): void {
   ipcMain.handle("replays:purge", (_event, id: string) => store.purgeReplay(id));
   ipcMain.handle("replays:export", (_event, replayId: string) => exportReplayBundle(replayId));
   ipcMain.handle("replays:export-mp4", (_event, replayId: string, options: ReplayMp4ExportOptions) => exportReplayMp4(replayId, options));
+  ipcMain.handle("replays:export-presentation-mp4", (_event, replayId: string, payload: ReplayPresentationRecordingPayload) => exportReplayPresentationMp4(replayId, payload));
+  ipcMain.handle("replays:export-flags-text", (_event, replayId: string) => exportReplayFlagsText(replayId));
   ipcMain.handle("replays:import", () => importReplayBundle());
   ipcMain.handle("replays:import-folder", () => importReplayFolder());
   ipcMain.handle("replays:open-folder", async () => {
@@ -3712,7 +4328,7 @@ function registerIpc(): void {
   ipcMain.handle("account:export", () => exportAccountData());
   ipcMain.handle("account:unlink", () => syncService.unlinkAccount());
   ipcMain.handle("profiles:search", (_event, query: string) => syncService.searchPublicProfiles(query));
-  ipcMain.handle("hubs:claim", (_event, hubId: string, passwordHash?: string) => syncService.claimHub(hubId, passwordHash));
+  ipcMain.handle("hubs:claim", (_event, hubId: string, password?: string) => syncService.claimHub(hubId, password));
   ipcMain.handle("hubs:inbox", () => syncService.getHubInbox());
   ipcMain.handle("hubs:invite:accept", (_event, inviteId: string) => syncService.acceptHubInvite(inviteId));
   ipcMain.handle("hubs:invite:decline", (_event, inviteId: string) => syncService.declineHubInvite(inviteId));
@@ -3837,38 +4453,52 @@ app.whenReady().then(async () => {
   if (!gotSingleInstanceLock) {
     return;
   }
-  Menu.setApplicationMenu(null);
-  store = new RiftLiteStore();
-  await store.load();
-  tcgaResolver = new TcgaResolver(assetPath("tcga_card_lookup.json"));
-  syncService = new FirebaseSyncService(store, () => mainWindow);
-  deckService = new DeckService(store);
-  deckTrackerService = new DeckTrackerService(store, tcgaResolver);
-  overlayServer = new OverlayServer(store, () => {
-    if (typeof capture === "undefined") {
-      return null;
+  try {
+    Menu.setApplicationMenu(null);
+    await logStartupIssue("startup begin", `RiftLite ${app.getVersion()}`);
+    store = new RiftLiteStore();
+    await store.load();
+    tcgaResolver = new TcgaResolver(assetPath("tcga_card_lookup.json"));
+    syncService = new FirebaseSyncService(store, () => mainWindow);
+    deckService = new DeckService(store);
+    deckTrackerService = new DeckTrackerService(store, tcgaResolver);
+    overlayServer = new OverlayServer(store, () => {
+      if (typeof capture === "undefined") {
+        return null;
+      }
+      return capture.getLiveOverlayMatch();
+    });
+    await overlayServer.start().catch((error) => logStartupIssue("overlay server startup failed", error));
+    diagnostics = new CaptureDiagnostics();
+    updater = new UpdaterService(() => mainWindow);
+    await diagnostics.ensureFile();
+    capture = new CaptureCoordinator(store, () => mainWindow, tcgaResolver, syncService, diagnostics, captureTimedReplayFrame, deckTrackerService);
+    capture.recordBuildMarker(app.getVersion());
+    if (simEventReceiverEnabled()) {
+      simEventReceiver = new SimEventReceiver((event) => capture.handleEvent(event));
+      await simEventReceiver.start().catch(async (error) => {
+        await logStartupIssue("sim event receiver startup failed", error);
+        simEventReceiver = null;
+      });
     }
-    return capture.getLiveOverlayMatch();
-  });
-  await overlayServer.start();
-  diagnostics = new CaptureDiagnostics();
-  updater = new UpdaterService(() => mainWindow);
-  await diagnostics.ensureFile();
-  capture = new CaptureCoordinator(store, () => mainWindow, tcgaResolver, syncService, diagnostics, captureTimedReplayFrame, deckTrackerService);
-  if (simEventReceiverEnabled()) {
-    simEventReceiver = new SimEventReceiver((event) => capture.handleEvent(event));
-    await simEventReceiver.start();
-  }
-  registerIpc();
-  await createWindow();
-  await configureScreenshotHotkey();
-  scheduleAppUsageHeartbeat(store);
+    registerIpc();
+    await createWindow();
+    await configureScreenshotHotkey().catch((error) => logStartupIssue("screenshot hotkey startup failed", error));
+    scheduleAppUsageHeartbeat(store);
+    await logStartupIssue("startup complete", `RiftLite ${app.getVersion()}`);
 
-  app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      void createWindow();
-    }
-  });
+    app.on("activate", () => {
+      if (BrowserWindow.getAllWindows().length === 0) {
+        void createWindow().catch((error) => logStartupIssue("activate createWindow failed", error));
+      }
+    });
+  } catch (error) {
+    await logStartupIssue("fatal startup failure", error);
+    dialog.showErrorBox(
+      "RiftLite could not start",
+      `RiftLite hit a startup problem and wrote details to:\n${startupLogPath()}\n\n${formatStartupError(error).split("\n")[0]}`
+    );
+  }
 });
 
 app.on("window-all-closed", () => {

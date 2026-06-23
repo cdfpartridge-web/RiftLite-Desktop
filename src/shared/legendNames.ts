@@ -1,5 +1,5 @@
 const MASTER_YI_WUJU_BLADESMAN = "Master Yi, Wuju Bladesman";
-const MASTER_YI_WUJI_MASTER = "Master Yi, Wuji Master";
+const MASTER_YI_WUJU_MASTER = "Master Yi, Wuju Master";
 
 export const CANONICAL_LEGEND_NAMES = [
   "Ahri",
@@ -25,7 +25,7 @@ export const CANONICAL_LEGEND_NAMES = [
   "Lucian",
   "Lux",
   "Master Yi",
-  MASTER_YI_WUJI_MASTER,
+  MASTER_YI_WUJU_MASTER,
   MASTER_YI_WUJU_BLADESMAN,
   "Miss Fortune",
   "Ornn",
@@ -91,8 +91,8 @@ const LEGEND_ALIAS_MAP: Record<string, string> = {
   "purifier": "Lucian",
   "lady of luminosity": "Lux",
   "wuju bladesman": MASTER_YI_WUJU_BLADESMAN,
-  "wuju master": MASTER_YI_WUJI_MASTER,
-  "wuji master": MASTER_YI_WUJI_MASTER,
+  "wuju master": MASTER_YI_WUJU_MASTER,
+  "wuji master": MASTER_YI_WUJU_MASTER,
   "unstoppable": "Master Yi",
   "tempered": "Master Yi",
   "captain": "Miss Fortune",
@@ -142,7 +142,7 @@ export function normalizeLegendName(value: unknown): string {
       return MASTER_YI_WUJU_BLADESMAN;
     }
     if (lower.includes("wuji master") || lower.includes("wuju master")) {
-      return MASTER_YI_WUJI_MASTER;
+      return MASTER_YI_WUJU_MASTER;
     }
     return "Master Yi";
   }

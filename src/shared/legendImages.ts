@@ -22,7 +22,7 @@ const LEGEND_IMAGE_URLS: Record<string, string> = {
   "Lucian": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/eb2a5262da6044c041ba87becae1dc71d58b2bf7-744x1039.png?auto=format&fit=fill&q=80&w=744",
   "Lux": "https://cdn.rgpub.io/public/live/map/riftbound/latest/OGS/cards/OGS-021/full-desktop-2x.avif",
   "Master Yi": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/557e41d84ac36ffa2bf805deda159f45e0a815f9-744x1039.png?auto=format&fit=fill&q=80&w=744",
-  "Master Yi, Wuji Master": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/557e41d84ac36ffa2bf805deda159f45e0a815f9-744x1039.png?auto=format&fit=fill&q=80&w=744",
+  "Master Yi, Wuju Master": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/557e41d84ac36ffa2bf805deda159f45e0a815f9-744x1039.png?auto=format&fit=fill&q=80&w=744",
   "Master Yi, Wuju Bladesman": "https://cdn.rgpub.io/public/live/map/riftbound/latest/OGS/cards/OGS-019/full-desktop-2x.avif",
   "Miss Fortune": "https://cdn.rgpub.io/public/live/map/riftbound/latest/OGN/cards/OGN-267/full-desktop-2x.avif",
   "Ornn": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/883dab66da8ed5ab39d968ed7fcaebd5ebaf3d43-744x1039.png?auto=format&fit=fill&q=80&w=744",

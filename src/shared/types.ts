@@ -78,7 +78,16 @@ export interface MatchDraft {
   platform: GamePlatform;
   source?: MatchSource;
   deletedAt?: string;
+  manualRepair?: boolean;
+  combinedFromMatchIds?: string[];
+  combinedAt?: string;
+  combinedBy?: "user";
+  mergedIntoMatchId?: string;
+  hiddenFromStats?: boolean;
+  hiddenFromHistory?: boolean;
   keepReplay?: boolean;
+  testingSessionId?: string;
+  testingSessionLabel?: string;
   status: "pending-review" | "saved" | "incomplete";
   capturedAt: string;
   updatedAt: string;
@@ -105,6 +114,17 @@ export interface MatchDraft {
     hubs: Record<string, "pending" | "synced" | "failed">;
     teams: Record<string, "pending" | "synced" | "failed">;
   };
+}
+
+export interface TestingSession {
+  id: string;
+  label: string;
+  goal: string;
+  deckId?: string;
+  deckName?: string;
+  startedAt: string;
+  endedAt?: string;
+  notes?: string;
 }
 
 export interface DeckEntry {
@@ -269,6 +289,9 @@ export interface ActiveDeckPrep {
 
 export type DeckTrackerZone = "hand" | "board" | "base" | "stack" | "trash" | "discard" | "unknown";
 export type DeckTrackerConfidence = "tracked" | "estimated";
+export type DeckTrackerObservationSource = "dom" | "vision" | "manual";
+export type VisionDeckTrackerState = "disabled" | "waiting-for-deck" | "calibrating" | "active" | "low-confidence" | "paused" | "error";
+export type DeckTrackerPerformanceMode = "light" | "balanced" | "responsive";
 
 export interface DeckTrackerObservation {
   cardKey: string;
@@ -280,6 +303,71 @@ export interface DeckTrackerObservation {
   count: number;
   platform: GamePlatform;
   confidence: DeckTrackerConfidence;
+  capturedAt: string;
+  source?: DeckTrackerObservationSource;
+  confidenceScore?: number;
+  frameId?: string;
+  zoneRect?: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
+}
+
+export interface VisionDeckTrackerSuggestion {
+  cardKey: string;
+  name: string;
+  code: string;
+  cardId: string;
+  imageUrl: string;
+  zone: DeckTrackerZone;
+  platform: GamePlatform;
+  confidenceScore: number;
+  capturedAt: string;
+  frameId: string;
+  zoneRect?: DeckTrackerObservation["zoneRect"];
+}
+
+export interface VisionDeckTrackerStatus {
+  state: VisionDeckTrackerState;
+  enabled: boolean;
+  active: boolean;
+  platform: GamePlatform | "none";
+  message: string;
+  updatedAt: string;
+  frameId: string;
+  confidenceScore: number;
+  processedFrames: number;
+  skippedFrames: number;
+  suggestions: VisionDeckTrackerSuggestion[];
+}
+
+export interface VisionRenderedCardObservation {
+  name: string;
+  code: string;
+  cardId: string;
+  imageUrl: string;
+  zone: DeckTrackerZone;
+  platform: GamePlatform;
+  confidenceScore: number;
+  zoneRect?: DeckTrackerObservation["zoneRect"];
+}
+
+export interface VisionFrameCandidate {
+  zone: DeckTrackerZone;
+  platform: GamePlatform;
+  confidenceScore: number;
+  zoneRect: NonNullable<DeckTrackerObservation["zoneRect"]>;
+  reason?: string;
+}
+
+export interface VisionFrameSample {
+  dataUrl: string;
+  width: number;
+  height: number;
+  viewportWidth: number;
+  viewportHeight: number;
   capturedAt: string;
 }
 
@@ -783,6 +871,20 @@ export interface ReplayMp4ExportOptions {
   includeDrawings: boolean;
   includeVoiceNotes: boolean;
   includeOriginalAudio: boolean;
+  mode?: "full" | "clip";
+  clipStartMs?: number;
+  clipDurationMs?: number;
+  watermark?: boolean;
+  layout?: "landscape" | "vertical-center" | "vertical-custom";
+  cropFocusX?: number;
+  cropFocusY?: number;
+  cropZoom?: number;
+}
+
+export interface ReplayPresentationRecordingPayload {
+  data: ArrayBuffer;
+  mimeType: string;
+  durationMs: number;
 }
 
 export interface ReplayWindowCaptureSource {
@@ -855,6 +957,11 @@ export interface CommunityMatch {
   deckSourceKey: string;
   deckSnapshotJson: string;
   createdAt: number;
+  manualRepair?: boolean;
+  combinedFromMatchIds?: string[];
+  mergedIntoMatchId?: string;
+  superseded?: boolean;
+  supersededAt?: string;
   scope: "community" | "hub" | "team";
   hubId?: string;
 }
@@ -957,9 +1064,11 @@ export interface UserSettings {
   replayVideoMode: ReplayVideoCaptureMode;
   replayVideoQuality: ReplayVideoQuality;
   replayMicAudioEnabled: boolean;
+  replayCustomFlagTypes: string[];
   deckTrackerEnabled: boolean;
   deckTrackerAutoStart: boolean;
   deckTrackerSaveToReplay: boolean;
+  deckTrackerPerformanceMode: DeckTrackerPerformanceMode;
   deckTrackerPinnedCards: Record<string, string[]>;
   microphoneDeviceId: string;
   gameZoomFactor: number;
@@ -1320,6 +1429,9 @@ export interface RiftLiteApi {
   getDeletedMatches(): Promise<MatchDraft[]>;
   saveMatchDraft(draft: MatchDraft): Promise<MatchDraft>;
   confirmMatch(draft: MatchDraft): Promise<MatchDraft>;
+  previewCombinedMatches(matchIds: string[]): Promise<import("./matchCombine.js").MatchCombinePreview>;
+  saveCombinedMatches(payload: import("./matchCombine.js").MatchCombineSavePayload): Promise<MatchDraft>;
+  undoCombinedMatch(combinedMatchId: string): Promise<MatchDraft[]>;
   deleteMatch(id: string): Promise<void>;
   restoreMatch(id: string): Promise<MatchDraft | null>;
   purgeMatch(id: string): Promise<void>;
@@ -1346,6 +1458,17 @@ export interface RiftLiteApi {
   setDeckTrackerPinnedCards(deckId: string, cardKeys: string[]): Promise<DeckTrackerState>;
   adjustDeckTrackerCard(cardKey: string, delta: number): Promise<DeckTrackerState>;
   resetDeckTrackerMatch(): Promise<DeckTrackerState>;
+  getVisionDeckTrackerStatus(): Promise<VisionDeckTrackerStatus>;
+  setVisionDeckTrackerEnabled(enabled: boolean): Promise<UserSettings>;
+  calibrateVisionDeckTracker(platform: GamePlatform): Promise<VisionDeckTrackerStatus>;
+  confirmVisionDeckTrackerSuggestion(cardKey: string): Promise<VisionDeckTrackerStatus>;
+  rejectVisionDeckTrackerSuggestion(cardKey: string): Promise<VisionDeckTrackerStatus>;
+  reportVisionDeckTrackerObservations(
+    platform: GamePlatform,
+    observations: DeckTrackerObservation[],
+    status?: Partial<VisionDeckTrackerStatus>
+  ): Promise<DeckTrackerState>;
+  recordVisionDeckTrackerDebug(platform: GamePlatform, payload: Record<string, unknown>): Promise<void>;
   getReplays(): Promise<ReplayRecord[]>;
   getDeletedReplays(): Promise<ReplayRecord[]>;
   saveReplay(replay: ReplayRecord): Promise<ReplayRecord>;
@@ -1354,6 +1477,8 @@ export interface RiftLiteApi {
   purgeReplay(id: string): Promise<void>;
   exportReplayBundle(replayId: string): Promise<string>;
   exportReplayMp4(replayId: string, options: ReplayMp4ExportOptions): Promise<string>;
+  exportReplayPresentationMp4(replayId: string, payload: ReplayPresentationRecordingPayload): Promise<string>;
+  exportReplayFlagsText(replayId: string): Promise<string>;
   importReplayBundle(): Promise<ReplayRecord | null>;
   importReplayFolder(): Promise<ReplayRecord[]>;
   openReplayFolder(): Promise<void>;
@@ -1390,7 +1515,7 @@ export interface RiftLiteApi {
   exportAccountData(): Promise<string>;
   unlinkAccount(): Promise<UserSettings>;
   searchPublicProfiles(query: string): Promise<PublicProfileSearchResult[]>;
-  claimHub(hubId: string, passwordHash?: string): Promise<void>;
+  claimHub(hubId: string, password?: string): Promise<void>;
   getHubInbox(): Promise<HubInboxItem[]>;
   acceptHubInvite(inviteId: string): Promise<HubActionResult | null>;
   declineHubInvite(inviteId: string): Promise<void>;

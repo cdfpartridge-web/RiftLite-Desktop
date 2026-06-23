@@ -9,7 +9,7 @@ import type {
   SavedDeck
 } from "./types.js";
 
-type MainDeckCard = {
+export type MainDeckCard = {
   cardKey: string;
   aliases: string[];
   name: string;
@@ -17,6 +17,10 @@ type MainDeckCard = {
   cardId: string;
   imageUrl: string;
   qty: number;
+};
+
+export type DeckTrackerLibraryCard = MainDeckCard & {
+  role: "main" | "legend";
 };
 
 export type DeckTrackerBuildOptions = {
@@ -94,6 +98,52 @@ export function mainDeckTrackerCards(deck: SavedDeck | null): MainDeckCard[] {
   }).filter((card) => card.cardKey);
 }
 
+export function visionDeckTrackerCards(deck: SavedDeck | null): DeckTrackerLibraryCard[] {
+  const mainCards = mainDeckTrackerCards(deck).map((card) => ({ ...card, role: "main" as const }));
+  const legendCard = legendDeckTrackerCard(deck);
+  return legendCard ? [...mainCards, legendCard] : mainCards;
+}
+
+function legendDeckTrackerCard(deck: SavedDeck | null): DeckTrackerLibraryCard | null {
+  if (!deck?.snapshotJson) {
+    return null;
+  }
+  const snapshot = parseJsonRecord(deck.snapshotJson);
+  const entry = readDeckEntry(snapshot.legendEntry ?? snapshot.legend_entry ?? {
+    qty: 1,
+    name: readString(snapshot.legend ?? deck.legend),
+    cardId: readString(snapshot.legendKey ?? snapshot.legend_key),
+    imageUrl: ""
+  });
+  const name = entry?.name || readString(snapshot.legend ?? deck.legend);
+  if (!name) {
+    return null;
+  }
+  const cardId = entry?.cardId || "";
+  const imageUrl = entry?.imageUrl || "";
+  const code = deckTrackerCodeFromImage(imageUrl) || deckTrackerCodeFromImage(cardId);
+  const cardKey = deckTrackerCardKey({ cardId, imageUrl, name, code }) || normalizeDeckTrackerKey(name);
+  const aliases = [
+    cardKey,
+    normalizeDeckTrackerKey(cardId),
+    normalizeDeckTrackerKey(code),
+    normalizeDeckTrackerKey(name),
+    normalizeDeckTrackerKey(deck.legend || ""),
+    ...deckTrackerCodeAliases(cardId),
+    ...deckTrackerCodeAliases(code)
+  ].filter(Boolean);
+  return {
+    cardKey,
+    aliases: [...new Set(aliases)],
+    name,
+    code,
+    cardId,
+    imageUrl,
+    qty: 1,
+    role: "legend"
+  };
+}
+
 export function observationCountsForDeck(
   observations: DeckTrackerObservation[],
   deckCards: MainDeckCard[]
@@ -109,6 +159,8 @@ export function observationCountsForDeck(
   }
   const counts = new Map<string, number>();
   const confidence = new Map<string, DeckTrackerConfidence>();
+  const visionZoneCounts = new Map<string, Map<string, number>>();
+  const visionConfidence = new Map<string, DeckTrackerConfidence>();
   for (const observation of observations) {
     const observationAliases = [
       observation.cardKey,
@@ -122,9 +174,27 @@ export function observationCountsForDeck(
       continue;
     }
     const count = Math.max(1, Math.floor(Number(observation.count) || 1));
+    if (observation.source === "vision") {
+      const zone = observation.zone || "unknown";
+      const zoneCounts = visionZoneCounts.get(matchedKey) ?? new Map<string, number>();
+      zoneCounts.set(zone, (zoneCounts.get(zone) ?? 0) + count);
+      visionZoneCounts.set(matchedKey, zoneCounts);
+      if (observation.confidence === "estimated" || !visionConfidence.has(matchedKey)) {
+        visionConfidence.set(matchedKey, observation.confidence);
+      }
+      continue;
+    }
     counts.set(matchedKey, (counts.get(matchedKey) ?? 0) + count);
     if (observation.confidence === "estimated" || !confidence.has(matchedKey)) {
       confidence.set(matchedKey, observation.confidence);
+    }
+  }
+  for (const [matchedKey, zoneCounts] of visionZoneCounts) {
+    const count = Math.max(...zoneCounts.values());
+    counts.set(matchedKey, Math.max(counts.get(matchedKey) ?? 0, count));
+    const nextConfidence = visionConfidence.get(matchedKey);
+    if (nextConfidence && (nextConfidence === "estimated" || !confidence.has(matchedKey))) {
+      confidence.set(matchedKey, nextConfidence);
     }
   }
   return { counts, confidence };
