@@ -467,29 +467,36 @@ function homeFeaturedPartnersFromConfig(value: unknown): HomeFeaturedPartner[] {
     return [];
   }
   const payload = value as Record<string, unknown>;
-  const rawPartners = Array.isArray(payload.featuredPartners)
+  const rawPartners: unknown[] = Array.isArray(payload.featuredPartners)
     ? payload.featuredPartners
     : payload.featuredPartner
       ? [payload.featuredPartner]
       : [];
   return rawPartners
-    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item))
     .map((item) => {
-      const title = typeof item.title === "string" ? item.title.trim() : "";
-      const url = typeof item.url === "string" ? item.url.trim() : "";
+      if (!item || typeof item !== "object" || Array.isArray(item)) {
+        return null;
+      }
+      const partner = item as Record<string, unknown>;
+      const title = typeof partner.title === "string" ? partner.title.trim() : "";
+      const url = typeof partner.url === "string" ? partner.url.trim() : "";
       if (!title || !url) {
         return null;
       }
-      return {
+      const featuredPartner: HomeFeaturedPartner = {
         title,
-        eyebrow: typeof item.eyebrow === "string" && item.eyebrow.trim() ? item.eyebrow.trim() : "Featured partner",
-        description: typeof item.description === "string" ? item.description.trim() : "",
-        ctaLabel: typeof item.ctaLabel === "string" && item.ctaLabel.trim() ? item.ctaLabel.trim() : "Learn more",
-        url,
-        imageUrl: typeof item.imageUrl === "string" && item.imageUrl.trim() ? item.imageUrl.trim() : undefined
+        eyebrow: typeof partner.eyebrow === "string" && partner.eyebrow.trim() ? partner.eyebrow.trim() : "Featured partner",
+        description: typeof partner.description === "string" ? partner.description.trim() : "",
+        ctaLabel: typeof partner.ctaLabel === "string" && partner.ctaLabel.trim() ? partner.ctaLabel.trim() : "Learn more",
+        url
       };
+      const imageUrl = typeof partner.imageUrl === "string" ? partner.imageUrl.trim() : "";
+      if (imageUrl) {
+        featuredPartner.imageUrl = imageUrl;
+      }
+      return featuredPartner;
     })
-    .filter((item): item is HomeFeaturedPartner => Boolean(item));
+    .filter((item): item is HomeFeaturedPartner => item !== null);
 }
 
 function homeFeaturedStreamsFromConfig(value: unknown): HomeFeaturedStream[] {
@@ -497,29 +504,36 @@ function homeFeaturedStreamsFromConfig(value: unknown): HomeFeaturedStream[] {
     return [];
   }
   const payload = value as Record<string, unknown>;
-  const rawStreams = Array.isArray(payload.featuredStreams)
+  const rawStreams: unknown[] = Array.isArray(payload.featuredStreams)
     ? payload.featuredStreams
     : payload.featuredStream
       ? [payload.featuredStream]
       : [];
   return rawStreams
-    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item))
     .map((item) => {
-      const url = typeof item.url === "string" ? item.url.trim() : "";
-      const channel = twitchChannelFromUrl(typeof item.channel === "string" ? item.channel : url);
+      if (!item || typeof item !== "object" || Array.isArray(item)) {
+        return null;
+      }
+      const stream = item as Record<string, unknown>;
+      const url = typeof stream.url === "string" ? stream.url.trim() : "";
+      const channel = twitchChannelFromUrl(typeof stream.channel === "string" ? stream.channel : url);
       if (!channel) {
         return null;
       }
-      return {
-        title: typeof item.title === "string" && item.title.trim() ? item.title.trim() : `${channel} live`,
+      const featuredStream: HomeFeaturedStream = {
+        title: typeof stream.title === "string" && stream.title.trim() ? stream.title.trim() : `${channel} live`,
         channel,
         url: url || `https://www.twitch.tv/${channel}`,
         playerUrl: twitchPlayerUrl(channel),
-        thumbnailUrl: typeof item.thumbnailUrl === "string" && item.thumbnailUrl.trim() ? item.thumbnailUrl.trim() : undefined,
-        isLive: item.isLive === true || item.live === true || item.online === true || item.status === "live"
+        isLive: stream.isLive === true || stream.live === true || stream.online === true || stream.status === "live"
       };
+      const thumbnailUrl = typeof stream.thumbnailUrl === "string" ? stream.thumbnailUrl.trim() : "";
+      if (thumbnailUrl) {
+        featuredStream.thumbnailUrl = thumbnailUrl;
+      }
+      return featuredStream;
     })
-    .filter((item): item is HomeFeaturedStream => Boolean(item))
+    .filter((item): item is HomeFeaturedStream => item !== null)
     .sort((a, b) => Number(Boolean(b.isLive)) - Number(Boolean(a.isLive)) || a.title.localeCompare(b.title));
 }
 const DIRECT_REPLAY_MODE_MIGRATION_KEY = "riftlite-direct-replay-mode-v2";
@@ -7312,7 +7326,7 @@ function MatchupLabView({
   const mapTopValue = (values: Map<string, number>) => [...values.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0]?.[0] ?? "";
 
   const replayMatchIds = useMemo(() => {
-    return new Set(replays.filter((replay) => replay.video || replay.frames?.length).map((replay) => replay.matchId).filter(Boolean));
+    return new Set(replays.filter((replay) => replay.video || replay.visualFrames?.length).map((replay) => replay.matchId).filter(Boolean));
   }, [replays]);
 
   const personalRows = useMemo(() => {
@@ -10665,7 +10679,7 @@ function MatchesView({
   onOpenReplay: (matchId: string) => void;
   onSyncMatchesToHubs: (matchIds: string[], hubIds: string[]) => Promise<PrivateHubSyncResult>;
   onSyncMatchesToTeams: (matchIds: string[], teamIds: string[]) => Promise<PrivateHubSyncResult>;
-  onSaveCombinedMatches: (payload: MatchCombineSavePayload) => Promise<void>;
+  onSaveCombinedMatches: (payload: MatchCombineSavePayload) => Promise<MatchDraft>;
   onUndoCombinedMatch: (combinedMatchId: string) => Promise<void>;
   onStartTestingSession: (input: { label: string; goal: string; deckId: string }) => void;
   onStopTestingSession: () => void;
