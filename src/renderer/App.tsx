@@ -10733,7 +10733,12 @@ function MatchesView({
   const selectedCombineMatches = useMemo(
     () => selectedSyncIds
       .map((id) => matchById.get(id))
-      .filter((match): match is MatchDraft => Boolean(match) && combineSelectableIds.has(match.id))
+      .filter((match): match is MatchDraft => {
+        if (!match) {
+          return false;
+        }
+        return combineSelectableIds.has(match.id);
+      })
       .sort((a, b) => new Date(a.capturedAt).getTime() - new Date(b.capturedAt).getTime()),
     [combineSelectableIds, matchById, selectedSyncIds]
   );
@@ -11519,7 +11524,7 @@ function combineWarningLabel(warning: MatchCombineWarning): string {
 function matchGameBattlefieldSummary(match: MatchDraft): string {
   const firstGame = match.games[0];
   const myBattlefield = firstGame?.myBattlefield || match.myBattlefield || "";
-  const opponentBattlefield = firstGame?.opponentBattlefield || match.opponentBattlefield || "";
+  const opponentBattlefield = firstGame?.oppBattlefield || match.opponentBattlefield || "";
   if (!myBattlefield && !opponentBattlefield) {
     return "Battlefields pending";
   }
