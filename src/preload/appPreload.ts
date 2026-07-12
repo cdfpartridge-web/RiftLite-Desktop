@@ -67,7 +67,10 @@ const api: RiftLiteApi = {
   getDeckTrackerState: () => ipcRenderer.invoke("deck-tracker:get-state") as Promise<DeckTrackerState>,
   setDeckTrackerPinnedCards: (deckId, cardKeys) => ipcRenderer.invoke("deck-tracker:set-pinned", deckId, cardKeys) as Promise<DeckTrackerState>,
   adjustDeckTrackerCard: (cardKey, delta) => ipcRenderer.invoke("deck-tracker:adjust", cardKey, delta) as Promise<DeckTrackerState>,
+  adjustDeckTrackerSideboard: (cardKey, direction, delta) => ipcRenderer.invoke("deck-tracker:sideboard-adjust", cardKey, direction, delta) as Promise<DeckTrackerState>,
+  resetDeckTrackerSideboard: () => ipcRenderer.invoke("deck-tracker:sideboard-reset") as Promise<DeckTrackerState>,
   resetDeckTrackerMatch: () => ipcRenderer.invoke("deck-tracker:reset") as Promise<DeckTrackerState>,
+  openDeckTrackerWindow: () => ipcRenderer.invoke("deck-tracker:open-window") as Promise<void>,
   getVisionDeckTrackerStatus: () => ipcRenderer.invoke("vision-deck-tracker:get-status") as ReturnType<RiftLiteApi["getVisionDeckTrackerStatus"]>,
   setVisionDeckTrackerEnabled: (enabled) => ipcRenderer.invoke("vision-deck-tracker:set-enabled", enabled) as Promise<UserSettings>,
   calibrateVisionDeckTracker: (platform) => ipcRenderer.invoke("vision-deck-tracker:calibrate", platform) as ReturnType<RiftLiteApi["calibrateVisionDeckTracker"]>,
@@ -85,6 +88,13 @@ const api: RiftLiteApi = {
   exportReplayMp4: (replayId, options) => ipcRenderer.invoke("replays:export-mp4", replayId, options) as ReturnType<RiftLiteApi["exportReplayMp4"]>,
   exportReplayPresentationMp4: (replayId, payload) => ipcRenderer.invoke("replays:export-presentation-mp4", replayId, payload) as ReturnType<RiftLiteApi["exportReplayPresentationMp4"]>,
   exportReplayFlagsText: (replayId) => ipcRenderer.invoke("replays:export-flags-text", replayId) as ReturnType<RiftLiteApi["exportReplayFlagsText"]>,
+  uploadRawCapture: (replayId) => ipcRenderer.invoke("raw-capture:upload", replayId) as ReturnType<RiftLiteApi["uploadRawCapture"]>,
+  getRawCaptureStatus: () => ipcRenderer.invoke("raw-capture:status") as ReturnType<RiftLiteApi["getRawCaptureStatus"]>,
+  getRawCapturePayload: (replayId) => ipcRenderer.invoke("raw-capture:payload", replayId) as ReturnType<RiftLiteApi["getRawCapturePayload"]>,
+  uploadRawCaptureToRiftLite: (replayId, visibility) => ipcRenderer.invoke("raw-capture:upload-riftlite", replayId, visibility) as ReturnType<RiftLiteApi["uploadRawCaptureToRiftLite"]>,
+  shareRawCaptureToDiscord: (replayId) => ipcRenderer.invoke("raw-capture:share-discord", replayId) as ReturnType<RiftLiteApi["shareRawCaptureToDiscord"]>,
+  prepareReplayEmbed: (replayId) => ipcRenderer.invoke("replay:embed:prepare", replayId) as ReturnType<RiftLiteApi["prepareReplayEmbed"]>,
+  prepareReplayLibraryEmbed: () => ipcRenderer.invoke("replay:embed:prepare-library") as ReturnType<RiftLiteApi["prepareReplayLibraryEmbed"]>,
   importReplayBundle: () => ipcRenderer.invoke("replays:import") as Promise<ReplayRecord | null>,
   importReplayFolder: () => ipcRenderer.invoke("replays:import-folder") as Promise<ReplayRecord[]>,
   openReplayFolder: () => ipcRenderer.invoke("replays:open-folder") as Promise<void>,
@@ -106,6 +116,7 @@ const api: RiftLiteApi = {
   getHubMatches: (hubId, forceRefresh) => ipcRenderer.invoke("hubs:matches", hubId, forceRefresh) as Promise<CommunityMatch[]>,
   createHub: (name, password) => ipcRenderer.invoke("hubs:create", name, password) as Promise<HubActionResult>,
   joinHub: (name, password) => ipcRenderer.invoke("hubs:join", name, password) as Promise<HubActionResult>,
+  refreshAccountHubs: () => ipcRenderer.invoke("hubs:refresh-account") as ReturnType<RiftLiteApi["refreshAccountHubs"]>,
   syncPrivateHubs: () => ipcRenderer.invoke("hubs:sync-private") as Promise<PrivateHubSyncResult>,
   syncMatchesToHubs: (matchIds, hubIds) => ipcRenderer.invoke("hubs:sync-selected", matchIds, hubIds) as Promise<PrivateHubSyncResult>,
   deleteHubMatch: (hubId, matchId) => ipcRenderer.invoke("hubs:delete-match", hubId, matchId) as Promise<void>,
@@ -115,10 +126,16 @@ const api: RiftLiteApi = {
   deleteTeamMatch: (teamId, matchId) => ipcRenderer.invoke("teams:delete-match", teamId, matchId) as Promise<void>,
   startAccountLink: () => ipcRenderer.invoke("account:link:start") as ReturnType<RiftLiteApi["startAccountLink"]>,
   getAccountLinkStatus: (sessionId) => ipcRenderer.invoke("account:link:status", sessionId) as ReturnType<RiftLiteApi["getAccountLinkStatus"]>,
+  getAccountConnectionStatus: () => ipcRenderer.invoke("account:connection:status") as ReturnType<RiftLiteApi["getAccountConnectionStatus"]>,
+  repairAccountConnection: () => ipcRenderer.invoke("account:connection:repair") as ReturnType<RiftLiteApi["repairAccountConnection"]>,
   getAccountProfile: () => ipcRenderer.invoke("account:profile:get") as ReturnType<RiftLiteApi["getAccountProfile"]>,
   saveAccountProfile: (profile) => ipcRenderer.invoke("account:profile:save", profile) as ReturnType<RiftLiteApi["saveAccountProfile"]>,
   refreshAccountProfileMatches: () => ipcRenderer.invoke("account:profile:backfill") as ReturnType<RiftLiteApi["refreshAccountProfileMatches"]>,
   exportAccountData: () => ipcRenderer.invoke("account:export") as ReturnType<RiftLiteApi["exportAccountData"]>,
+  getAccountCloudSyncStatus: () => ipcRenderer.invoke("account:cloud-sync:status") as ReturnType<RiftLiteApi["getAccountCloudSyncStatus"]>,
+  setAccountCloudSyncEnabled: (enabled) => ipcRenderer.invoke("account:cloud-sync:set-enabled", enabled) as ReturnType<RiftLiteApi["setAccountCloudSyncEnabled"]>,
+  uploadAccountCloudSync: () => ipcRenderer.invoke("account:cloud-sync:upload") as ReturnType<RiftLiteApi["uploadAccountCloudSync"]>,
+  restoreAccountCloudSync: () => ipcRenderer.invoke("account:cloud-sync:restore") as ReturnType<RiftLiteApi["restoreAccountCloudSync"]>,
   unlinkAccount: () => ipcRenderer.invoke("account:unlink") as ReturnType<RiftLiteApi["unlinkAccount"]>,
   searchPublicProfiles: (query) => ipcRenderer.invoke("profiles:search", query) as ReturnType<RiftLiteApi["searchPublicProfiles"]>,
   claimHub: (hubId, password) => ipcRenderer.invoke("hubs:claim", hubId, password) as ReturnType<RiftLiteApi["claimHub"]>,
@@ -151,6 +168,11 @@ const api: RiftLiteApi = {
   reportSocialTeam: (payload) => ipcRenderer.invoke("teams:report", payload) as ReturnType<RiftLiteApi["reportSocialTeam"]>,
   getModerationTeams: (query) => ipcRenderer.invoke("moderation:teams", query) as ReturnType<RiftLiteApi["getModerationTeams"]>,
   moderateTeam: (teamId, action, reason) => ipcRenderer.invoke("moderation:team:update", teamId, action, reason) as ReturnType<RiftLiteApi["moderateTeam"]>,
+  onAppNavigate: (callback) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: Parameters<typeof callback>[0]) => callback(payload);
+    ipcRenderer.on("app:navigate", listener);
+    return () => ipcRenderer.removeListener("app:navigate", listener);
+  },
   getUpdateStatus: () => ipcRenderer.invoke("updates:status") as Promise<UpdateStatus>,
   checkForUpdates: () => ipcRenderer.invoke("updates:check") as Promise<UpdateStatus>,
   downloadUpdate: () => ipcRenderer.invoke("updates:download") as Promise<UpdateStatus>,
@@ -194,6 +216,16 @@ const api: RiftLiteApi = {
     const listener = (_event: Electron.IpcRendererEvent, payload: ScreenshotResult) => callback(payload);
     ipcRenderer.on("screenshot:saved", listener);
     return () => ipcRenderer.removeListener("screenshot:saved", listener);
+  },
+  onReplayShadowClipHotkey: (callback) => {
+    const listener = () => callback();
+    ipcRenderer.on("replay:shadow-clip-hotkey", listener);
+    return () => ipcRenderer.removeListener("replay:shadow-clip-hotkey", listener);
+  },
+  onReplayQuickFlagHotkey: (callback) => {
+    const listener = () => callback();
+    ipcRenderer.on("replay:quick-flag-hotkey", listener);
+    return () => ipcRenderer.removeListener("replay:quick-flag-hotkey", listener);
   },
   onUpdateStatus: (callback) => {
     const listener = (_event: Electron.IpcRendererEvent, payload: UpdateStatus) => callback(payload);

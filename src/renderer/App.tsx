@@ -13,6 +13,7 @@ import {
   ChevronRight,
   ClipboardList,
   Compass,
+  Copy,
   ExternalLink,
   FileText,
   Film,
@@ -50,6 +51,7 @@ import {
   Video,
   Trash2,
   Volume2,
+  VolumeX,
   Users,
   X,
   ZoomIn,
@@ -58,7 +60,9 @@ import {
 import type {
   BrowserInfo,
   BattlefieldOption,
+  AccountConnectionStatus,
   AccountLinkSession,
+  AccountCloudSyncStatus,
   AccountProfile,
   CommunityMatch,
   CaptureDiagnosticsSummary,
@@ -73,8 +77,12 @@ import type {
   DeckNotebook,
   DeckSnapshot,
   DeckTestingGoalStatus,
+  DeckTrackerCardState,
   DeckTrackerObservation,
   DeckTrackerPerformanceMode,
+  DeckTrackerSideboardCardOption,
+  DeckTrackerSideboardChange,
+  DeckTrackerSideboardDirection,
   DeckTrackerState,
   GamePlatform,
   HubActionResult,
@@ -128,6 +136,12 @@ import type {
   VisionRenderedCardObservation
 } from "../shared/types";
 import { buildAtlasReplay, replaySnapshotCardCount, type AtlasReplayViewModel, type ReplayTimelineEvent, type ReplayTurnView } from "../shared/atlasReplay";
+import { getRiftLiteAccountState, isGenericAccountDisplayName } from "../shared/accountIdentity";
+import {
+  activeDiscordReplayHubIds,
+  rawCaptureSettingsForDiscordHubSelection
+} from "../shared/replaySharing";
+import { buildRiftLiteReplayModel, type RiftLiteReplayModel } from "../shared/riftLiteReplayEngine";
 import { activeDeckOverlayStats, buildDeckPerformance, type DeckBattlefieldPairStat, type DeckBattlefieldStat, type DeckPerformanceStats, type DeckRecordStats } from "../shared/deckPerformance";
 import {
   buildDeckVersionPerformance,
@@ -140,6 +154,10 @@ import {
   emptyDeckNotebook,
   resolveDeckMatchupGuide
 } from "../shared/deckNotebook";
+import {
+  deckTrackerImageUrlFromId,
+  normalizeDeckTrackerKey
+} from "../shared/deckTracker";
 import {
   buildCommunityDeckMeta,
   communityBattlefieldStatsForLegend,
@@ -163,9 +181,10 @@ import {
 } from "../shared/matchCombine";
 import { upsertMatchPreservingOrder } from "../shared/matchList";
 import { publicCommunitySyncEnabled, syncModePatch } from "../shared/syncPolicy";
+import { RiftLiteReplayViewer } from "./RiftLiteReplayViewer";
 import "./styles/app.css";
 
-type ActiveView = "home" | "play" | "scorepad" | "matches" | "stats" | "matchup-lab" | "spotlight" | "community" | "social" | "hubs" | "decks" | "replays" | "stream" | "account" | "settings";
+type ActiveView = "home" | "play" | "scorepad" | "matches" | "stats" | "matchup-lab" | "spotlight" | "community" | "social" | "hubs" | "decks" | "replays" | "web-replay" | "stream" | "account" | "settings";
 type DeckFocusTarget = "library" | "prep" | "notebook" | "performance";
 type MatchFocusTarget = {
   myLegend?: string;
@@ -186,6 +205,8 @@ const GAME_URLS: Record<GamePlatform, string> = {
   sim: "http://127.0.0.1:5174"
 };
 
+const RIFT_REPLAY_WEB_URL = "https://www.riftlite.com/replays";
+
 const DEFAULT_HEALTH: CaptureHealth = {
   platform: "none",
   state: "idle",
@@ -193,18 +214,20 @@ const DEFAULT_HEALTH: CaptureHealth = {
   eventCount: 0
 };
 
-const DECK_TRACKER_FEATURE_ENABLED = false;
+const DECK_TRACKER_FEATURE_ENABLED = true;
+const VISION_DECK_TRACKER_FRAME_SCAN_ENABLED = false;
+const RIFTLITE_WEB_REPLAY_FEATURE_VISIBLE = true;
 
 const DEFAULT_UPDATE_STATUS: UpdateStatus = {
   state: "idle",
-  currentVersion: "0.7.80",
+  currentVersion: "0.8.00",
   message: "Updater ready"
 };
 
 const FALLBACK_BOOT_SETTINGS: UserSettings = {
   username: "",
   firstRunComplete: true,
-  lastSeenVersion: "0.7.80",
+  lastSeenVersion: "0.8.00",
   syncMode: "community-and-hubs",
   communitySyncEnabled: true,
   firebaseUid: "",
@@ -214,6 +237,14 @@ const FALLBACK_BOOT_SETTINGS: UserSettings = {
   accountHandle: "",
   accountDisplayName: "",
   accountProfilePublic: false,
+  accountLastVerifiedAt: "",
+  accountLastVerificationError: "",
+  accountCloudSyncEnabled: false,
+  accountCloudSyncLastSyncedAt: "",
+  accountCloudSyncLastRestoredAt: "",
+  accountCloudSyncDeviceId: "",
+  accountCloudSyncDeviceName: "",
+  accountCloudSyncLastError: "",
   anonymousDiagnosticsEnabled: true,
   anonymousInstallId: "",
   anonymousInstallCreatedAt: "",
@@ -229,6 +260,24 @@ const FALLBACK_BOOT_SETTINGS: UserSettings = {
   replayVideoQuality: "sharp",
   replayMicAudioEnabled: false,
   replayCustomFlagTypes: ["Mistake Consequence", "Question", "Alternative Line"],
+  replayShadowClipEnabled: false,
+  replayShadowClipSeconds: 60,
+  replayShadowClipHotkey: "CommandOrControl+Shift+C",
+  replayShadowClipHotkeyEnabled: true,
+  replayQuickFlagHotkey: "CommandOrControl+Shift+F",
+  replayQuickFlagHotkeyEnabled: true,
+  rawCapture: {
+    enabled: false,
+    webReplayAutoUploadEnabled: false,
+    webReplayAutoUploadAccountUid: "",
+    webReplayDiscordShareEnabled: false,
+    webReplayDiscordShareAccountUid: "",
+    webReplayDiscordShareHubIds: [],
+    uploadEnabled: false,
+    endpoint: "https://riftreplay.com/api/v1/replays",
+    apiKey: "",
+    visibility: "private"
+  },
   deckTrackerEnabled: false,
   deckTrackerAutoStart: false,
   deckTrackerSaveToReplay: false,
@@ -268,7 +317,15 @@ const FALLBACK_BOOT_SETTINGS: UserSettings = {
   activeTeams: []
 };
 
-const APP_VERSION_META = "0.7.80";
+const APP_VERSION_META = "0.8.00";
+const VENDETTA_PREVIEW_START_MS = Date.UTC(2026, 6, 6);
+const VENDETTA_LAUNCH_START_MS = Date.UTC(2026, 6, 31);
+const COMMUNITY_SEASONS = [
+  { id: "vendetta-preview", label: "Vendetta Preview season" },
+  { id: "vendetta-launch", label: "Vendetta launch season" },
+  { id: "pre-vendetta", label: "Pre-Vendetta archive" },
+  { id: "", label: "All tracked seasons" }
+] as const;
 type HomeFeaturedVideo = {
   title: string;
   embedUrl: string;
@@ -298,10 +355,10 @@ type HomeFeaturedStream = {
 const DEFAULT_HOME_FEATURED_VIDEOS: HomeFeaturedVideo[] = [
   {
     title: "Featured RiftLite video",
-    embedUrl: youtubeEmbedUrlFromId("jQdNVS7R9nE"),
-    url: "https://www.youtube.com/watch?v=jQdNVS7R9nE",
-    thumbnailUrl: "https://img.youtube.com/vi/jQdNVS7R9nE/hqdefault.jpg",
-    videoId: "jQdNVS7R9nE"
+    embedUrl: youtubeEmbedUrlFromId("4n0x_t-wprg"),
+    url: "https://www.youtube.com/watch?v=4n0x_t-wprg",
+    thumbnailUrl: "https://img.youtube.com/vi/4n0x_t-wprg/hqdefault.jpg",
+    videoId: "4n0x_t-wprg"
   },
   {
     title: "Featured RiftLite video",
@@ -314,13 +371,14 @@ const DEFAULT_HOME_FEATURED_VIDEOS: HomeFeaturedVideo[] = [
 const HOME_CONFIG_URL = "https://www.riftlite.com/api/app/home";
 const RELEASE_NOTES = {
   version: APP_VERSION_META,
-  title: "RiftLite 0.7.80",
-  intro: "This polish update parks the Vision beta while tightening testing, prep, replay review, syncing, and profiles.",
+  title: "RiftLite 0.8.00",
+  intro: "RiftLite 0.8 brings account-linked Atlas web replays, complete BO3 playback, safer account tools, and major replay and capture improvements.",
   items: [
-    "Deck tracker beta is parked for now so game windows stay smooth while the code stays ready for later testing.",
-    "Testing sessions help group practice matches with a goal, summary, replay links, and CSV export.",
-    "Replay library filters, health badges, and flagged moments make coaching packs easier to review.",
-    "Bulk hub/team sync and profile naming have been polished without changing core match capture."
+    "Completed Atlas matches can upload privately to your linked RiftLite account and play inside the new RiftLite web replay tab.",
+    "BO3 web replays stay together across games and show animated sideboard changes, game setup, and series score.",
+    "Account linking, profile setup, private hubs, Discord verification, and reconnect or account switching are now much clearer.",
+    "Private-hub Discord sharing can post permanent Unlisted replay links to configured reports channels.",
+    "Match capture, cloud backup safety, local replay export, mulligans, tokens, card state, and replay association have received major reliability fixes."
   ]
 };
 const RIOT_LEGAL_NOTICE = `RiftLite was created under Riot Games' "Legal Jibber Jabber" policy using assets owned by Riot Games. Riot Games does not endorse or sponsor this project.`;
@@ -542,6 +600,9 @@ const GAME_ZOOM_RESET_MIGRATION_KEY = "riftlite-game-zoom-reset-v0760";
 const VISION_TRACKER_DEFAULT_OFF_MIGRATION_KEY = "riftlite-vision-tracker-default-off-v0770";
 const DECK_TRACKER_POSITION_KEY = "riftlite-deck-tracker-position-v1";
 const DECK_TRACKER_SIZE_KEY = "riftlite-deck-tracker-size-v1";
+const DECK_TRACKER_OPACITY_KEY = "riftlite-deck-tracker-opacity-v1";
+const DECK_TRACKER_COMPACT_MIGRATION_KEY = "riftlite-deck-tracker-compact-size-v1";
+const DECK_TRACKER_DEBUG_PANEL_VISIBLE = false;
 const MATCHUP_PREP_POSITION_KEY = "riftlite-matchup-prep-position-v1";
 const MATCHUP_PREP_SIZE_KEY = "riftlite-matchup-prep-size-v1";
 const MATCHUP_PREP_HIDDEN_KEY = "riftlite-matchup-prep-hidden-v1";
@@ -549,6 +610,32 @@ const VISION_DEBUG_POSITION_KEY = "riftlite-vision-debug-position-v1";
 const TESTING_SESSIONS_KEY = "riftlite-testing-sessions-v1";
 const ACTIVE_TESTING_SESSION_KEY = "riftlite-active-testing-session-v1";
 const STARTUP_VALUE_TIMEOUT_MS = 6_000;
+const CRITICAL_LOCAL_STARTUP_VALUE_TIMEOUT_MS = 45_000;
+
+type OpponentTrackerHintCard = {
+  key: string;
+  name: string;
+  cardId: string;
+  code: string;
+  imageUrl: string;
+  detail: string;
+  subDetail: string;
+  tag: string;
+};
+
+const KNOWN_HIDDEN_CARD_NAMES = new Set([
+  "Back Off",
+  "Hidden Blade",
+  "Keeper of Masks",
+  "Lotus Trap",
+  "Smoke and Mirrors",
+  "Trapping Grounds",
+  "Zhonya's Hourglass"
+].map(normalizeDeckTrackerKey));
+
+const BANNED_CARD_NAMES = new Set([
+  "Fight or Flight"
+].map(normalizeDeckTrackerKey));
 
 type VisionDebugItem = {
   name: string;
@@ -649,12 +736,12 @@ function createLocalId(prefix: string): string {
   return `${prefix}-${randomId}`;
 }
 
-async function startupValue<T>(label: string, promise: Promise<T>, fallback: T): Promise<T> {
+async function startupValue<T>(label: string, promise: Promise<T>, fallback: T, timeoutMs = STARTUP_VALUE_TIMEOUT_MS): Promise<T> {
   try {
     return await Promise.race([
       promise,
       new Promise<T>((_resolve, reject) => {
-        window.setTimeout(() => reject(new Error(`${label} timed out`)), STARTUP_VALUE_TIMEOUT_MS);
+        window.setTimeout(() => reject(new Error(`${label} timed out`)), timeoutMs);
       })
     ]);
   } catch (error) {
@@ -1092,6 +1179,14 @@ function supportedReplayVideoFormats(includeAudio = false): ReplayRecorderFormat
   return candidates.filter((candidate) => MediaRecorder.isTypeSupported(candidate.recorderMimeType));
 }
 
+function normalizeReplayShadowClipSeconds(value: unknown): number {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return 60;
+  }
+  return Math.max(15, Math.min(600, Math.round(numeric)));
+}
+
 async function createReplayMicrophoneStream(microphoneDeviceId: string): Promise<MediaStream> {
   const audio: MediaTrackConstraints = {
     ...(microphoneDeviceId ? { deviceId: { exact: microphoneDeviceId } } : {}),
@@ -1452,6 +1547,34 @@ type ReplayVideoRuntime = {
   slowCaptureStreak: number;
   lastCaptureMs: number;
   chunkMs: number;
+};
+
+type ReplayShadowClipChunk = {
+  data: Blob;
+  capturedAt: number;
+};
+
+type ReplayShadowClipRuntime = {
+  parentSessionId: string;
+  platform: GamePlatform;
+  source: ReplayVideoFinalizeOptions["source"];
+  width: number;
+  height: number;
+  fps: number;
+  bitrateKbps: number;
+  quality: ReplayVideoQuality;
+  mimeType: ReplayVideoMimeType;
+  codec: string;
+  hasAudio: boolean;
+  startedAt: string;
+  startedMs: number;
+  clipSeconds: number;
+  chunks: ReplayShadowClipChunk[];
+};
+
+type PendingReplayHotkeyFlag = {
+  platform: GamePlatform;
+  flag: ReplayFlag;
 };
 
 type PendingReplayVideoSegment = {
@@ -2226,6 +2349,112 @@ const RITUALTCG_SPOTLIGHT: CommunitySpotlight = {
   ]
 };
 
+const WINTHEPANDA_SPOTLIGHT: CommunitySpotlight = {
+  id: "winthepanda",
+  name: "WinThePanda",
+  kicker: "Creator spotlight",
+  location: "New-player friendly",
+  description: "WinThePanda welcomes new TCG players into Riftbound with beginner-friendly learning content, streams, and social updates. His content is aimed at helping players learn the game together without making the first steps feel intimidating.",
+  primaryCta: {
+    id: "twitch",
+    label: "Watch Twitch",
+    url: "https://www.twitch.tv/winthepanda",
+    description: "Watch WinThePanda live on Twitch for Riftbound learning, games, and community content.",
+    icon: Radio,
+    featured: true
+  },
+  links: [
+    {
+      id: "twitch",
+      label: "Twitch",
+      url: "https://www.twitch.tv/winthepanda",
+      description: "Live Riftbound games, learning streams, and community-focused TCG content.",
+      icon: Radio,
+      featured: true
+    },
+    {
+      id: "youtube",
+      label: "YouTube",
+      url: "https://www.youtube.com/channel/UCRC9Y9QDdw-8OpZcehO42pg",
+      description: "Video content and Riftbound learning routes for new and returning TCG players.",
+      icon: Video,
+      featured: true
+    },
+    {
+      id: "tiktok",
+      label: "TikTok",
+      url: "https://www.tiktok.com/@winthepanda",
+      description: "Short-form TCG and Riftbound content from WinThePanda.",
+      icon: Video,
+      featured: true
+    },
+    {
+      id: "instagram",
+      label: "Instagram",
+      url: "https://www.instagram.com/wiinthepanda/",
+      description: "Photos, creator updates, and community posts.",
+      icon: Camera,
+      featured: true
+    },
+    {
+      id: "x",
+      label: "X",
+      url: "https://x.com/WinThePanda",
+      description: "Posts, updates, and Riftbound conversation from WinThePanda.",
+      icon: X,
+      featured: true
+    }
+  ],
+  tags: ["New players", "Learning", "Streams", "TCG content"],
+  highlights: [
+    {
+      title: "New-player friendly",
+      text: "Built around welcoming players who are just starting their Riftbound or wider TCG journey."
+    },
+    {
+      title: "Live learning",
+      text: "Twitch gives players a live place to learn, ask questions, and follow games as they happen."
+    },
+    {
+      title: "Multi-platform creator",
+      text: "WinThePanda is active across Twitch, YouTube, TikTok, Instagram, and X so players can follow wherever they prefer."
+    },
+    {
+      title: "Community tone",
+      text: "The focus is approachable, friendly content that helps players learn Riftbound together."
+    }
+  ],
+  assets: {
+    logo: "community/winthepanda-profile.jpg",
+    banner: "community/winthepanda-profile.jpg",
+    tiktok: "community/winthepanda-profile.jpg",
+    youtube: "community/winthepanda-profile.jpg",
+    twitch: "community/winthepanda-profile.jpg"
+  },
+  overviewBanner: "community/winthepanda-profile.jpg",
+  overviewLogo: "community/winthepanda-profile.jpg",
+  routes: [
+    {
+      key: "twitch",
+      title: "Twitch stream",
+      subtitle: "Watch live Riftbound games, learning streams, and community content.",
+      linkId: "twitch"
+    },
+    {
+      key: "youtube",
+      title: "YouTube channel",
+      subtitle: "Follow video content and learning routes for TCG players.",
+      linkId: "youtube"
+    },
+    {
+      key: "tiktok",
+      title: "Short-form updates",
+      subtitle: "Catch quick TCG posts and Riftbound creator clips.",
+      linkId: "tiktok"
+    }
+  ]
+};
+
 const AGITOSWIFTLY_SPOTLIGHT: CommunitySpotlight = {
   id: "agitoswiftly",
   name: "AgitoSwiftly",
@@ -2525,6 +2754,7 @@ const COMMUNITY_SPOTLIGHTS: CommunitySpotlight[] = [
   NOVEGGIES_SPOTLIGHT,
   DUNC_SPOTLIGHT,
   RITUALTCG_SPOTLIGHT,
+  WINTHEPANDA_SPOTLIGHT,
   AGITOSWIFTLY_SPOTLIGHT,
   MRTOOLSHED_SPOTLIGHT,
   DAEMONXGG_SPOTLIGHT
@@ -2589,6 +2819,7 @@ function App() {
   const diagnosticsRefreshTimerRef = useRef<number | undefined>(undefined);
   const diagnosticsRefreshInFlightRef = useRef(false);
   const communityLoadedRef = useRef(false);
+  const communityMatchesLoadedForTrackerRef = useRef(false);
   const activeViewRef = useRef<ActiveView>(activeView);
   const settingsRef = useRef<UserSettings | null>(settings);
   const healthRef = useRef<CaptureHealth>(health);
@@ -2608,8 +2839,10 @@ function App() {
   const visionTrackerLastFrameCaptureRef = useRef(0);
   const visionTrackerNoEvidenceUntilRef = useRef(0);
   const replayVideoRef = useRef<ReplayVideoRuntime | null>(null);
+  const replayShadowClipRef = useRef<ReplayShadowClipRuntime | null>(null);
   const pendingReplayVideoRef = useRef<PendingReplayVideoSegment | null>(null);
   const pendingReplayVideoSegmentsRef = useRef<PendingReplayVideoSegment[]>([]);
+  const pendingReplayHotkeyFlagsRef = useRef<PendingReplayHotkeyFlag[]>([]);
   const lastReplayStartEventRef = useRef<CaptureEvent | null>(null);
   const armedReplayVideoRef = useRef<Partial<Record<GamePlatform, ArmedReplayVideoSource>>>({});
   const replayVideoPrimeTimerRef = useRef<number | undefined>(undefined);
@@ -2656,6 +2889,23 @@ function App() {
   useEffect(() => {
     activeViewRef.current = activeView;
   }, [activeView]);
+
+  useEffect(() => window.riftlite.onAppNavigate((request) => {
+    if (request.view === "hubs") {
+      setActiveView("hubs");
+      return;
+    }
+    setActiveView("account");
+  }), []);
+
+  useEffect(() => {
+    const navigate = (event: Event) => {
+      const view = (event as CustomEvent<{ view?: ActiveView }>).detail?.view;
+      if (view) setActiveView(view);
+    };
+    window.addEventListener("riftlite:navigate", navigate);
+    return () => window.removeEventListener("riftlite:navigate", navigate);
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -2737,6 +2987,12 @@ function App() {
       setScreenshotStatus(message);
       showActionFeedback(message);
     });
+    const offShadowClipHotkey = window.riftlite.onReplayShadowClipHotkey(() => {
+      void saveReplayShadowClipFromHotkey();
+    });
+    const offQuickFlagHotkey = window.riftlite.onReplayQuickFlagHotkey(() => {
+      addReplayReviewFlagFromHotkey();
+    });
     const offUpdate = window.riftlite.onUpdateStatus((status) => {
       setUpdateStatus(status);
       if (status.state === "available" || status.state === "downloaded") {
@@ -2748,6 +3004,8 @@ function App() {
       offHealth();
       offDraft();
       offScreenshot();
+      offShadowClipHotkey();
+      offQuickFlagHotkey();
       offUpdate();
       if (actionFeedbackTimerRef.current) {
         window.clearTimeout(actionFeedbackTimerRef.current);
@@ -2809,7 +3067,7 @@ function App() {
   }, [activeView, activePlatform, settings?.activeDeckId, settings?.deckTrackerEnabled, settings?.deckTrackerAutoStart]);
 
   useEffect(() => {
-    if (!DECK_TRACKER_FEATURE_ENABLED || !settings?.deckTrackerEnabled || !settings.deckTrackerAutoStart) {
+    if (!DECK_TRACKER_FEATURE_ENABLED || !VISION_DECK_TRACKER_FRAME_SCAN_ENABLED || !settings?.deckTrackerEnabled || !settings.deckTrackerAutoStart) {
       return;
     }
     if (activeView !== "play") {
@@ -2891,6 +3149,16 @@ function App() {
   }, [activeView, settings]);
 
   useEffect(() => {
+    if (!settings || !DECK_TRACKER_FEATURE_ENABLED || !settings.deckTrackerEnabled) {
+      return;
+    }
+    if (activeView !== "play" || communityMatchesLoadedForTrackerRef.current) {
+      return;
+    }
+    void refreshCommunityMatchesForTracker(false);
+  }, [activeView, settings?.deckTrackerEnabled]);
+
+  useEffect(() => {
     if (activeView === "settings") {
       scheduleDiagnosticsRefresh(50, true);
     }
@@ -2918,7 +3186,12 @@ function App() {
   }, [activePlatform, activeView, settings?.replayVideoEnabled]);
 
   async function bootstrap() {
-    const nextSettings = await startupValue("settings", window.riftlite.getSettings(), FALLBACK_BOOT_SETTINGS);
+    const nextSettings = await startupValue(
+      "settings",
+      window.riftlite.getSettings(),
+      FALLBACK_BOOT_SETTINGS,
+      CRITICAL_LOCAL_STARTUP_VALUE_TIMEOUT_MS
+    );
     const [
       nextHealth,
       nextMatches,
@@ -2935,11 +3208,11 @@ function App() {
       nextUpdateStatus
     ] = await Promise.all([
       startupValue("capture health", window.riftlite.getCaptureHealth(), DEFAULT_HEALTH),
-      startupValue<MatchDraft[]>("matches", window.riftlite.getMatches(), []),
-      startupValue<ReplayRecord[]>("replays", window.riftlite.getReplays(), []),
-      startupValue<MatchDraft[]>("deleted matches", window.riftlite.getDeletedMatches(), []),
-      startupValue<ReplayRecord[]>("deleted replays", window.riftlite.getDeletedReplays(), []),
-      startupValue<SavedDeck[]>("decks", window.riftlite.getDecks(), []),
+      startupValue<MatchDraft[]>("matches", window.riftlite.getMatches(), [], CRITICAL_LOCAL_STARTUP_VALUE_TIMEOUT_MS),
+      startupValue<ReplayRecord[]>("replays", window.riftlite.getReplays(), [], CRITICAL_LOCAL_STARTUP_VALUE_TIMEOUT_MS),
+      startupValue<MatchDraft[]>("deleted matches", window.riftlite.getDeletedMatches(), [], CRITICAL_LOCAL_STARTUP_VALUE_TIMEOUT_MS),
+      startupValue<ReplayRecord[]>("deleted replays", window.riftlite.getDeletedReplays(), [], CRITICAL_LOCAL_STARTUP_VALUE_TIMEOUT_MS),
+      startupValue<SavedDeck[]>("decks", window.riftlite.getDecks(), [], CRITICAL_LOCAL_STARTUP_VALUE_TIMEOUT_MS),
       startupValue<BattlefieldOption[]>("battlefields", window.riftlite.getBattlefields(), []),
       startupValue("logo asset", window.riftlite.getAssetUrl("riftlite-logo-ui.png"), ""),
       startupValue<BrowserInfo[]>("browser detection", window.riftlite.detectBrowsers(), []),
@@ -2977,13 +3250,6 @@ function App() {
         localStorage.setItem(GAME_ZOOM_RESET_MIGRATION_KEY, "done");
       }
       if (localStorage.getItem(VISION_TRACKER_DEFAULT_OFF_MIGRATION_KEY) !== "done") {
-        if (bootSettings.deckTrackerEnabled || bootSettings.deckTrackerAutoStart || bootSettings.deckTrackerSaveToReplay) {
-          bootSettings = await window.riftlite.saveSettings({
-            deckTrackerEnabled: false,
-            deckTrackerAutoStart: false,
-            deckTrackerSaveToReplay: false
-          });
-        }
         localStorage.setItem(VISION_TRACKER_DEFAULT_OFF_MIGRATION_KEY, "done");
       }
     } catch {
@@ -3276,6 +3542,7 @@ function App() {
     setSettings(next);
     if (patch.activeHubs || patch.activeTeams || typeof patch.communitySyncEnabled === "boolean" || patch.syncMode) {
       communityLoadedRef.current = false;
+      communityMatchesLoadedForTrackerRef.current = false;
       if (activeViewRef.current === "community" || activeViewRef.current === "hubs" || activeViewRef.current === "social") {
         void refreshCommunityData(next);
       }
@@ -3404,9 +3671,50 @@ function App() {
       setDeckTrackerState(null);
       return;
     }
-    const state = await window.riftlite.getDeckTrackerState().catch(() => null);
+    const [state, status] = await Promise.all([
+      window.riftlite.getDeckTrackerState().catch(() => null),
+      window.riftlite.getVisionDeckTrackerStatus().catch(() => null)
+    ]);
     if (state) {
       setDeckTrackerState(state);
+      if (status) {
+        setVisionTrackerStatus(status);
+        const countedCards = state.cards.filter((card) => card.seenCount > 0).slice(0, 16);
+        setVisionTrackerDebugPanel((current) => ({
+          frameId: status.frameId || current?.frameId || "atlas-events",
+          capturedAt: status.updatedAt || new Date().toISOString(),
+          platform: status.platform === "none" ? activePlatform : status.platform,
+          healthState: healthRef.current.state,
+          renderedCount: status.processedFrames,
+          frameCandidateCount: status.skippedFrames,
+          observationCount: countedCards.length,
+          suggestionCount: status.suggestions.length,
+          confidenceScore: status.confidenceScore,
+          frameCaptured: false,
+          message: status.message,
+          observations: countedCards.map((card) => ({
+            name: card.name,
+            code: card.code || card.cardId,
+            zone: "seen",
+            confidenceScore: card.confidence === "tracked" ? 0.98 : 0.75
+          })),
+          suggestions: status.suggestions.map((card) => ({
+            name: card.name,
+            code: card.code || card.cardId,
+            zone: card.zone,
+            confidenceScore: card.confidenceScore
+          })),
+          bestMatches: countedCards.slice(0, 10).map((card) => ({
+            name: card.name,
+            code: card.code || card.cardId,
+            zone: `${card.seenCount}/${card.deckCount} seen`,
+            confidenceScore: card.confidence === "tracked" ? 0.98 : 0.75,
+            source: "Atlas event",
+            rect: ""
+          })),
+          ignoredMatches: current?.ignoredMatches ?? []
+        }));
+      }
     }
   }
 
@@ -3431,6 +3739,22 @@ function App() {
       return;
     }
     const state = await window.riftlite.resetDeckTrackerMatch();
+    setDeckTrackerState(state);
+  }
+
+  async function adjustDeckTrackerSideboard(cardKey: string, direction: DeckTrackerSideboardDirection, delta: number) {
+    if (!DECK_TRACKER_FEATURE_ENABLED) {
+      return;
+    }
+    const state = await window.riftlite.adjustDeckTrackerSideboard(cardKey, direction, delta);
+    setDeckTrackerState(state);
+  }
+
+  async function resetDeckTrackerSideboard() {
+    if (!DECK_TRACKER_FEATURE_ENABLED) {
+      return;
+    }
+    const state = await window.riftlite.resetDeckTrackerSideboard();
     setDeckTrackerState(state);
   }
 
@@ -3597,7 +3921,7 @@ function App() {
   }
 
   async function runVisionDeckTrackerScan() {
-    if (!DECK_TRACKER_FEATURE_ENABLED) {
+    if (!DECK_TRACKER_FEATURE_ENABLED || !VISION_DECK_TRACKER_FRAME_SCAN_ENABLED) {
       return;
     }
     const currentSettings = settingsRef.current;
@@ -3856,12 +4180,12 @@ function App() {
 
   async function calibrateVisionDeckTracker() {
     const status = await window.riftlite.calibrateVisionDeckTracker(activePlatform);
-    recordVisionDeckTrackerDebug("vision-calibration-requested", {
+    recordVisionDeckTrackerDebug("event-tracker-reset-requested", {
       state: status.state,
       message: status.message
     }, true);
     setVisionTrackerStatus(status);
-    await runVisionDeckTrackerScan();
+    await refreshDeckTrackerState();
   }
 
   async function savePrepNotebook(next: DeckNotebook) {
@@ -4039,6 +4363,7 @@ function App() {
       return;
     }
     communityLoadedRef.current = true;
+    communityMatchesLoadedForTrackerRef.current = true;
     setCommunityStatus("Refreshing Firebase data...");
     const [nextCommunityMatches, hubEntries, teamEntries] = await Promise.all([
       window.riftlite.getCommunityMatches(forceRefresh).catch(() => [] as CommunityMatch[]),
@@ -4055,6 +4380,18 @@ function App() {
     setHubMatches(Object.fromEntries(hubEntries));
     setTeamMatches(Object.fromEntries(teamEntries));
     setCommunityStatus(`Loaded ${nextCommunityMatches.length} community-submitted matches`);
+  }
+
+  async function refreshCommunityMatchesForTracker(forceRefresh = false) {
+    if (communityMatchesLoadedForTrackerRef.current && !forceRefresh) {
+      return;
+    }
+    communityMatchesLoadedForTrackerRef.current = true;
+    const nextCommunityMatches = await window.riftlite.getCommunityMatches(forceRefresh).catch(() => [] as CommunityMatch[]);
+    setCommunityMatches(nextCommunityMatches);
+    if (nextCommunityMatches.length) {
+      setCommunityStatus(`Loaded ${nextCommunityMatches.length} community-submitted matches`);
+    }
   }
 
   async function importLegacyData() {
@@ -4480,7 +4817,13 @@ function App() {
       if (!chunkEvent.data.size) {
         return;
       }
+      const capturedAt = Date.now();
       const chunk = chunkEvent.data;
+      const shadowRuntime = replayShadowClipRef.current;
+      if (shadowRuntime?.parentSessionId === runtime.session.id) {
+        shadowRuntime.chunks.push({ data: chunk, capturedAt });
+        pruneReplayShadowClipChunks(shadowRuntime, capturedAt);
+      }
       const pending = runtime.writeChain
         .catch(() => undefined)
         .then(async () => {
@@ -4539,6 +4882,251 @@ function App() {
       constantFps: Boolean(profile.constantFps),
       chunkMs: runtime.chunkMs
     });
+    startReplayShadowClipRuntime(runtime);
+  }
+
+  function pruneReplayShadowClipChunks(runtime: ReplayShadowClipRuntime, now = Date.now()): void {
+    const keepAfter = now - (normalizeReplayShadowClipSeconds(runtime.clipSeconds) * 1000) - 5000;
+    const headerChunk = runtime.chunks[0];
+    const recentChunks = runtime.chunks.slice(1).filter((chunk) => chunk.capturedAt >= keepAfter);
+    // MediaRecorder containers need their opening metadata. Keep the first chunk as a tiny header anchor.
+    runtime.chunks = headerChunk ? [headerChunk, ...recentChunks] : recentChunks;
+    if (runtime.chunks.length > 750) {
+      const firstChunk = runtime.chunks[0];
+      runtime.chunks = firstChunk ? [firstChunk, ...runtime.chunks.slice(-749)] : runtime.chunks.slice(-750);
+    }
+  }
+
+  function startReplayShadowClipRuntime(parent: ReplayVideoRuntime): void {
+    void stopReplayShadowClipRuntime();
+    const currentSettings = settingsRef.current;
+    if (
+      !currentSettings?.replayVideoEnabled ||
+      !currentSettings.replayShadowClipEnabled ||
+      !currentSettings.replayShadowClipHotkeyEnabled
+    ) {
+      return;
+    }
+    const clipSeconds = normalizeReplayShadowClipSeconds(currentSettings.replayShadowClipSeconds);
+    const runtime: ReplayShadowClipRuntime = {
+      parentSessionId: parent.session.id,
+      platform: parent.platform,
+      source: parent.source,
+      width: parent.width,
+      height: parent.height,
+      fps: parent.profile.fps,
+      bitrateKbps: parent.profile.bitrateKbps,
+      quality: parent.quality,
+      mimeType: parent.fileMimeType,
+      codec: parent.codec,
+      hasAudio: parent.hasAudio,
+      startedAt: new Date().toISOString(),
+      startedMs: Date.now(),
+      clipSeconds,
+      chunks: []
+    };
+    replayShadowClipRef.current = runtime;
+    reportReplayVideoDebug(parent.platform, "shadow-clip-buffer-started", {
+      clipSeconds,
+      codec: parent.codec,
+      source: "main-recorder-chunks"
+    });
+  }
+
+  async function stopReplayShadowClipRuntime(): Promise<ReplayShadowClipRuntime | null> {
+    const runtime = replayShadowClipRef.current;
+    if (!runtime) {
+      return null;
+    }
+    replayShadowClipRef.current = null;
+    pruneReplayShadowClipChunks(runtime);
+    return runtime;
+  }
+
+  function replayShadowClipTitle(runtime: ReplayVideoRuntime, clipSeconds: number): string {
+    const payload = runtime.startEvent.payload;
+    const myLegend = replayPayloadString(payload, "myChampion");
+    const opponentLegend = replayPayloadString(payload, "opponentChampion");
+    const matchup = myLegend || opponentLegend ? `${myLegend || "RiftLite"} vs ${opponentLegend || "opponent"}` : "RiftLite replay";
+    return `Shadow clip ${clipSeconds}s - ${matchup}`;
+  }
+
+  function replayShadowClipRecord(runtime: ReplayVideoRuntime, video: ReplayVideoAsset, clipSeconds: number): ReplayRecord {
+    const payload = runtime.startEvent.payload;
+    const myName = replayPayloadString(payload, "playerName") || settingsRef.current?.username || "You";
+    const opponentName = replayPayloadString(payload, "opponentName") || "Opponent";
+    const id = `shadow-${Date.now()}-${crypto.randomUUID()}`;
+    return {
+      id,
+      matchId: id,
+      platform: runtime.platform,
+      capturedAt: video.endedAt,
+      schemaVersion: 4,
+      title: replayShadowClipTitle(runtime, clipSeconds),
+      players: {
+        me: myName,
+        opponent: opponentName
+      },
+      events: [runtime.startEvent],
+      video,
+      flags: [
+        {
+          id: crypto.randomUUID(),
+          targetType: "video-time",
+          targetId: `${video.path || video.url}:0`,
+          targetLabel: "Shadow clip start",
+          type: "key-turn",
+          label: "Shadow clip",
+          note: `Created from the previous ${clipSeconds} seconds with the shadow clip hotkey.`,
+          capturedAt: video.startedAt,
+          createdAt: video.endedAt,
+          timeMs: 0
+        }
+      ]
+    };
+  }
+
+  async function saveReplayShadowClipFromHotkey(): Promise<void> {
+    const parent = replayVideoRef.current;
+    const runtime = replayShadowClipRef.current;
+    if (!parent || !runtime) {
+      showActionFeedback("No active video replay buffer to clip yet.");
+      return;
+    }
+    const clipSeconds = normalizeReplayShadowClipSeconds(settingsRef.current?.replayShadowClipSeconds ?? runtime.clipSeconds);
+    try {
+      const now = Date.now();
+      const clipStartMs = Math.max(runtime.startedMs, now - clipSeconds * 1000);
+      pruneReplayShadowClipChunks(runtime, now);
+      const headerChunk = runtime.chunks[0];
+      const recentChunks = runtime.chunks.filter((chunk) => chunk.capturedAt >= clipStartMs - REPLAY_VIDEO_WRITE_CHUNK_MS);
+      const chunks = headerChunk && !recentChunks.includes(headerChunk)
+        ? [headerChunk, ...recentChunks]
+        : recentChunks;
+      if (!chunks.length) {
+        showActionFeedback("Shadow clip buffer is still warming up.");
+        return;
+      }
+      const blob = new Blob(chunks.map((chunk) => chunk.data), { type: runtime.mimeType });
+      if (!blob.size) {
+        showActionFeedback("Shadow clip buffer was empty.");
+        return;
+      }
+      const startedAt = new Date(clipStartMs).toISOString();
+      const endedAt = new Date(now).toISOString();
+      const title = replayShadowClipTitle(parent, clipSeconds);
+      const session = await window.riftlite.startReplayVideoCapture({
+        platform: runtime.platform,
+        title,
+        quality: runtime.quality,
+        mimeType: runtime.mimeType
+      });
+      await window.riftlite.appendReplayVideoChunk(session.id, await blob.arrayBuffer());
+      const video = await window.riftlite.finishReplayVideoCapture(session.id, {
+        platform: runtime.platform,
+        startedAt,
+        endedAt,
+        durationMs: now - clipStartMs,
+        width: runtime.width,
+        height: runtime.height,
+        fps: runtime.fps,
+        captureIntervalMs: Math.round(1000 / Math.max(1, runtime.fps)),
+        bitrateKbps: runtime.bitrateKbps,
+        actualBitrateKbps: Math.round((blob.size * 8) / Math.max(1, (now - clipStartMs) / 1000) / 1000),
+        codec: runtime.codec,
+        quality: runtime.quality,
+        mimeType: runtime.mimeType,
+        source: runtime.source,
+        hasAudio: runtime.hasAudio
+      });
+      await window.riftlite.saveReplay(replayShadowClipRecord(parent, video, clipSeconds));
+      setReplays(await window.riftlite.getReplays());
+      showActionFeedback(`Shadow clip saved (${formatDuration(video.durationMs)}).`);
+      reportReplayVideoDebug(runtime.platform, "shadow-clip-saved", {
+        clipSeconds,
+        sizeBytes: video.sizeBytes,
+        durationMs: video.durationMs
+      });
+    } catch (error) {
+      showActionFeedback(rendererErrorMessage(error, "Shadow clip could not be saved."));
+      reportReplayVideoDebug(parent.platform, "shadow-clip-save-failed", {
+        message: error instanceof Error ? error.message : String(error)
+      });
+    } finally {
+      // The shadow buffer reuses the main recorder chunks, so the main capture keeps running.
+    }
+  }
+
+  function addReplayReviewFlagFromHotkey(): void {
+    const runtime = replayVideoRef.current;
+    if (!runtime) {
+      showActionFeedback("No active video replay to flag yet.");
+      return;
+    }
+    const now = new Date();
+    const timeMs = Math.max(0, Date.now() - runtime.startedMs);
+    const flag: ReplayFlag = {
+      id: crypto.randomUUID(),
+      targetType: "video-time",
+      targetId: `pending-video:${runtime.startedAt}:${Math.round(timeMs)}`,
+      targetLabel: `Video ${formatDuration(timeMs)}`,
+      type: "key-turn",
+      label: "Review later",
+      note: "Added with the replay review hotkey during the live match.",
+      capturedAt: now.toISOString(),
+      createdAt: now.toISOString(),
+      timeMs
+    };
+    pendingReplayHotkeyFlagsRef.current = [
+      ...pendingReplayHotkeyFlagsRef.current,
+      { platform: runtime.platform, flag }
+    ];
+    showActionFeedback(`Review flag added at ${formatDuration(timeMs)}.`);
+  }
+
+  function takePendingReplayHotkeyFlags(video: ReplayVideoAsset): ReplayFlag[] {
+    const startedAt = Date.parse(video.startedAt);
+    const endedAt = Date.parse(video.endedAt);
+    const targetBase = video.path || video.url || video.filename;
+    const matched: ReplayFlag[] = [];
+    pendingReplayHotkeyFlagsRef.current = pendingReplayHotkeyFlagsRef.current.filter((item) => {
+      if (item.platform !== video.platform) {
+        return true;
+      }
+      const capturedAt = Date.parse(item.flag.capturedAt);
+      const belongs = Number.isFinite(capturedAt) &&
+        Number.isFinite(startedAt) &&
+        Number.isFinite(endedAt) &&
+        capturedAt >= startedAt - 5000 &&
+        capturedAt <= endedAt + 5000;
+      if (!belongs) {
+        return true;
+      }
+      const timeMs = typeof item.flag.timeMs === "number" ? Math.max(0, Math.min(video.durationMs, item.flag.timeMs)) : 0;
+      matched.push({
+        ...item.flag,
+        targetId: `${targetBase}:${Math.round(timeMs)}`,
+        targetLabel: `Video ${formatDuration(timeMs)}`,
+        capturedAt: replayVideoCapturedAt(video, timeMs),
+        timeMs
+      });
+      return false;
+    });
+    return matched;
+  }
+
+  function mergeReplayFlags(existing: ReplayFlag[] | undefined, additions: ReplayFlag[]): ReplayFlag[] {
+    const flags = [...(existing ?? [])];
+    const keys = new Set(flags.map((flag) => `${flag.targetType}:${flag.targetId}:${flag.label.toLowerCase()}`));
+    for (const flag of additions) {
+      const key = `${flag.targetType}:${flag.targetId}:${flag.label.toLowerCase()}`;
+      if (keys.has(key)) {
+        continue;
+      }
+      keys.add(key);
+      flags.push(flag);
+    }
+    return flags;
   }
 
   function replayVideoStartBlockedReason(event: CaptureEvent): string {
@@ -4905,14 +5493,25 @@ function App() {
 
   async function attachReplayVideoToDraft(draft: MatchDraft, video: ReplayVideoAsset): Promise<void> {
     if (draft.keepReplay === false) {
+      takePendingReplayHotkeyFlags(video);
       await window.riftlite.discardReplayVideo(video).catch(() => undefined);
       showActionFeedback("Video replay discarded for this match.");
       return;
     }
-    const saved = await window.riftlite.attachReplayVideo(draft.id, video);
+    let saved = await window.riftlite.attachReplayVideo(draft.id, video);
     if (saved) {
+      const hotkeyFlags = takePendingReplayHotkeyFlags(video);
+      if (hotkeyFlags.length) {
+        saved = await window.riftlite.saveReplay({
+          ...saved,
+          schemaVersion: 4,
+          flags: mergeReplayFlags(saved.flags, hotkeyFlags)
+        });
+      }
       setReplays(await window.riftlite.getReplays());
-      showActionFeedback(`Video replay attached (${formatBytes(video.sizeBytes)}).`);
+      showActionFeedback(hotkeyFlags.length
+        ? `Video replay attached (${formatBytes(video.sizeBytes)}), with ${hotkeyFlags.length} review flag${hotkeyFlags.length === 1 ? "" : "s"}.`
+        : `Video replay attached (${formatBytes(video.sizeBytes)}).`);
     }
   }
 
@@ -4938,8 +5537,8 @@ function App() {
         segmentCount: usableSegments.length,
         message: error instanceof Error ? error.message : String(error)
       });
-      showActionFeedback("Replay segments were saved, but could not be merged. Attaching the latest playable segment.");
-      return usableSegments.at(-1) ?? usableSegments[0]!;
+      showActionFeedback("Replay segments were saved, but could not be merged. Attaching the earliest playable segment.");
+      return usableSegments[0] ?? usableSegments.at(-1)!;
     }
   }
 
@@ -5162,6 +5761,7 @@ function App() {
     }
     const rolloverStartEvent = draft ? replayStartEventAfterRuntime(runtime, draft) : null;
     replayVideoRef.current = null;
+    await stopReplayShadowClipRuntime();
     window.clearInterval(runtime.timer);
     runtime.resizeGuardCleanup?.();
     if (runtime.videoFrameCallbackId !== undefined && runtime.sourceVideo?.cancelVideoFrameCallback) {
@@ -5277,6 +5877,7 @@ function App() {
     hubs: "Private Hubs",
     decks: deckFocusTarget === "prep" ? "Matchup Prep" : "Deck Library",
     replays: "Replays",
+    "web-replay": "RiftLite web replay",
     stream: "Overlay",
     account: "Account",
     settings: "Settings"
@@ -5295,6 +5896,7 @@ function App() {
     hubs: "Private hub sync uses hidden hub names and passwords, just like the current app.",
     decks: "Import, refresh, and attach decks to captured matches.",
     replays: "Review Atlas timelines reconstructed from retained capture evidence.",
+    "web-replay": "Your account-linked Atlas replays, uploaded automatically and played on RiftLite.com.",
     stream: "OBS-friendly local overlay for session score and latest match.",
     account: "RiftLite profile, account link, and public visibility controls.",
     settings: "Privacy, sync, browser support, and capture behaviour."
@@ -5322,6 +5924,9 @@ function App() {
       items: [
         { label: "Matches", title: "Matches", active: activeView === "matches", icon: <ClipboardList size={18} />, onClick: () => openView("matches") },
         { label: "Replays", title: "Replays", active: activeView === "replays", icon: <Film size={18} />, onClick: () => openView("replays") },
+        ...(RIFTLITE_WEB_REPLAY_FEATURE_VISIBLE ? [
+          { label: "RiftLite web replay", title: "RiftLite web replay", active: activeView === "web-replay", icon: <Globe2 size={18} />, onClick: () => openView("web-replay") }
+        ] : []),
         { label: "Stats", title: "Stats", active: activeView === "stats", icon: <BarChart3 size={18} />, onClick: () => openView("stats") },
         { label: "Matchup Lab", title: "Matchup Lab", active: activeView === "matchup-lab", icon: <Activity size={18} />, onClick: () => openView("matchup-lab") }
       ]
@@ -5501,11 +6106,16 @@ function App() {
               onAdjust={adjustDeckTrackerCard}
               onPinnedChange={setDeckTrackerPins}
               onReset={resetDeckTrackerMatch}
+              onSideboardAdjust={adjustDeckTrackerSideboard}
+              onSideboardReset={resetDeckTrackerSideboard}
               onConfirmSuggestion={confirmVisionSuggestion}
               onRejectSuggestion={rejectVisionSuggestion}
+              onPopOut={window.riftlite.openDeckTrackerWindow}
+              opponentLegend={deckTrackerState?.opponentLegend || prepOpponentLegend}
+              communityMatches={communityMatches}
             />
           ) : null}
-          {DECK_TRACKER_FEATURE_ENABLED && settings?.deckTrackerEnabled && settings.debugMode ? (
+          {DECK_TRACKER_DEBUG_PANEL_VISIBLE && DECK_TRACKER_FEATURE_ENABLED && settings?.deckTrackerEnabled && settings.debugMode ? (
             <VisionDeckTrackerDebugWindow
               state={deckTrackerState}
               status={visionTrackerStatus}
@@ -5983,13 +6593,13 @@ type FloatingDeckTrackerSize = { width: number; height: number };
 
 function defaultDeckTrackerPosition(): FloatingDeckTrackerPosition {
   if (typeof window === "undefined") {
-    return { x: 12, y: 420 };
+    return { x: 12, y: 380 };
   }
-  return { x: 12, y: Math.max(96, window.innerHeight - 470) };
+  return { x: 12, y: Math.max(96, window.innerHeight - 330) };
 }
 
 function defaultDeckTrackerSize(): FloatingDeckTrackerSize {
-  return { width: 390, height: 560 };
+  return { width: 300, height: 360 };
 }
 
 function readDeckTrackerPosition(): FloatingDeckTrackerPosition {
@@ -6008,9 +6618,16 @@ function readDeckTrackerSize(): FloatingDeckTrackerSize {
   try {
     const parsed = JSON.parse(window.localStorage.getItem(DECK_TRACKER_SIZE_KEY) || "null") as Partial<FloatingDeckTrackerSize> | null;
     if (parsed && Number.isFinite(parsed.width) && Number.isFinite(parsed.height)) {
+      const width = Number(parsed.width);
+      const height = Number(parsed.height);
+      const oldDefaultSize = width >= 380 && width <= 410 && height >= 540 && height <= 580;
+      if (oldDefaultSize && window.localStorage.getItem(DECK_TRACKER_COMPACT_MIGRATION_KEY) !== "done") {
+        window.localStorage.setItem(DECK_TRACKER_COMPACT_MIGRATION_KEY, "done");
+        return defaultDeckTrackerSize();
+      }
       return {
-        width: Math.max(320, Math.min(620, Number(parsed.width))),
-        height: Math.max(360, Math.min(760, Number(parsed.height)))
+        width: Math.max(260, Math.min(520, width)),
+        height: Math.max(260, Math.min(680, height))
       };
     }
   } catch {
@@ -6035,28 +6652,167 @@ function saveDeckTrackerSize(size: FloatingDeckTrackerSize) {
   }
 }
 
+function readDeckTrackerOpacity(): number {
+  try {
+    const stored = Number(window.localStorage.getItem(DECK_TRACKER_OPACITY_KEY));
+    if (Number.isFinite(stored)) {
+      return Math.max(0.45, Math.min(1, stored));
+    }
+  } catch {
+    // Opacity memory is a convenience only.
+  }
+  return 0.88;
+}
+
+function saveDeckTrackerOpacity(opacity: number) {
+  try {
+    window.localStorage.setItem(DECK_TRACKER_OPACITY_KEY, String(opacity));
+  } catch {
+    // Non-fatal.
+  }
+}
+
+function sortDeckTrackerCardsByProbability(cards: DeckTrackerCardState[]): DeckTrackerCardState[] {
+  return [...cards].sort((a, b) =>
+    b.odds.next1 - a.odds.next1 ||
+    b.copiesLeft - a.copiesLeft ||
+    b.deckCount - a.deckCount ||
+    a.name.localeCompare(b.name)
+  );
+}
+
+function deckTrackerCardSearchText(card: Pick<DeckTrackerCardState, "name" | "code" | "cardId" | "role">): string {
+  return [card.name, card.code, card.cardId, card.role].join(" ").toLowerCase();
+}
+
+function opponentCardKeyFromParts(name: string, cardId = "", code = ""): string {
+  return normalizeDeckTrackerKey(cardId || code || name);
+}
+
+function opponentSeenKeySet(cards: DeckTrackerState["opponent"]["cards"]): Set<string> {
+  const seen = new Set<string>();
+  for (const card of cards) {
+    for (const value of [card.cardKey, card.cardId, card.code, card.name]) {
+      const key = normalizeDeckTrackerKey(value || "");
+      if (key) {
+        seen.add(key);
+      }
+    }
+  }
+  return seen;
+}
+
+function opponentHintFromCommunityStat(stat: CommunityDeckCardStat, tag: string): OpponentTrackerHintCard {
+  const code = stat.cardId?.match(/\b([A-Z]{2,5}-\d{1,4}[A-Z]?)\b/i)?.[1]?.toUpperCase() ?? "";
+  return {
+    key: stat.key || opponentCardKeyFromParts(stat.name, stat.cardId, code),
+    name: stat.name,
+    cardId: stat.cardId,
+    code,
+    imageUrl: stat.imageUrl || deckTrackerImageUrlFromId(stat.cardId || code),
+    detail: stat.inclusionLabel,
+    subDetail: `${stat.commonCopies || 0}x common | ${stat.winRateLabel} WR`,
+    tag
+  };
+}
+
+function opponentCommunityCards(meta: ReturnType<typeof buildCommunityDeckMeta> | null, opponentLegend: string, seenKeys: Set<string>): OpponentTrackerHintCard[] {
+  const legend = normalizeLegendName(opponentLegend);
+  if (!meta || !legend) {
+    return [];
+  }
+  const byKey = new Map<string, OpponentTrackerHintCard>();
+  const stats = [
+    ...communityCardStatsForLegend(meta, legend, "mainDeck"),
+    ...communityCardStatsForLegend(meta, legend, "sideboard")
+  ].sort((a, b) => b.inclusionRate - a.inclusionRate || b.deckCount - a.deckCount || a.name.localeCompare(b.name));
+  for (const stat of stats) {
+    const key = opponentCardKeyFromParts(stat.name, stat.cardId, stat.key);
+    if (!key || seenKeys.has(key) || seenKeys.has(normalizeDeckTrackerKey(stat.name))) {
+      continue;
+    }
+    if (!byKey.has(key)) {
+      byKey.set(key, opponentHintFromCommunityStat(stat, stat.section === "sideboard" ? "Sideboard common" : "Deck common"));
+    }
+  }
+  return [...byKey.values()].slice(0, 14);
+}
+
+function isPossibleHiddenCardStat(stat: CommunityDeckCardStat): boolean {
+  const key = normalizeDeckTrackerKey(stat.name);
+  if (!key || BANNED_CARD_NAMES.has(key)) {
+    return false;
+  }
+  if (stat.section !== "mainDeck" && stat.section !== "sideboard") {
+    return false;
+  }
+  return KNOWN_HIDDEN_CARD_NAMES.has(key);
+}
+
+function opponentHiddenCards(meta: ReturnType<typeof buildCommunityDeckMeta> | null, opponentLegend: string, seenKeys: Set<string>): OpponentTrackerHintCard[] {
+  const legend = normalizeLegendName(opponentLegend);
+  if (!meta || !legend) {
+    return [];
+  }
+  const byKey = new Map<string, OpponentTrackerHintCard>();
+  const stats = [
+    ...communityCardStatsForLegend(meta, legend, "mainDeck"),
+    ...communityCardStatsForLegend(meta, legend, "sideboard")
+  ].sort((a, b) => b.inclusionRate - a.inclusionRate || b.deckCount - a.deckCount || a.name.localeCompare(b.name));
+  for (const stat of stats) {
+    if (!isPossibleHiddenCardStat(stat)) {
+      continue;
+    }
+    const key = opponentCardKeyFromParts(stat.name, stat.cardId, stat.key);
+    const nameKey = normalizeDeckTrackerKey(stat.name);
+    if (!key || seenKeys.has(key) || seenKeys.has(nameKey)) {
+      continue;
+    }
+    if (!byKey.has(nameKey || key)) {
+      byKey.set(nameKey || key, opponentHintFromCommunityStat(stat, "Possible hidden"));
+    }
+  }
+  return [...byKey.values()].slice(0, 10);
+}
+
 function DeckTrackerOverlay({
   state,
   visionStatus,
   onAdjust,
   onPinnedChange,
   onReset,
+  onSideboardAdjust,
+  onSideboardReset,
   onConfirmSuggestion,
-  onRejectSuggestion
+  onRejectSuggestion,
+  onPopOut,
+  opponentLegend = "",
+  communityMatches = [],
+  initialExpanded = false,
+  popoutMode = false
 }: {
   state: DeckTrackerState | null;
   visionStatus: VisionDeckTrackerStatus | null;
   onAdjust: (cardKey: string, delta: number) => Promise<void>;
   onPinnedChange: (deckId: string, cardKeys: string[]) => Promise<void>;
   onReset: () => Promise<void>;
+  onSideboardAdjust: (cardKey: string, direction: DeckTrackerSideboardDirection, delta: number) => Promise<void>;
+  onSideboardReset: () => Promise<void>;
   onConfirmSuggestion: (cardKey: string) => Promise<void>;
   onRejectSuggestion: (cardKey: string) => Promise<void>;
+  onPopOut?: () => Promise<void>;
+  opponentLegend?: string;
+  communityMatches?: CommunityMatch[];
+  initialExpanded?: boolean;
+  popoutMode?: boolean;
 }) {
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(initialExpanded);
   const [search, setSearch] = useState("");
+  const [cardView, setCardView] = useState<"left" | "all" | "sideboard" | "opponent">("left");
   const [busyKey, setBusyKey] = useState("");
   const [position, setPosition] = useState<FloatingDeckTrackerPosition>(() => readDeckTrackerPosition());
   const [size, setSize] = useState<FloatingDeckTrackerSize>(() => readDeckTrackerSize());
+  const [opacity, setOpacity] = useState(() => readDeckTrackerOpacity());
   const [dragging, setDragging] = useState(false);
   const overlayRef = useRef<HTMLDivElement | null>(null);
   const panelRef = useRef<HTMLElement | null>(null);
@@ -6077,25 +6833,79 @@ function DeckTrackerOverlay({
     origin: FloatingDeckTrackerSize;
   } | null>(null);
   const cards = state?.cards ?? [];
-  const pinnedCards = cards.filter((card) => card.pinned);
+  const opponentCards = state?.opponent.cards ?? [];
+  const opponentKnownCards = state?.opponent.knownCards ?? [];
   const needle = search.trim().toLowerCase();
+  const sideboard = state?.sideboard;
+  const leftCards = sortDeckTrackerCardsByProbability(cards.filter((card) => card.copiesLeft > 0));
   const visibleCards = (needle
-    ? cards.filter((card) => [card.name, card.code, card.cardId].join(" ").toLowerCase().includes(needle))
-    : (pinnedCards.length ? pinnedCards : cards)
-  ).slice(0, 10);
+    ? sortDeckTrackerCardsByProbability(cards.filter((card) => deckTrackerCardSearchText(card).includes(needle)))
+    : cardView === "all"
+        ? cards
+        : cardView === "opponent"
+          ? []
+        : leftCards
+  );
+  const visibleOpponentCards = (needle
+    ? opponentCards.filter((card) => [card.name, card.code, card.cardId, card.zones.join(" ")].join(" ").toLowerCase().includes(needle))
+    : opponentCards
+  );
+  const visibleOpponentKnownCards = (needle
+    ? opponentKnownCards.filter((card) => [card.name, card.code, card.cardId, card.zones.join(" ")].join(" ").toLowerCase().includes(needle))
+    : opponentKnownCards
+  );
+  const opponentSeenKeys = useMemo(() => opponentSeenKeySet(opponentKnownCards), [opponentKnownCards]);
+  const communityDeckMeta = useMemo(() => {
+    if (!communityMatches.length) {
+      return null;
+    }
+    return buildCommunityDeckMeta(filterCommunityDeckMatches(communityMatches, "", "", "with", true));
+  }, [communityMatches]);
+  const effectiveOpponentLegend = opponentLegend || state?.opponentLegend || "";
+  const normalizedOpponentLegend = canonicalLegendName(effectiveOpponentLegend);
+  const opponentLegendDisplay = normalizedOpponentLegend || normalizeLegendName(effectiveOpponentLegend);
+  const opponentLegendKnown = Boolean(normalizedOpponentLegend);
+  const commonCardsEmptyText = !opponentLegendKnown
+    ? "Waiting for opponent legend."
+    : !communityMatches.length
+      ? "Community cache has not loaded yet."
+      : "No common public deck hints for this legend yet.";
+  const hiddenCardsEmptyText = !opponentLegendKnown
+    ? "Waiting for opponent legend."
+    : !communityMatches.length
+      ? "Community cache has not loaded yet."
+      : "No opponent hidden-card hints found in public decklists.";
+  const visibleOpponentCommonCards = useMemo(() => {
+    const rows = opponentCommunityCards(communityDeckMeta, normalizedOpponentLegend, opponentSeenKeys);
+    return needle ? rows.filter((card) => [card.name, card.detail, card.subDetail].join(" ").toLowerCase().includes(needle)) : rows;
+  }, [communityDeckMeta, needle, normalizedOpponentLegend, opponentSeenKeys]);
+  const visibleOpponentHiddenCards = useMemo(() => {
+    const rows = opponentHiddenCards(communityDeckMeta, normalizedOpponentLegend, opponentSeenKeys);
+    return needle ? rows.filter((card) => [card.name, card.detail, card.subDetail].join(" ").toLowerCase().includes(needle)) : rows;
+  }, [communityDeckMeta, needle, normalizedOpponentLegend, opponentSeenKeys]);
   const title = state?.active ? `${state.cardsLeft}/${state.deckSize} left` : "Deck";
   const visionLabel = visionStatus?.enabled
     ? visionStatus.state === "low-confidence"
-      ? "Vision needs confirm"
+      ? "Atlas events need confirm"
       : visionStatus.state === "active"
-        ? `Vision ${Math.round((visionStatus.confidenceScore || 0) * 100)}%`
+        ? `Atlas events ${Math.round((visionStatus.confidenceScore || 0) * 100)}%`
         : visionStatus.message
-    : "Vision off";
+    : "Tracker off";
 
   async function adjust(cardKey: string, delta: number) {
     setBusyKey(cardKey);
     try {
       await onAdjust(cardKey, delta);
+    } finally {
+      setBusyKey("");
+    }
+  }
+
+  async function adjustSideboard(cardKey: string, direction: DeckTrackerSideboardDirection, delta: number) {
+    const key = `${direction}:${cardKey}`;
+    setBusyKey(key);
+    try {
+      await onSideboardAdjust(cardKey, direction, delta);
     } finally {
       setBusyKey("");
     }
@@ -6147,16 +6957,21 @@ function DeckTrackerOverlay({
     const bounds = parent?.getBoundingClientRect();
     const boundsWidth = bounds?.width || window.innerWidth;
     const boundsHeight = bounds?.height || window.innerHeight;
-    const maxWidth = Math.max(320, Math.min(620, boundsWidth - 24));
-    const maxHeight = Math.max(360, Math.min(760, boundsHeight - 24));
+    const maxWidth = Math.max(260, Math.min(520, boundsWidth - 24));
+    const maxHeight = Math.max(260, Math.min(680, boundsHeight - 24));
     return {
-      width: Math.min(maxWidth, Math.max(320, Math.round(next.width))),
-      height: Math.min(maxHeight, Math.max(360, Math.round(next.height)))
+      width: Math.min(maxWidth, Math.max(260, Math.round(next.width))),
+      height: Math.min(maxHeight, Math.max(260, Math.round(next.height)))
     };
   }
 
   function startDrag(event: React.PointerEvent<HTMLElement>) {
-    if (event.button !== 0) {
+    if (popoutMode || event.button !== 0) {
+      return;
+    }
+    const targetElement = event.target instanceof Element ? event.target : null;
+    const draggingPill = Boolean(targetElement?.closest(".deck-tracker-pill"));
+    if (!draggingPill && targetElement?.closest("button, input, textarea, select, a, .floating-resize-handle")) {
       return;
     }
     event.preventDefault();
@@ -6288,6 +7103,7 @@ function DeckTrackerOverlay({
       className="deck-tracker-overlay"
       data-expanded={expanded}
       data-dragging={dragging}
+      data-popout={popoutMode}
       style={{ left: position.x, top: position.y }}
     >
       {!expanded ? (
@@ -6306,36 +7122,46 @@ function DeckTrackerOverlay({
           ref={panelRef}
           className="deck-tracker-panel"
           aria-label="My Deck Tracker"
-          style={{ width: size.width, height: size.height }}
+          style={(popoutMode
+            ? { "--deck-tracker-opacity": opacity }
+            : { width: size.width, height: size.height, "--deck-tracker-opacity": opacity }
+          ) as unknown as React.CSSProperties}
+          onPointerDown={popoutMode ? undefined : startDrag}
+          title={popoutMode ? "RiftLite Deck Tracker" : "Drag My Deck Tracker"}
         >
-          <header
-            onPointerDown={startDrag}
-            title="Drag My Deck Tracker"
-          >
-            <div>
-              <span>My Deck Tracker</span>
-              <h2>{state?.deckTitle || "Set active deck"}</h2>
-              <p>{state?.reason || "Waiting for an active match."}</p>
+          <header className="deck-tracker-mini-header">
+            <div className="deck-tracker-title-block">
+              <span>{state?.active ? title : "Deck tracker"}</span>
+              <strong>{state?.deckTitle || "Set active deck"}</strong>
             </div>
-            <button
-              type="button"
-              className="icon-button"
-              onPointerDown={(event) => event.stopPropagation()}
-              onClick={() => setExpanded(false)}
-              aria-label="Collapse deck tracker"
-            >
-              <X size={15} />
-            </button>
+            <div className="deck-tracker-header-actions">
+              {visionStatus?.enabled ? (
+                <span className="deck-tracker-status-chip" data-state={visionStatus.state}>{visionLabel}</span>
+              ) : null}
+              {onPopOut && !popoutMode ? (
+                <button
+                  type="button"
+                  className="icon-button"
+                  onClick={() => {
+                    setExpanded(false);
+                    void onPopOut();
+                  }}
+                  aria-label="Pop out deck tracker"
+                  title="Pop out to a separate window"
+                >
+                  <Maximize2 size={14} />
+                </button>
+              ) : null}
+              <button
+                type="button"
+                className="icon-button"
+                onClick={() => setExpanded(false)}
+                aria-label="Collapse deck tracker"
+              >
+                <X size={15} />
+              </button>
+            </div>
           </header>
-          <div className="deck-tracker-summary">
-            <Metric label="Deck left" value={state?.active ? String(state.cardsLeft) : "-"} />
-            <Metric label="Seen" value={state?.active ? String(state.seenCount) : "-"} />
-            <Metric label="Confidence" value={state?.confidence === "tracked" ? "Tracked" : "Estimated"} />
-          </div>
-          <div className="deck-tracker-vision-status" data-state={visionStatus?.state ?? "disabled"}>
-            <span>{visionLabel}</span>
-            <small>{visionStatus?.processedFrames ?? 0} frames checked{visionStatus?.skippedFrames ? `, ${visionStatus.skippedFrames} skipped` : ""}</small>
-          </div>
           {visionStatus?.suggestions.length ? (
             <div className="deck-tracker-suggestions">
               <strong>Confirm suggested cards</strong>
@@ -6353,22 +7179,75 @@ function DeckTrackerOverlay({
             </div>
           ) : null}
           <label className="deck-tracker-search">
-            Search or pin cards
+            Search cards
             <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Card name or code..." />
           </label>
+          <div className="deck-tracker-view-tabs" role="tablist" aria-label="Deck tracker view">
+            {[
+              ["left", "Left"],
+              ["all", "All"],
+              ["sideboard", "Sideboard"],
+              ["opponent", "Opponent"]
+            ].map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                className="segmented"
+                data-active={cardView === value}
+                onClick={() => setCardView(value as typeof cardView)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          {sideboard?.changes.length ? (
+            <div className="deck-tracker-sideboard-summary">
+              <strong>{sideboard.autoDetected ? "Auto sideboard detected" : "Manual sideboard"}</strong>
+              <span>{sideboard.changes.map((change) => `${change.direction === "in" ? "+" : "-"}${change.qty} ${change.name}`).join(", ")}</span>
+            </div>
+          ) : null}
+          {cardView === "sideboard" ? (
+            <div className="deck-tracker-sideboard-panel">
+              <div className="deck-tracker-sideboard-copy">
+                <strong>Sideboard for this game</strong>
+                <span>{sideboard?.phase ? `${sideboard.phase}${sideboard.gameNumber ? ` - game ${sideboard.gameNumber}` : ""}` : "Atlas auto-detects sideboard moves when it can."}</span>
+              </div>
+              <button type="button" className="secondary" onClick={() => void onSideboardReset()}>
+                <RotateCcw size={13} /> Reset sideboard
+              </button>
+              <DeckTrackerSideboardSection
+                title="Bring in"
+                direction="in"
+                options={sideboard?.sideboardOptions ?? []}
+                changes={sideboard?.changes ?? []}
+                busyKey={busyKey}
+                search={needle}
+                onAdjust={adjustSideboard}
+              />
+              <DeckTrackerSideboardSection
+                title="Take out"
+                direction="out"
+                options={sideboard?.mainOptions ?? []}
+                changes={sideboard?.changes ?? []}
+                busyKey={busyKey}
+                search={needle}
+                onAdjust={adjustSideboard}
+              />
+            </div>
+          ) : null}
           <div className="deck-tracker-card-list">
-            {visibleCards.map((card) => (
+            {cardView !== "sideboard" && cardView !== "opponent" ? visibleCards.map((card) => (
               <div className="deck-tracker-card" key={card.cardKey}>
                 {card.imageUrl ? <img src={card.imageUrl} alt="" loading="lazy" /> : <span className="deck-tracker-card-fallback">{card.name.slice(0, 2)}</span>}
                 <div className="deck-tracker-card-main">
                   <button type="button" onClick={() => void togglePin(card.cardKey)} data-pinned={card.pinned}>
                     <Flag size={13} /> {card.name}
                   </button>
-                  <small>{card.copiesLeft}/{card.deckCount} left {card.code ? `- ${card.code}` : ""}</small>
+                  <small>{card.copiesLeft}/{card.deckCount} left {card.role === "sideboard" ? "- sideboarded in" : ""} {card.code ? `- ${card.code}` : ""}</small>
                   <div className="deck-tracker-odds">
-                    <span>1: {percent(card.odds.next1)}</span>
-                    <span>2: {percent(card.odds.next2)}</span>
-                    <span>3: {percent(card.odds.next3)}</span>
+                    <span title="Chance to draw at least one copy on your next draw">Next: {percent(card.odds.next1)}</span>
+                    <span title="Chance to draw at least one copy within your next 2 draws">2 draws: {percent(card.odds.next2)}</span>
+                    <span title="Chance to draw at least one copy within your next 3 draws">3 draws: {percent(card.odds.next3)}</span>
                   </div>
                 </div>
                 <div className="deck-tracker-adjust">
@@ -6376,12 +7255,66 @@ function DeckTrackerOverlay({
                   <button type="button" disabled={busyKey === card.cardKey} onClick={() => void adjust(card.cardKey, -1)} title="Undo one seen copy">+</button>
                 </div>
               </div>
-            ))}
-            {state?.active && !visibleCards.length ? <p className="muted">No cards match that search.</p> : null}
-            {!state?.active ? <p className="muted">Pick an active deck in Decks, then start a TCGA or Atlas match.</p> : null}
+            )) : null}
+            {cardView === "opponent" ? (
+              <div className="deck-tracker-opponent-grid">
+                <section className="deck-tracker-opponent-column">
+                  <header>
+                    <strong>Played this game</strong>
+                    <small>{state?.opponent.totalSeen ? `${state.opponent.totalSeen} public card${state.opponent.totalSeen === 1 ? "" : "s"}` : "Resets each game"}</small>
+                  </header>
+                  {visibleOpponentCards.length ? visibleOpponentCards.map((card) => (
+                    <DeckTrackerOpponentSeenCard card={card} key={card.cardKey} />
+                  )) : <p className="muted">No opponent public cards seen yet.</p>}
+                </section>
+                <section className="deck-tracker-opponent-column">
+                  <header>
+                    <strong>Known in BO3 deck</strong>
+                    <small>{state?.opponent.totalKnown ? `${state.opponent.totalKnown} / max 40 known` : "Carries across games"}</small>
+                  </header>
+                  {visibleOpponentKnownCards.length ? visibleOpponentKnownCards.map((card) => (
+                    <DeckTrackerOpponentSeenCard card={card} key={card.cardKey} />
+                  )) : <p className="muted">No BO3 deck info yet.</p>}
+                </section>
+                <section className="deck-tracker-opponent-column">
+                  <header>
+                    <strong>Common cards</strong>
+                    <small>{opponentLegendDisplay ? `Public ${opponentLegendDisplay} decks` : "Waiting for opponent legend"}</small>
+                  </header>
+                  {visibleOpponentCommonCards.length ? visibleOpponentCommonCards.map((card) => (
+                    <DeckTrackerOpponentHintCard card={card} key={card.key} />
+                  )) : <p className="muted">{commonCardsEmptyText}</p>}
+                </section>
+                <section className="deck-tracker-opponent-column">
+                  <header>
+                    <strong>Possible hidden</strong>
+                    <small>{opponentLegendDisplay ? `Public ${opponentLegendDisplay} decklists` : "Waiting for opponent legend"}</small>
+                  </header>
+                  {visibleOpponentHiddenCards.length ? visibleOpponentHiddenCards.map((card) => (
+                    <DeckTrackerOpponentHintCard card={card} key={card.key} />
+                  )) : <p className="muted">{hiddenCardsEmptyText}</p>}
+                </section>
+              </div>
+            ) : null}
+            {state?.active && cardView !== "sideboard" && cardView !== "opponent" && !visibleCards.length ? <p className="muted">No cards match that search.</p> : null}
+            {!state?.active ? <p className="muted">Pick an active deck in Decks, then start an Atlas match. TCGA support is not enabled for this beta.</p> : null}
           </div>
           <footer>
-            <button type="button" className="secondary" onClick={() => void onReset()}><RefreshCw size={14} /> Reset game / BO3</button>
+            <label className="deck-tracker-opacity-control">
+              <span>Opacity</span>
+              <input
+                type="range"
+                min="45"
+                max="100"
+                value={Math.round(opacity * 100)}
+                onChange={(event) => {
+                  const next = Math.max(0.45, Math.min(1, Number(event.target.value) / 100));
+                  setOpacity(next);
+                  saveDeckTrackerOpacity(next);
+                }}
+              />
+            </label>
+            <button type="button" className="secondary" onClick={() => void onReset()}><RefreshCw size={14} /> Reset</button>
           </footer>
           <button
             type="button"
@@ -6393,6 +7326,193 @@ function DeckTrackerOverlay({
         </section>
       )}
     </div>
+  );
+}
+
+function DeckTrackerOpponentSeenCard({ card }: { card: DeckTrackerState["opponent"]["cards"][number] }) {
+  return (
+    <div className="deck-tracker-card deck-tracker-opponent-card">
+      {card.imageUrl ? <img src={card.imageUrl} alt="" loading="lazy" /> : <span className="deck-tracker-card-fallback">{card.name.slice(0, 2)}</span>}
+      <div className="deck-tracker-card-main">
+        <strong>{card.name}</strong>
+        <small>{card.count} seen {card.code ? `- ${card.code}` : ""}</small>
+        <div className="deck-tracker-odds">
+          {card.zones.map((zone) => <span key={zone}>{zone}</span>)}
+          <span>{new Date(card.lastSeenAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DeckTrackerOpponentHintCard({ card }: { card: OpponentTrackerHintCard }) {
+  return (
+    <div className="deck-tracker-card deck-tracker-opponent-card deck-tracker-opponent-hint-card">
+      {card.imageUrl ? <img src={card.imageUrl} alt="" loading="lazy" /> : <span className="deck-tracker-card-fallback">{card.name.slice(0, 2)}</span>}
+      <div className="deck-tracker-card-main">
+        <strong>{card.name}</strong>
+        <small>{card.detail}</small>
+        <div className="deck-tracker-odds">
+          <span>{card.tag}</span>
+          <span>{card.subDetail}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DeckTrackerSideboardSection({
+  title,
+  direction,
+  options,
+  changes,
+  busyKey,
+  search,
+  onAdjust
+}: {
+  title: string;
+  direction: DeckTrackerSideboardDirection;
+  options: DeckTrackerSideboardCardOption[];
+  changes: DeckTrackerSideboardChange[];
+  busyKey: string;
+  search: string;
+  onAdjust: (cardKey: string, direction: DeckTrackerSideboardDirection, delta: number) => Promise<void>;
+}) {
+  const currentQty = new Map<string, number>();
+  for (const change of changes.filter((item) => item.direction === direction)) {
+    currentQty.set(change.cardKey, (currentQty.get(change.cardKey) ?? 0) + change.qty);
+  }
+  const filteredOptions = options.filter((option) => {
+    if (!search) {
+      return true;
+    }
+    return [option.name, option.code, option.cardId].join(" ").toLowerCase().includes(search);
+  });
+  return (
+    <section className="deck-tracker-sideboard-section">
+      <h4>{title}</h4>
+      {!filteredOptions.length ? <p className="muted">No matching cards.</p> : null}
+      {filteredOptions.map((option) => {
+        const qty = currentQty.get(option.cardKey) ?? 0;
+        const key = `${direction}:${option.cardKey}`;
+        return (
+          <div className="deck-tracker-sideboard-row" key={`${direction}-${option.cardKey}`}>
+            {option.imageUrl ? <img src={option.imageUrl} alt="" loading="lazy" /> : <span className="deck-tracker-card-fallback">{option.name.slice(0, 2)}</span>}
+            <div>
+              <strong>{option.name}</strong>
+              <small>{qty}/{option.qty} {direction === "in" ? "in" : "out"} {option.code ? `- ${option.code}` : ""}</small>
+            </div>
+            <div className="deck-tracker-adjust">
+              <button type="button" disabled={busyKey === key || qty <= 0} onClick={() => void onAdjust(option.cardKey, direction, -1)} title={`Reduce ${title.toLowerCase()}`}>-</button>
+              <button type="button" disabled={busyKey === key || qty >= option.qty} onClick={() => void onAdjust(option.cardKey, direction, 1)} title={`Increase ${title.toLowerCase()}`}>+</button>
+            </div>
+          </div>
+        );
+      })}
+    </section>
+  );
+}
+
+function DeckTrackerPopoutApp() {
+  const [state, setState] = useState<DeckTrackerState | null>(null);
+  const [visionStatus, setVisionStatus] = useState<VisionDeckTrackerStatus | null>(null);
+  const [communityMatches, setCommunityMatches] = useState<CommunityMatch[]>([]);
+  const [error, setError] = useState("");
+
+  async function refreshDeckTracker() {
+    try {
+      const [nextState, nextVisionStatus] = await Promise.all([
+        window.riftlite.getDeckTrackerState().catch(() => null),
+        window.riftlite.getVisionDeckTrackerStatus().catch(() => null)
+      ]);
+      setState(nextState);
+      setVisionStatus(nextVisionStatus);
+      setError("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  useEffect(() => {
+    void refreshDeckTracker();
+    const timer = window.setInterval(() => void refreshDeckTracker(), 750);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void window.riftlite.getCommunityMatches(false)
+      .then((matches) => {
+        if (!cancelled) {
+          setCommunityMatches(matches);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setCommunityMatches([]);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function adjust(cardKey: string, delta: number) {
+    const next = await window.riftlite.adjustDeckTrackerCard(cardKey, delta);
+    setState(next);
+  }
+
+  async function setPins(deckId: string, cardKeys: string[]) {
+    const next = await window.riftlite.setDeckTrackerPinnedCards(deckId, cardKeys);
+    setState(next);
+  }
+
+  async function reset() {
+    const next = await window.riftlite.resetDeckTrackerMatch();
+    setState(next);
+  }
+
+  async function adjustSideboard(cardKey: string, direction: DeckTrackerSideboardDirection, delta: number) {
+    const next = await window.riftlite.adjustDeckTrackerSideboard(cardKey, direction, delta);
+    setState(next);
+  }
+
+  async function resetSideboard() {
+    const next = await window.riftlite.resetDeckTrackerSideboard();
+    setState(next);
+  }
+
+  async function confirmSuggestion(cardKey: string) {
+    const next = await window.riftlite.confirmVisionDeckTrackerSuggestion(cardKey);
+    setVisionStatus(next);
+    const nextState = await window.riftlite.getDeckTrackerState().catch(() => null);
+    setState(nextState);
+  }
+
+  async function rejectSuggestion(cardKey: string) {
+    const next = await window.riftlite.rejectVisionDeckTrackerSuggestion(cardKey);
+    setVisionStatus(next);
+  }
+
+  return (
+    <main className="deck-tracker-popout-shell">
+      {error ? <div className="deck-tracker-popout-error">{error}</div> : null}
+      <DeckTrackerOverlay
+        state={state}
+        visionStatus={visionStatus}
+        onAdjust={adjust}
+        onPinnedChange={setPins}
+        onReset={reset}
+        onSideboardAdjust={adjustSideboard}
+        onSideboardReset={resetSideboard}
+        onConfirmSuggestion={confirmSuggestion}
+        onRejectSuggestion={rejectSuggestion}
+        opponentLegend={state?.opponentLegend ?? ""}
+        communityMatches={communityMatches}
+        initialExpanded
+        popoutMode
+      />
+    </main>
   );
 }
 
@@ -6474,12 +7594,12 @@ function VisionDeckTrackerDebugWindow({
       className="vision-debug-window"
       data-collapsed={collapsed}
       style={{ left: `${position.x}px`, top: `${position.y}px` }}
-      aria-label="Vision deck tracker debug"
+      aria-label="Atlas event deck tracker debug"
     >
       <header onPointerDown={startDrag}>
         <GripVertical size={15} />
         <div>
-          <strong>Vision reads</strong>
+          <strong>Atlas event reads</strong>
           <span>{statusText}</span>
         </div>
         <button
@@ -6487,7 +7607,7 @@ function VisionDeckTrackerDebugWindow({
           className="icon-button"
           onPointerDown={(event) => event.stopPropagation()}
           onClick={() => setCollapsed((value) => !value)}
-          aria-label={collapsed ? "Expand vision reads" : "Collapse vision reads"}
+          aria-label={collapsed ? "Expand Atlas event reads" : "Collapse Atlas event reads"}
         >
           {collapsed ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
         </button>
@@ -6495,14 +7615,14 @@ function VisionDeckTrackerDebugWindow({
       {!collapsed ? (
         <div className="vision-debug-body">
           <div className="vision-debug-meta">
-            <span>{scan?.frameCaptured ? "frame" : "DOM only"}</span>
+            <span>{scan?.frameCaptured ? "packet" : "events"}</span>
             <span>{scan ? `${scan.observationCount} reads` : "no scan yet"}</span>
-            <span>{scan ? `${scan.frameCandidateCount} crops` : ""}</span>
+            <span>{scan ? `${scan.frameCandidateCount} ignored` : ""}</span>
           </div>
           <button type="button" className="secondary vision-debug-reset" onClick={() => void onReset()}>
             <RefreshCw size={13} /> Reset game / BO3
           </button>
-          <VisionDebugList title="Just picked up" items={recentReads} empty="No confident reads this scan." />
+          <VisionDebugList title="Just picked up" items={recentReads} empty="No confident event reads yet." />
           <VisionDebugList title="Suggestions" items={suggestions} empty="No pending suggestions." />
           <div className="vision-debug-section">
             <strong>Counted in deck</strong>
@@ -6513,7 +7633,7 @@ function VisionDeckTrackerDebugWindow({
               </div>
             )) : <p className="muted">Nothing counted yet.</p>}
           </div>
-          <VisionDebugList title="Best frame matches" items={bestMatches} empty="No frame matches yet." showSource />
+          <VisionDebugList title="Recent event details" items={bestMatches} empty="No event details yet." showSource />
         </div>
       ) : null}
     </section>
@@ -6648,7 +7768,7 @@ function HomeView({
   const featuredAsset = featuredAssets[featuredCreator.id] ?? {};
   const featuredPartner = featuredPartners[featuredPartnerIndex % Math.max(1, featuredPartners.length)] ?? null;
   const communityDeckSummary = useMemo(() => {
-    const deckRows = filterCommunityDeckMatches(communityMatches, "", "with", true);
+    const deckRows = filterCommunityDeckMatches(communityMatches, "", "", "with", true);
     const meta = buildCommunityDeckMeta(deckRows);
     const hasCommunityRows = communityMatches.length > 0;
     const deckCount = meta.totalDecks;
@@ -7436,7 +8556,7 @@ function MatchupLabView({
   }, [activeDeck]);
 
   const communityDeckMeta = useMemo(
-    () => buildCommunityDeckMeta(filterCommunityDeckMatches(communityMatches, "", "with", true)),
+    () => buildCommunityDeckMeta(filterCommunityDeckMatches(communityMatches, "", "", "with", true)),
     [communityMatches]
   );
 
@@ -8125,6 +9245,21 @@ function DashboardView({
       />
     );
   }
+  if (view === "web-replay") {
+    return RIFTLITE_WEB_REPLAY_FEATURE_VISIBLE ? (
+      <EmbeddedRiftReplayView onOpenAccount={() => onNavigate("account")} />
+    ) : (
+      <ReplayView
+        replays={replays}
+        matches={visibleMatches}
+        settings={settings}
+        focusReplayId={replayFocusId}
+        onFocusConsumed={onReplayFocusConsumed}
+        onReplaysChanged={onReplaysChanged}
+        onDeleteReplay={onDeleteReplay}
+      />
+    );
+  }
   if (view === "account") {
     return <AccountView settings={settings} onSettingsChanged={onSettingsChanged} />;
   }
@@ -8180,6 +9315,484 @@ function DashboardView({
   return <CommunityView matches={visibleMatches} communityMatches={communityMatches} hubMatches={hubMatches} settings={settings} status={communityStatus} activeTab={communityTab} deckLegendTarget={communityDeckLegendTarget} onTabChange={onCommunityTabChange} onRefresh={onRefreshCommunity} />;
 }
 
+type LocalRiftReplayItem = {
+  replay: ReplayRecord;
+  match?: MatchDraft;
+  rawLabel: string;
+};
+
+type LocalRiftReplayLoadState =
+  | { state: "idle"; model: null; error: "" }
+  | { state: "loading"; model: null; error: "" }
+  | { state: "ready"; model: RiftLiteReplayModel; error: "" }
+  | { state: "empty"; model: null; error: string }
+  | { state: "error"; model: null; error: string };
+
+type LocalRiftReplayCardChip = {
+  key: string;
+  name: string;
+  count: number;
+  imageUrl: string;
+  meta: string;
+};
+
+function EmbeddedRiftReplayView({ onOpenAccount }: { onOpenAccount: () => void }) {
+  const [reloadKey, setReloadKey] = useState(0);
+  const [embedState, setEmbedState] = useState<{
+    authenticated: boolean;
+    error: string;
+    loading: boolean;
+    url: string;
+  }>({ authenticated: false, error: "", loading: true, url: "" });
+  const RiftReplayWebview = "webview" as unknown as React.ElementType;
+
+  useEffect(() => {
+    let cancelled = false;
+    setEmbedState((current) => ({ ...current, error: "", loading: true }));
+    void window.riftlite.prepareReplayLibraryEmbed()
+      .then((result) => {
+        if (cancelled) return;
+        setEmbedState({
+          authenticated: result.authenticated,
+          error: result.error || "",
+          loading: false,
+          url: result.url
+        });
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setEmbedState({
+          authenticated: false,
+          error: error instanceof Error ? error.message : "RiftLite Web Replay could not be opened.",
+          loading: false,
+          url: ""
+        });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [reloadKey]);
+
+  return (
+    <section className="web-replay-page">
+      <div className="web-replay-toolbar">
+        <div>
+          <h2>RiftLite web replay</h2>
+          <p>
+            {embedState.loading
+              ? "Connecting to your RiftLite replay library..."
+              : embedState.authenticated
+                ? "Signed in with your linked RiftLite account."
+                : embedState.error
+                  ? "We couldn't open your account library. Public replays are shown below. Reconnect your account, then retry."
+                  : "Public replays are shown below. Link your account to open My replays."}
+          </p>
+        </div>
+        <div className="web-replay-actions">
+          {!embedState.loading && !embedState.authenticated ? (
+            <button type="button" className="secondary" onClick={onOpenAccount}>
+              <Link2 size={15} /> Account
+            </button>
+          ) : null}
+          <button type="button" className="secondary" onClick={() => setReloadKey((value) => value + 1)}>
+            <RefreshCw size={15} /> Replay library
+          </button>
+          <button type="button" className="secondary" onClick={() => void window.riftlite.openExternalResource(RIFT_REPLAY_WEB_URL)}>
+            <ExternalLink size={15} /> Open in browser
+          </button>
+        </div>
+      </div>
+      <div className="web-replay-frame-shell">
+        {embedState.url ? (
+          <RiftReplayWebview
+            key={`${reloadKey}:${embedState.url}`}
+            className="web-replay-webview"
+            src={embedState.url}
+            partition="persist:riftlite-replay"
+          />
+        ) : (
+          <div className="local-riftreplay-empty local-riftreplay-empty-inline">
+            <Globe2 size={36} />
+            <h3>{embedState.loading ? "Loading web replays" : "Web replay unavailable"}</h3>
+            <p>{embedState.loading ? "Connecting to RiftLite.com..." : "Use Replay library to try again, or open it in your browser."}</p>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function LocalRiftReplayView({
+  replays,
+  matches,
+  onNavigate,
+  onReplaysChanged
+}: {
+  replays: ReplayRecord[];
+  matches: MatchDraft[];
+  onNavigate: (view: ActiveView, options?: NavigationOptions) => void;
+  onReplaysChanged: (focusReplayId?: string) => Promise<void>;
+}) {
+  const [selectedReplayId, setSelectedReplayId] = useState("");
+  const [loadState, setLoadState] = useState<LocalRiftReplayLoadState>({ state: "idle", model: null, error: "" });
+  const [uploadState, setUploadState] = useState("");
+  const loadedReplayKeyRef = useRef("");
+  const loadingReplayKeyRef = useRef("");
+  const matchById = useMemo(() => new Map(matches.map((match) => [match.id, match])), [matches]);
+  const items = useMemo<LocalRiftReplayItem[]>(() => {
+    return replays
+      .filter((replay) => replay.platform === "atlas" && !replay.deletedAt && hasLocalRiftReplayEvidence(replay))
+      .map((replay) => {
+        const match = matchById.get(replay.matchId) ?? replay.matchSnapshot;
+        return {
+          replay,
+          match,
+          rawLabel: localRiftReplayRawLabel(replay)
+        };
+      })
+      .sort((a, b) => (Date.parse(b.replay.capturedAt) || 0) - (Date.parse(a.replay.capturedAt) || 0));
+  }, [matchById, replays]);
+  const selectedItem = useMemo(
+    () => items.find((item) => item.replay.id === selectedReplayId) ?? null,
+    [items, selectedReplayId]
+  );
+  const selectedReplayLoadKey = selectedItem ? localRiftReplayLoadKey(selectedItem.replay, selectedItem.match) : "";
+
+  useEffect(() => {
+    if (!selectedReplayId || !items.length) {
+      setSelectedReplayId("");
+      return;
+    }
+    if (!items.some((item) => item.replay.id === selectedReplayId)) {
+      setSelectedReplayId("");
+    }
+  }, [items, selectedReplayId]);
+
+  useEffect(() => {
+    const selected = selectedItem;
+    const loadKey = selectedReplayLoadKey;
+    let cancelled = false;
+    if (!selected) {
+      loadedReplayKeyRef.current = "";
+      loadingReplayKeyRef.current = "";
+      setLoadState({ state: "idle", model: null, error: "" });
+      return () => {
+        cancelled = true;
+      };
+    }
+    if (!selected.replay.rawCapture?.messageCount) {
+      loadedReplayKeyRef.current = "";
+      loadingReplayKeyRef.current = "";
+      setLoadState({
+        state: "empty",
+        model: null,
+        error: "Raw Atlas replay data was not captured for this match. Video replay is still available from the Replay Library."
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
+    if (loadedReplayKeyRef.current === loadKey || loadingReplayKeyRef.current === loadKey) {
+      return () => {
+        cancelled = true;
+      };
+    }
+    setUploadState("");
+    loadedReplayKeyRef.current = "";
+    loadingReplayKeyRef.current = loadKey;
+    setLoadState({ state: "loading", model: null, error: "" });
+    void window.riftlite.getRawCapturePayload(selected.replay.id)
+      .then((payload) => {
+        if (cancelled) return;
+        if (!payload) {
+          loadedReplayKeyRef.current = "";
+          loadingReplayKeyRef.current = "";
+          setLoadState({ state: "empty", model: null, error: "No raw Atlas sidecar is attached to this replay." });
+          return;
+        }
+        const model = buildRiftLiteReplayModel(payload, {
+          id: selected.replay.id,
+          title: selected.replay.title,
+          localName: selected.match?.myName,
+          opponentName: selected.match?.opponentName,
+          localLegend: selected.match?.myChampion,
+          opponentLegend: selected.match?.opponentChampion,
+          format: selected.match?.format
+        });
+        loadedReplayKeyRef.current = loadKey;
+        loadingReplayKeyRef.current = "";
+        setLoadState({ state: "ready", model, error: "" });
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        loadedReplayKeyRef.current = "";
+        loadingReplayKeyRef.current = "";
+        setLoadState({
+          state: "error",
+          model: null,
+          error: error instanceof Error ? error.message : String(error)
+        });
+      });
+    return () => {
+      cancelled = true;
+      if (loadingReplayKeyRef.current === loadKey) {
+        loadingReplayKeyRef.current = "";
+      }
+    };
+  }, [selectedReplayLoadKey]);
+
+  if (!items.length) {
+    return (
+      <section className="dashboard-page web-replay-page local-riftreplay-page">
+        <div className="web-replay-toolbar">
+          <div>
+            <h2>RiftReplay Lab</h2>
+            <p>No local Atlas replay captures are ready yet. Play an Atlas game with replay/raw capture enabled, then come back here.</p>
+          </div>
+          <div className="web-replay-actions">
+            <button type="button" className="secondary" onClick={() => onNavigate("replays")}>
+              <Film size={15} /> Replays
+            </button>
+            <button type="button" className="secondary" onClick={() => onNavigate("settings")}>
+              <Settings size={15} /> Settings
+            </button>
+            <button type="button" className="secondary" onClick={() => window.open(RIFT_REPLAY_WEB_URL, "_blank", "noopener,noreferrer")}>
+              <ExternalLink size={15} /> RiftReplay
+            </button>
+          </div>
+        </div>
+        <div className="local-riftreplay-empty">
+          <Globe2 size={30} />
+          <h3>Waiting for Atlas replay evidence</h3>
+          <p>Raw Atlas replays appear here after you play an Atlas match with RiftReplay raw capture enabled in Settings.</p>
+        </div>
+      </section>
+    );
+  }
+
+  const openWebReplay = () => {
+    void window.riftlite.openExternalResource(selectedItem?.replay.rawCapture?.uploadUrl || RIFT_REPLAY_WEB_URL);
+  };
+  const uploadToRiftLite = async () => {
+    if (!selectedItem) return;
+    setUploadState("Uploading to RiftLite Web Replay...");
+    try {
+      const result = await window.riftlite.uploadRawCaptureToRiftLite(selectedItem.replay.id, selectedItem.replay.rawCapture?.visibility ?? "private");
+      setUploadState(`Uploaded: ${result.url}`);
+      await onReplaysChanged(selectedItem.replay.id);
+      await window.riftlite.openExternalResource(result.url);
+    } catch (error) {
+      setUploadState(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  if (!selectedItem) {
+    return (
+      <section className="dashboard-page web-replay-page local-riftreplay-page local-riftreplay-library-page">
+        <div className="web-replay-toolbar">
+          <div>
+            <h2>RiftReplay Lab</h2>
+            <p>Choose a local Atlas raw capture, then RiftLite will open it as a full-window board replay.</p>
+          </div>
+          <div className="web-replay-actions">
+            <button type="button" className="secondary" onClick={() => void onReplaysChanged()}>
+              <RefreshCw size={15} /> Refresh
+            </button>
+            <button type="button" className="secondary" onClick={() => onNavigate("replays")}>
+              <Film size={15} /> Replay library
+            </button>
+            <button type="button" className="secondary" onClick={() => onNavigate("settings")}>
+              <Settings size={15} /> Settings
+            </button>
+          </div>
+        </div>
+        <div className="local-riftreplay-gallery">
+          {items.map((item) => (
+            <article className="local-riftreplay-open-card" key={item.replay.id}>
+              <div>
+                <span>{item.match?.platform || "Atlas"}</span>
+                <strong>{item.replay.title}</strong>
+                <small>{new Date(item.replay.capturedAt).toLocaleString()}</small>
+                <em>{item.match?.format || "Replay"} - {item.match?.score || "score pending"} - {item.rawLabel}</em>
+              </div>
+              <div className="local-riftreplay-open-card-actions">
+                <button type="button" className="primary" onClick={() => setSelectedReplayId(item.replay.id)}>
+                  <Play size={15} /> Open replay
+                </button>
+                {item.replay.rawCapture?.uploadUrl ? (
+                  <button type="button" className="secondary" onClick={() => void window.riftlite.openExternalResource(item.replay.rawCapture?.uploadUrl || "")}>
+                    <ExternalLink size={15} /> Web
+                  </button>
+                ) : null}
+              </div>
+            </article>
+          ))}
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <section className="dashboard-page web-replay-page local-riftreplay-page local-riftreplay-page-player">
+      <div className="web-replay-toolbar local-riftreplay-player-toolbar">
+        <div>
+          <h2>RiftReplay Lab</h2>
+          <p>{selectedItem.replay.title} - {selectedItem.match?.format || "Replay"} - {selectedItem.match?.score || "score pending"} - {selectedItem.rawLabel}</p>
+        </div>
+        <div className="web-replay-actions">
+          <button type="button" className="secondary" onClick={() => setSelectedReplayId("")}>
+            <ChevronLeft size={15} /> Replay list
+          </button>
+          <button type="button" className="secondary" onClick={() => void onReplaysChanged(selectedItem.replay.id)}>
+            <RefreshCw size={15} /> Refresh
+          </button>
+          <button type="button" className="secondary" onClick={openWebReplay}>
+            <ExternalLink size={15} /> Open Web Replay
+          </button>
+          <button type="button" className="primary" onClick={() => void uploadToRiftLite()} disabled={!selectedItem.replay.rawCapture?.messageCount}>
+            <Upload size={15} /> Upload to RiftLite
+          </button>
+        </div>
+      </div>
+
+      <main className="local-riftreplay-player local-riftreplay-player-full">
+        {loadState.state === "ready" && loadState.model ? (
+          <RiftLiteReplayViewer model={loadState.model} />
+        ) : (
+          <div className="local-riftreplay-empty local-riftreplay-empty-inline">
+            <Globe2 size={30} />
+            <h3>{loadState.state === "loading" ? "Building replay..." : "Raw replay unavailable"}</h3>
+            <p>{loadState.error || "RiftLite is parsing the local Atlas websocket capture into a board replay."}</p>
+          </div>
+        )}
+        {uploadState ? <p className="local-riftreplay-upload-status">{uploadState}</p> : null}
+      </main>
+    </section>
+  );
+}
+
+function hasLocalRiftReplayEvidence(replay: ReplayRecord): boolean {
+  return Boolean(
+    replay.rawCapture ||
+    (replay.structuredEvents?.length ?? 0) > 0 ||
+    replay.events.length > 0 ||
+    (replay.visualFrames?.length ?? 0) > 0
+  );
+}
+
+function localRiftReplayRawLabel(replay: ReplayRecord): string {
+  if (replay.rawCapture?.uploadUrl) {
+    return "uploaded";
+  }
+  if (replay.rawCapture?.messageCount) {
+    const roomCount = replay.rawCapture.roomCodes?.length ?? 0;
+    return `${replay.rawCapture.messageCount} raw frames${roomCount > 1 ? ` · ${roomCount} rooms` : ""}`;
+  }
+  if (replay.structuredEvents?.length) {
+    return `${replay.structuredEvents.length} structured`;
+  }
+  return `${replay.events.length} events`;
+}
+
+function localRiftReplayLoadKey(replay: ReplayRecord, match?: MatchDraft): string {
+  const raw = replay.rawCapture;
+  return [
+    replay.id,
+    raw?.localPath || "",
+    raw?.captureSessionId || "",
+    raw?.messageCount ?? 0,
+    raw?.firstSeenAt ?? 0,
+    raw?.lastSeenAt ?? 0,
+    match?.id || replay.matchId || "",
+    match?.myName || "",
+    match?.opponentName || "",
+    match?.myChampion || "",
+    match?.opponentChampion || "",
+    match?.format || ""
+  ].join("|");
+}
+
+function latestLocalRiftReplayScore(events: ReplayTimelineEvent[]): ReplayTimelineEvent["score"] | undefined {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    if (events[index].score) {
+      return events[index].score;
+    }
+  }
+  return undefined;
+}
+
+function localRiftReplayImageFromEvent(event: ReplayTimelineEvent): string {
+  return event.cardId ? deckTrackerImageUrlFromId(event.cardId) : "";
+}
+
+function localRiftReplaySeenCards(events: ReplayTimelineEvent[], side: "me" | "opponent", limit: number): LocalRiftReplayCardChip[] {
+  const seen = new Map<string, LocalRiftReplayCardChip>();
+  for (const event of events) {
+    if (!event.cardName || event.side !== side) {
+      continue;
+    }
+    const key = normalizeDeckTrackerKey(event.cardId || event.cardName);
+    const current = seen.get(key);
+    if (current) {
+      current.count += event.cardCount || 1;
+      current.meta = event.destination || event.battlefield || current.meta;
+    } else {
+      seen.set(key, {
+        key,
+        name: event.cardName,
+        count: event.cardCount || 1,
+        imageUrl: localRiftReplayImageFromEvent(event),
+        meta: event.destination || event.battlefield || event.type
+      });
+    }
+  }
+  return [...seen.values()].reverse().slice(0, limit);
+}
+
+function localRiftReplayKnownOpponentCards(event: ReplayTimelineEvent | null, limit: number): LocalRiftReplayCardChip[] {
+  const cards = event?.snapshot?.knownOpponentCards ?? [];
+  return cards.slice(-limit).reverse().map((card, index) => ({
+    key: `${card.id || card.code || card.name}-${index}`,
+    name: card.name,
+    count: 1,
+    imageUrl: card.imageUrl || deckTrackerImageUrlFromId(card.code),
+    meta: card.type || "known card"
+  }));
+}
+
+function localRiftReplayTimelineWindow(events: ReplayTimelineEvent[], eventIndex: number): Array<{ event: ReplayTimelineEvent; index: number }> {
+  const start = Math.max(0, eventIndex - 7);
+  const end = Math.min(events.length, eventIndex + 10);
+  return events.slice(start, end).map((event, offset) => ({ event, index: start + offset }));
+}
+
+function LocalRiftReplayCardGrid({
+  cards,
+  empty,
+  compact = false
+}: {
+  cards: LocalRiftReplayCardChip[];
+  empty: string;
+  compact?: boolean;
+}) {
+  if (!cards.length) {
+    return <p className="muted">{empty}</p>;
+  }
+  return (
+    <div className="local-riftreplay-card-grid" data-compact={compact}>
+      {cards.map((card) => (
+        <div className="local-riftreplay-card-chip" key={card.key}>
+          {card.imageUrl ? <img src={card.imageUrl} alt="" /> : <span>{card.name.slice(0, 2).toUpperCase()}</span>}
+          <div>
+            <strong>{card.count > 1 ? `${card.count}x ` : ""}{card.name}</strong>
+            <small>{card.meta}</small>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function SocialHubView({
   settings,
   matches,
@@ -8200,7 +9813,7 @@ function SocialHubView({
   onRefreshTeamMatches: (teamId: string, forceRefresh?: boolean) => Promise<CommunityMatch[]>;
 }) {
   const [tab, setTab] = useState<"lfg" | "teams" | "applications" | "moderation">("lfg");
-  const signedIn = Boolean(settings.accountUid || settings.firebaseRefreshToken);
+  const signedIn = Boolean(settings.accountUid && settings.firebaseRefreshToken);
   const canOpenModeration = ["bmu", "bmucasts"].includes(settings.accountHandle.trim().toLowerCase());
   if (!signedIn || !settings.accountHandle) {
     return (
@@ -8326,7 +9939,7 @@ function FindMatchPanel({ settings }: { settings: UserSettings }) {
     withVoice: false,
     note: ""
   });
-  const ownUid = settings.accountUid || settings.firebaseUid;
+  const ownUid = settings.accountUid;
   const roomCode = draft.roomCode.trim();
 
   function addLfgTrace(message: string, detail?: unknown) {
@@ -9651,6 +11264,10 @@ function TeamModerationPanel() {
 
 function AccountView({ settings, onSettingsChanged }: { settings: UserSettings; onSettingsChanged: (settings: UserSettings) => void }) {
   const [profile, setProfile] = useState<AccountProfile | null>(null);
+  const [connectionStatus, setConnectionStatus] = useState<AccountConnectionStatus | null>(null);
+  const [connectionBusy, setConnectionBusy] = useState(false);
+  const [cloudStatus, setCloudStatus] = useState<AccountCloudSyncStatus | null>(null);
+  const [cloudBusy, setCloudBusy] = useState(false);
   const [linkSession, setLinkSession] = useState<AccountLinkSession | null>(null);
   const [linkQr, setLinkQr] = useState("");
   const [status, setStatus] = useState("");
@@ -9665,8 +11282,51 @@ function AccountView({ settings, onSettingsChanged }: { settings: UserSettings; 
   const [marketingConsentDraft, setMarketingConsentDraft] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<PublicProfileSearchResult[]>([]);
-  const signedIn = Boolean(settings.accountUid || settings.firebaseRefreshToken);
+  const accountState = getRiftLiteAccountState(settings, profile, Boolean(linkSession));
+  const accountLinked = Boolean(settings.accountUid);
+  const signedIn = accountLinked && Boolean(settings.firebaseRefreshToken);
+  const profileComplete = accountState === "ready";
+  const accountVerified = connectionStatus?.verified === true;
+  const accountReady = profileComplete && accountVerified;
+  const replayAutoUploadEnabled = Boolean(
+    settings.rawCapture.enabled &&
+    settings.rawCapture.webReplayAutoUploadEnabled &&
+    settings.rawCapture.webReplayAutoUploadAccountUid === settings.accountUid
+  );
+  const discordShareHubs = settings.activeHubs;
+  const selectedDiscordShareHubIds = activeDiscordReplayHubIds(settings)
+    .filter((hubId) => discordShareHubs.some((hub) => hub.id === hubId));
+  const discordReplayShareEnabled = Boolean(
+    replayAutoUploadEnabled &&
+    settings.rawCapture.webReplayDiscordShareEnabled &&
+    settings.rawCapture.webReplayDiscordShareAccountUid === settings.accountUid &&
+    selectedDiscordShareHubIds.length
+  );
   const profileLink = handleDraft.trim() ? `https://www.riftlite.com/user/${encodeURIComponent(handleDraft.trim())}` : "";
+  const cloudEnabled = Boolean(cloudStatus?.enabled ?? settings.accountCloudSyncEnabled);
+  const cloudNeedsChoice = accountLinked && Boolean(cloudStatus?.hasRemoteBackup) && !cloudEnabled;
+  const cloudCounts = cloudStatus?.remoteCounts ?? { matches: 0, decks: 0, notebooks: 0, replays: 0 };
+
+  function formatCloudDate(value?: string) {
+    return value ? new Date(value).toLocaleString() : "Never";
+  }
+
+  function shortAccountId(value: string) {
+    const clean = value.trim();
+    return clean.length > 10 ? `${clean.slice(0, 6)}...${clean.slice(-4)}` : clean || "Not connected";
+  }
+
+  async function loadCloudStatus() {
+    const next = await window.riftlite.getAccountCloudSyncStatus();
+    setCloudStatus(next);
+    return next;
+  }
+
+  async function loadConnectionStatus() {
+    const next = await window.riftlite.getAccountConnectionStatus();
+    setConnectionStatus(next);
+    return next;
+  }
 
   function applyProfile(next: AccountProfile | null) {
     setProfile(next);
@@ -9694,19 +11354,23 @@ function AccountView({ settings, onSettingsChanged }: { settings: UserSettings; 
   }
 
   async function refreshSettingsAndProfile() {
-    const [nextSettings, nextProfile] = await Promise.all([
+    const [nextSettings, nextProfile, nextCloudStatus, nextConnectionStatus] = await Promise.all([
       window.riftlite.getSettings(),
-      window.riftlite.getAccountProfile()
+      window.riftlite.getAccountProfile(),
+      window.riftlite.getAccountCloudSyncStatus(),
+      window.riftlite.getAccountConnectionStatus()
     ]);
     onSettingsChanged(nextSettings);
     applyProfile(nextProfile);
+    setCloudStatus(nextCloudStatus);
+    setConnectionStatus(nextConnectionStatus);
     return nextSettings;
   }
 
   useEffect(() => {
     let cancelled = false;
     async function loadProfile() {
-      if (!signedIn) {
+      if (!accountLinked) {
         applyProfile(null);
         return;
       }
@@ -9719,7 +11383,63 @@ function AccountView({ settings, onSettingsChanged }: { settings: UserSettings; 
     return () => {
       cancelled = true;
     };
-  }, [signedIn, settings.accountHandle, settings.accountDisplayName, settings.username]);
+  }, [accountLinked, settings.accountHandle, settings.accountDisplayName, settings.username]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function refreshConnection() {
+      if (!accountLinked) {
+        setConnectionStatus(null);
+        return;
+      }
+      const next = await window.riftlite.getAccountConnectionStatus();
+      if (!cancelled) {
+        setConnectionStatus(next);
+        onSettingsChanged(await window.riftlite.getSettings());
+      }
+    }
+    void refreshConnection();
+    return () => {
+      cancelled = true;
+    };
+  }, [accountLinked, settings.accountUid, settings.firebaseRefreshToken]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function refreshCloud() {
+      try {
+        const next = await window.riftlite.getAccountCloudSyncStatus();
+        if (!cancelled) {
+          setCloudStatus(next);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setCloudStatus({
+            enabled: settings.accountCloudSyncEnabled,
+            signedIn: accountLinked,
+            hasRemoteBackup: false,
+            lastSyncedAt: settings.accountCloudSyncLastSyncedAt,
+            lastRestoredAt: settings.accountCloudSyncLastRestoredAt,
+            remoteUpdatedAt: "",
+            remoteDeviceName: "",
+            remoteAppVersion: "",
+            remoteBytes: 0,
+            remoteCounts: { matches: 0, decks: 0, notebooks: 0, replays: 0 },
+            message: error instanceof Error ? error.message : "Could not load account sync status."
+          });
+        }
+      }
+    }
+    void refreshCloud();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    accountLinked,
+    settings.accountCloudSyncEnabled,
+    settings.accountCloudSyncLastSyncedAt,
+    settings.accountCloudSyncLastRestoredAt
+  ]);
 
   useEffect(() => {
     if (!linkSession) {
@@ -9731,7 +11451,7 @@ function AccountView({ settings, onSettingsChanged }: { settings: UserSettings; 
         const result = await window.riftlite.getAccountLinkStatus(linkSession.sessionId);
         if (cancelled) return;
         if (result.status === "complete") {
-          setStatus("Account linked.");
+          setStatus(result.message || "Account linked and verified.");
           setLinkSession(null);
           setLinkQr("");
           await refreshSettingsAndProfile();
@@ -9767,7 +11487,7 @@ function AccountView({ settings, onSettingsChanged }: { settings: UserSettings; 
   }
 
   async function saveProfile() {
-    if (!signedIn) {
+    if (!accountLinked) {
       setStatus("Link an account first.");
       return;
     }
@@ -9819,7 +11539,7 @@ function AccountView({ settings, onSettingsChanged }: { settings: UserSettings; 
   }
 
   async function refreshProfileMatches() {
-    if (!signedIn) {
+    if (!accountLinked) {
       setStatus("Link an account first.");
       return;
     }
@@ -9846,30 +11566,211 @@ function AccountView({ settings, onSettingsChanged }: { settings: UserSettings; 
     }
   }
 
+  async function checkAccountConnection() {
+    setConnectionBusy(true);
+    setStatus("Checking website, desktop, and replay ownership...");
+    try {
+      const next = await loadConnectionStatus();
+      onSettingsChanged(await window.riftlite.getSettings());
+      setStatus(next.message);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not verify the account connection.");
+    } finally {
+      setConnectionBusy(false);
+    }
+  }
+
+  async function repairAccountConnection() {
+    setConnectionBusy(true);
+    setStatus("Repairing older account links...");
+    try {
+      const next = await window.riftlite.repairAccountConnection();
+      setConnectionStatus(next);
+      onSettingsChanged(await window.riftlite.getSettings());
+      setStatus(next.message);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not repair the account connection.");
+    } finally {
+      setConnectionBusy(false);
+    }
+  }
+
+  async function setReplayAutoUpload(enabled: boolean) {
+    if (enabled && !accountVerified) {
+      setStatus("Verify this account before enabling automatic replay upload.");
+      return;
+    }
+    const next = await window.riftlite.saveSettings({
+      rawCapture: {
+        ...settings.rawCapture,
+        enabled: enabled ? true : settings.rawCapture.enabled,
+        webReplayAutoUploadEnabled: enabled,
+        webReplayAutoUploadAccountUid: enabled ? settings.accountUid : "",
+        webReplayDiscordShareEnabled: enabled ? settings.rawCapture.webReplayDiscordShareEnabled : false,
+        webReplayDiscordShareAccountUid: enabled ? settings.rawCapture.webReplayDiscordShareAccountUid : "",
+        webReplayDiscordShareHubIds: enabled ? settings.rawCapture.webReplayDiscordShareHubIds : []
+      }
+    });
+    onSettingsChanged(next);
+    setStatus(enabled
+      ? `New Atlas replays will upload privately to ${connectionStatus?.displayName || connectionStatus?.handle || "this verified account"}.`
+      : "Automatic Atlas replay upload is off.");
+    setConnectionStatus(await window.riftlite.getAccountConnectionStatus());
+  }
+
+  async function setReplayVisibility(visibility: UserSettings["rawCapture"]["visibility"]) {
+    const next = await window.riftlite.saveSettings({
+      rawCapture: { ...settings.rawCapture, visibility }
+    });
+    onSettingsChanged(next);
+  }
+
+  async function setDiscordReplayShareHub(hubId: string, selected: boolean) {
+    if (selected && !accountVerified) {
+      setStatus("Verify this account before sharing replay links to Discord.");
+      return;
+    }
+    const rawCapture = rawCaptureSettingsForDiscordHubSelection(settings, hubId, selected);
+    const next = await window.riftlite.saveSettings({
+      rawCapture
+    });
+    onSettingsChanged(next);
+    setStatus(selected
+      ? "Future Atlas replays will be Unlisted and posted to this hub's Discord reports channel."
+      : rawCapture.webReplayDiscordShareHubIds.length
+        ? "This Discord destination was removed. Other selected hubs remain active."
+        : "Automatic Discord replay sharing is off.");
+  }
+
+  async function setAccountCloudSync(enabled: boolean) {
+    if (!accountLinked) {
+      setStatus("Link a RiftLite account before enabling device sync.");
+      return;
+    }
+    setCloudBusy(true);
+    setStatus(enabled ? "Enabling account sync..." : "Turning account sync off...");
+    try {
+      const next = await window.riftlite.setAccountCloudSyncEnabled(enabled);
+      setCloudStatus(next);
+      onSettingsChanged(await window.riftlite.getSettings());
+      setStatus(next.message || (enabled ? "Account sync enabled." : "Account sync disabled."));
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not update account sync.");
+    } finally {
+      setCloudBusy(false);
+    }
+  }
+
+  async function uploadAccountCloudSync() {
+    if (!accountLinked) {
+      setStatus("Link a RiftLite account before syncing this device.");
+      return;
+    }
+    if (cloudNeedsChoice && !window.confirm(
+      "A cloud backup already exists. Keep this device's local data and replace that cloud backup? Choose Cancel if you want to restore the cloud copy instead."
+    )) {
+      return;
+    }
+    setCloudBusy(true);
+    setStatus("Syncing this device...");
+    try {
+      const next = await window.riftlite.uploadAccountCloudSync();
+      setCloudStatus(next);
+      onSettingsChanged(await window.riftlite.getSettings());
+      setStatus(next.message || "Account data synced.");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Account sync failed.");
+    } finally {
+      setCloudBusy(false);
+    }
+  }
+
+  async function restoreAccountCloudSync() {
+    if (!accountLinked) {
+      setStatus("Link a RiftLite account before restoring account data.");
+      return;
+    }
+    const confirmed = window.confirm(
+      "Restore match history, decks, notebooks, and settings from your RiftLite account backup? This keeps your current login and local replay video files, but replaces local match/deck data with the cloud copy."
+    );
+    if (!confirmed) {
+      return;
+    }
+    setCloudBusy(true);
+    setStatus("Restoring account data...");
+    try {
+      const next = await window.riftlite.restoreAccountCloudSync();
+      setCloudStatus(next);
+      await refreshSettingsAndProfile();
+      setStatus(next.message || "Account data restored.");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Account restore failed.");
+    } finally {
+      setCloudBusy(false);
+    }
+  }
+
   async function unlinkAccount() {
+    if (!window.confirm("Unlink this device? Existing website replays stay with this account, automatic replay upload turns off, and local matches remain on this computer.")) {
+      return;
+    }
     setStatus("Unlinking this device...");
     try {
       const nextSettings = await window.riftlite.unlinkAccount();
       onSettingsChanged(nextSettings);
       applyProfile(null);
+      setConnectionStatus(null);
       setStatus("Device unlinked. Local matches and settings remain on this machine.");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Could not unlink account.");
     }
   }
 
+  async function switchAccount() {
+    if (!window.confirm("Switch the account used by this desktop? Existing website replays and cloud backups stay with the current account. Automatic replay upload will remain off until the new account is verified and you opt in again.")) {
+      return;
+    }
+    setStatus("Preparing a safe account switch...");
+    try {
+      const nextSettings = await window.riftlite.unlinkAccount();
+      onSettingsChanged(nextSettings);
+      applyProfile(null);
+      setConnectionStatus(null);
+      const session = await window.riftlite.startAccountLink();
+      setLinkSession(session);
+      setLinkQr(await QRCode.toDataURL(session.loginUrl, { margin: 1, width: 180 }));
+      setStatus("Choose and explicitly confirm the new account on RiftLite.com.");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not start the account switch.");
+    }
+  }
+
   return (
     <section className="dashboard-page account-page">
       <div className="rail-card">
-        <h2>RiftLite account</h2>
-        <p className="muted">Accounts are optional. Link once to get a stable profile, searchable handle, and upgraded hub tools.</p>
+        <h2>{accountReady ? "Your RiftLite account" : accountLinked && connectionStatus && !accountVerified ? "Account connection needs attention" : accountState === "needs-profile" ? "Finish your RiftLite account" : accountState === "reconnect" ? "Reconnect your RiftLite account" : "Create or sign in"}</h2>
+        <p className="muted">
+          {accountReady
+            ? `Verified as ${connectionStatus?.displayName || settings.accountDisplayName || settings.accountHandle}. The website, this desktop, private hubs, and web replays use this identity.`
+            : accountLinked && connectionStatus && !accountVerified
+              ? connectionStatus.message
+            : accountState === "needs-profile"
+              ? "Your device is linked. Choose the name other players will see to finish setup and unlock private-hub invites."
+              : accountState === "reconnect"
+                ? "Your account data is still safe, but this device's sign-in has expired. Reconnect to continue."
+                : "One account keeps your private hubs, Discord verification, and web replays together. Existing local matches stay on this device."}
+        </p>
         <div className="drilldown-grid">
-          <Metric label="Mode" value={signedIn ? "Linked" : "No login"} />
+          <Metric label="Status" value={accountReady ? "Verified" : accountLinked && !connectionStatus ? "Checking" : accountLinked && !accountVerified ? "Needs attention" : accountState === "needs-profile" ? "Name needed" : accountState === "reconnect" ? "Reconnect" : accountState === "linking" ? "Signing in" : "Local only"} />
           <Metric label="Handle" value={settings.accountHandle || "Not claimed"} />
-          <Metric label="Public profile" value={settings.accountProfilePublic ? "On" : "Private"} />
+          <Metric label="Email" value={settings.accountEmail || "Not connected"} />
+          <Metric label="Account ID" value={shortAccountId(settings.accountUid)} />
+          <Metric label="Private hubs" value={accountReady ? "Ready" : "Finish verification"} />
+          <Metric label="Web replays" value={accountVerified && connectionStatus?.replayLibraryReady ? `${connectionStatus.replayCount} found` : "Not verified"} />
         </div>
         <div className="row-actions">
-          <button className="primary" onClick={() => void startLink()}><Shield size={16} /> {signedIn ? "Relink device" : "Link account"}</button>
+          {!accountReady ? <button className="primary" onClick={() => void startLink()}><Shield size={16} /> {accountState === "reconnect" || accountLinked ? "Reconnect account" : "Create or sign in"}</button> : null}
+          {accountLinked ? <button className="secondary" disabled={connectionBusy} onClick={() => void checkAccountConnection()}><RefreshCw size={16} /> Check connection</button> : null}
           {profileLink ? <button className="secondary" onClick={() => void window.riftlite.openExternalResource(profileLink)}><ExternalLink size={16} /> Open profile</button> : null}
           <button className="secondary" disabled={!signedIn || !publicDraft || !handleDraft.trim()} onClick={() => void refreshProfileMatches()}>
             <RefreshCw size={16} /> Refresh matches
@@ -9880,7 +11781,7 @@ function AccountView({ settings, onSettingsChanged }: { settings: UserSettings; 
             {linkQr ? <img src={linkQr} alt="RiftLite account QR" /> : <Shield size={44} />}
             <div>
               <h3>Finish on RiftLite.com</h3>
-              <p className="muted">Scan this QR code or open the link, then sign in with Google or email. This device will finish linking automatically.</p>
+              <p className="muted">Scan this QR code or open the link, sign in with Google or email, then confirm the exact account shown on the website. This device verifies the same account before finishing.</p>
               <div className="row-actions">
                 <button className="secondary" onClick={() => void window.riftlite.openExternalResource(linkSession.loginUrl)}><ExternalLink size={16} /> Open link</button>
                 <button className="secondary" onClick={() => void navigator.clipboard?.writeText(linkSession.loginUrl)}>Copy link</button>
@@ -9892,28 +11793,96 @@ function AccountView({ settings, onSettingsChanged }: { settings: UserSettings; 
         {status ? <p className="muted">{status}</p> : null}
       </div>
       <div className="rail-card">
-        <h2>Profile</h2>
+        <h2>Replay and account connection</h2>
+        <p className="muted">One verified identity owns your private hubs, Discord link, device backup, and every new Atlas web replay.</p>
+        <div className="drilldown-grid">
+          <Metric label="Website identity" value={accountVerified ? "Matches desktop" : accountLinked ? "Check required" : "Not connected"} />
+          <Metric label="Replay library" value={connectionStatus?.replayLibraryReady ? "Accessible" : "Not verified"} />
+          <Metric label="Replay upload target" value={accountVerified ? connectionStatus?.displayName || connectionStatus?.handle || "Verified account" : "Blocked"} />
+          <Metric label="Older data" value={connectionStatus?.migrationState === "attention" ? "Needs repair" : connectionStatus?.migrationState === "pending" ? "Finishing" : "Ready"} />
+          <Metric label="Last verified" value={formatCloudDate(connectionStatus?.checkedAt || settings.accountLastVerifiedAt)} />
+          <Metric label="Auto upload" value={replayAutoUploadEnabled ? "On" : "Off"} />
+          <Metric label="Discord reports" value={discordReplayShareEnabled ? `${selectedDiscordShareHubIds.length} hub${selectedDiscordShareHubIds.length === 1 ? "" : "s"}` : "Off"} />
+        </div>
+        {connectionStatus?.message ? <div className={`settings-note ${connectionStatus.verified ? "" : "warning"}`}>{connectionStatus.message}</div> : null}
+        {connectionStatus?.migrationMessage ? <div className="settings-note warning">{connectionStatus.migrationMessage}</div> : null}
+        <label className="toggle-row">
+          <span><Upload size={16} /> Automatically upload my completed Atlas replays</span>
+          <input
+            type="checkbox"
+            checked={replayAutoUploadEnabled}
+            disabled={!accountVerified || connectionBusy}
+            onChange={(event) => void setReplayAutoUpload(event.target.checked)}
+          />
+        </label>
+        <label>New replay visibility
+          <select
+            value={settings.rawCapture.visibility}
+            disabled={!replayAutoUploadEnabled || discordReplayShareEnabled}
+            onChange={(event) => void setReplayVisibility(event.target.value as UserSettings["rawCapture"]["visibility"])}
+          >
+            <option value="private">Private — only me</option>
+            <option value="unlisted">Unlisted — anyone with the link</option>
+            <option value="public">Public — listed on RiftLite</option>
+          </select>
+        </label>
+        {discordShareHubs.length ? (
+          <div className="settings-note">
+            <strong><Radio size={15} /> Automatically post future replay links</strong>
+            <span>Selecting a hub is the complete opt-in. New Atlas replays become Unlisted and are posted to that hub's configured Discord reports channel.</span>
+            {discordShareHubs.map((hub) => (
+              <label className="toggle-row" key={hub.id}>
+                <span>{hub.name} <small>Hub ID: {hub.id}</small></span>
+                <input
+                  type="checkbox"
+                  checked={selectedDiscordShareHubIds.includes(hub.id)}
+                  disabled={!accountVerified || connectionBusy}
+                  onChange={(event) => void setDiscordReplayShareHub(hub.id, event.target.checked)}
+                />
+              </label>
+            ))}
+            <span>Each selected hub must have a Discord bot <code>reports_channel</code> configured with <code>/setup</code>. The exact hub ID is shown to distinguish similarly named hubs.</span>
+            {!discordReplayShareEnabled && settings.rawCapture.webReplayDiscordShareHubIds.length ? (
+              <span className="warning">A destination was previously selected without completing the old two-stage opt-in. Select it again to enable sharing.</span>
+            ) : null}
+          </div>
+        ) : <p className="muted">Enable at least one joined private hub before sharing replay links to Discord.</p>}
+        <div className="row-actions">
+          <button className="secondary" disabled={!accountLinked || connectionBusy} onClick={() => void checkAccountConnection()}><RefreshCw size={16} /> Verify now</button>
+          {connectionStatus?.migrationState !== "ready" ? <button className="secondary" disabled={connectionBusy} onClick={() => void repairAccountConnection()}><RotateCcw size={16} /> Repair older links</button> : null}
+          <button className="secondary" onClick={() => void window.riftlite.openExternalResource("https://www.riftlite.com/account")}><ExternalLink size={16} /> Open website account</button>
+        </div>
+      </div>
+      <div className="rail-card">
+        <h2>{profileComplete ? "Profile" : "Choose your RiftLite name"}</h2>
+        {!accountLinked ? <p className="muted">Create or sign in above first. RiftLite will return here automatically.</p> : null}
         <label>Handle<input value={handleDraft} onChange={(event) => setHandleDraft(event.target.value)} placeholder="your-handle" /></label>
         <label>Display name<input value={displayNameDraft} onChange={(event) => setDisplayNameDraft(event.target.value)} placeholder="Name shown in RiftLite" /></label>
-        <label className="toggle-row">
-          <span><Globe2 size={16} /> Searchable profile</span>
-          <input type="checkbox" checked={searchableDraft} onChange={(event) => setSearchableDraft(event.target.checked)} />
-        </label>
-        <label className="toggle-row">
-          <span><Users size={16} /> Public profile page</span>
-          <input type="checkbox" checked={publicDraft} onChange={(event) => setPublicDraft(event.target.checked)} />
-        </label>
-        <label className="toggle-row">
-          <span><Bell size={16} /> Send me RiftLite updates</span>
-          <input type="checkbox" checked={marketingConsentDraft} onChange={(event) => setMarketingConsentDraft(event.target.checked)} />
-        </label>
-        <p className="muted">Optional mailing-list consent. Your email is kept private and is never shown on public profiles, search, community stats, or hubs.</p>
+        {!profileComplete && accountLinked ? <p className="muted">Your display name can contain spaces. Your unique handle is used for direct hub invites.</p> : null}
+        {profileComplete ? (
+          <>
+            <label className="toggle-row">
+              <span><Globe2 size={16} /> Searchable profile</span>
+              <input type="checkbox" checked={searchableDraft} onChange={(event) => setSearchableDraft(event.target.checked)} />
+            </label>
+            <label className="toggle-row">
+              <span><Users size={16} /> Public profile page</span>
+              <input type="checkbox" checked={publicDraft} onChange={(event) => setPublicDraft(event.target.checked)} />
+            </label>
+            <label className="toggle-row">
+              <span><Bell size={16} /> Send me RiftLite updates</span>
+              <input type="checkbox" checked={marketingConsentDraft} onChange={(event) => setMarketingConsentDraft(event.target.checked)} />
+            </label>
+            <p className="muted">Optional mailing-list consent. Your email is kept private and is never shown on public profiles, search, community stats, or hubs.</p>
+          </>
+        ) : null}
         <div className="row-actions">
-          <button className="primary" disabled={!signedIn} onClick={() => void saveProfile()}><Save size={16} /> Save profile</button>
+          <button className="primary" disabled={!accountLinked || !handleDraft.trim() || isGenericAccountDisplayName(displayNameDraft)} onClick={() => void saveProfile()}><Save size={16} /> {profileComplete ? "Save profile" : "Finish setup"}</button>
           {profileLink ? <button className="secondary" onClick={() => void copyProfileLink()}>Copy profile link</button> : null}
         </div>
         {profile ? <p className="muted">Profile updated {profile.updatedAt ? new Date(profile.updatedAt).toLocaleString() : "recently"}.</p> : null}
       </div>
+      {accountReady ? <>
       <div className="rail-card">
         <h2>Public sections</h2>
         <p className="muted">These only apply when the public profile page is enabled. Private hub matches, notes, and Scorepad-only matches stay hidden.</p>
@@ -9935,6 +11904,50 @@ function AccountView({ settings, onSettingsChanged }: { settings: UserSettings; 
         </label>
       </div>
       <div className="rail-card">
+        <h2>Device sync</h2>
+        <p className="muted">Optional account backup for match history, decks, notebooks, and settings. Replay videos and raw replay files stay local so the cloud copy stays lightweight.</p>
+        <label className="toggle-row">
+          <span><RefreshCw size={16} /> Sync this device to my RiftLite account</span>
+          <input
+            type="checkbox"
+            checked={cloudEnabled}
+            disabled={!accountLinked || cloudBusy}
+            onChange={(event) => void setAccountCloudSync(event.target.checked)}
+          />
+        </label>
+        {!accountLinked ? <p className="muted">Link a RiftLite account first, then turn this on from any device you want to keep in sync.</p> : null}
+        {cloudNeedsChoice ? (
+          <div className="settings-note warning">
+            A backup already exists for this account. Choose Restore cloud to use it on this device, or Keep local and replace cloud to make this device authoritative. Sync stays off until you choose; leaving it unchanged cancels safely.
+          </div>
+        ) : null}
+        <div className="drilldown-grid">
+          <Metric label="Remote backup" value={cloudStatus?.hasRemoteBackup ? "Available" : "None yet"} />
+          <Metric label="Last cloud update" value={formatCloudDate(cloudStatus?.remoteUpdatedAt)} />
+          <Metric label="Matches" value={String(cloudCounts.matches)} />
+          <Metric label="Decks / notebooks" value={`${cloudCounts.decks} / ${cloudCounts.notebooks}`} />
+          <Metric label="Replay files" value="Local only" />
+          <Metric label="Backup size" value={cloudStatus?.remoteBytes ? formatBytes(cloudStatus.remoteBytes) : "-"} />
+        </div>
+        <div className="row-actions">
+          <button className="primary" disabled={!accountLinked || cloudBusy} onClick={() => void uploadAccountCloudSync()}>
+            <Upload size={16} /> {cloudNeedsChoice ? "Keep local and replace cloud" : "Sync now"}
+          </button>
+          <button className="secondary" disabled={!accountLinked || cloudBusy || !cloudStatus?.hasRemoteBackup} onClick={() => void restoreAccountCloudSync()}>
+            <RotateCcw size={16} /> {cloudNeedsChoice ? "Restore cloud and enable" : "Restore on this device"}
+          </button>
+          <button className="secondary" disabled={cloudBusy} onClick={() => void loadCloudStatus()}>
+            <RefreshCw size={16} /> Check status
+          </button>
+        </div>
+        <p className="muted">
+          {cloudStatus?.message || settings.accountCloudSyncLastError || "Auto-sync waits briefly after changes so it does not upload after every click."}
+        </p>
+        <p className="muted">
+          Last local sync: {formatCloudDate(cloudStatus?.lastSyncedAt || settings.accountCloudSyncLastSyncedAt)} · Last restore: {formatCloudDate(cloudStatus?.lastRestoredAt || settings.accountCloudSyncLastRestoredAt)}
+        </p>
+      </div>
+      <div className="rail-card">
         <h2>Find players</h2>
         <div className="search-row">
           <input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="Search public handles..." />
@@ -9952,11 +11965,13 @@ function AccountView({ settings, onSettingsChanged }: { settings: UserSettings; 
           {!searchResults.length ? <p className="muted">Only searchable public profiles appear here.</p> : null}
         </div>
       </div>
+      </> : null}
       <div className="rail-card">
         <h2>Data controls</h2>
         <p className="muted">These controls affect the linked RiftLite profile. Local no-login capture still works if you unlink.</p>
         <div className="row-actions">
           <button className="secondary" disabled={!signedIn} onClick={() => void exportAccountData()}><FileText size={16} /> Export account data</button>
+          <button className="secondary" disabled={!signedIn || connectionBusy} onClick={() => void switchAccount()}><RefreshCw size={16} /> Switch account safely</button>
           <button className="secondary danger" disabled={!signedIn} onClick={() => void unlinkAccount()}>Unlink this device</button>
         </div>
       </div>
@@ -11574,6 +13589,57 @@ function filterAnalyticsByDeckPresence(matches: AnalyticsMatch[], deckPresence: 
     return matches.filter((match) => !analyticsMatchHasDeck(match));
   }
   return matches;
+}
+
+function filterAnalyticsByCommunitySeason(matches: AnalyticsMatch[], seasonFilter: string): AnalyticsMatch[] {
+  if (!seasonFilter) {
+    return matches;
+  }
+  return matches.filter((match) => matchInCommunitySeason(match, seasonFilter));
+}
+
+function matchInCommunitySeason(match: { capturedAt?: string; date?: string; createdAt?: number | string }, seasonFilter: string): boolean {
+  if (!seasonFilter) {
+    return true;
+  }
+  const capturedAtMs = communitySeasonTimestamp(match);
+  if (!capturedAtMs) {
+    return false;
+  }
+  if (seasonFilter === "vendetta-preview") {
+    return capturedAtMs >= VENDETTA_PREVIEW_START_MS && capturedAtMs < VENDETTA_LAUNCH_START_MS;
+  }
+  if (seasonFilter === "vendetta-launch") {
+    return capturedAtMs >= VENDETTA_LAUNCH_START_MS;
+  }
+  if (seasonFilter === "pre-vendetta") {
+    return capturedAtMs < VENDETTA_PREVIEW_START_MS;
+  }
+  return true;
+}
+
+function communitySeasonTimestamp(match: { capturedAt?: string; date?: string; createdAt?: number | string }): number {
+  const dated = match.capturedAt || match.date || "";
+  if (dated) {
+    const parsed = Date.parse(dated);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  if (typeof match.createdAt === "number") {
+    return match.createdAt > 10_000_000_000 ? match.createdAt : match.createdAt * 1000;
+  }
+  if (typeof match.createdAt === "string" && match.createdAt.trim()) {
+    const parsed = Date.parse(match.createdAt);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+    const numeric = Number(match.createdAt);
+    if (Number.isFinite(numeric)) {
+      return numeric > 10_000_000_000 ? numeric : numeric * 1000;
+    }
+  }
+  return 0;
 }
 
 function filterLocalMatches(matches: MatchDraft[], filters: MatchHistoryFilters): MatchDraft[] {
@@ -13741,10 +15807,7 @@ function MatchupPrepOverlay({ deck, notebook, opponentLegend, sideboardSuggested
 
   useEffect(() => {
     if (sideboardSuggested) {
-      setHidden(false);
-      saveMatchupPrepHidden(false);
       setTab("sideboard");
-      setOpen(true);
     }
   }, [sideboardSuggested]);
 
@@ -15320,6 +17383,7 @@ function ReplayDetail({
   const [visibleLayerIds, setVisibleLayerIds] = useState<Set<string>>(() => new Set(layers.map((layer) => layer.id)));
   const [addingLayer, setAddingLayer] = useState(false);
   const [layerStatus, setLayerStatus] = useState("");
+  const [rawCaptureStatus, setRawCaptureStatus] = useState("");
   const pendingLayerIdRef = useRef<string | null>(null);
   const activeLayer = layers.find((layer) => layer.id === activeLayerId) ?? layers[0];
   const layerVisible = (layerId: string | undefined) => visibleLayerIds.has(replayLayerId(layerId));
@@ -15362,6 +17426,7 @@ function ReplayDetail({
     pendingLayerIdRef.current = null;
     setAddingLayer(false);
     setLayerStatus("");
+    setRawCaptureStatus("");
     setPresentationMode(false);
     setReviewMode(false);
     setActiveReviewFlagId("");
@@ -15790,6 +17855,53 @@ function ReplayDetail({
     }
   }
 
+  async function uploadRawCapture() {
+    setRawCaptureStatus("Uploading raw capture...");
+    try {
+      const result = await window.riftlite.uploadRawCaptureToRiftLite(model.replay.id, settings.rawCapture.visibility);
+      const updatedReplays = await window.riftlite.getReplays();
+      const saved = updatedReplays.find((replay) => replay.id === model.replay.id) ?? null;
+      if (!saved) {
+        setRawCaptureStatus("No raw capture is attached to this replay.");
+        return;
+      }
+      await onSaveReplay(saved);
+      setRawCaptureStatus(`RiftLite replay uploaded: ${result.url}`);
+    } catch (error) {
+      setRawCaptureStatus(rendererErrorMessage(error, "Raw capture upload failed."));
+    }
+  }
+
+  async function shareRawCaptureToDiscord() {
+    const activeHubIds = new Set(settings.activeHubs.map((hub) => hub.id));
+    const hubIds = activeDiscordReplayHubIds(settings).filter((hubId) => activeHubIds.has(hubId));
+    const hubNames = settings.activeHubs
+      .filter((hub) => hubIds.includes(hub.id))
+      .map((hub) => `${hub.name} (${hub.id})`);
+    if (!hubIds.length) {
+      setRawCaptureStatus("Select a Discord replay destination from the Account tab first.");
+      return;
+    }
+    const destinations = hubNames.length ? hubNames.join(", ") : hubIds.join(", ");
+    if (!window.confirm(
+      `Make this replay Unlisted and post its link to ${destinations}? Anyone with the Discord link will be able to watch it.`
+    )) {
+      return;
+    }
+    setRawCaptureStatus("Sharing replay to Discord...");
+    try {
+      const result = await window.riftlite.shareRawCaptureToDiscord(model.replay.id);
+      const updatedReplays = await window.riftlite.getReplays();
+      const saved = updatedReplays.find((replay) => replay.id === model.replay.id) ?? null;
+      if (saved) await onSaveReplay(saved);
+      setRawCaptureStatus(result.status === "shared"
+        ? "Replay posted to Discord. Its visibility is now Unlisted."
+        : result.error || "One or more Discord destinations could not receive the replay.");
+    } catch (error) {
+      setRawCaptureStatus(rendererErrorMessage(error, "Discord replay share failed."));
+    }
+  }
+
   function toggleLayer(layerId: string) {
     setVisibleLayerIds((current) => {
       const next = new Set(current);
@@ -15844,6 +17956,43 @@ function ReplayDetail({
         </div>
       </section>
 
+      {model.replay.video ? (
+        <ReplayVideoPlayer
+          replayId={model.replay.id}
+          video={model.replay.video}
+          flags={visibleFlags.filter((flag) => flag.targetType === "video-time")}
+          annotations={visibleAnnotations.filter((annotation) => annotation.targetType === "video-time")}
+          voiceNotes={visibleVoiceNotes}
+          seekToMs={videoSeekMs}
+          onSeekHandled={() => setVideoSeekMs(null)}
+          onTimeChange={setReplayVideoCurrentMs}
+          flagType={flagType}
+          flagCustomType={flagCustomType}
+          flagNote={flagNote}
+          customFlagTypes={customReplayFlagTypes}
+          onFlagTypeSelect={selectReplayFlagType}
+          onFlagCustomTypeChange={setFlagCustomType}
+          onFlagNoteChange={setFlagNote}
+          onRememberCustomType={() => {
+            const saved = rememberReplayCustomFlagType();
+            if (saved) {
+              setFlagType("custom");
+              setFlagCustomType(saved);
+            }
+          }}
+          onFlagTime={addVideoTimeFlag}
+          onEditFlag={setEditingFlag}
+          onSaveKeyframe={saveVideoKeyframe}
+          activeLayerId={activeLayerId}
+          microphoneDeviceId={settings.microphoneDeviceId}
+          onSaveTimelineVoiceNote={saveTimelineVoiceNote}
+          onAddAnnotation={addAnnotation}
+          onRemoveAnnotation={removeAnnotation}
+          onRemoveAnnotations={removeAnnotations}
+          onClip={(timeMs) => onExport(timeMs)}
+        />
+      ) : null}
+
       <div className="replay-metric-grid">
         <Metric label="Turns" value={String(model.turns.length)} />
         <Metric label="Events" value={String(model.events.length)} />
@@ -15861,6 +18010,16 @@ function ReplayDetail({
         annotations={replayAnnotations}
         voiceNotes={replayVoiceNotes}
       />
+
+      {RIFTLITE_WEB_REPLAY_FEATURE_VISIBLE ? (
+        <ReplayRawCapturePanel
+          replay={model.replay}
+          settings={settings}
+          status={rawCaptureStatus}
+          onUpload={() => void uploadRawCapture()}
+          onShareDiscord={() => void shareRawCaptureToDiscord()}
+        />
+      ) : null}
 
       <section className="rail-card replay-pack-panel">
         <header>
@@ -15964,43 +18123,6 @@ function ReplayDetail({
             ))}
           </div>
         </section>
-      ) : null}
-
-      {model.replay.video ? (
-        <ReplayVideoPlayer
-          replayId={model.replay.id}
-          video={model.replay.video}
-          flags={visibleFlags.filter((flag) => flag.targetType === "video-time")}
-          annotations={visibleAnnotations.filter((annotation) => annotation.targetType === "video-time")}
-          voiceNotes={visibleVoiceNotes}
-          seekToMs={videoSeekMs}
-          onSeekHandled={() => setVideoSeekMs(null)}
-          onTimeChange={setReplayVideoCurrentMs}
-          flagType={flagType}
-          flagCustomType={flagCustomType}
-          flagNote={flagNote}
-          customFlagTypes={customReplayFlagTypes}
-          onFlagTypeSelect={selectReplayFlagType}
-          onFlagCustomTypeChange={setFlagCustomType}
-          onFlagNoteChange={setFlagNote}
-          onRememberCustomType={() => {
-            const saved = rememberReplayCustomFlagType();
-            if (saved) {
-              setFlagType("custom");
-              setFlagCustomType(saved);
-            }
-          }}
-          onFlagTime={addVideoTimeFlag}
-          onEditFlag={setEditingFlag}
-          onSaveKeyframe={saveVideoKeyframe}
-          activeLayerId={activeLayerId}
-          microphoneDeviceId={settings.microphoneDeviceId}
-          onSaveTimelineVoiceNote={saveTimelineVoiceNote}
-          onAddAnnotation={addAnnotation}
-          onRemoveAnnotation={removeAnnotation}
-          onRemoveAnnotations={removeAnnotations}
-          onClip={(timeMs) => onExport(timeMs)}
-        />
       ) : null}
 
       <ReplayFlagPanel
@@ -16127,6 +18249,83 @@ function ReplayHealthPanel({
           {warnings.slice(1).map((warning) => <li key={warning}>{warning}</li>)}
         </ul>
       ) : null}
+    </section>
+  );
+}
+
+function ReplayRawCapturePanel({
+  replay,
+  settings,
+  status,
+  onUpload,
+  onShareDiscord
+}: {
+  replay: ReplayRecord;
+  settings: UserSettings;
+  status: string;
+  onUpload: () => void;
+  onShareDiscord: () => void;
+}) {
+  const rawCapture = replay.rawCapture;
+  if (!settings.rawCapture.enabled && !rawCapture) {
+    return null;
+  }
+  const statusLabel = rawCapture?.uploadStatus
+    ? rawCapture.uploadStatus.replace(/-/g, " ")
+    : settings.rawCapture.enabled ? "waiting for next Atlas replay" : "disabled";
+  const hasRiftLiteReplay = Boolean(rawCapture?.uploadUrl?.includes("riftlite.com/replays/"));
+  const canUpload = Boolean(
+    settings.rawCapture.enabled &&
+    settings.accountUid &&
+    settings.firebaseRefreshToken &&
+    rawCapture?.localPath &&
+    !hasRiftLiteReplay
+  );
+  const activeHubIds = new Set(settings.activeHubs.map((hub) => hub.id));
+  const discordHubIds = activeDiscordReplayHubIds(settings).filter((hubId) => activeHubIds.has(hubId));
+  const canShareDiscord = Boolean(hasRiftLiteReplay && discordHubIds.length);
+  const discordShared = rawCapture?.discordShareStatus === "shared";
+  return (
+    <section className="rail-card replay-health-panel">
+      <div className="replay-health-title">
+        <div>
+          <h2>RiftLite web replay capture</h2>
+          <span>{rawCapture ? `${rawCapture.messageCount} Atlas WebSocket frame${rawCapture.messageCount === 1 ? "" : "s"} captured.` : "No raw Atlas sidecar is attached to this replay."}</span>
+        </div>
+        <strong>{statusLabel}</strong>
+      </div>
+      <div className="replay-health-grid">
+        <StatRow label="Provider" value="RiftLite Web Replay" />
+        <StatRow label="Room" value={rawCapture?.roomCode || "Not captured"} />
+        <StatRow label="Visibility" value={rawCapture?.visibility || settings.rawCapture.visibility} />
+        <StatRow label="Uploaded" value={rawCapture?.uploadedAt ? new Date(rawCapture.uploadedAt).toLocaleString() : "No"} />
+        <StatRow label="Discord reports" value={rawCapture?.discordShareStatus?.replace(/-/g, " ") || "Not shared"} />
+      </div>
+      {hasRiftLiteReplay && rawCapture?.uploadUrl ? (
+        <div className="row-actions">
+          <button className="secondary" type="button" onClick={() => void window.riftlite.openExternalResource(rawCapture.uploadUrl!)}>
+            <ExternalLink size={14} /> Open web replay
+          </button>
+          <button
+            className="secondary"
+            type="button"
+            disabled={!canShareDiscord || discordShared}
+            onClick={onShareDiscord}
+            title={canShareDiscord
+              ? "Makes this replay Unlisted and posts its permanent link to the selected hub Discord reports channel."
+              : "Select a Discord replay destination from the Account tab first."}
+          >
+            <Radio size={14} /> {discordShared ? "Shared to Discord" : rawCapture?.discordShareStatus === "failed" ? "Retry Discord share" : "Share to Discord"}
+          </button>
+        </div>
+      ) : (
+        <button className="secondary" type="button" disabled={!canUpload} onClick={onUpload}>
+          <Upload size={14} /> Upload to web replay
+        </button>
+      )}
+      {rawCapture?.error ? <p className="muted">{rawCapture.error}</p> : null}
+      {rawCapture?.discordShareError ? <p className="muted">{rawCapture.discordShareError}</p> : null}
+      {status ? <p className="muted">{status}</p> : null}
     </section>
   );
 }
@@ -16923,7 +19122,8 @@ function ReplayVideoPlayer({
   const [playbackClipId, setPlaybackClipId] = useState<string | undefined>();
   const [playbackOffsetMs, setPlaybackOffsetMs] = useState(0);
   const [voicePlaybackPaused, setVoicePlaybackPaused] = useState(false);
-  const [voiceVolume, setVoiceVolume] = useState(0.9);
+  const [replayAudioVolume, setReplayAudioVolume] = useState(0.9);
+  const [replayAudioMuted, setReplayAudioMuted] = useState(false);
   const [videoFullscreen, setVideoFullscreen] = useState(false);
   const [videoPlaying, setVideoPlaying] = useState(false);
   const [playbackRate, setPlaybackRate] = useState<(typeof REPLAY_PLAYBACK_RATES)[number]>(1);
@@ -17010,9 +19210,13 @@ function ReplayVideoPlayer({
 
   useEffect(() => {
     if (audioRef.current) {
-      audioRef.current.volume = voiceVolume;
+      audioRef.current.volume = replayAudioMuted ? 0 : replayAudioVolume;
     }
-  }, [voiceVolume]);
+    if (videoRef.current) {
+      videoRef.current.volume = replayAudioVolume;
+      videoRef.current.muted = replayAudioMuted;
+    }
+  }, [replayAudioMuted, replayAudioVolume]);
 
   useEffect(() => {
     if (videoRef.current) {
@@ -17213,6 +19417,7 @@ function ReplayVideoPlayer({
   function stopPresentationRecording() {
     if (presentationRecorderRef.current?.state === "recording") {
       setPresentationStatus("Finalising presentation recording...");
+      presentationRecorderRef.current.requestData?.();
       presentationRecorderRef.current.stop();
     }
   }
@@ -17274,7 +19479,7 @@ function ReplayVideoPlayer({
     audioRef.current.pause();
     audioRef.current.src = note.dataUrl;
     audioRef.current.currentTime = 0;
-    audioRef.current.volume = voiceVolume;
+    audioRef.current.volume = replayAudioMuted ? 0 : replayAudioVolume;
     if (videoRef.current && typeof flag?.timeMs === "number") {
       videoRef.current.currentTime = Math.max(0, flag.timeMs / 1000);
       setCurrentMs(flag.timeMs);
@@ -17490,17 +19695,29 @@ function ReplayVideoPlayer({
               {voicePlaybackPaused ? <Play size={14} /> : <Pause size={14} />} {voicePlaybackPaused ? "Resume voice" : "Pause voice"}
             </button>
           ) : null}
-          <label className="replay-voice-volume" title="Voice note playback volume">
-            <Volume2 size={14} />
+          <label className="replay-voice-volume" title="Replay and coaching audio volume">
+            <button
+              type="button"
+              className="replay-audio-mute"
+              onClick={() => setReplayAudioMuted((muted) => !muted)}
+              title={replayAudioMuted ? "Unmute replay audio" : "Mute replay audio"}
+              aria-label={replayAudioMuted ? "Unmute replay audio" : "Mute replay audio"}
+            >
+              {replayAudioMuted || replayAudioVolume <= 0 ? <VolumeX size={14} /> : <Volume2 size={14} />}
+            </button>
             <input
               type="range"
               min="0"
               max="1"
               step="0.05"
-              value={voiceVolume}
-              onChange={(event) => setVoiceVolume(Number.parseFloat(event.target.value) || 0)}
+              value={replayAudioMuted ? 0 : replayAudioVolume}
+              onChange={(event) => {
+                const next = Number.parseFloat(event.target.value) || 0;
+                setReplayAudioVolume(next);
+                setReplayAudioMuted(next <= 0);
+              }}
             />
-            <span>{Math.round(voiceVolume * 100)}%</span>
+            <span>{replayAudioMuted ? "Muted" : `${Math.round(replayAudioVolume * 100)}%`}</span>
           </label>
           {videoFullscreen ? (
             <>
@@ -17592,6 +19809,8 @@ function ReplayVideoPlayer({
           onLoadedMetadata={(event) => {
             const nextMs = Math.round(event.currentTarget.currentTime * 1000);
             event.currentTarget.playbackRate = playbackRate;
+            event.currentTarget.volume = replayAudioVolume;
+            event.currentTarget.muted = replayAudioMuted;
             setCurrentMs(nextMs);
             onTimeChange(nextMs);
           }}
@@ -18292,6 +20511,7 @@ function ReplayDeckTrackerPanel({ replay, currentTimeMs }: { replay: ReplayRecor
   const cards = state.cards
     .filter((card) => card.pinned || card.seenCount > 0)
     .slice(0, 8);
+  const opponentCards = state.opponent.cards.slice(0, 8);
   return (
     <section className="rail-card replay-deck-tracker-panel">
       <header>
@@ -18308,12 +20528,32 @@ function ReplayDeckTrackerPanel({ replay, currentTimeMs }: { replay: ReplayRecor
             <div>
               <strong>{card.name}</strong>
               <span>{card.copiesLeft}/{card.deckCount} left</span>
-              <small>Next 1/2/3: {percent(card.odds.next1)} / {percent(card.odds.next2)} / {percent(card.odds.next3)}</small>
+              <small>Next draw / 2 / 3: {percent(card.odds.next1)} / {percent(card.odds.next2)} / {percent(card.odds.next3)}</small>
             </div>
           </div>
         ))}
         {!cards.length ? <p className="muted">No pinned or seen cards in this snapshot.</p> : null}
       </div>
+      {opponentCards.length ? (
+        <>
+          <header className="replay-deck-tracker-subheader">
+            <strong>Opponent seen</strong>
+            <span>{state.opponent.totalSeen} public card{state.opponent.totalSeen === 1 ? "" : "s"}</span>
+          </header>
+          <div className="replay-deck-tracker-grid">
+            {opponentCards.map((card) => (
+              <div className="replay-deck-tracker-card" key={`opponent-${card.cardKey}`}>
+                {card.imageUrl ? <img src={card.imageUrl} alt="" loading="lazy" /> : null}
+                <div>
+                  <strong>{card.name}</strong>
+                  <span>{card.count} seen</span>
+                  <small>{card.zones.join(", ")}</small>
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+      ) : null}
     </section>
   );
 }
@@ -18491,6 +20731,33 @@ function SettingsView({
   const [supportStatus, setSupportStatus] = useState("");
   const [backupStatus, setBackupStatus] = useState("");
   const [backupBusy, setBackupBusy] = useState(false);
+  const [shadowClipHotkeyDraft, setShadowClipHotkeyDraft] = useState(settings.replayShadowClipHotkey);
+  const [quickFlagHotkeyDraft, setQuickFlagHotkeyDraft] = useState(settings.replayQuickFlagHotkey);
+  useEffect(() => {
+    setShadowClipHotkeyDraft(settings.replayShadowClipHotkey);
+  }, [settings.replayShadowClipHotkey]);
+  useEffect(() => {
+    setQuickFlagHotkeyDraft(settings.replayQuickFlagHotkey);
+  }, [settings.replayQuickFlagHotkey]);
+
+  async function saveShadowClipHotkeyDraft() {
+    const hotkey = shadowClipHotkeyDraft.trim();
+    if (hotkey && hotkey !== settings.replayShadowClipHotkey) {
+      await onSave({ replayShadowClipHotkey: hotkey });
+    } else if (!hotkey) {
+      setShadowClipHotkeyDraft(settings.replayShadowClipHotkey);
+    }
+  }
+
+  async function saveQuickFlagHotkeyDraft() {
+    const hotkey = quickFlagHotkeyDraft.trim();
+    if (hotkey && hotkey !== settings.replayQuickFlagHotkey) {
+      await onSave({ replayQuickFlagHotkey: hotkey });
+    } else if (!hotkey) {
+      setQuickFlagHotkeyDraft(settings.replayQuickFlagHotkey);
+    }
+  }
+
   async function refreshAudioInputs(requestPermission = false) {
     if (!navigator.mediaDevices?.enumerateDevices) {
       setAudioStatus("Microphone device listing is not available on this system.");
@@ -18641,6 +20908,81 @@ function SettingsView({
               ))}
             </select>
           </label>
+          <div className="settings-note">
+            Shadow clips reuse the main video replay buffer, so pressing the hotkey saves a recent short replay without starting a second recorder.
+          </div>
+          <label className="toggle-row">
+            <span><Scissors size={16} /> Shadow clip hotkey</span>
+            <input
+              type="checkbox"
+              checked={settings.replayShadowClipEnabled}
+              disabled={!settings.replayVideoEnabled}
+              onChange={(event) => void onSave({ replayShadowClipEnabled: event.target.checked })}
+            />
+          </label>
+          <label>
+            Shadow clip length
+            <select
+              value={String(normalizeReplayShadowClipSeconds(settings.replayShadowClipSeconds))}
+              disabled={!settings.replayVideoEnabled || !settings.replayShadowClipEnabled}
+              onChange={(event) => void onSave({ replayShadowClipSeconds: normalizeReplayShadowClipSeconds(event.target.value) })}
+            >
+              <option value="30">30 seconds</option>
+              <option value="60">1 minute</option>
+              <option value="120">2 minutes</option>
+              <option value="300">5 minutes</option>
+              <option value="600">10 minutes</option>
+            </select>
+          </label>
+          <label className="toggle-row">
+            <span><Keyboard size={16} /> Enable clip shortcut</span>
+            <input
+              type="checkbox"
+              checked={settings.replayShadowClipHotkeyEnabled}
+              disabled={!settings.replayVideoEnabled || !settings.replayShadowClipEnabled}
+              onChange={(event) => void onSave({ replayShadowClipHotkeyEnabled: event.target.checked })}
+            />
+          </label>
+          <label>
+            Clip shortcut
+            <input
+              value={shadowClipHotkeyDraft}
+              disabled={!settings.replayVideoEnabled || !settings.replayShadowClipEnabled || !settings.replayShadowClipHotkeyEnabled}
+              onChange={(event) => setShadowClipHotkeyDraft(event.target.value)}
+              onBlur={() => void saveShadowClipHotkeyDraft()}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.currentTarget.blur();
+                }
+              }}
+              placeholder="CommandOrControl+Shift+C"
+            />
+          </label>
+          <label className="toggle-row">
+            <span><Flag size={16} /> Review flag shortcut</span>
+            <input
+              type="checkbox"
+              checked={settings.replayQuickFlagHotkeyEnabled}
+              disabled={!settings.replayVideoEnabled}
+              onChange={(event) => void onSave({ replayQuickFlagHotkeyEnabled: event.target.checked })}
+            />
+          </label>
+          <label>
+            Review flag shortcut
+            <input
+              value={quickFlagHotkeyDraft}
+              disabled={!settings.replayVideoEnabled || !settings.replayQuickFlagHotkeyEnabled}
+              onChange={(event) => setQuickFlagHotkeyDraft(event.target.value)}
+              onBlur={() => void saveQuickFlagHotkeyDraft()}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.currentTarget.blur();
+                }
+              }}
+              placeholder="CommandOrControl+Shift+F"
+            />
+          </label>
+          <p className="muted">Hotkeys use Electron accelerator names, for example CommandOrControl+Shift+C. The review flag is attached when the full replay saves.</p>
           {replayGuardrail ? <div className="settings-note warning">{replayGuardrail}</div> : null}
           <label>Replay folder<input readOnly value={replayPath} /></label>
           <div className="row-actions">
@@ -18652,12 +20994,73 @@ function SettingsView({
           </div>
           <p className="muted">Direct game frame records only the embedded TCGA/Atlas view and avoids per-frame capture work. Click anywhere in the Play screen before queueing so Windows can arm the stream.</p>
         </div>
+        {RIFTLITE_WEB_REPLAY_FEATURE_VISIBLE ? (
+          <div className="rail-card">
+            <h2>RiftLite web replay</h2>
+            <p className="muted">Opt in to automatically capture completed Atlas matches and upload them to the RiftLite account linked on this device. New uploads are private unless you choose another visibility.</p>
+            <label className="toggle-row">
+              <span><Upload size={16} /> Automatically upload Atlas replays</span>
+              <input
+                type="checkbox"
+                checked={Boolean(
+                  settings.rawCapture.enabled &&
+                  settings.rawCapture.webReplayAutoUploadEnabled &&
+                  settings.rawCapture.webReplayAutoUploadAccountUid === settings.accountUid
+                )}
+                disabled={
+                  !settings.accountUid ||
+                  !settings.firebaseRefreshToken ||
+                  !settings.accountLastVerifiedAt ||
+                  Boolean(settings.accountLastVerificationError)
+                }
+                onChange={(event) => void onSave({
+                  rawCapture: {
+                    ...settings.rawCapture,
+                    enabled: event.target.checked ? true : settings.rawCapture.enabled,
+                    webReplayAutoUploadEnabled: event.target.checked,
+                    webReplayAutoUploadAccountUid: event.target.checked ? settings.accountUid : "",
+                    webReplayDiscordShareEnabled: event.target.checked ? settings.rawCapture.webReplayDiscordShareEnabled : false,
+                    webReplayDiscordShareAccountUid: event.target.checked ? settings.rawCapture.webReplayDiscordShareAccountUid : "",
+                    webReplayDiscordShareHubIds: event.target.checked ? settings.rawCapture.webReplayDiscordShareHubIds : []
+                  }
+                })}
+              />
+            </label>
+            <p className="muted">
+              {settings.accountUid
+                ? settings.accountLastVerifiedAt && !settings.accountLastVerificationError
+                  ? `Uploads belong to ${settings.accountDisplayName || settings.accountHandle || settings.accountEmail || "your verified account"}. Account verification is managed from the Account tab.`
+                  : "Open the Account tab and verify the website, desktop, and replay library before enabling uploads."
+                : "Link your RiftLite account from the Account tab before enabling automatic upload."}
+            </p>
+            <label>
+              Upload visibility
+              <select
+                value={settings.rawCapture.visibility}
+                disabled={!(
+                  settings.rawCapture.enabled &&
+                  settings.rawCapture.webReplayAutoUploadEnabled &&
+                  settings.rawCapture.webReplayAutoUploadAccountUid === settings.accountUid
+                )}
+                onChange={(event) => void onSave({
+                  rawCapture: { ...settings.rawCapture, visibility: event.target.value as UserSettings["rawCapture"]["visibility"] }
+                })}
+              >
+                <option value="private">Private — only me</option>
+                <option value="unlisted">Unlisted — anyone with the link</option>
+                <option value="public">Public — listed on RiftLite</option>
+              </select>
+            </label>
+            <p className="muted">The source capture can contain room codes, player names, chat, and match state. It is stored privately for processing; only the reconstructed replay follows the visibility selected above.</p>
+            <p className="muted">Private-hub Discord replay sharing is configured from the Account tab. When enabled, new shared replays use Unlisted visibility.</p>
+          </div>
+        ) : null}
         {DECK_TRACKER_FEATURE_ENABLED ? (
           <div className="rail-card">
-            <h2>Vision Deck Tracker Beta</h2>
-            <p className="muted">Opt-in local card recognition for your active deck. It only scans visible local-player cards and never changes match result capture.</p>
+            <h2>Atlas Event Deck Tracker Beta</h2>
+            <p className="muted">Opt-in local tracking from RiftAtlas game events for your active deck. It counts visible local-player card events only and never changes match result capture.</p>
             <label className="toggle-row">
-              <span><BookOpen size={16} /> Vision tracker</span>
+              <span><BookOpen size={16} /> Atlas deck tracker</span>
               <input
                 type="checkbox"
                 checked={settings.deckTrackerEnabled}
@@ -18694,12 +21097,12 @@ function SettingsView({
                 disabled={!settings.deckTrackerEnabled}
                 onChange={(event) => void onSave({ deckTrackerPerformanceMode: event.target.value as DeckTrackerPerformanceMode })}
               >
-                <option value="light">Light - slower checks, lowest CPU</option>
+                <option value="light">Light - event updates only</option>
                 <option value="balanced">Balanced - recommended beta setting</option>
-                <option value="responsive">Responsive - faster checks, higher CPU</option>
+                <option value="responsive">Responsive - refresh UI more often</option>
               </select>
             </label>
-            <p className="muted">Recognition runs away from the game renderer and skips frames if it falls behind. If confidence is low, suggestions must be confirmed before affecting odds.</p>
+            <p className="muted">No screenshots are uploaded or scanned. Tracker data stays local unless you explicitly export or sync a supported replay bundle.</p>
           </div>
         ) : null}
         <div className="rail-card">
@@ -18812,7 +21215,7 @@ function SettingsView({
           {typeof updateStatus.progress === "number" ? <StatRow label="Download" value={`${updateStatus.progress}%`} /> : null}
           {updateStatus.manualInstallOnly ? (
             <p className="muted">
-              Mac updates are manual for now: download the DMG, quit RiftLite, then drag the new app into Applications.
+              This update should be installed from the release page. Quit RiftLite before replacing the app.
             </p>
           ) : null}
           <div className="row-actions">
@@ -19062,6 +21465,7 @@ function HubsView({ settings, matches, hubMatches, onSave, onHubResult, onSyncPr
   const [hubMessageText, setHubMessageText] = useState("");
   const [inviteStatus, setInviteStatus] = useState("");
   const [inboxStatus, setInboxStatus] = useState("");
+  const [copiedHubId, setCopiedHubId] = useState("");
   const filteredHubs = useMemo(
     () => selectedHubId ? settings.activeHubs.filter((hub) => hub.id === selectedHubId) : settings.activeHubs,
     [selectedHubId, settings.activeHubs]
@@ -19103,6 +21507,13 @@ function HubsView({ settings, matches, hubMatches, onSave, onHubResult, onSyncPr
     void refreshHubInbox(false);
   }, [settings.accountUid]);
 
+  useEffect(() => {
+    if (!settings.accountUid) return;
+    void window.riftlite.refreshAccountHubs()
+      .then((nextSettings) => onSave({ activeHubs: nextSettings.activeHubs }))
+      .catch(() => undefined);
+  }, [settings.accountUid]);
+
   async function submitHub() {
     const clean = name.trim();
     if (!clean || !password) {
@@ -19119,6 +21530,12 @@ function HubsView({ settings, matches, hubMatches, onSave, onHubResult, onSyncPr
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Hub action failed.");
     }
+  }
+
+  async function copyHubId(hubId: string) {
+    const copied = await window.riftlite.writeClipboardText(hubId).catch(() => false);
+    setCopiedHubId(copied ? hubId : "");
+    setSyncStatus(copied ? `Copied hub ID: ${hubId}` : "Could not copy the hub ID.");
   }
 
   async function manualPrivateSync() {
@@ -19313,6 +21730,7 @@ function HubsView({ settings, matches, hubMatches, onSave, onHubResult, onSyncPr
   const selectedHubLatest = selectedHubRows[0];
   const allHubPickerMatchesSelected = Boolean(syncableMatches.length) && syncableMatches.every((match) => selectedMatchIds.includes(match.id));
   const localHubDisplayName = settings.accountDisplayName || settings.username || settings.accountHandle || "";
+  const hubAccountReady = Boolean(settings.accountUid && settings.accountHandle && !isGenericAccountDisplayName(settings.accountDisplayName));
   const localHubAccountIds = useMemo(
     () => new Set([settings.accountUid, settings.firebaseUid].filter(Boolean)),
     [settings.accountUid, settings.firebaseUid]
@@ -19353,7 +21771,15 @@ function HubsView({ settings, matches, hubMatches, onSave, onHubResult, onSyncPr
         ) : null}
       </div>
       {!settings.accountUid ? (
-        <p className="muted">Link a RiftLite account to receive direct hub invites here. The old hub name/password join still works without signing in.</p>
+        <>
+          <p className="muted">Create or sign in once to receive direct invites, keep the same player name, and use Discord hub tools. Name/password joining remains available below.</p>
+          <button className="primary" onClick={() => window.dispatchEvent(new CustomEvent("riftlite:navigate", { detail: { view: "account" } }))}><Shield size={16} /> Create or sign in</button>
+        </>
+      ) : !hubAccountReady ? (
+        <>
+          <p className="muted">Your device is linked, but your RiftLite player name is not finished. Complete it once to receive invites and use Discord hub tools.</p>
+          <button className="primary" onClick={() => window.dispatchEvent(new CustomEvent("riftlite:navigate", { detail: { view: "account" } }))}><Shield size={16} /> Finish account</button>
+        </>
       ) : (
         <>
           <p className="muted">Direct hub invites for @{settings.accountHandle || settings.username}. Name/password joining stays available for no-login players.</p>
@@ -19441,10 +21867,17 @@ function HubsView({ settings, matches, hubMatches, onSave, onHubResult, onSyncPr
                   </div>
                   <div className="hub-card-body">
                     <h3>{hub.name}</h3>
+                    <div className="hub-id-display">
+                      <span>Hub ID</span>
+                      <code>{hub.id}</code>
+                    </div>
                     <p>{rows.length} synced match{rows.length === 1 ? "" : "es"}{latest ? ` - latest ${normalizeLegendName(latest.myChampion) || "Unknown"} vs ${normalizeLegendName(latest.opponentChampion) || "unknown"}` : ""}</p>
                   </div>
                   <div className="hub-card-actions">
                     <button className="primary" onClick={() => setSelectedHubId(hub.id)}>Open hub</button>
+                    <button className="secondary" onClick={() => void copyHubId(hub.id)}>
+                      <Copy size={16} /> {copiedHubId === hub.id ? "Copied ID" : "Copy ID"}
+                    </button>
                     <label className="secondary file-button">
                       <Images size={16} /> Image
                       <input
@@ -19509,6 +21942,13 @@ function HubsView({ settings, matches, hubMatches, onSave, onHubResult, onSyncPr
           <button className="secondary" onClick={() => setSelectedHubId("")}><ChevronLeft size={16} /> Hub home</button>
           <button className="secondary" disabled={!selectedHubRows.length} onClick={() => void exportSelectedHubCsv()}><FileText size={16} /> Export CSV</button>
           <h2>{selectedHub.name}</h2>
+          <div className="hub-id-display">
+            <span>Hub ID</span>
+            <code>{selectedHub.id}</code>
+            <button className="secondary" onClick={() => void copyHubId(selectedHub.id)}>
+              <Copy size={14} /> {copiedHubId === selectedHub.id ? "Copied" : "Copy"}
+            </button>
+          </div>
           <p>{hubRoleLabel(selectedHub)} - {(hubMatches[selectedHub.id] ?? []).length} private hub match{(hubMatches[selectedHub.id] ?? []).length === 1 ? "" : "es"}</p>
         </div>
       </div>
@@ -19522,8 +21962,8 @@ function HubsView({ settings, matches, hubMatches, onSave, onHubResult, onSyncPr
       <div className="rail-card hub-social-card">
         <h2>Hub tools</h2>
         <p className="muted">Claim this hub, invite linked profiles, and leave low-read message-board notes for members.</p>
-        {!settings.accountUid ? (
-          <p className="muted">Link a RiftLite account on the Account page to unlock roles, invites, and hub messages.</p>
+        {!hubAccountReady ? (
+          <p className="muted">Finish your RiftLite account on the Account page to unlock roles, invites, and hub messages.</p>
         ) : (
           <>
             <div className="row-actions">
@@ -19650,6 +22090,7 @@ function CommunityView({ matches, communityMatches, hubMatches, settings, status
   onTabChange: (tab: CommunityTab) => void;
   onRefresh: () => Promise<void>;
 }) {
+  const [seasonFilter, setSeasonFilter] = useState<(typeof COMMUNITY_SEASONS)[number]["id"]>("vendetta-preview");
   const [formatFilter, setFormatFilter] = useState("");
   const [deckPresenceFilter, setDeckPresenceFilter] = useState("");
   const communityRef = useRef<HTMLElement | null>(null);
@@ -19658,13 +22099,17 @@ function CommunityView({ matches, communityMatches, hubMatches, settings, status
     () => validAnalytics(communityMatches.length ? communityMatches.map((match) => communityToAnalytics(match)) : localReady.map(localToAnalytics)),
     [communityMatches, localReady]
   );
+  const seasonAnalytics = useMemo(
+    () => filterAnalyticsByCommunitySeason(analytics, seasonFilter),
+    [analytics, seasonFilter]
+  );
   const filteredAnalytics = useMemo(
-    () => filterAnalyticsByDeckPresence(filterAnalyticsByFormat(analytics, formatFilter), deckPresenceFilter),
-    [analytics, formatFilter, deckPresenceFilter]
+    () => filterAnalyticsByDeckPresence(filterAnalyticsByFormat(seasonAnalytics, formatFilter), deckPresenceFilter),
+    [seasonAnalytics, formatFilter, deckPresenceFilter]
   );
   const communityDeckMatches = useMemo(
-    () => filterCommunityDeckMatches(communityMatches, formatFilter, deckPresenceFilter),
-    [communityMatches, formatFilter, deckPresenceFilter]
+    () => filterCommunityDeckMatches(communityMatches, seasonFilter, formatFilter, deckPresenceFilter),
+    [communityMatches, seasonFilter, formatFilter, deckPresenceFilter]
   );
   const tabs: Array<{ id: CommunityTab; label: string }> = [
     { id: "legend-meta", label: "Legend Meta" },
@@ -19688,6 +22133,11 @@ function CommunityView({ matches, communityMatches, hubMatches, settings, status
           <span>{status}. User-submitted records only; no public leaderboard or meta alerts.</span>
         </div>
         <div className="community-toolbar-actions">
+          <label>Season<select value={seasonFilter} onChange={(event) => setSeasonFilter(event.target.value as (typeof COMMUNITY_SEASONS)[number]["id"])}>
+            {COMMUNITY_SEASONS.map((season) => (
+              <option key={season.id || "all"} value={season.id}>{season.label}</option>
+            ))}
+          </select></label>
           <label>Format<select value={formatFilter} onChange={(event) => setFormatFilter(event.target.value)}>
             <option value="">All formats</option>
             <option value="Bo1">Bo1</option>
@@ -19716,12 +22166,15 @@ function CommunityView({ matches, communityMatches, hubMatches, settings, status
   );
 }
 
-function filterCommunityDeckMatches(matches: CommunityMatch[], formatFilter: string, deckPresenceFilter: string, includeUnknownScope = false): CommunityMatch[] {
+function filterCommunityDeckMatches(matches: CommunityMatch[], seasonFilter: string, formatFilter: string, deckPresenceFilter: string, includeUnknownScope = false): CommunityMatch[] {
   return matches.filter((match) => {
     if (!includeUnknownScope && match.scope !== "community") {
       return false;
     }
     if (includeUnknownScope && match.scope && match.scope !== "community") {
+      return false;
+    }
+    if (!matchInCommunitySeason(match, seasonFilter)) {
       return false;
     }
     if (formatFilter && match.format !== formatFilter) {
@@ -20056,9 +22509,12 @@ function RecentMatchesPanel({ matches, showFlags = true }: { matches: AnalyticsM
   );
 }
 
+type CommunityDeckSortMode = "matches" | "winRate" | "recent" | "name";
+
 function CommunityDecksPanel({ matches, focusLegend = "" }: { matches: CommunityMatch[]; focusLegend?: string }) {
   const [selectedLegend, setSelectedLegend] = useState("");
   const [search, setSearch] = useState("");
+  const [deckSort, setDeckSort] = useState<CommunityDeckSortMode>("matches");
   const [selectedDeck, setSelectedDeck] = useState<CommunityDeckGroup | null>(null);
   const [selectedDrilldown, setSelectedDrilldown] = useState<StatsDrilldownSelection | null>(null);
   const meta = useMemo(() => buildCommunityDeckMeta(matches), [matches]);
@@ -20067,8 +22523,8 @@ function CommunityDecksPanel({ matches, focusLegend = "" }: { matches: Community
     [meta, search]
   );
   const selectedGroups = useMemo(
-    () => selectedLegend ? communityDeckGroupsForLegend(meta, selectedLegend) : [],
-    [meta, selectedLegend]
+    () => selectedLegend ? sortCommunityDeckGroups(communityDeckGroupsForLegend(meta, selectedLegend), deckSort) : [],
+    [deckSort, meta, selectedLegend]
   );
   const selectedMatches = useMemo(
     () => uniqueCommunityAnalytics(selectedGroups.flatMap((group) => group.matches)),
@@ -20184,7 +22640,18 @@ function CommunityDecksPanel({ matches, focusLegend = "" }: { matches: Community
           </div>
 
           <section className="community-deck-section">
-            <h3>Decklists</h3>
+            <div className="community-deck-section-header">
+              <h3>Decklists</h3>
+              <label className="community-deck-sort">
+                Sort decks
+                <select value={deckSort} onChange={(event) => setDeckSort(event.target.value as CommunityDeckSortMode)}>
+                  <option value="matches">Match count</option>
+                  <option value="winRate">Win rate</option>
+                  <option value="recent">Recently played</option>
+                  <option value="name">Deck name</option>
+                </select>
+              </label>
+            </div>
             <div className="community-deck-list-grid">
               {selectedGroups.map((group) => (
                 <div
@@ -20370,6 +22837,28 @@ function communityDeckLegendMatchesSearch(summary: CommunityDeckLegendSummary, g
     return [...snapshot.mainDeck, ...snapshot.sideboard, ...snapshot.battlefields, ...snapshot.runes]
       .some((entry) => entry.name.toLowerCase().includes(query));
   });
+}
+
+function sortCommunityDeckGroups(groups: CommunityDeckGroup[], sort: CommunityDeckSortMode): CommunityDeckGroup[] {
+  return [...groups].sort((left, right) => {
+    if (sort === "winRate") {
+      return right.winRate - left.winRate || right.total - left.total || left.title.localeCompare(right.title);
+    }
+    if (sort === "recent") {
+      return communityDeckGroupLatestMs(right) - communityDeckGroupLatestMs(left) || right.total - left.total || left.title.localeCompare(right.title);
+    }
+    if (sort === "name") {
+      return left.title.localeCompare(right.title) || right.total - left.total;
+    }
+    return right.total - left.total || right.winRate - left.winRate || left.title.localeCompare(right.title);
+  });
+}
+
+function communityDeckGroupLatestMs(group: CommunityDeckGroup): number {
+  return group.matches.reduce((latest, match) => {
+    const time = new Date(match.date || match.createdAt * 1000).getTime();
+    return Number.isFinite(time) ? Math.max(latest, time) : latest;
+  }, 0);
 }
 
 function uniqueCommunityAnalytics(matches: CommunityMatch[]): AnalyticsMatch[] {
@@ -23012,8 +25501,11 @@ function captureNoticeMessage(health: CaptureHealth, fallback: string): string {
   return message;
 }
 
+const deckTrackerPopoutMode = typeof window !== "undefined"
+  && new URLSearchParams(window.location.search).get("deckTrackerPopout") === "1";
+
 createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <App />
+    {deckTrackerPopoutMode ? <DeckTrackerPopoutApp /> : <App />}
   </React.StrictMode>
 );

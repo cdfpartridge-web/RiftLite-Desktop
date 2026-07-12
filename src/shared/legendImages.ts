@@ -1,5 +1,6 @@
 const LEGEND_IMAGE_URLS: Record<string, string> = {
   "Ahri": "https://cdn.rgpub.io/public/live/map/riftbound/latest/OGN/cards/OGN-255/full-desktop-2x.avif",
+  "Akali": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/0d53b477ed43fb9bbed84858443a606b2b51a2b5-744x1039.png?accountingTag=RB&auto=format&fit=fill&q=80&w=444",
   "Annie": "https://cdn.rgpub.io/public/live/map/riftbound/latest/OGS/cards/OGS-017/full-desktop-2x.avif",
   "Azir": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/42c04e4d7ef5d7395494587c2e15ac945b37b71e-744x1039.png?auto=format&fit=fill&q=80&w=744",
   "Darius": "https://cdn.rgpub.io/public/live/map/riftbound/latest/OGN/cards/OGN-253/full-desktop-2x.avif",
@@ -14,6 +15,7 @@ const LEGEND_IMAGE_URLS: Record<string, string> = {
   "Jhin": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/47f10693258104e9373396165e335014bf5783a2-744x1039.png?auto=format&fit=fill&q=80&w=744",
   "Jinx": "https://cdn.rgpub.io/public/live/map/riftbound/latest/OGN/cards/OGN-251/full-desktop-2x.avif",
   "Kai'Sa": "https://cdn.rgpub.io/public/live/map/riftbound/latest/OGN/cards/OGN-247/full-desktop-2x.avif",
+  "Kennen": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/0eab83392b310417d2630d50a3bfee3dd02b31c4-744x1039.png?accountingTag=RB&auto=format&fit=fill&q=80&w=444",
   "Kha'Zix": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/ffed0102adcae6fe01d173042487ea85ebe899bc-744x1039.png?auto=format&fit=fill&q=80&w=744",
   "LeBlanc": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/656450f89be4dc253438a4e0af7f7638ed5f90b2-744x1039.png?accountingTag=RB&auto=format&fit=fill&q=80&w=744",
   "Lee Sin": "https://cdn.rgpub.io/public/live/map/riftbound/latest/OGN/cards/OGN-257/full-desktop-2x.avif",
@@ -30,6 +32,7 @@ const LEGEND_IMAGE_URLS: Record<string, string> = {
   "Pyke": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/b4095d98aff998fda5a08d4c32e97a2a66ccf1e6-744x1039.png?accountingTag=RB&auto=format&fit=fill&q=80&w=744",
   "Rek'Sai": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/968eb5c484a25bbebd162f31736024b4ff3b0d07-744x1039.png?auto=format&fit=fill&q=80&w=744",
   "Renata Glasc": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/5df25d5a1351d0a97e103ef8e155991297b86ca9-744x1039.png?auto=format&fit=fill&q=80&w=744",
+  "Renekton": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/7620595b36b40a0c3d05c4c5469b016d1c18c6f2-744x1039.png?accountingTag=RB&auto=format&fit=fill&q=80&w=444",
   "Rengar": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/1f80a016015ebc77bd3d23ce471e364d70698279-744x1039.png?auto=format&fit=fill&q=80&w=744",
   "Sett": "https://cdn.rgpub.io/public/live/map/riftbound/latest/OGN/cards/OGN-269/full-desktop-2x.avif",
   "Sivir": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/743887bce0027f549b85bf023475c3587a005581-744x1039.png?auto=format&fit=fill&q=80&w=744",
@@ -39,6 +42,24 @@ const LEGEND_IMAGE_URLS: Record<string, string> = {
   "Viktor": "https://cdn.rgpub.io/public/live/map/riftbound/latest/OGN/cards/OGN-265/full-desktop-2x.avif",
   "Volibear": "https://cdn.rgpub.io/public/live/map/riftbound/latest/OGN/cards/OGN-249/full-desktop-2x.avif",
   "Yasuo": "https://cdn.rgpub.io/public/live/map/riftbound/latest/OGN/cards/OGN-259/full-desktop-2x.avif"
+};
+
+const LEGEND_CARD_CODE_MAP: Record<string, string> = {
+  "SFD-181": "Rumble",
+  "SFD-240": "Rumble",
+  "VEN-139": "Akali",
+  "VEN-141": "Renekton",
+  "VEN-190": "Renekton",
+  "VEN-143": "Zed",
+  "VEN-191": "Zed",
+  "VEN-145": "Nasus",
+  "VEN-147": "Shen",
+  "VEN-193": "Shen",
+  "VEN-149": "Jayce",
+  "VEN-151": "Mel",
+  "VEN-153": "Ambessa",
+  "VEN-155": "Kennen",
+  "VEN-197": "Kennen"
 };
 
 export function legendImageUrl(legend: string): string {
@@ -52,6 +73,10 @@ export function legendFromImageUrl(value: unknown): string {
   }
   const decoded = decodeLoose(raw);
   const directCode = cardCode(decoded);
+  const mappedLegend = directCode ? LEGEND_CARD_CODE_MAP[directCode] : "";
+  if (mappedLegend) {
+    return mappedLegend;
+  }
   const directHash = imageHash(decoded);
   for (const [legend, url] of Object.entries(LEGEND_IMAGE_URLS)) {
     const candidate = decodeLoose(url);
@@ -66,7 +91,7 @@ export function legendFromImageUrl(value: unknown): string {
 }
 
 function cardCode(value: string): string {
-  return value.match(/\b((?:OGN|OGS|SFD|UNL)-\d+[A-Z]?)\b/i)?.[1]?.toUpperCase() ?? "";
+  return value.match(/\b((?:OGN|OGS|SFD|UNL|VEN)-\d+[A-Z]?)\b/i)?.[1]?.toUpperCase() ?? "";
 }
 
 function imageHash(value: string): string {

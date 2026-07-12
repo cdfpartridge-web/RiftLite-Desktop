@@ -13,6 +13,7 @@ import { deflateRawSync, inflateRawSync } from "node:zlib";
 import ffmpegStaticPath from "ffmpeg-static";
 import type {
   ActiveDeckPrep,
+  AppNavigationRequest,
   BattlefieldOption,
   CaptureEvent,
   CommunityMatch,
@@ -37,6 +38,8 @@ import type {
   ReplayFlag,
   ReplayMp4ExportOptions,
   ReplayPresentationRecordingPayload,
+  RawCaptureAppendFramePayload,
+  RawCaptureVisibility,
   ReplayRecord,
   ReplaySearchMetadata,
   ReplayScreenshotFrame,
@@ -64,11 +67,22 @@ import { detectBrowsers } from "./services/browserDetection.js";
 import { scheduleAppUsageHeartbeat } from "./services/appUsageAnalytics.js";
 import { CaptureCoordinator } from "./services/captureCoordinator.js";
 import { CaptureDiagnostics } from "./services/captureDiagnostics.js";
+import { AtlasFrameDeduper, type AtlasFrameSource } from "./services/atlasFrameDeduper.js";
 import { DeckService } from "./services/deckService.js";
 import { DeckTrackerService } from "./services/deckTrackerService.js";
 import { joinDiscordVoiceChannel } from "./services/discordRpc.js";
 import { FirebaseSyncService } from "./services/firebaseSync.js";
 import { OverlayServer } from "./services/overlayServer.js";
+import { RawCaptureService } from "./services/rawCaptureService.js";
+import {
+  clearReplayEmbedCookies,
+  prepareReplayEmbedSession,
+  prepareReplayLibraryEmbedSession,
+  replayEmbedPermissionCheckAllowed,
+  replayEmbedPermissionRequestAllowed,
+  RIFTLITE_REPLAY_ORIGIN,
+  RIFTLITE_REPLAY_PARTITION
+} from "./services/replayEmbedSession.js";
 import { RiftLiteStore } from "./services/store.js";
 import { SimEventReceiver } from "./services/simEventReceiver.js";
 import { TcgaResolver } from "./services/tcgaResolver.js";
@@ -84,10 +98,16 @@ const RIFTLITE_BACKUP_EXTENSION = "riftlitebackup";
 const REPLAY_STREAM_MAGIC = "RIFTLITE_REPLAY_STREAM_V1";
 const REPLAY_STREAM_VIDEO_START = "VIDEO_DATA";
 const REPLAY_STREAM_VIDEO_END = "END_VIDEO_DATA";
+const RIFTREPLAY_CAPTURE_FEATURE_ENABLED = true;
 
-app.setName("RiftLite Beta 0.7");
+app.setName("RiftLite Beta 0.8");
 app.setPath("userData", join(app.getPath("appData"), "RiftLite Beta 0.6"));
 app.setAppUserModelId("com.riftlite.desktop.beta06");
+if (process.defaultApp && process.argv[1]) {
+  app.setAsDefaultProtocolClient("riftlite", process.execPath, [resolve(process.argv[1])]);
+} else {
+  app.setAsDefaultProtocolClient("riftlite");
+}
 app.commandLine.appendSwitch("ignore-gpu-blocklist");
 app.commandLine.appendSwitch("enable-gpu-rasterization");
 app.commandLine.appendSwitch("enable-zero-copy");
@@ -96,23 +116,54 @@ app.commandLine.appendSwitch("disable-features", "WebRtcAllowInputVolumeAdjustme
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 
 let mainWindow: BrowserWindow | null = null;
+let pendingAppNavigation: AppNavigationRequest | null = protocolNavigationFromArgs(process.argv);
+let deckTrackerWindow: BrowserWindow | null = null;
+let riftLiteReplayWebContents: WebContents | null = null;
 let store: RiftLiteStore;
 let capture: CaptureCoordinator;
 let tcgaResolver: TcgaResolver;
 let syncService: FirebaseSyncService;
 let deckService: DeckService;
 let deckTrackerService: DeckTrackerService;
+let rawCaptureService: RawCaptureService;
 let overlayServer: OverlayServer;
 let simEventReceiver: SimEventReceiver | null = null;
 let diagnostics: CaptureDiagnostics;
 let updater: UpdaterService;
 let registeredScreenshotHotkey = "";
+let registeredShadowClipHotkey = "";
+let registeredReplayFlagHotkey = "";
 const gameWebContentsByPlatform = new Map<GamePlatform, WebContents>();
+const rawCaptureDebuggerContents = new WeakSet<WebContents>();
+const atlasDeckTrackerFrameDebugCounts = new Map<string, number>();
+const atlasFrameDeduper = new AtlasFrameDeduper();
 const replayFrameHashByPlatform = new Map<GamePlatform, { hash: string; capturedAt: number }>();
 const ensuredReplayFrameDirectories = new Set<string>();
 let replayFrameDirectoryCache: { path: string; expiresAt: number } | null = null;
 const replayVideoSessions = new Map<string, ReplayVideoSession>();
 let replayVideoDisplayTarget: { platform: GamePlatform; mode: ReplayVideoCaptureMode; expiresAt: number } | null = null;
+let accountCloudSyncTimer: ReturnType<typeof setTimeout> | null = null;
+let rawCaptureUploadRetryTimer: ReturnType<typeof setInterval> | null = null;
+
+function queueAccountCloudSync(reason = "Local data changed"): void {
+  if (accountCloudSyncTimer) {
+    clearTimeout(accountCloudSyncTimer);
+  }
+  accountCloudSyncTimer = setTimeout(() => {
+    accountCloudSyncTimer = null;
+    void (async () => {
+      const settings = await store.getSettings();
+      if (!settings.accountCloudSyncEnabled || !settings.accountUid) {
+        return;
+      }
+      await syncService.uploadAccountCloudSync(`${reason}. Account sync updated.`);
+    })().catch(async (error) => {
+      await store.saveSettings({
+        accountCloudSyncLastError: error instanceof Error ? error.message : "Account cloud sync failed."
+      }).catch(() => undefined);
+    });
+  }, 20_000);
+}
 
 function startupLogPath(): string {
   return join(app.getPath("userData"), "riftlite-startup.log");
@@ -130,6 +181,18 @@ async function logStartupIssue(label: string, error: unknown): Promise<void> {
   ].join("\n");
   await mkdir(app.getPath("userData"), { recursive: true }).catch(() => undefined);
   await appendFile(startupLogPath(), line, "utf8").catch(() => undefined);
+}
+
+function startRawCaptureUploadRetry(): void {
+  if (rawCaptureUploadRetryTimer) {
+    clearInterval(rawCaptureUploadRetryTimer);
+  }
+  rawCaptureUploadRetryTimer = setInterval(() => {
+    void rawCaptureService.uploadPendingRawCaptures().catch((error) => {
+      void logStartupIssue("raw capture pending upload retry failed", error);
+    });
+  }, 120_000);
+  rawCaptureUploadRetryTimer.unref();
 }
 
 process.on("uncaughtException", (error) => {
@@ -718,11 +781,312 @@ function rememberGameWebContents(webContents: WebContents): void {
   }
 }
 
+function isRiftLiteReplayWebContents(webContents: WebContents): boolean {
+  return webContents.session === electronSession.fromPartition(RIFTLITE_REPLAY_PARTITION) ||
+    isAllowedRiftLiteReplayNavigation(webContents.getURL());
+}
+
+function isAllowedRiftLiteReplayNavigation(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.origin === RIFTLITE_REPLAY_ORIGIN &&
+      (url.pathname === "/replays" || url.pathname.startsWith("/replays/"));
+  } catch {
+    return false;
+  }
+}
+
+function isRiftLiteReplayOrigin(value: string): boolean {
+  try {
+    return new URL(value).origin === RIFTLITE_REPLAY_ORIGIN;
+  } catch {
+    return false;
+  }
+}
+
+function secureRiftLiteReplayWebContents(webContents: WebContents): void {
+  const replaySession = webContents.session;
+  const isExactReplayRequester = (requestingContents: WebContents | null, requestingUrl: string) => (
+    requestingContents?.id === webContents.id &&
+    !webContents.isDestroyed() &&
+    isAllowedRiftLiteReplayNavigation(requestingUrl || webContents.getURL())
+  );
+  replaySession.setPermissionCheckHandler((requestingContents, permission, _origin, details) => {
+    if (!details.isMainFrame || !isExactReplayRequester(requestingContents, details.requestingUrl || "")) {
+      return false;
+    }
+    return replayEmbedPermissionCheckAllowed(permission, details.mediaType);
+  });
+  replaySession.setPermissionRequestHandler((requestingContents, permission, callback, details) => {
+    callback(
+      replayEmbedPermissionRequestAllowed(permission) &&
+      details.isMainFrame &&
+      isExactReplayRequester(requestingContents, details.requestingUrl)
+    );
+  });
+  replaySession.setDisplayMediaRequestHandler((request, callback) => {
+    const mainFrame = webContents.isDestroyed() ? null : webContents.mainFrame;
+    const requestingFrame = request.frame;
+    const exactFrame = Boolean(
+      mainFrame &&
+      requestingFrame &&
+      requestingFrame.processId === mainFrame.processId &&
+      requestingFrame.routingId === mainFrame.routingId
+    );
+    if (
+      !mainFrame ||
+      !exactFrame ||
+      !request.userGesture ||
+      !request.videoRequested ||
+      request.audioRequested ||
+      !isRiftLiteReplayOrigin(request.securityOrigin) ||
+      !isAllowedRiftLiteReplayNavigation(mainFrame.url)
+    ) {
+      callback({});
+      return;
+    }
+    callback({ video: mainFrame });
+  });
+  webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//i.test(url)) {
+      void openExternalResource(url).catch(() => undefined);
+    }
+    return { action: "deny" };
+  });
+  const restrictNavigation = (event: Electron.Event, url: string) => {
+    if (isAllowedRiftLiteReplayNavigation(url)) {
+      return;
+    }
+    event.preventDefault();
+    if (/^https?:\/\//i.test(url)) {
+      void openExternalResource(url).catch(() => undefined);
+    }
+  };
+  webContents.on("will-navigate", restrictNavigation);
+  webContents.on("will-redirect", restrictNavigation);
+}
+
+async function clearRiftLiteReplayEmbedCookies(): Promise<void> {
+  const replaySession = electronSession.fromPartition(RIFTLITE_REPLAY_PARTITION);
+  await clearReplayEmbedCookies(replaySession);
+}
+
+async function prepareRiftLiteReplayEmbed(replayId: string) {
+  const replaySession = electronSession.fromPartition(RIFTLITE_REPLAY_PARTITION);
+  const authGeneration = syncService.getLinkedAccountAuthGeneration();
+  let result = await prepareReplayEmbedSession(
+    replayId,
+    replaySession,
+    () => syncService.refreshLinkedAccountIdToken(),
+    () => syncService.isLinkedAccountAuthGenerationCurrent(authGeneration)
+  );
+  if (!syncService.isLinkedAccountAuthGenerationCurrent(authGeneration)) {
+    await clearReplayEmbedCookies(replaySession).catch(() => undefined);
+    result = {
+      url: result.url,
+      authenticated: false,
+      error: "The linked RiftLite account changed during replay authentication."
+    };
+  }
+  const replayContents = riftLiteReplayWebContents;
+  if (replayContents && !replayContents.isDestroyed()) {
+    await replayContents.loadURL(result.url).catch(() => undefined);
+  }
+  return result;
+}
+
+async function prepareRiftLiteReplayLibraryEmbed() {
+  const replaySession = electronSession.fromPartition(RIFTLITE_REPLAY_PARTITION);
+  const authGeneration = syncService.getLinkedAccountAuthGeneration();
+  let result = await prepareReplayLibraryEmbedSession(
+    replaySession,
+    () => syncService.refreshLinkedAccountIdToken(),
+    () => syncService.isLinkedAccountAuthGenerationCurrent(authGeneration)
+  );
+  if (!syncService.isLinkedAccountAuthGenerationCurrent(authGeneration)) {
+    await clearReplayEmbedCookies(replaySession).catch(() => undefined);
+    result = {
+      url: result.url,
+      authenticated: false,
+      error: "The linked RiftLite account changed during replay authentication."
+    };
+  }
+  const replayContents = riftLiteReplayWebContents;
+  if (replayContents && !replayContents.isDestroyed()) {
+    await replayContents.loadURL(result.url).catch(() => undefined);
+  }
+  return result;
+}
+
 function forgetGameWebContents(webContents: WebContents): void {
   for (const [platform, contents] of gameWebContentsByPlatform.entries()) {
     if (contents.id === webContents.id) {
       gameWebContentsByPlatform.delete(platform);
     }
+  }
+}
+
+function installRawCaptureWebSocketTap(webContents: WebContents): void {
+  if (rawCaptureDebuggerContents.has(webContents) || webContents.isDestroyed()) {
+    return;
+  }
+  const platform = platformFromUrl(webContents.getURL());
+  if (platform !== "atlas") {
+    return;
+  }
+  rawCaptureDebuggerContents.add(webContents);
+  const socketUrls = new Map<string, string>();
+  try {
+    if (!webContents.debugger.isAttached()) {
+      webContents.debugger.attach("1.3");
+    }
+    recordAtlasDeckTrackerFrameDebug("main-debugger", {
+      platform: "atlas",
+      requestUrl: webContents.getURL(),
+      frame: {
+        seq: 0,
+        ts: Date.now(),
+        dir: "in",
+        raw: "{\"type\":\"debugger-attached\"}"
+      }
+    }, "debugger-attached");
+    webContents.debugger.sendCommand("Network.enable").catch((error) => {
+      void logStartupIssue("raw capture network enable failed", error);
+    });
+  } catch (error) {
+    void logStartupIssue("raw capture debugger attach failed", error);
+    return;
+  }
+
+  webContents.debugger.on("message", (_event, method, params) => {
+    if (webContents.isDestroyed()) {
+      return;
+    }
+    const payload = params && typeof params === "object" ? params as Record<string, unknown> : {};
+    if (method === "Network.webSocketCreated") {
+      const requestId = readDebugString(payload.requestId);
+      const url = readDebugString(payload.url);
+      if (requestId && isRiftAtlasRealtimeSocket(url)) {
+        socketUrls.set(requestId, url);
+      }
+      return;
+    }
+    if (method !== "Network.webSocketFrameReceived" && method !== "Network.webSocketFrameSent") {
+      return;
+    }
+    const requestId = readDebugString(payload.requestId);
+    const requestUrl = socketUrls.get(requestId) || "";
+    if (!requestId || !isRiftAtlasRealtimeSocket(requestUrl)) {
+      return;
+    }
+    const response = payload.response && typeof payload.response === "object"
+      ? payload.response as Record<string, unknown>
+      : {};
+    const raw = readDebugString(response.payloadData);
+    if (!raw || raw.length > 1_500_000 || !raw.trim().startsWith("{")) {
+      return;
+    }
+    const frame: RawCaptureAppendFramePayload = {
+      platform: "atlas",
+      requestUrl,
+      frame: {
+        seq: 0,
+        ts: Date.now(),
+        dir: method === "Network.webSocketFrameSent" ? "out" : "in",
+        socketId: requestId,
+        raw
+      }
+    };
+    ingestAtlasRawFrame("main-debugger", webContents, frame, "atlas-ws-frame");
+  });
+
+  webContents.once("destroyed", () => {
+    socketUrls.clear();
+    atlasFrameDeduper.forgetStream(String(webContents.id));
+    try {
+      if (webContents.debugger.isAttached()) {
+        webContents.debugger.detach();
+      }
+    } catch {
+      // The webContents is already gone; nothing to clean up.
+    }
+  });
+}
+
+function maybeInstallRawCaptureWebSocketTap(webContents: WebContents): void {
+  if (webContents.isDestroyed() || platformFromUrl(webContents.getURL()) !== "atlas") {
+    return;
+  }
+  installRawCaptureWebSocketTap(webContents);
+}
+
+function isRiftAtlasRealtimeSocket(url: string): boolean {
+  return /realtime\.riftatlas-workers\.com/i.test(url) || /riftatlas/i.test(url);
+}
+
+function readDebugString(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+function ingestAtlasRawFrame(
+  source: AtlasFrameSource,
+  webContents: WebContents,
+  frame: RawCaptureAppendFramePayload,
+  reason: string
+): void {
+  if (!atlasFrameDeduper.shouldIngest(source, String(webContents.id), frame)) {
+    return;
+  }
+  recordAtlasDeckTrackerFrameDebug(source, frame, reason);
+  if (RIFTREPLAY_CAPTURE_FEATURE_ENABLED) {
+    void rawCaptureService.appendFrame(frame).catch((error) => {
+      void logStartupIssue("raw capture append failed", error);
+    });
+  }
+  void deckTrackerService?.ingestAtlasRawFrame(frame).catch((error) => {
+    void logStartupIssue("deck tracker atlas frame failed", error);
+  });
+}
+
+function recordAtlasDeckTrackerFrameDebug(source: string, frame: RawCaptureAppendFramePayload, reason: string): void {
+  try {
+    const key = `${source}:${frame.platform}`;
+    const count = (atlasDeckTrackerFrameDebugCounts.get(key) ?? 0) + 1;
+    atlasDeckTrackerFrameDebugCounts.set(key, count);
+    if (count > 5 && count % 50 !== 0) {
+      return;
+    }
+    const raw = frame.frame.raw ?? "";
+    const capturedAt = new Date().toISOString();
+    void diagnostics?.record({
+      id: `atlas-deck-tracker-frame-${source}-${count}-${randomUUID()}`,
+      platform: "atlas",
+      kind: "debug",
+      capturedAt,
+      url: frame.requestUrl ?? "",
+      payload: {
+        reason,
+        source,
+        count,
+        dir: frame.frame.dir,
+        socketId: frame.frame.socketId ?? "",
+        requestUrl: frame.requestUrl ?? "",
+        rawLength: raw.length,
+        rawType: readAtlasFrameType(raw),
+        trackerMarker: "atlas-event-deck-tracker-v1"
+      }
+    });
+  } catch {
+    // Diagnostics must never affect gameplay or capture.
+  }
+}
+
+function readAtlasFrameType(raw: string): string {
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    return typeof parsed.type === "string" ? parsed.type : "";
+  } catch {
+    return "";
   }
 }
 
@@ -883,6 +1247,47 @@ async function configureScreenshotHotkey(): Promise<void> {
     void takeScreenshot("hotkey");
   });
   registeredScreenshotHotkey = registered ? hotkey : "";
+}
+
+function unregisterReplayHotkeys(): void {
+  if (registeredShadowClipHotkey) {
+    globalShortcut.unregister(registeredShadowClipHotkey);
+    registeredShadowClipHotkey = "";
+  }
+  if (registeredReplayFlagHotkey) {
+    globalShortcut.unregister(registeredReplayFlagHotkey);
+    registeredReplayFlagHotkey = "";
+  }
+}
+
+async function configureReplayHotkeys(): Promise<void> {
+  unregisterReplayHotkeys();
+  const settings = await store.getSettings();
+  const shadowClipHotkey = settings.replayShadowClipHotkey?.trim();
+  if (
+    settings.replayVideoEnabled &&
+    settings.replayShadowClipEnabled &&
+    settings.replayShadowClipHotkeyEnabled &&
+    shadowClipHotkey
+  ) {
+    const registered = globalShortcut.register(shadowClipHotkey, () => {
+      mainWindow?.webContents.send("replay:shadow-clip-hotkey");
+    });
+    registeredShadowClipHotkey = registered ? shadowClipHotkey : "";
+  }
+
+  const flagHotkey = settings.replayQuickFlagHotkey?.trim();
+  if (
+    settings.replayVideoEnabled &&
+    settings.replayQuickFlagHotkeyEnabled &&
+    flagHotkey &&
+    flagHotkey !== registeredShadowClipHotkey
+  ) {
+    const registered = globalShortcut.register(flagHotkey, () => {
+      mainWindow?.webContents.send("replay:quick-flag-hotkey");
+    });
+    registeredReplayFlagHotkey = registered ? flagHotkey : "";
+  }
 }
 
 async function openExternalResource(url: string): Promise<void> {
@@ -1108,61 +1513,75 @@ async function mergeReplayVideoSegments(segments: ReplayVideoAsset[], options: R
   const outputPath = join(directory, filename);
   await unlink(outputPath).catch(() => undefined);
 
-  const args = ["-y", "-hide_banner", "-loglevel", "error"];
-  for (const segment of validSegments) {
-    args.push("-fflags", "+genpts", "-i", segment.path);
-  }
-  const filters = validSegments.map((_segment, index) =>
-    `[${index}:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,fps=${fps},setsar=1,setpts=PTS-STARTPTS[v${index}]`
-  );
-  if (canMergeAudio) {
-    const audioFilters = validSegments.map((_segment, index) => `[${index}:a]aresample=48000,asetpts=PTS-STARTPTS[a${index}]`);
-    const concatInputs = validSegments.map((_segment, index) => `[v${index}][a${index}]`).join("");
-    args.push(
-      "-filter_complex",
-      `${filters.join(";")};${audioFilters.join(";")};${concatInputs}concat=n=${validSegments.length}:v=1:a=1[v][a]`,
-      "-map",
-      "[v]",
-      "-map",
-      "[a]",
-      "-c:a",
-      "aac",
-      "-b:a",
-      "96k"
+  const runMerge = async (includeAudio: boolean): Promise<void> => {
+    const args = ["-y", "-hide_banner", "-loglevel", "error"];
+    for (const segment of validSegments) {
+      args.push("-fflags", "+genpts", "-i", segment.path);
+    }
+    const filters = validSegments.map((_segment, index) =>
+      `[${index}:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,fps=${fps},setsar=1,setpts=PTS-STARTPTS[v${index}]`
     );
-  } else {
-    const concatInputs = validSegments.map((_segment, index) => `[v${index}]`).join("");
+    if (includeAudio) {
+      const audioFilters = validSegments.map((_segment, index) => `[${index}:a]aresample=48000,asetpts=PTS-STARTPTS[a${index}]`);
+      const concatInputs = validSegments.map((_segment, index) => `[v${index}][a${index}]`).join("");
+      args.push(
+        "-filter_complex",
+        `${filters.join(";")};${audioFilters.join(";")};${concatInputs}concat=n=${validSegments.length}:v=1:a=1[v][a]`,
+        "-map",
+        "[v]",
+        "-map",
+        "[a]",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "96k"
+      );
+    } else {
+      const concatInputs = validSegments.map((_segment, index) => `[v${index}]`).join("");
+      args.push(
+        "-filter_complex",
+        `${filters.join(";")};${concatInputs}concat=n=${validSegments.length}:v=1:a=0[v]`,
+        "-map",
+        "[v]",
+        "-an"
+      );
+    }
     args.push(
-      "-filter_complex",
-      `${filters.join(";")};${concatInputs}concat=n=${validSegments.length}:v=1:a=0[v]`,
-      "-map",
-      "[v]",
-      "-an"
+      "-c:v",
+      "libx264",
+      "-preset",
+      "veryfast",
+      "-b:v",
+      `${bitrateKbps}k`,
+      "-maxrate",
+      `${Math.round(bitrateKbps * 1.35)}k`,
+      "-bufsize",
+      `${Math.round(bitrateKbps * 2)}k`,
+      "-pix_fmt",
+      "yuv420p",
+      "-movflags",
+      "+faststart",
+      outputPath
     );
-  }
-  args.push(
-    "-c:v",
-    "libx264",
-    "-preset",
-    "veryfast",
-    "-b:v",
-    `${bitrateKbps}k`,
-    "-maxrate",
-    `${Math.round(bitrateKbps * 1.35)}k`,
-    "-bufsize",
-    `${Math.round(bitrateKbps * 2)}k`,
-    "-pix_fmt",
-    "yuv420p",
-    "-movflags",
-    "+faststart",
-    outputPath
-  );
 
-  await execFileAsync(ffmpegPath, args, {
-    windowsHide: true,
-    timeout: 300_000,
-    maxBuffer: 1024 * 1024
-  });
+    await execFileAsync(ffmpegPath, args, {
+      windowsHide: true,
+      timeout: 300_000,
+      maxBuffer: 1024 * 1024
+    });
+  };
+
+  let mergedWithAudio = canMergeAudio;
+  try {
+    await runMerge(canMergeAudio);
+  } catch (error) {
+    if (!canMergeAudio) {
+      throw error;
+    }
+    await unlink(outputPath).catch(() => undefined);
+    mergedWithAudio = false;
+    await runMerge(false);
+  }
   const fileStats = await stat(outputPath);
   const durationMs = validSegments.reduce((total, segment) => total + Math.max(0, segment.durationMs || 0), 0);
   await markReplayVideoSeekable(outputPath);
@@ -1186,7 +1605,7 @@ async function mergeReplayVideoSegments(segments: ReplayVideoAsset[], options: R
     actualBitrateKbps: actualReplayBitrateKbps(fileStats.size, durationMs),
     codec: "H.264 MP4",
     quality: options.quality,
-    hasAudio: canMergeAudio,
+    hasAudio: mergedWithAudio,
     containerFinalized: true
   };
 }
@@ -1278,7 +1697,8 @@ async function attachReplayVideo(matchId: string, video: ReplayVideoAsset): Prom
     await discardReplayVideoAsset(video).catch(() => undefined);
     return replay;
   }
-  return store.saveReplay({ ...replay, video });
+  const saved = await store.saveReplay({ ...replay, video });
+  return rawCaptureService.finishForReplay(saved);
 }
 
 function pathInside(childPath: string, rootPath: string): boolean {
@@ -1618,15 +2038,18 @@ function replayForExport(replay: ReplayRecord): ReplayRecord {
 }
 
 function sanitizeReplayForBundle(replay: ReplayRecord): ReplayRecord {
+  const rawCapture = replay.rawCapture
+    ? { ...replay.rawCapture, localPath: undefined }
+    : undefined;
   if (!replay.video) {
-    return replay;
+    return rawCapture ? { ...replay, rawCapture } : replay;
   }
   const video: Record<string, unknown> = { ...replay.video };
   delete video.data;
   delete video.asset;
   delete video.sourcePath;
   delete video.sourceUrl;
-  return { ...replay, video: video as unknown as ReplayVideoAsset };
+  return { ...replay, rawCapture, video: video as unknown as ReplayVideoAsset };
 }
 
 function withinReplayTrim(replay: ReplayRecord, capturedAt: string): boolean {
@@ -1911,12 +2334,51 @@ function clampReplayMp4TimeMs(video: ReplayVideoAsset, timeMs: number | undefine
   return Math.min(duration, Math.max(0, timeMs));
 }
 
+function sanitizeSvgTextValue(value: string): string {
+  let output = "";
+  for (const character of value) {
+    const codePoint = character.codePointAt(0);
+    if (
+      codePoint === 0x09 ||
+      codePoint === 0x0a ||
+      codePoint === 0x0d ||
+      (typeof codePoint === "number" && codePoint >= 0x20 && codePoint <= 0xd7ff) ||
+      (typeof codePoint === "number" && codePoint >= 0xe000 && codePoint <= 0xfffd) ||
+      (typeof codePoint === "number" && codePoint >= 0x10000 && codePoint <= 0x10ffff)
+    ) {
+      output += character;
+    }
+  }
+  return output;
+}
+
 function escapeSvgText(value: string): string {
-  return value
+  return sanitizeSvgTextValue(value)
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
+}
+
+function replayMp4SvgColor(value: string | undefined, fallback = "#6feeff"): string {
+  const safe = sanitizeSvgTextValue(value ?? "").trim();
+  if (/^#[0-9a-f]{3,8}$/i.test(safe)) {
+    return safe;
+  }
+  if (/^rgba?\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}(?:\s*,\s*(?:0|1|0?\.\d+))?\s*\)$/i.test(safe)) {
+    return safe;
+  }
+  if (/^hsla?\(\s*\d{1,3}\s*,\s*\d{1,3}%\s*,\s*\d{1,3}%(?:\s*,\s*(?:0|1|0?\.\d+))?\s*\)$/i.test(safe)) {
+    return safe;
+  }
+  return fallback;
+}
+
+function replayMp4SvgPoint(value: number, size: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  return Math.round(Math.min(1, Math.max(0, value)) * size);
 }
 
 function wrapReplayMp4Text(value: string, maxLength: number, maxLines: number): string[] {
@@ -2007,14 +2469,17 @@ function replayMp4FlagSvg(flag: ReplayFlag, width: number, height: number): stri
 }
 
 function replayMp4AnnotationSvg(annotation: ReplayAnnotation, width: number, height: number): string {
-  const points = annotation.points.map((point) => ({
-    x: Math.round(point.x * width),
-    y: Math.round(point.y * height)
-  }));
-  const strokeWidth = Math.max(4, Math.round(annotation.width * 3 * (Math.min(width, height) / 1000)));
+  const points = (annotation.points ?? [])
+    .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y))
+    .map((point) => ({
+      x: replayMp4SvgPoint(point.x, width),
+      y: replayMp4SvgPoint(point.y, height)
+    }));
+  const annotationWidth = Number.isFinite(annotation.width) ? annotation.width : 2;
+  const strokeWidth = Math.max(4, Math.round(annotationWidth * 3 * (Math.min(width, height) / 1000)));
   const first = points[0];
   const last = points.at(-1);
-  const color = annotation.color || "#6feeff";
+  const color = replayMp4SvgColor(annotation.color);
   const commonDefs = `<defs><marker id="arrowhead" markerWidth="18" markerHeight="18" refX="15" refY="6" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L0,12 L17,6 z" fill="${color}"/></marker></defs>`;
   let body = "";
   if (annotation.tool === "text" && first) {
@@ -2022,7 +2487,7 @@ function replayMp4AnnotationSvg(annotation: ReplayAnnotation, width: number, hei
     body = `<text x="${first.x}" y="${first.y}" fill="${color}" font-family="Arial, sans-serif" font-size="${Math.max(34, Math.round(height * 0.046))}" font-weight="900" paint-order="stroke" stroke="#020712" stroke-width="10">${text}</text>`;
   } else if (annotation.tool === "arrow" && first && last) {
     body = `<line x1="${first.x}" y1="${first.y}" x2="${last.x}" y2="${last.y}" stroke="${color}" stroke-width="${strokeWidth}" stroke-linecap="round" marker-end="url(#arrowhead)"/>`;
-  } else {
+  } else if (points.length) {
     const polyline = points.map((point) => `${point.x},${point.y}`).join(" ");
     const opacity = annotation.tool === "highlight" ? "0.48" : "0.94";
     body = `<polyline points="${polyline}" fill="none" stroke="${color}" stroke-width="${strokeWidth}" stroke-linecap="round" stroke-linejoin="round" opacity="${opacity}"/>`;
@@ -2103,8 +2568,15 @@ async function replayMp4OverlayInputs(
     if (!timing) {
       return;
     }
+    let path: string;
+    try {
+      path = await writeReplayMp4OverlayPng(tempDirectory, label, svg);
+    } catch (error) {
+      console.warn(`[replay-mp4] Skipping replay export overlay ${label}`, error);
+      return;
+    }
     overlays.push({
-      path: await writeReplayMp4OverlayPng(tempDirectory, label, svg),
+      path,
       startSec: timing.startSec,
       endSec: timing.endSec
     });
@@ -2189,6 +2661,16 @@ async function replayMp4VoiceInputs(
 
 function ffmpegSeconds(value: number): string {
   return Math.max(0, value).toFixed(3);
+}
+
+function replayMp4CanCopyVideoToMp4(video: ReplayVideoAsset, sourcePath: string): boolean {
+  const codec = String(video.codec ?? "").toLowerCase();
+  const mimeType = String(video.mimeType ?? "").toLowerCase();
+  const filePath = sourcePath.toLowerCase();
+  if (mimeType.includes("webm") || filePath.endsWith(".webm") || codec.includes("vp8") || codec.includes("vp9") || codec.includes("webm")) {
+    return false;
+  }
+  return mimeType.includes("mp4") || filePath.endsWith(".mp4") || codec.includes("h.264") || codec.includes("h264") || codec.includes("avc1");
 }
 
 function replayMp4FfmpegError(error: unknown): Error {
@@ -2306,7 +2788,8 @@ async function exportReplayMp4(replayId: string, options: ReplayMp4ExportOptions
       args.push("-i", voice.path);
     });
 
-    const needsVideoFilter = Boolean(clipRange) || geometry.layout !== "landscape" || hasOverlay || hasVoice;
+    const canCopyVideoToMp4 = replayMp4CanCopyVideoToMp4(source.asset, source.sourcePath);
+    const needsVideoFilter = Boolean(clipRange) || geometry.layout !== "landscape" || hasOverlay || hasVoice || !canCopyVideoToMp4;
     if (!needsVideoFilter) {
       args.push("-map", "0:v:0");
       if (exportOptions.includeOriginalAudio) {
@@ -2422,6 +2905,7 @@ async function exportReplayPresentationMp4(replayId: string, payload: ReplayPres
   const inputPath = join(tempDirectory, `presentation.${inputExtension}`);
   await writeFile(inputPath, Buffer.from(new Uint8Array(payload.data)));
   try {
+    const durationSec = Math.max(1, payload.durationMs / 1000 + 0.5);
     const args = [
       "-y",
       "-hide_banner",
@@ -2440,17 +2924,18 @@ async function exportReplayPresentationMp4(replayId: string, payload: ReplayPres
       "-c:v",
       "libx264",
       "-preset",
-      "veryfast",
+      "superfast",
       "-crf",
-      "18",
+      "20",
       "-pix_fmt",
       "yuv420p",
       "-c:a",
       "aac",
       "-b:a",
       "160k",
-      "-movflags",
-      "+faststart",
+      "-t",
+      ffmpegSeconds(durationSec),
+      "-shortest",
       outputPath
     ];
     try {
@@ -4099,7 +4584,7 @@ async function createWindow(): Promise<void> {
     height: bounds.height,
     minWidth: bounds.minWidth,
     minHeight: bounds.minHeight,
-    title: "RiftLite Beta 0.7",
+    title: "RiftLite Beta 0.8",
     icon,
     backgroundColor: "#0c101a",
     autoHideMenuBar: true,
@@ -4140,13 +4625,92 @@ async function createWindow(): Promise<void> {
   mainWindow.webContents.on("preload-error", (_event, preloadPathValue, error) => {
     void logStartupIssue("app preload error", `${preloadPathValue}\n${formatStartupError(error)}`);
   });
+  mainWindow.webContents.on("will-attach-webview", (event, webPreferences, params) => {
+    if (params.partition !== RIFTLITE_REPLAY_PARTITION) {
+      return;
+    }
+    webPreferences.preload = undefined;
+    webPreferences.nodeIntegration = false;
+    webPreferences.contextIsolation = true;
+    webPreferences.sandbox = true;
+    webPreferences.webSecurity = true;
+    if (!isAllowedRiftLiteReplayNavigation(params.src)) {
+      event.preventDefault();
+    }
+  });
   mainWindow.webContents.on("did-attach-webview", (_event, webContents) => {
+    if (isRiftLiteReplayWebContents(webContents)) {
+      riftLiteReplayWebContents = webContents;
+      secureRiftLiteReplayWebContents(webContents);
+      installFullscreenShortcut(webContents);
+      webContents.once("destroyed", () => {
+        if (riftLiteReplayWebContents?.id === webContents.id) {
+          riftLiteReplayWebContents = null;
+        }
+      });
+      return;
+    }
     rememberGameWebContents(webContents);
+    maybeInstallRawCaptureWebSocketTap(webContents);
     installFullscreenShortcut(webContents);
-    webContents.on("did-navigate", () => rememberGameWebContents(webContents));
-    webContents.on("did-navigate-in-page", () => rememberGameWebContents(webContents));
-    webContents.on("dom-ready", () => rememberGameWebContents(webContents));
+    const refreshGuestContext = () => {
+      rememberGameWebContents(webContents);
+      maybeInstallRawCaptureWebSocketTap(webContents);
+    };
+    webContents.on("did-navigate", refreshGuestContext);
+    webContents.on("did-navigate-in-page", refreshGuestContext);
+    webContents.on("dom-ready", refreshGuestContext);
     webContents.once("destroyed", () => forgetGameWebContents(webContents));
+    webContents.on("render-process-gone", (_goneEvent, details) => {
+      const platform = platformFromUrl(webContents.getURL());
+      const payload = {
+        reason: "guest-render-process-gone",
+        details,
+        url: webContents.getURL()
+      };
+      void logStartupIssue("guest render process gone", JSON.stringify(payload));
+      if (platform) {
+        void capture.handleEvent({
+          id: `guest-render-process-gone-${Date.now()}`,
+          platform,
+          kind: "debug",
+          capturedAt: new Date().toISOString(),
+          url: webContents.getURL(),
+          payload
+        });
+      }
+    });
+    webContents.on("unresponsive", () => {
+      const platform = platformFromUrl(webContents.getURL());
+      const payload = {
+        reason: "guest-webview-unresponsive",
+        url: webContents.getURL()
+      };
+      void logStartupIssue("guest webview unresponsive", JSON.stringify(payload));
+      if (platform) {
+        void capture.handleEvent({
+          id: `guest-webview-unresponsive-${Date.now()}`,
+          platform,
+          kind: "debug",
+          capturedAt: new Date().toISOString(),
+          url: webContents.getURL(),
+          payload
+        });
+      }
+    });
+    webContents.on("responsive", () => {
+      const platform = platformFromUrl(webContents.getURL());
+      if (platform) {
+        void capture.handleEvent({
+          id: `guest-webview-responsive-${Date.now()}`,
+          platform,
+          kind: "debug",
+          capturedAt: new Date().toISOString(),
+          url: webContents.getURL(),
+          payload: { reason: "guest-webview-responsive" }
+        });
+      }
+    });
     webContents.on("console-message", (_consoleEvent, level, message, line, sourceId) => {
       if (/riftlite|preload|capture/i.test(message)) {
         void capture.handleEvent({
@@ -4179,20 +4743,133 @@ async function createWindow(): Promise<void> {
   } else {
     await mainWindow.loadFile(join(__dirname, "..", "renderer", "index.html"));
   }
+  // Give the isolated renderer preload and React navigation listener time to attach
+  // before delivering an initial protocol URL. Second-instance links deliver immediately.
+  setTimeout(flushPendingAppNavigation, 750);
+}
+
+function protocolNavigationFromArgs(argv: string[]): AppNavigationRequest | null {
+  const raw = argv.find((item) => item.toLowerCase().startsWith("riftlite://"));
+  if (!raw) return null;
+  try {
+    const url = new URL(raw);
+    if (url.hostname === "hubs") {
+      return { view: "hubs", hubId: decodeURIComponent(url.pathname.replace(/^\/+/, "")) };
+    }
+    if (url.hostname === "account") return { view: "account" };
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function queueAppNavigation(request: AppNavigationRequest | null): void {
+  if (!request) return;
+  pendingAppNavigation = request;
+  flushPendingAppNavigation();
+}
+
+function flushPendingAppNavigation(): void {
+  if (!pendingAppNavigation || !mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isLoading()) return;
+  mainWindow.webContents.send("app:navigate", pendingAppNavigation);
+  pendingAppNavigation = null;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+}
+
+async function openDeckTrackerWindow(): Promise<void> {
+  if (deckTrackerWindow && !deckTrackerWindow.isDestroyed()) {
+    if (deckTrackerWindow.isMinimized()) {
+      deckTrackerWindow.restore();
+    }
+    deckTrackerWindow.focus();
+    return;
+  }
+
+  const icon = nativeImage.createFromPath(assetPath("riftlite-app.ico"));
+  deckTrackerWindow = new BrowserWindow({
+    width: 340,
+    height: 520,
+    minWidth: 280,
+    minHeight: 300,
+    title: "RiftLite Deck Tracker",
+    icon,
+    backgroundColor: "#07101d",
+    autoHideMenuBar: true,
+    show: false,
+    webPreferences: {
+      preload: preloadPath("appPreload"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+      backgroundThrottling: false
+    }
+  });
+  deckTrackerWindow.setMenu(null);
+  deckTrackerWindow.setMenuBarVisibility(false);
+  deckTrackerWindow.once("ready-to-show", () => deckTrackerWindow?.show());
+  deckTrackerWindow.on("closed", () => {
+    deckTrackerWindow = null;
+  });
+  deckTrackerWindow.webContents.setWindowOpenHandler(({ url }) => {
+    void openExternalResource(url).catch(() => undefined);
+    return { action: "deny" };
+  });
+  deckTrackerWindow.webContents.on("render-process-gone", (_event, details) => {
+    void logStartupIssue("deck tracker renderer process gone", JSON.stringify(details));
+  });
+  deckTrackerWindow.webContents.on("preload-error", (_event, preloadPathValue, error) => {
+    void logStartupIssue("deck tracker preload error", `${preloadPathValue}\n${formatStartupError(error)}`);
+  });
+
+  if (isDev) {
+    await deckTrackerWindow.loadURL("http://127.0.0.1:5173/?deckTrackerPopout=1");
+  } else {
+    await deckTrackerWindow.loadFile(join(__dirname, "..", "renderer", "index.html"), {
+      query: { deckTrackerPopout: "1" }
+    });
+  }
 }
 
 function registerIpc(): void {
   ipcMain.handle("settings:get", () => store.getSettings());
   ipcMain.handle("settings:save", async (_event, patch: Partial<UserSettings>) => {
+    const accountIdentityChanged =
+      Object.prototype.hasOwnProperty.call(patch, "accountUid") ||
+      Object.prototype.hasOwnProperty.call(patch, "firebaseUid") ||
+      Object.prototype.hasOwnProperty.call(patch, "firebaseRefreshToken");
+    if (accountIdentityChanged) {
+      syncService.invalidateLinkedAccountAuth();
+      await clearRiftLiteReplayEmbedCookies().catch(() => undefined);
+    }
     const saved = await store.saveSettings(patch);
+    if (accountIdentityChanged) {
+      await clearRiftLiteReplayEmbedCookies().catch(() => undefined);
+    }
     if (
       Object.prototype.hasOwnProperty.call(patch, "screenshotHotkey") ||
       Object.prototype.hasOwnProperty.call(patch, "screenshotHotkeyEnabled")
     ) {
       await configureScreenshotHotkey();
     }
+    if (
+      Object.prototype.hasOwnProperty.call(patch, "replayVideoEnabled") ||
+      Object.prototype.hasOwnProperty.call(patch, "replayShadowClipEnabled") ||
+      Object.prototype.hasOwnProperty.call(patch, "replayShadowClipHotkey") ||
+      Object.prototype.hasOwnProperty.call(patch, "replayShadowClipHotkeyEnabled") ||
+      Object.prototype.hasOwnProperty.call(patch, "replayQuickFlagHotkey") ||
+      Object.prototype.hasOwnProperty.call(patch, "replayQuickFlagHotkeyEnabled")
+    ) {
+      await configureReplayHotkeys();
+    }
     if (Object.prototype.hasOwnProperty.call(patch, "replayDirectory")) {
       replayFrameDirectoryCache = null;
+    }
+    if (RIFTREPLAY_CAPTURE_FEATURE_ENABLED && Object.prototype.hasOwnProperty.call(patch, "rawCapture")) {
+      void rawCaptureService.uploadPendingRawCaptures().catch((error) => {
+        void logStartupIssue("raw capture pending upload after settings save failed", error);
+      });
     }
     return saved;
   });
@@ -4201,13 +4878,23 @@ function registerIpc(): void {
   ipcMain.handle("capture:force-review", (_event, platform: GamePlatform) => capture.forceReview(platform));
   ipcMain.handle("matches:get", () => store.getMatches());
   ipcMain.handle("matches:deleted", () => store.getDeletedMatches());
-  ipcMain.handle("matches:save-draft", (_event, draft: MatchDraft) => store.saveMatch(draft));
-  ipcMain.handle("matches:confirm", (_event, draft: MatchDraft) => capture.confirmMatch(draft));
+  ipcMain.handle("matches:save-draft", async (_event, draft: MatchDraft) => {
+    const saved = await store.saveMatch(draft);
+    queueAccountCloudSync("Match saved");
+    return saved;
+  });
+  ipcMain.handle("matches:confirm", async (_event, draft: MatchDraft) => {
+    const saved = await capture.confirmMatch(draft);
+    queueAccountCloudSync("Match saved");
+    return saved;
+  });
   ipcMain.handle("matches:combine-preview", (_event, matchIds: string[]) => store.previewCombinedMatches(matchIds));
   ipcMain.handle("matches:combine-save", async (_event, payload) => {
     const combined = await store.combineMatches(payload);
     const synced = await syncService.syncMatch(combined, { quiet: true }).catch(() => combined);
-    return store.saveMatch(synced);
+    const saved = await store.saveMatch(synced);
+    queueAccountCloudSync("Match repair saved");
+    return saved;
   });
   ipcMain.handle("matches:combine-undo", (_event, combinedMatchId: string) => store.undoCombinedMatch(combinedMatchId));
   ipcMain.handle("matches:delete", (_event, id: string) => store.deleteMatch(id));
@@ -4215,14 +4902,41 @@ function registerIpc(): void {
   ipcMain.handle("matches:purge", (_event, id: string) => store.purgeMatch(id));
   ipcMain.handle("matches:export-csv", (_event, payload: MatchHistoryCsvExportPayload) => exportMatchHistoryCsv(payload));
   ipcMain.handle("decks:get", () => deckService.getDecks());
-  ipcMain.handle("decks:import", (_event, url: string) => deckService.importDeck(url));
-  ipcMain.handle("decks:import-text", (_event, text: string) => deckService.importDeckText(text));
-  ipcMain.handle("decks:refresh", (_event, id: string) => deckService.refreshDeck(id));
-  ipcMain.handle("decks:rename", (_event, id: string, title: string) => deckService.renameDeck(id, title));
-  ipcMain.handle("decks:delete", (_event, id: string) => deckService.deleteDeck(id));
-  ipcMain.handle("decks:set-active", (_event, id: string) => deckService.setActiveDeck(id));
+  ipcMain.handle("decks:import", async (_event, url: string) => {
+    const deck = await deckService.importDeck(url);
+    queueAccountCloudSync("Deck imported");
+    return deck;
+  });
+  ipcMain.handle("decks:import-text", async (_event, text: string) => {
+    const deck = await deckService.importDeckText(text);
+    queueAccountCloudSync("Deck imported");
+    return deck;
+  });
+  ipcMain.handle("decks:refresh", async (_event, id: string) => {
+    const deck = await deckService.refreshDeck(id);
+    queueAccountCloudSync("Deck refreshed");
+    return deck;
+  });
+  ipcMain.handle("decks:rename", async (_event, id: string, title: string) => {
+    const deck = await deckService.renameDeck(id, title);
+    queueAccountCloudSync("Deck renamed");
+    return deck;
+  });
+  ipcMain.handle("decks:delete", async (_event, id: string) => {
+    await deckService.deleteDeck(id);
+    queueAccountCloudSync("Deck deleted");
+  });
+  ipcMain.handle("decks:set-active", async (_event, id: string) => {
+    const settings = await deckService.setActiveDeck(id);
+    queueAccountCloudSync("Active deck changed");
+    return settings;
+  });
   ipcMain.handle("decks:notebook:get", (_event, deckId: string) => store.getDeckNotebook(deckId));
-  ipcMain.handle("decks:notebook:save", (_event, deckId: string, notebook: DeckNotebook) => store.saveDeckNotebook(deckId, notebook));
+  ipcMain.handle("decks:notebook:save", async (_event, deckId: string, notebook: DeckNotebook) => {
+    const saved = await store.saveDeckNotebook(deckId, notebook);
+    queueAccountCloudSync("Deck notebook saved");
+    return saved;
+  });
   ipcMain.handle("decks:notebook:export", (_event, deckId: string) => exportDeckNotebook(deckId));
   ipcMain.handle("decks:notebook:import", () => importDeckNotebook());
   ipcMain.handle("decks:package:export", (_event, deckId: string, notebook?: DeckNotebook) => exportDeckPackage(deckId, notebook));
@@ -4238,7 +4952,12 @@ function registerIpc(): void {
   ipcMain.handle("deck-tracker:get-state", () => deckTrackerService.getState());
   ipcMain.handle("deck-tracker:set-pinned", (_event, deckId: string, cardKeys: string[]) => deckTrackerService.setPinnedCards(deckId, cardKeys));
   ipcMain.handle("deck-tracker:adjust", (_event, cardKey: string, delta: number) => deckTrackerService.adjustCard(cardKey, delta));
+  ipcMain.handle("deck-tracker:sideboard-adjust", (_event, cardKey: string, direction: "in" | "out", delta: number) => (
+    deckTrackerService.adjustSideboardCard(cardKey, direction, delta)
+  ));
+  ipcMain.handle("deck-tracker:sideboard-reset", () => deckTrackerService.resetSideboard());
   ipcMain.handle("deck-tracker:reset", () => deckTrackerService.resetMatch());
+  ipcMain.handle("deck-tracker:open-window", () => openDeckTrackerWindow());
   ipcMain.handle("vision-deck-tracker:get-status", () => deckTrackerService.getVisionStatus());
   ipcMain.handle("vision-deck-tracker:set-enabled", (_event, enabled: boolean) => deckTrackerService.setVisionEnabled(Boolean(enabled)));
   ipcMain.handle("vision-deck-tracker:calibrate", (_event, platform: GamePlatform) => deckTrackerService.calibrateVisionTracker(platform));
@@ -4269,6 +4988,17 @@ function registerIpc(): void {
   ipcMain.handle("replays:export-mp4", (_event, replayId: string, options: ReplayMp4ExportOptions) => exportReplayMp4(replayId, options));
   ipcMain.handle("replays:export-presentation-mp4", (_event, replayId: string, payload: ReplayPresentationRecordingPayload) => exportReplayPresentationMp4(replayId, payload));
   ipcMain.handle("replays:export-flags-text", (_event, replayId: string) => exportReplayFlagsText(replayId));
+  ipcMain.handle("raw-capture:upload", (_event, replayId: string) => rawCaptureService.uploadRawCapture(replayId));
+  ipcMain.handle("raw-capture:status", () => rawCaptureService.getStatus());
+  ipcMain.handle("raw-capture:payload", (_event, replayId: string) => rawCaptureService.getRawCapturePayload(replayId));
+  ipcMain.handle("raw-capture:upload-riftlite", (_event, replayId: string, visibility?: RawCaptureVisibility) => (
+    rawCaptureService.uploadRawCaptureToRiftLite(replayId, visibility)
+  ));
+  ipcMain.handle("raw-capture:share-discord", (_event, replayId: string) => (
+    rawCaptureService.shareRawCaptureToDiscord(replayId)
+  ));
+  ipcMain.handle("replay:embed:prepare", (_event, replayId: string) => prepareRiftLiteReplayEmbed(replayId));
+  ipcMain.handle("replay:embed:prepare-library", () => prepareRiftLiteReplayLibraryEmbed());
   ipcMain.handle("replays:import", () => importReplayBundle());
   ipcMain.handle("replays:import-folder", () => importReplayFolder());
   ipcMain.handle("replays:open-folder", async () => {
@@ -4312,6 +5042,7 @@ function registerIpc(): void {
   ipcMain.handle("community:matches", (_event, forceRefresh = false) => syncService.getCommunityMatches(Boolean(forceRefresh)));
   ipcMain.handle("hubs:create", async (_event, name: string, password: string) => syncService.createHub(name, password, await store.getSettings()));
   ipcMain.handle("hubs:join", async (_event, name: string, password: string) => syncService.joinHub(name, password, await store.getSettings()));
+  ipcMain.handle("hubs:refresh-account", () => syncService.refreshAccountHubs());
   ipcMain.handle("hubs:matches", (_event, hubId: string, forceRefresh = false) => syncService.getHubMatches(hubId, Boolean(forceRefresh)));
   ipcMain.handle("hubs:sync-private", () => capture.syncPrivateHubs());
   ipcMain.handle("hubs:sync-selected", (_event, matchIds: string[], hubIds: string[]) => capture.syncMatchesToHubs(matchIds, hubIds));
@@ -4321,12 +5052,33 @@ function registerIpc(): void {
   ipcMain.handle("teams:sync-selected", (_event, matchIds: string[], teamIds: string[]) => capture.syncMatchesToTeams(matchIds, teamIds));
   ipcMain.handle("teams:delete-match", (_event, teamId: string, matchId: string) => syncService.deleteTeamMatch(teamId, matchId));
   ipcMain.handle("account:link:start", () => syncService.startAccountLink());
-  ipcMain.handle("account:link:status", (_event, sessionId: string) => syncService.getAccountLinkStatus(sessionId));
+  ipcMain.handle("account:link:status", async (_event, sessionId: string) => {
+    const status = await syncService.getAccountLinkStatus(sessionId);
+    if (status.status === "complete") {
+      await clearRiftLiteReplayEmbedCookies().catch(() => undefined);
+      if (RIFTREPLAY_CAPTURE_FEATURE_ENABLED) {
+        void rawCaptureService.uploadPendingRawCaptures().catch((error) => {
+          void logStartupIssue("raw capture pending upload after account link failed", error);
+        });
+      }
+    }
+    return status;
+  });
   ipcMain.handle("account:profile:get", () => syncService.getAccountProfile());
+  ipcMain.handle("account:connection:status", () => syncService.getAccountConnectionStatus());
+  ipcMain.handle("account:connection:repair", () => syncService.repairAccountConnection());
   ipcMain.handle("account:profile:save", (_event, profile: Record<string, unknown>) => syncService.saveAccountProfile(profile));
   ipcMain.handle("account:profile:backfill", () => syncService.refreshAccountProfileMatches());
   ipcMain.handle("account:export", () => exportAccountData());
-  ipcMain.handle("account:unlink", () => syncService.unlinkAccount());
+  ipcMain.handle("account:cloud-sync:status", () => syncService.getAccountCloudSyncStatus());
+  ipcMain.handle("account:cloud-sync:set-enabled", (_event, enabled: boolean) => syncService.setAccountCloudSyncEnabled(Boolean(enabled)));
+  ipcMain.handle("account:cloud-sync:upload", () => syncService.uploadAccountCloudSync());
+  ipcMain.handle("account:cloud-sync:restore", () => syncService.restoreAccountCloudSync());
+  ipcMain.handle("account:unlink", async () => {
+    const settings = await syncService.unlinkAccount();
+    await clearRiftLiteReplayEmbedCookies().catch(() => undefined);
+    return settings;
+  });
   ipcMain.handle("profiles:search", (_event, query: string) => syncService.searchPublicProfiles(query));
   ipcMain.handle("hubs:claim", (_event, hubId: string, password?: string) => syncService.claimHub(hubId, password));
   ipcMain.handle("hubs:inbox", () => syncService.getHubInbox());
@@ -4434,12 +5186,16 @@ function registerIpc(): void {
   ipcMain.on("capture:event", (_event, event: CaptureEvent) => {
     void capture.handleEvent(event);
   });
+  ipcMain.on("raw-capture:frame", (event, payload: RawCaptureAppendFramePayload) => {
+    ingestAtlasRawFrame("game-preload", event.sender, payload, "atlas-preload-frame");
+  });
 }
 
 if (!gotSingleInstanceLock) {
   app.quit();
 } else {
-  app.on("second-instance", () => {
+  app.on("second-instance", (_event, argv) => {
+    queueAppNavigation(protocolNavigationFromArgs(argv));
     if (mainWindow) {
       if (mainWindow.isMinimized()) {
         mainWindow.restore();
@@ -4448,6 +5204,11 @@ if (!gotSingleInstanceLock) {
     }
   });
 }
+
+app.on("open-url", (event, url) => {
+  event.preventDefault();
+  queueAppNavigation(protocolNavigationFromArgs([url]));
+});
 
 app.whenReady().then(async () => {
   if (!gotSingleInstanceLock) {
@@ -4458,10 +5219,20 @@ app.whenReady().then(async () => {
     await logStartupIssue("startup begin", `RiftLite ${app.getVersion()}`);
     store = new RiftLiteStore();
     await store.load();
+    await clearRiftLiteReplayEmbedCookies().catch((error) => {
+      void logStartupIssue("replay embed cookie cleanup failed", error);
+    });
     tcgaResolver = new TcgaResolver(assetPath("tcga_card_lookup.json"));
     syncService = new FirebaseSyncService(store, () => mainWindow);
     deckService = new DeckService(store);
     deckTrackerService = new DeckTrackerService(store, tcgaResolver);
+    rawCaptureService = new RawCaptureService(store);
+    if (RIFTREPLAY_CAPTURE_FEATURE_ENABLED) {
+      void rawCaptureService.uploadPendingRawCaptures().catch((error) => {
+        void logStartupIssue("raw capture pending upload on startup failed", error);
+      });
+      startRawCaptureUploadRetry();
+    }
     overlayServer = new OverlayServer(store, () => {
       if (typeof capture === "undefined") {
         return null;
@@ -4472,7 +5243,16 @@ app.whenReady().then(async () => {
     diagnostics = new CaptureDiagnostics();
     updater = new UpdaterService(() => mainWindow);
     await diagnostics.ensureFile();
-    capture = new CaptureCoordinator(store, () => mainWindow, tcgaResolver, syncService, diagnostics, captureTimedReplayFrame, deckTrackerService);
+    capture = new CaptureCoordinator(
+      store,
+      () => mainWindow,
+      tcgaResolver,
+      syncService,
+      diagnostics,
+      captureTimedReplayFrame,
+      deckTrackerService,
+      (identity, replay) => rawCaptureService.finishCapture(identity, replay)
+    );
     capture.recordBuildMarker(app.getVersion());
     if (simEventReceiverEnabled()) {
       simEventReceiver = new SimEventReceiver((event) => capture.handleEvent(event));
@@ -4484,6 +5264,7 @@ app.whenReady().then(async () => {
     registerIpc();
     await createWindow();
     await configureScreenshotHotkey().catch((error) => logStartupIssue("screenshot hotkey startup failed", error));
+    await configureReplayHotkeys().catch((error) => logStartupIssue("replay hotkey startup failed", error));
     scheduleAppUsageHeartbeat(store);
     await logStartupIssue("startup complete", `RiftLite ${app.getVersion()}`);
 
@@ -4510,5 +5291,9 @@ app.on("window-all-closed", () => {
 });
 
 app.on("will-quit", () => {
+  if (rawCaptureUploadRetryTimer) {
+    clearInterval(rawCaptureUploadRetryTimer);
+    rawCaptureUploadRetryTimer = null;
+  }
   globalShortcut.unregisterAll();
 });

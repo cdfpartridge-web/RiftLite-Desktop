@@ -122,7 +122,10 @@ function draft(overrides: Partial<MatchDraft> = {}): MatchDraft {
   };
 }
 
-function coordinatorHarness(options: { failSave?: boolean } = {}): {
+function coordinatorHarness(options: {
+  failSave?: boolean;
+  finalizeRawCaptureForMatch?: ReturnType<typeof vi.fn>;
+} = {}): {
   coordinator: CaptureCoordinator;
   saved: MatchDraft[];
   sent: Array<{ channel: string; payload: unknown }>;
@@ -178,7 +181,10 @@ function coordinatorHarness(options: { failSave?: boolean } = {}): {
       () => win as never,
       resolver as never,
       syncService as never,
-      diagnostics as never
+      diagnostics as never,
+      undefined,
+      undefined,
+      options.finalizeRawCaptureForMatch as never
     ),
     saved,
     sent,
@@ -439,6 +445,45 @@ describe("CaptureCoordinator", () => {
       opponentName: "Leman",
       score: "1-0"
     });
+  });
+
+  it("finalizes the raw match when video replay capture is disabled", async () => {
+    const finalizeRawCaptureForMatch = vi.fn(async () => null);
+    const { coordinator } = coordinatorHarness({ finalizeRawCaptureForMatch });
+
+    await coordinator.handleEvent(event("match-start", {
+      active: true,
+      myName: "BMU",
+      opponentName: "Atlas Rival",
+      myChampion: "Annie",
+      opponentChampion: "Jinx",
+      seriesId: "series-without-video",
+      matchId: "atlas-game-1",
+      roomCode: "RAWROOM",
+      score: { me: "1", opp: "0", source: "atlas-score-track" }
+    }, "2026-07-09T20:00:00.000Z", "atlas"));
+
+    const captured = await coordinator.forceReview("atlas");
+    expect(captured).not.toBeNull();
+    await vi.waitFor(() => expect(finalizeRawCaptureForMatch).toHaveBeenCalledOnce());
+    expect(finalizeRawCaptureForMatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        platform: "atlas",
+        seriesId: "series-without-video",
+        matchId: "atlas-game-1",
+        roomCodes: ["RAWROOM"],
+        localMatchId: expect.any(String),
+        capturedAt: "2026-07-09T20:00:00.000Z",
+        completedAt: expect.any(String),
+        match: {
+          format: "bo1",
+          result: "win",
+          score: { perspective: 1, opponent: 0 },
+          games: expect.any(Array)
+        }
+      }),
+      undefined
+    );
   });
 
   it("still opens the review popup when local storage fails during capture", async () => {

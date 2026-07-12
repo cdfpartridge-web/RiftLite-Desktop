@@ -74,6 +74,12 @@ const BATTLEFIELD_NAMES = [
   { name: "Reaver's Row", canonical: "Reaver's Row" },
   { name: "Targons Peak", canonical: "Targon's Peak" },
   { name: "Zaun Warrens", canonical: "Zaun Warrens" },
+  { name: "Piltovan Forge", canonical: "Piltovan Forge" },
+  { name: "Piltover Forge", canonical: "Piltovan Forge" },
+  { name: "PiltovanForge", canonical: "Piltovan Forge" },
+  { name: "PiltoverForge", canonical: "Piltovan Forge" },
+  { name: "Sandswept Tomb", canonical: "Sandswept Tomb" },
+  { name: "SandsweptTomb", canonical: "Sandswept Tomb" },
   { name: "Ripper's Bay", canonical: "Ripper's Bay" },
   { name: "Frozen Vault", canonical: "Frozen Vault" },
   { name: "Bandle Tree", canonical: "Bandle Tree" },
@@ -96,6 +102,8 @@ let lastEndSignature = "";
 let endedVisibleResultKey = "";
 let snapshotTimer: number | undefined;
 let eventCounter = 0;
+let rawCaptureSeq = 0;
+let rawCaptureSocketSeq = 1;
 let debugEnabled = false;
 let lastDebugMutationAt = 0;
 let lastSnapshotPublishedAt = 0;
@@ -865,6 +873,8 @@ function readTcgaSnapshot(): Record<string, unknown> {
   const hasOpponentCounter = Boolean(opponentName) || counterPlayers.length > 1;
   const hasScoreSignal = score.source !== "none" && (score.me !== "" || score.opp !== "" || score.raw.length > 1);
   const active = Boolean(endText || cardZoneOverlay || hasOpponentCounter || hasScoreSignal || (tcgaPhase === "playing" && counterPlayers.length > 1));
+  const myLegendCard = readTcgaLegendCard("me");
+  const opponentLegendCard = readTcgaLegendCard("opponent");
   return {
     active,
     myName: localCounter?.name || localPlayerName || counterPlayers[0]?.name || "",
@@ -879,14 +889,10 @@ function readTcgaSnapshot(): Record<string, unknown> {
       pseudo: localPlayerName,
       opponentName
     },
-    myChampionImage: imageIdentity(
-      ".game-card.Legend:not(.opponent-card) img.card-front",
-      ".game-card.Legend:not(.opponent-card) img"
-    ),
-    opponentChampionImage: imageIdentity(
-      ".game-card.Legend.opponent-card img.card-front",
-      ".opponent-card.game-card.Legend img"
-    ),
+    myChampion: tcgaLegendCardText(myLegendCard),
+    opponentChampion: tcgaLegendCardText(opponentLegendCard),
+    myChampionImage: myLegendCard.image,
+    opponentChampionImage: opponentLegendCard.image,
     myBattlefield: battlefieldText.me,
     opponentBattlefield: battlefieldText.opponent,
     myBattlefieldImage,
@@ -897,6 +903,91 @@ function readTcgaSnapshot(): Record<string, unknown> {
     selectedDeck: readTcgaDeck(),
     endText
   };
+}
+
+function readTcgaLegendCard(owner: "me" | "opponent"): { text: string; image: string; code: string } {
+  const selectors = owner === "opponent"
+    ? [
+        ".game-card.Legend.opponent-card",
+        ".opponent-card.game-card.Legend",
+        "[class*='Legend'][class*='opponent-card']",
+        "[class*='opponent-card'][class*='Legend']",
+        "[class*='opponent' i] [class*='Legend']"
+      ]
+    : [
+        ".game-card.Legend:not(.opponent-card)",
+        ".game-card[class*='Legend']:not(.opponent-card)",
+        "[class*='Legend']:not(.opponent-card)"
+      ];
+
+  for (const selector of selectors) {
+    for (const element of Array.from(document.querySelectorAll(selector)).slice(0, 12)) {
+      const classes = attr(element, "class");
+      if (owner === "me" && /\bopponent-card\b/i.test(classes)) {
+        continue;
+      }
+      if (owner === "opponent" && !/opponent/i.test(`${selector} ${classes}`)) {
+        continue;
+      }
+      const img = element.querySelector("img.card-front, img") as HTMLImageElement | null;
+      const image = img?.currentSrc || img?.src || attr(img, "data-src") || "";
+      if (isCardBackImage(image)) {
+        continue;
+      }
+      const text = [
+        textOf(element),
+        attr(element, "aria-label"),
+        attr(element, "title"),
+        attr(element, "data-name"),
+        attr(element, "data-card-name"),
+        attr(img, "alt")
+      ].filter(Boolean).join(" ");
+      const code = attr(element, "data-card-id") || attr(img, "data-card-id") || cardCodeFromImage(image);
+      if (text || image || code) {
+        return { text, image, code };
+      }
+    }
+  }
+
+  return {
+    text: "",
+    image: owner === "opponent"
+      ? imageIdentity(
+          ".game-card.Legend.opponent-card img.card-front",
+          ".opponent-card.game-card.Legend img"
+        )
+      : imageIdentity(
+          ".game-card.Legend:not(.opponent-card) img.card-front",
+          ".game-card.Legend:not(.opponent-card) img"
+        ),
+    code: ""
+  };
+}
+
+function tcgaLegendCardText(card: { text: string; code: string }): string {
+  const values = [card.text, card.code]
+    .join(" ")
+    .replace(/\b[A-Z]{2,5}-\d{1,4}[A-Z]?\b/gi, " ")
+    .replace(/\b(legend|unit|champion|spell|gear|battlefield|rune)\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!values || values.length < 3 || isTcgaActionOnlyCardLabel(values)) {
+    return "";
+  }
+  return values.slice(0, 160);
+}
+
+function isTcgaActionOnlyCardLabel(value: string): boolean {
+  const cleaned = value
+    .replace(/[+\-]\d+/g, " ")
+    .replace(/[^a-z0-9]+/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+  if (!cleaned) {
+    return true;
+  }
+  return /^(tap|untap|ping|target|primary|secondary|group with|auto pay|energy|power|error|unknown card|no card)$/.test(cleaned);
 }
 
 function findTcgaEndText(): string {
@@ -1006,7 +1097,7 @@ function readAtlasSnapshot(): Record<string, unknown> {
   const ownedBoardSelector = document.querySelector(
     '[data-zone-owner="opponent"], [data-zone-owner="self"], [data-zone-owner="player"], [data-owner="opponent"], [data-owner="self"], [data-owner="player"]'
   );
-  const realZoneCards = zoneCards.some((card) => Boolean(card.zoneOwner) && isRealAtlasCardImage(card.image));
+  const realZoneCards = zoneCards.some((card) => Boolean(card.zoneOwner) && hasRealAtlasCardIdentity(card));
   const cardZoneOverlay = Boolean(
     !terminalText &&
       !sideboarding &&
@@ -1078,6 +1169,8 @@ function readAtlasSnapshot(): Record<string, unknown> {
     myName: atlasPlayers.me,
     opponentName: atlasPlayers.opponent,
     atlasPlayerCandidates: atlasPlayers.candidates,
+    myChampion: atlasLegendCardText(myLegendCard),
+    opponentChampion: atlasLegendCardText(opponentLegendCard),
     myChampionImage: myLegendCard.image,
     opponentChampionImage: opponentLegendCard.image,
     myBattlefield: "",
@@ -1315,7 +1408,7 @@ function atlasCardByZone(cards: Array<Record<string, string>>, owner: "self" | "
   const card = cards.find((candidate) =>
     atlasOwnerMatches(candidate.zoneOwner, owner) &&
     atlasZoneMatches(candidate.zone, zone) &&
-    isRealAtlasCardImage(candidate.image)
+    hasRealAtlasCardIdentity(candidate)
   );
   if (!card) {
     return emptyAtlasCard();
@@ -1323,9 +1416,25 @@ function atlasCardByZone(cards: Array<Record<string, string>>, owner: "self" | "
   return {
     text: usefulAtlasCardText(card.text),
     image: card.image,
-    code: card.code || cardCodeFromImage(card.image),
+    code: card.code || card.cardId || cardCodeFromImage(card.image),
     zone
   };
+}
+
+function atlasLegendCardText(card: { text: string; code: string }): string {
+  const text = usefulAtlasCardText(card.text)
+    .replace(/\b[A-Z]{2,5}-\d{1,4}[A-Z]?\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text || text.length < 3 || isAtlasGenericName(text) || isAtlasLegendTextNoise(text)) {
+    return "";
+  }
+  return text.slice(0, 120);
+}
+
+function isAtlasLegendTextNoise(value: string): boolean {
+  const normalized = normalizeNameKey(value);
+  return /^(?:tap|untap|ping|target|primary|secondary|groupwith|autopay|energy|power|empowered|quickattack|barrier|stun|deflect|hidden|overwhelm|assault|deathknell|temporary|gear|unit|spell|battlefield|rune|gold|ready|exhaust|body|mind|order|chaos|calm|fury|legend|champion|leader)$/i.test(normalized);
 }
 
 function atlasOwnerMatches(value: string, owner: "self" | "opponent"): boolean {
@@ -1351,18 +1460,18 @@ function readAtlasBattlefieldCards(cards: Array<Record<string, string>>): Array<
       const marker = cards.find((card) =>
         card.zone === zone &&
         !card.zoneOwner &&
-        isRealAtlasCardImage(card.image) &&
+        hasRealAtlasCardIdentity(card) &&
         /battlefield-marker/i.test(card.classes)
       ) ?? cards.find((card) =>
         card.zone === zone &&
         !card.zoneOwner &&
-        isRealAtlasCardImage(card.image)
+        hasRealAtlasCardIdentity(card)
       );
       return marker
         ? {
             text: usefulAtlasCardText(marker.text),
             image: marker.image,
-            code: marker.code || cardCodeFromImage(marker.image),
+            code: marker.code || marker.cardId || cardCodeFromImage(marker.image),
             zone
           }
         : { ...emptyAtlasCard(), zone };
@@ -1370,8 +1479,12 @@ function readAtlasBattlefieldCards(cards: Array<Record<string, string>>): Array<
     .filter((card) => card.image || card.code);
 }
 
+function hasRealAtlasCardIdentity(card: Record<string, string>): boolean {
+  return Boolean(card.cardId || card.code || isRealAtlasCardImage(card.image));
+}
+
 function isRealAtlasCardImage(value: string): boolean {
-  return Boolean(cardCodeFromImage(value)) && !/cardback/i.test(value);
+  return Boolean(value) && !isCardBackImage(value);
 }
 
 function usefulAtlasCardText(value: string): string {
@@ -2039,30 +2152,90 @@ function installNetworkHooks(): void {
   const OriginalWebSocket = window.WebSocket;
   window.WebSocket = class RiftLiteWebSocket extends OriginalWebSocket {
     constructor(url: string | URL, protocols?: string | string[]) {
+      const requestUrl = String(url);
+      const rawCaptureSocketId = isAtlasRawCaptureSocket(requestUrl) ? `ws-${rawCaptureSocketSeq++}` : "";
       if (protocols === undefined) {
         super(url);
       } else {
         super(url, protocols);
       }
       this.addEventListener("message", (message) => {
-        const raw = websocketMessageText(message.data);
-        const shouldCapture = raw && (
-          INTERESTING_URL.test(String(url) + raw.slice(0, 500)) ||
-          (platform === "atlas" && /score|points?|battlefield|players?|turnPlayer|roomCode|victoryScore/i.test(raw.slice(0, MAX_TEXT)))
-        );
-        if (shouldCapture) {
-          const body = safeJson(raw.slice(0, MAX_TEXT));
-          send("network-websocket", {
-            requestUrl: String(url),
-            body,
-            score: scoreFromUnknown(body)
-          });
-          sendDebug("network-websocket-debug", { requestUrl: String(url) });
-          scheduleSnapshot("websocket");
-        }
+        readWebSocketMessageText(message.data, (raw) => {
+          handleWebSocketMessageText(requestUrl, raw, "in", rawCaptureSocketId);
+        });
       });
     }
+
+    send(data: string | ArrayBufferLike | Blob | ArrayBufferView): void {
+      readWebSocketMessageText(data, (raw) => {
+        captureRawAtlasFrame(String(this.url), raw, "out", isAtlasRawCaptureSocket(String(this.url)) ? "ws-out" : "");
+      });
+      super.send(data);
+    }
   };
+}
+
+function handleWebSocketMessageText(requestUrl: string, raw: string, dir: "in" | "out", socketId = ""): void {
+  captureRawAtlasFrame(requestUrl, raw, dir, socketId);
+  const shouldCapture = raw && (
+    INTERESTING_URL.test(requestUrl + raw.slice(0, 500)) ||
+    (platform === "atlas" && /score|points?|battlefield|players?|turnPlayer|roomCode|victoryScore/i.test(raw.slice(0, MAX_TEXT)))
+  );
+  if (!shouldCapture) {
+    return;
+  }
+  const body = safeJson(raw.slice(0, MAX_TEXT));
+  send("network-websocket", {
+    requestUrl,
+    body,
+    score: scoreFromUnknown(body)
+  });
+  sendDebug("network-websocket-debug", { requestUrl });
+  scheduleSnapshot("websocket");
+}
+
+function captureRawAtlasFrame(requestUrl: string, raw: string, dir: "in" | "out", socketId = ""): void {
+  if (platform !== "atlas" || !raw || raw.length > 1_500_000 || !isAtlasRawCaptureSocket(requestUrl)) {
+    return;
+  }
+  const trimmed = raw.trim();
+  if (!trimmed.startsWith("{") || !trimmed.includes("\"type\"")) {
+    return;
+  }
+  const seq = rawCaptureSeq;
+  rawCaptureSeq += 1;
+  ipcRenderer.send("raw-capture:frame", {
+    platform,
+    requestUrl,
+    frame: {
+      seq,
+      ts: Date.now(),
+      dir,
+      socketId: socketId || null,
+      raw
+    }
+  });
+}
+
+function isAtlasRawCaptureSocket(requestUrl: string): boolean {
+  return /riftatlas/i.test(requestUrl) || /realtime\.riftatlas-workers\.com/i.test(requestUrl);
+}
+
+function readWebSocketMessageText(value: unknown, callback: (raw: string) => void): void {
+  const raw = websocketMessageText(value);
+  if (raw) {
+    callback(raw);
+    return;
+  }
+  if (typeof Blob !== "undefined" && value instanceof Blob) {
+    void value.text()
+      .then((text) => {
+        if (text) {
+          callback(text);
+        }
+      })
+      .catch(() => undefined);
+  }
 }
 
 function websocketMessageText(value: unknown): string {

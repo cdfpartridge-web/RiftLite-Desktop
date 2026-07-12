@@ -289,7 +289,7 @@ export interface ActiveDeckPrep {
 
 export type DeckTrackerZone = "hand" | "board" | "base" | "stack" | "trash" | "discard" | "unknown";
 export type DeckTrackerConfidence = "tracked" | "estimated";
-export type DeckTrackerObservationSource = "dom" | "vision" | "manual";
+export type DeckTrackerObservationSource = "dom" | "vision" | "manual" | "event";
 export type VisionDeckTrackerState = "disabled" | "waiting-for-deck" | "calibrating" | "active" | "low-confidence" | "paused" | "error";
 export type DeckTrackerPerformanceMode = "light" | "balanced" | "responsive";
 
@@ -307,6 +307,8 @@ export interface DeckTrackerObservation {
   source?: DeckTrackerObservationSource;
   confidenceScore?: number;
   frameId?: string;
+  instanceId?: string;
+  ownerPlayerId?: string;
   zoneRect?: {
     x: number;
     y: number;
@@ -377,12 +379,51 @@ export interface DeckTrackerCorrection {
   capturedAt: string;
 }
 
+export type DeckTrackerCardRole = "main" | "sideboard" | "legend";
+export type DeckTrackerSideboardDirection = "in" | "out";
+export type DeckTrackerSideboardSource = "atlas" | "manual";
+
+export interface DeckTrackerSideboardChange {
+  id: string;
+  cardKey: string;
+  name: string;
+  code: string;
+  cardId: string;
+  imageUrl: string;
+  qty: number;
+  direction: DeckTrackerSideboardDirection;
+  source: DeckTrackerSideboardSource;
+  gameNumber?: number;
+  capturedAt: string;
+}
+
+export interface DeckTrackerSideboardCardOption {
+  cardKey: string;
+  name: string;
+  code: string;
+  cardId: string;
+  imageUrl: string;
+  qty: number;
+  role: DeckTrackerCardRole;
+}
+
+export interface DeckTrackerSideboardState {
+  gameNumber?: number;
+  phase: string;
+  autoDetected: boolean;
+  hasManualChanges: boolean;
+  changes: DeckTrackerSideboardChange[];
+  mainOptions: DeckTrackerSideboardCardOption[];
+  sideboardOptions: DeckTrackerSideboardCardOption[];
+}
+
 export interface DeckTrackerCardState {
   cardKey: string;
   name: string;
   code: string;
   cardId: string;
   imageUrl: string;
+  role: DeckTrackerCardRole;
   deckCount: number;
   seenCount: number;
   manualDelta: number;
@@ -396,12 +437,34 @@ export interface DeckTrackerCardState {
   };
 }
 
+export interface DeckTrackerOpponentCardState {
+  cardKey: string;
+  name: string;
+  code: string;
+  cardId: string;
+  imageUrl: string;
+  count: number;
+  zones: DeckTrackerZone[];
+  firstSeenAt: string;
+  lastSeenAt: string;
+  confidence: DeckTrackerConfidence;
+}
+
+export interface DeckTrackerOpponentState {
+  totalSeen: number;
+  totalKnown: number;
+  updatedAt: string;
+  knownCards: DeckTrackerOpponentCardState[];
+  cards: DeckTrackerOpponentCardState[];
+}
+
 export interface DeckTrackerState {
   active: boolean;
   reason: string;
   deckId: string;
   deckTitle: string;
   deckLegend: string;
+  opponentLegend: string;
   platform: GamePlatform | "none";
   confidence: DeckTrackerConfidence;
   deckSize: number;
@@ -411,6 +474,8 @@ export interface DeckTrackerState {
   pinnedCards: string[];
   corrections: DeckTrackerCorrection[];
   cards: DeckTrackerCardState[];
+  sideboard: DeckTrackerSideboardState;
+  opponent: DeckTrackerOpponentState;
 }
 
 export interface DeckTrackerSnapshot {
@@ -684,6 +749,7 @@ export interface ReplayRecord {
   annotations?: ReplayAnnotation[];
   voiceNotes?: ReplayVoiceNote[];
   deckTrackerSnapshots?: DeckTrackerSnapshot[];
+  rawCapture?: RawCaptureReplayMetadata;
   coachingPack?: ReplayCoachingPackMetadata;
   matchSnapshot?: MatchDraft;
   search?: ReplaySearchMetadata;
@@ -1016,6 +1082,45 @@ export interface RiftLiteBackupSummary {
   preRestoreBackupPath?: string;
 }
 
+export interface AccountCloudSyncCounts {
+  matches: number;
+  decks: number;
+  notebooks: number;
+  replays: number;
+}
+
+export interface AccountCloudSyncStatus {
+  enabled: boolean;
+  signedIn: boolean;
+  hasRemoteBackup: boolean;
+  lastSyncedAt: string;
+  lastRestoredAt: string;
+  remoteUpdatedAt: string;
+  remoteDeviceName: string;
+  remoteAppVersion: string;
+  remoteBytes: number;
+  remoteCounts: AccountCloudSyncCounts;
+  message: string;
+}
+
+export interface AccountConnectionStatus {
+  connected: boolean;
+  verified: boolean;
+  uid: string;
+  email: string;
+  displayName: string;
+  handle: string;
+  profileComplete: boolean;
+  replayLibraryReady: boolean;
+  replayCount: number;
+  replayAutoUploadEnabled: boolean;
+  replayAutoUploadAccountMatches: boolean;
+  migrationState: "ready" | "pending" | "attention";
+  migrationMessage: string;
+  checkedAt: string;
+  message: string;
+}
+
 export type OverlayProfile = "compact" | "tournament" | "grind" | "deck-focused" | "privacy" | "caster";
 
 export interface OverlayDisplayOptions {
@@ -1037,6 +1142,108 @@ export interface OverlayDisplayOptions {
   showFooter: boolean;
 }
 
+export type RawCaptureVisibility = "private" | "unlisted" | "public";
+export type RawCaptureUploadStatus = "disabled" | "not-uploaded" | "uploaded" | "failed" | "too-large";
+export type RawCaptureProcessingStatus = "pending" | "uploading" | "processing" | "ready" | "failed";
+
+export interface RawCaptureSettings {
+  enabled: boolean;
+  webReplayAutoUploadEnabled: boolean;
+  webReplayAutoUploadAccountUid: string;
+  webReplayDiscordShareEnabled: boolean;
+  webReplayDiscordShareAccountUid: string;
+  webReplayDiscordShareHubIds: string[];
+  uploadEnabled: boolean;
+  endpoint: string;
+  apiKey: string;
+  visibility: RawCaptureVisibility;
+}
+
+export interface RawCaptureFrame {
+  seq: number;
+  ts: number;
+  dir: "in" | "out";
+  socketId?: string | null;
+  type?: string | null;
+  raw: string;
+  drop?: boolean;
+  dropReason?: string | null;
+}
+
+export interface RawCaptureAppendFramePayload {
+  platform: GamePlatform;
+  requestUrl?: string;
+  frame: RawCaptureFrame;
+}
+
+export interface RawCaptureReplayMetadata {
+  provider: "riftlite-v2" | "riftreplay";
+  captureSessionId: string;
+  messageCount: number;
+  firstSeenAt?: number;
+  lastSeenAt?: number;
+  roomCode?: string;
+  roomCodes?: string[];
+  seriesId?: string;
+  matchIds?: string[];
+  uploadStatus: RawCaptureUploadStatus;
+  uploadUrl?: string;
+  uploadId?: string;
+  uploadedAt?: string;
+  processingStatus?: RawCaptureProcessingStatus;
+  checksumSha256?: string;
+  compressedBytes?: number;
+  error?: string;
+  localPath?: string;
+  visibility?: RawCaptureVisibility;
+  webReplayAutoUploadEligible?: boolean;
+  webReplayAutoUploadAccountUid?: string;
+  webReplayDiscordShareEligible?: boolean;
+  webReplayDiscordShareAccountUid?: string;
+  webReplayDiscordShareHubIds?: string[];
+  discordShareStatus?: "pending" | "shared" | "partial" | "failed";
+  discordSharedHubIds?: string[];
+  discordShareError?: string;
+  lastUploadAttemptAt?: string;
+}
+
+export interface RawCaptureStatus {
+  enabled: boolean;
+  active: boolean;
+  platform?: GamePlatform;
+  captureSessionId?: string;
+  messageCount: number;
+  byteSize: number;
+  capped: boolean;
+  keptCount?: number;
+  droppedCount?: number;
+  lastFrameType?: string;
+  lastError?: string;
+  lastUploadUrl?: string;
+}
+
+export interface RiftLiteReplayUploadResult {
+  replayId: string;
+  url: string;
+  visibility: RawCaptureVisibility;
+  status?: RawCaptureProcessingStatus;
+}
+
+export interface RiftLiteReplayDiscordShareResult {
+  replayId: string;
+  url: string;
+  visibility: "unlisted";
+  status: "shared" | "partial" | "failed";
+  sharedHubIds: string[];
+  error?: string;
+}
+
+export interface ReplayEmbedSessionResult {
+  url: string;
+  authenticated: boolean;
+  error?: string;
+}
+
 export interface UserSettings {
   username: string;
   firstRunComplete: boolean;
@@ -1047,9 +1254,17 @@ export interface UserSettings {
     firebaseRefreshToken: string;
     accountUid: string;
     accountEmail: string;
-    accountHandle: string;
+  accountHandle: string;
   accountDisplayName: string;
   accountProfilePublic: boolean;
+  accountLastVerifiedAt: string;
+  accountLastVerificationError: string;
+  accountCloudSyncEnabled: boolean;
+  accountCloudSyncLastSyncedAt: string;
+  accountCloudSyncLastRestoredAt: string;
+  accountCloudSyncDeviceId: string;
+  accountCloudSyncDeviceName: string;
+  accountCloudSyncLastError: string;
   anonymousDiagnosticsEnabled: boolean;
   anonymousInstallId: string;
   anonymousInstallCreatedAt: string;
@@ -1065,6 +1280,13 @@ export interface UserSettings {
   replayVideoQuality: ReplayVideoQuality;
   replayMicAudioEnabled: boolean;
   replayCustomFlagTypes: string[];
+  replayShadowClipEnabled: boolean;
+  replayShadowClipSeconds: number;
+  replayShadowClipHotkey: string;
+  replayShadowClipHotkeyEnabled: boolean;
+  replayQuickFlagHotkey: string;
+  replayQuickFlagHotkeyEnabled: boolean;
+  rawCapture: RawCaptureSettings;
   deckTrackerEnabled: boolean;
   deckTrackerAutoStart: boolean;
   deckTrackerSaveToReplay: boolean;
@@ -1192,6 +1414,11 @@ export interface AccountLinkStatus {
   email?: string;
   displayName?: string;
   message?: string;
+}
+
+export interface AppNavigationRequest {
+  view: "account" | "hubs";
+  hubId?: string;
 }
 
 export interface PublicProfileSearchResult {
@@ -1457,7 +1684,10 @@ export interface RiftLiteApi {
   getDeckTrackerState(): Promise<DeckTrackerState>;
   setDeckTrackerPinnedCards(deckId: string, cardKeys: string[]): Promise<DeckTrackerState>;
   adjustDeckTrackerCard(cardKey: string, delta: number): Promise<DeckTrackerState>;
+  adjustDeckTrackerSideboard(cardKey: string, direction: DeckTrackerSideboardDirection, delta: number): Promise<DeckTrackerState>;
+  resetDeckTrackerSideboard(): Promise<DeckTrackerState>;
   resetDeckTrackerMatch(): Promise<DeckTrackerState>;
+  openDeckTrackerWindow(): Promise<void>;
   getVisionDeckTrackerStatus(): Promise<VisionDeckTrackerStatus>;
   setVisionDeckTrackerEnabled(enabled: boolean): Promise<UserSettings>;
   calibrateVisionDeckTracker(platform: GamePlatform): Promise<VisionDeckTrackerStatus>;
@@ -1479,6 +1709,13 @@ export interface RiftLiteApi {
   exportReplayMp4(replayId: string, options: ReplayMp4ExportOptions): Promise<string>;
   exportReplayPresentationMp4(replayId: string, payload: ReplayPresentationRecordingPayload): Promise<string>;
   exportReplayFlagsText(replayId: string): Promise<string>;
+  uploadRawCapture(replayId: string): Promise<ReplayRecord | null>;
+  getRawCaptureStatus(): Promise<RawCaptureStatus>;
+  getRawCapturePayload(replayId: string): Promise<unknown | null>;
+  uploadRawCaptureToRiftLite(replayId: string, visibility?: RawCaptureVisibility): Promise<RiftLiteReplayUploadResult>;
+  shareRawCaptureToDiscord(replayId: string): Promise<RiftLiteReplayDiscordShareResult>;
+  prepareReplayEmbed(replayId: string): Promise<ReplayEmbedSessionResult>;
+  prepareReplayLibraryEmbed(): Promise<ReplayEmbedSessionResult>;
   importReplayBundle(): Promise<ReplayRecord | null>;
   importReplayFolder(): Promise<ReplayRecord[]>;
   openReplayFolder(): Promise<void>;
@@ -1501,6 +1738,7 @@ export interface RiftLiteApi {
   getTeamMatches(teamId: string, forceRefresh?: boolean): Promise<CommunityMatch[]>;
   createHub(name: string, password: string): Promise<HubActionResult>;
   joinHub(name: string, password: string): Promise<HubActionResult>;
+  refreshAccountHubs(): Promise<UserSettings>;
   syncPrivateHubs(): Promise<PrivateHubSyncResult>;
   syncMatchesToHubs(matchIds: string[], hubIds: string[]): Promise<PrivateHubSyncResult>;
   deleteHubMatch(hubId: string, matchId: string): Promise<void>;
@@ -1509,10 +1747,16 @@ export interface RiftLiteApi {
   deleteTeamMatch(teamId: string, matchId: string): Promise<void>;
   startAccountLink(): Promise<AccountLinkSession>;
   getAccountLinkStatus(sessionId: string): Promise<AccountLinkStatus>;
+  getAccountConnectionStatus(): Promise<AccountConnectionStatus>;
+  repairAccountConnection(): Promise<AccountConnectionStatus>;
   getAccountProfile(): Promise<AccountProfile | null>;
   saveAccountProfile(profile: Partial<AccountProfile>): Promise<AccountProfile>;
   refreshAccountProfileMatches(): Promise<AccountProfileBackfillResult>;
   exportAccountData(): Promise<string>;
+  getAccountCloudSyncStatus(): Promise<AccountCloudSyncStatus>;
+  setAccountCloudSyncEnabled(enabled: boolean): Promise<AccountCloudSyncStatus>;
+  uploadAccountCloudSync(): Promise<AccountCloudSyncStatus>;
+  restoreAccountCloudSync(): Promise<AccountCloudSyncStatus>;
   unlinkAccount(): Promise<UserSettings>;
   searchPublicProfiles(query: string): Promise<PublicProfileSearchResult[]>;
   claimHub(hubId: string, password?: string): Promise<void>;
@@ -1545,6 +1789,7 @@ export interface RiftLiteApi {
   reportSocialTeam(payload: { teamId: string; targetType: "team" | "message"; targetId: string; reason: string }): Promise<void>;
   getModerationTeams(query?: string): Promise<{ isModerator: boolean; teams: TeamModerationRecord[] }>;
   moderateTeam(teamId: string, action: TeamModerationAction, reason?: string): Promise<TeamModerationRecord>;
+  onAppNavigate(callback: (request: AppNavigationRequest) => void): () => void;
   getUpdateStatus(): Promise<UpdateStatus>;
   checkForUpdates(): Promise<UpdateStatus>;
   downloadUpdate(): Promise<UpdateStatus>;
@@ -1572,6 +1817,8 @@ export interface RiftLiteApi {
   onCaptureHealth(callback: (health: CaptureHealth) => void): () => void;
   onMatchDraft(callback: (draft: MatchDraft) => void): () => void;
   onScreenshotSaved(callback: (result: ScreenshotResult) => void): () => void;
+  onReplayShadowClipHotkey(callback: () => void): () => void;
+  onReplayQuickFlagHotkey(callback: () => void): () => void;
   onUpdateStatus(callback: (status: UpdateStatus) => void): () => void;
   reportRendererEvent(event: CaptureEvent): Promise<void>;
 }

@@ -1,8 +1,8 @@
 {
-  "name": "riftlite-desktop-v06",
-  "version": "0.7.80",
+  "name": "riftlite-desktop-v08",
+  "version": "0.8.0",
   "private": true,
-  "description": "RiftLite 0.7 desktop companion app.",
+  "description": "RiftLite 0.8 desktop companion app.",
   "main": "dist/main/main.js",
   "type": "module",
   "scripts": {
@@ -47,8 +47,16 @@
   },
   "build": {
     "appId": "com.riftlite.desktop.beta06",
-    "productName": "RiftLite Beta 0.7",
-    "executableName": "RiftLite Beta 0.7",
+    "productName": "RiftLite Beta 0.8",
+    "protocols": [
+      {
+        "name": "RiftLite",
+        "schemes": [
+          "riftlite"
+        ]
+      }
+    ],
+    "executableName": "RiftLite Beta 0.8",
     "artifactName": "RiftLiteBetaInstall.${ext}",
     "publish": [
       {
@@ -102,8 +110,8 @@
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
-      "shortcutName": "RiftLite Beta 0.7",
-      "uninstallDisplayName": "RiftLite Beta 0.7"
+      "shortcutName": "RiftLite Beta 0.8",
+      "uninstallDisplayName": "RiftLite Beta 0.8"
     }
   }
 }

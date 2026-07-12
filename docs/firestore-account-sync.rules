@@ -1,0 +1,13 @@
+// Add this block inside the existing:
+// service cloud.firestore { match /databases/{database}/documents { ... } }
+//
+// RiftLite account cloud sync stores each user's compressed local backup as:
+// accountSync/{uid}/manifest/current
+// accountSync/{uid}/chunks/{generationId}-chunk-0000...
+//
+// Only the signed-in account owner may read/write their backup.
+// The desktop app writes directly with the user's Firebase ID token, so this
+// path must be allowed before enabling account device sync for testers.
+match /accountSync/{uid}/{document=**} {
+  allow read, write: if request.auth != null && request.auth.uid == uid;
+}

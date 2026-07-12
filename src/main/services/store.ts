@@ -1,5 +1,5 @@
 import { app } from "electron";
-import { copyFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { randomUUID } from "node:crypto";
@@ -17,6 +17,10 @@ interface PersistedState {
 }
 
 const require = createRequire(import.meta.url);
+const DATABASE_BACKUP_RETENTION = 10;
+const DATABASE_BACKUP_MIN_INTERVAL_MS = 5 * 60 * 1000;
+const OLD_RAW_CAPTURE_ENDPOINT = "https://test.riftreplay.com/api/v1/replays";
+const DEFAULT_RAW_CAPTURE_ENDPOINT = "https://riftreplay.com/api/v1/replays";
 
 const DEFAULT_SETTINGS: UserSettings = {
   username: "",
@@ -31,6 +35,14 @@ const DEFAULT_SETTINGS: UserSettings = {
   accountHandle: "",
   accountDisplayName: "",
   accountProfilePublic: false,
+  accountLastVerifiedAt: "",
+  accountLastVerificationError: "",
+  accountCloudSyncEnabled: false,
+  accountCloudSyncLastSyncedAt: "",
+  accountCloudSyncLastRestoredAt: "",
+  accountCloudSyncDeviceId: "",
+  accountCloudSyncDeviceName: "",
+  accountCloudSyncLastError: "",
   anonymousDiagnosticsEnabled: true,
   anonymousInstallId: "",
   anonymousInstallCreatedAt: "",
@@ -46,6 +58,24 @@ const DEFAULT_SETTINGS: UserSettings = {
   replayVideoQuality: "sharp",
   replayMicAudioEnabled: false,
   replayCustomFlagTypes: ["Mistake Consequence", "Question", "Alternative Line"],
+  replayShadowClipEnabled: false,
+  replayShadowClipSeconds: 60,
+  replayShadowClipHotkey: "CommandOrControl+Shift+C",
+  replayShadowClipHotkeyEnabled: true,
+  replayQuickFlagHotkey: "CommandOrControl+Shift+F",
+  replayQuickFlagHotkeyEnabled: true,
+  rawCapture: {
+    enabled: false,
+    webReplayAutoUploadEnabled: false,
+    webReplayAutoUploadAccountUid: "",
+    webReplayDiscordShareEnabled: false,
+    webReplayDiscordShareAccountUid: "",
+    webReplayDiscordShareHubIds: [],
+    uploadEnabled: false,
+    endpoint: DEFAULT_RAW_CAPTURE_ENDPOINT,
+    apiKey: "",
+    visibility: "private"
+  },
   deckTrackerEnabled: false,
   deckTrackerAutoStart: false,
   deckTrackerSaveToReplay: false,
@@ -92,6 +122,50 @@ function uniqueReplayCustomFlagTypes(value: unknown): string[] {
     result.push(label.slice(0, 48));
   }
   return result.slice(0, 24);
+}
+
+function normalizeRawCaptureSettings(value: unknown, fallback = DEFAULT_SETTINGS.rawCapture): UserSettings["rawCapture"] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return fallback;
+  }
+  const raw = value as Partial<UserSettings["rawCapture"]>;
+  const endpointValue = typeof raw.endpoint === "string" && raw.endpoint.trim()
+    ? raw.endpoint.trim()
+    : DEFAULT_RAW_CAPTURE_ENDPOINT;
+  const endpoint = endpointValue === OLD_RAW_CAPTURE_ENDPOINT ? DEFAULT_RAW_CAPTURE_ENDPOINT : endpointValue;
+  const storedVisibility = (raw as Record<string, unknown>).visibility;
+  const rawVisibility = typeof storedVisibility === "string" ? storedVisibility : "";
+  const hasSeparateUploadConsent = typeof raw.uploadEnabled === "boolean";
+  const hasWebReplayUploadConsent = typeof raw.webReplayAutoUploadEnabled === "boolean";
+  const webReplayAutoUploadAccountUid = hasWebReplayUploadConsent && typeof raw.webReplayAutoUploadAccountUid === "string"
+    ? raw.webReplayAutoUploadAccountUid.trim()
+    : "";
+  const hasDiscordShareConsent = typeof raw.webReplayDiscordShareEnabled === "boolean";
+  const webReplayDiscordShareAccountUid = hasDiscordShareConsent && typeof raw.webReplayDiscordShareAccountUid === "string"
+    ? raw.webReplayDiscordShareAccountUid.trim()
+    : "";
+  const webReplayDiscordShareHubIds = hasDiscordShareConsent && Array.isArray(raw.webReplayDiscordShareHubIds)
+    ? Array.from(new Set(raw.webReplayDiscordShareHubIds.map((value) => String(value ?? "").trim()).filter(Boolean))).slice(0, 10)
+    : [];
+  const visibility = hasSeparateUploadConsent && rawVisibility === "public"
+    ? "public"
+    : hasSeparateUploadConsent && (rawVisibility === "unlisted" || rawVisibility === "friends")
+      ? "unlisted"
+      : "private";
+  return {
+    // Legacy raw-capture settings predate separate capture/upload consent and
+    // lived behind hidden UI. Treat them as opted out during normalization.
+    enabled: hasSeparateUploadConsent && raw.enabled === true,
+    webReplayAutoUploadEnabled: hasWebReplayUploadConsent && raw.webReplayAutoUploadEnabled === true,
+    webReplayAutoUploadAccountUid,
+    webReplayDiscordShareEnabled: hasDiscordShareConsent && raw.webReplayDiscordShareEnabled === true,
+    webReplayDiscordShareAccountUid,
+    webReplayDiscordShareHubIds,
+    uploadEnabled: hasSeparateUploadConsent && raw.uploadEnabled === true,
+    endpoint,
+    apiKey: typeof raw.apiKey === "string" ? raw.apiKey : "",
+    visibility
+  };
 }
 
 function escapeRegExp(value: string): string {
@@ -160,6 +234,11 @@ export class RiftLiteStore {
   private db: Database | null = null;
   private loadPromise: Promise<void> | null = null;
   private settingsCache: UserSettings | null = null;
+  private matchesCache: MatchDraft[] | null = null;
+  private matchesLoadPromise: Promise<MatchDraft[]> | null = null;
+  private replaysCache: ReplayRecord[] | null = null;
+  private replaysLoadPromise: Promise<ReplayRecord[]> | null = null;
+  private lastDatabaseBackupAt = 0;
 
   constructor(
     dbPath = join(app.getPath("userData"), "riftlite-v06.sqlite"),
@@ -219,6 +298,7 @@ export class RiftLiteStore {
       replayCustomFlagTypes: Array.isArray(parsed.replayCustomFlagTypes)
         ? uniqueReplayCustomFlagTypes(parsed.replayCustomFlagTypes)
         : DEFAULT_SETTINGS.replayCustomFlagTypes,
+      rawCapture: normalizeRawCaptureSettings((parsed as { rawCapture?: unknown }).rawCapture),
       deckTrackerPinnedCards: parsed.deckTrackerPinnedCards && typeof parsed.deckTrackerPinnedCards === "object" && !Array.isArray(parsed.deckTrackerPinnedCards)
         ? parsed.deckTrackerPinnedCards
         : {},
@@ -248,6 +328,9 @@ export class RiftLiteStore {
       replayCustomFlagTypes: Object.prototype.hasOwnProperty.call(patch, "replayCustomFlagTypes")
         ? uniqueReplayCustomFlagTypes(patch.replayCustomFlagTypes)
         : current.replayCustomFlagTypes,
+      rawCapture: Object.prototype.hasOwnProperty.call(patch, "rawCapture")
+        ? normalizeRawCaptureSettings((patch as { rawCapture?: unknown }).rawCapture, current.rawCapture)
+        : current.rawCapture,
       activeHubs: patch.activeHubs ? [...patch.activeHubs] : current.activeHubs,
       activeTeams: patch.activeTeams ? [...patch.activeTeams] : current.activeTeams
     };
@@ -263,21 +346,13 @@ export class RiftLiteStore {
   }
 
   async getMatches(): Promise<MatchDraft[]> {
-    const db = await this.database();
-    const result = db.exec("SELECT data_json FROM matches ORDER BY captured_at DESC");
-    return (result[0]?.values ?? [])
-      .map((row) => this.parseStoredMatch(row[0]))
-      .filter((match): match is MatchDraft => Boolean(match))
-      .filter((match) => !match.deletedAt);
+    return (await this.readAllMatches()).filter((match) => !match.deletedAt);
   }
 
   async getDeletedMatches(): Promise<MatchDraft[]> {
-    const db = await this.database();
-    const result = db.exec("SELECT data_json FROM matches ORDER BY updated_at DESC");
-    return (result[0]?.values ?? [])
-      .map((row) => this.parseStoredMatch(row[0]))
-      .filter((match): match is MatchDraft => Boolean(match))
-      .filter((match) => Boolean(match.deletedAt));
+    return [...(await this.readAllMatches())]
+      .filter((match) => Boolean(match.deletedAt))
+      .sort((a, b) => Date.parse(b.updatedAt || b.capturedAt) - Date.parse(a.updatedAt || a.capturedAt));
   }
 
   async saveMatch(draft: MatchDraft): Promise<MatchDraft> {
@@ -293,6 +368,7 @@ export class RiftLiteStore {
       );
       await this.persist();
     });
+    this.invalidateMatchCache();
     return next;
   }
 
@@ -330,6 +406,7 @@ export class RiftLiteStore {
       }
       await this.persist();
     });
+    this.invalidateMatchCache();
     return combined;
   }
 
@@ -364,10 +441,16 @@ export class RiftLiteStore {
       }
       await this.persist();
     });
+    this.invalidateMatchCache();
     return restored;
   }
 
   private async getMatchesByIds(matchIds: string[]): Promise<MatchDraft[]> {
+    const cached = this.matchesCache ?? null;
+    if (cached) {
+      const matches = new Map(cached.filter((match) => !match.deletedAt).map((match) => [match.id, match]));
+      return matchIds.map((id) => matches.get(id)).filter((match): match is MatchDraft => Boolean(match));
+    }
     const db = await this.database();
     const matches = new Map<string, MatchDraft>();
     for (const id of new Set(matchIds.filter(Boolean))) {
@@ -382,6 +465,34 @@ export class RiftLiteStore {
     return matchIds.map((id) => matches.get(id)).filter((match): match is MatchDraft => Boolean(match));
   }
 
+  private async readAllMatches(): Promise<MatchDraft[]> {
+    if (this.matchesCache) {
+      return this.matchesCache;
+    }
+    if (this.matchesLoadPromise) {
+      return this.matchesLoadPromise;
+    }
+    this.matchesLoadPromise = (async () => {
+      const db = await this.database();
+      const result = db.exec("SELECT data_json FROM matches ORDER BY captured_at DESC");
+      const matches = (result[0]?.values ?? [])
+        .map((row) => this.parseStoredMatch(row[0]))
+        .filter((match): match is MatchDraft => Boolean(match));
+      this.matchesCache = matches;
+      return matches;
+    })();
+    try {
+      return await this.matchesLoadPromise;
+    } finally {
+      this.matchesLoadPromise = null;
+    }
+  }
+
+  private invalidateMatchCache(): void {
+    this.matchesCache = null;
+    this.matchesLoadPromise = null;
+  }
+
   async deleteMatch(id: string): Promise<void> {
     const db = await this.database();
     const row = db.exec("SELECT data_json FROM matches WHERE id=?", [id])[0]?.values[0]?.[0];
@@ -390,6 +501,7 @@ export class RiftLiteStore {
       const match = normalizeStoredMatch({ ...JSON.parse(row) as MatchDraft, deletedAt: now, updatedAt: now });
       db.run("UPDATE matches SET updated_at=?, data_json=? WHERE id=?", [match.updatedAt, JSON.stringify(match), id]);
       await this.deleteReplayByMatch(id, now);
+      this.invalidateMatchCache();
     }
     await this.persist();
   }
@@ -406,6 +518,7 @@ export class RiftLiteStore {
     db.run("UPDATE matches SET updated_at=?, data_json=? WHERE id=?", [match.updatedAt, JSON.stringify(match), id]);
     await this.restoreReplayByMatch(id);
     await this.persist();
+    this.invalidateMatchCache();
     return match;
   }
 
@@ -414,6 +527,8 @@ export class RiftLiteStore {
     db.run("DELETE FROM matches WHERE id=?", [id]);
     db.run("DELETE FROM replays WHERE match_id=?", [id]);
     await this.persist();
+    this.invalidateMatchCache();
+    this.invalidateReplayCache();
   }
 
   async getSavedDecks(): Promise<SavedDeck[]> {
@@ -576,21 +691,11 @@ export class RiftLiteStore {
   }
 
   async getReplays(): Promise<ReplayRecord[]> {
-    const db = await this.database();
-    const result = db.exec("SELECT data_json FROM replays ORDER BY captured_at DESC");
-    return (result[0]?.values ?? [])
-      .map((row) => this.parseStoredReplay(row[0]))
-      .filter((replay): replay is ReplayRecord => Boolean(replay))
-      .filter((replay) => !replay.deletedAt);
+    return (await this.readAllReplays()).filter((replay) => !replay.deletedAt);
   }
 
   async getDeletedReplays(): Promise<ReplayRecord[]> {
-    const db = await this.database();
-    const result = db.exec("SELECT data_json FROM replays ORDER BY captured_at DESC");
-    return (result[0]?.values ?? [])
-      .map((row) => this.parseStoredReplay(row[0]))
-      .filter((replay): replay is ReplayRecord => Boolean(replay))
-      .filter((replay) => Boolean(replay.deletedAt));
+    return (await this.readAllReplays()).filter((replay) => Boolean(replay.deletedAt));
   }
 
   async saveReplay(replay: ReplayRecord): Promise<ReplayRecord> {
@@ -605,6 +710,7 @@ export class RiftLiteStore {
       );
       await this.persist();
     });
+    this.invalidateReplayCache();
     return next;
   }
 
@@ -616,6 +722,7 @@ export class RiftLiteStore {
       const replay = { ...JSON.parse(row) as ReplayRecord, deletedAt: now };
       db.run("UPDATE replays SET data_json=? WHERE id=?", [JSON.stringify(replay), id]);
       await this.persist();
+      this.invalidateReplayCache();
     }
   }
 
@@ -629,6 +736,7 @@ export class RiftLiteStore {
     delete replay.deletedAt;
     db.run("UPDATE replays SET data_json=? WHERE id=?", [JSON.stringify(replay), id]);
     await this.persist();
+    this.invalidateReplayCache();
     return replay;
   }
 
@@ -636,6 +744,7 @@ export class RiftLiteStore {
     const db = await this.database();
     db.run("DELETE FROM replays WHERE id=?", [id]);
     await this.persist();
+    this.invalidateReplayCache();
   }
 
   async deleteReplayByMatch(matchId: string, deletedAt = new Date().toISOString()): Promise<void> {
@@ -646,6 +755,7 @@ export class RiftLiteStore {
       db.run("UPDATE replays SET data_json=? WHERE id=?", [JSON.stringify(replay), String(row[0])]);
     }
     await this.persist();
+    this.invalidateReplayCache();
   }
 
   async restoreReplayByMatch(matchId: string): Promise<void> {
@@ -657,6 +767,35 @@ export class RiftLiteStore {
       db.run("UPDATE replays SET data_json=? WHERE id=?", [JSON.stringify(replay), String(row[0])]);
     }
     await this.persist();
+    this.invalidateReplayCache();
+  }
+
+  private async readAllReplays(): Promise<ReplayRecord[]> {
+    if (this.replaysCache) {
+      return this.replaysCache;
+    }
+    if (this.replaysLoadPromise) {
+      return this.replaysLoadPromise;
+    }
+    this.replaysLoadPromise = (async () => {
+      const db = await this.database();
+      const result = db.exec("SELECT data_json FROM replays ORDER BY captured_at DESC");
+      const replays = (result[0]?.values ?? [])
+        .map((row) => this.parseStoredReplay(row[0]))
+        .filter((replay): replay is ReplayRecord => Boolean(replay));
+      this.replaysCache = replays;
+      return replays;
+    })();
+    try {
+      return await this.replaysLoadPromise;
+    } finally {
+      this.replaysLoadPromise = null;
+    }
+  }
+
+  private invalidateReplayCache(): void {
+    this.replaysCache = null;
+    this.replaysLoadPromise = null;
   }
 
   async exportBackupData(options: Partial<RiftLiteBackupOptions> = {}): Promise<RiftLiteBackupFile> {
@@ -676,86 +815,147 @@ export class RiftLiteStore {
     };
   }
 
-  async restoreBackupData(backup: RiftLiteBackupFile): Promise<void> {
+  async restoreBackupData(backup: RiftLiteBackupFile, options: { preserveAccount?: boolean; preserveReplays?: boolean } = {}): Promise<void> {
     if (backup.format !== "riftlite.backup" || backup.version !== 1) {
       throw new Error("That backup file is not a supported RiftLite backup.");
     }
-    const db = await this.database();
-    db.run("DELETE FROM matches");
-    db.run("DELETE FROM replays");
-    db.run("DELETE FROM saved_decks");
-    db.run("DELETE FROM deck_notebooks");
-
-    const settings = this.normalizeSettings(backup.settings ?? {});
-    db.run("INSERT OR REPLACE INTO settings (key, value_json, updated_at) VALUES (?, ?, ?)", [
-      "settings",
-      JSON.stringify(settings),
-      Date.now()
-    ]);
-    this.settingsCache = settings;
-
-    const matches = [...(backup.matches ?? []), ...(backup.deletedMatches ?? [])];
-    for (const match of matches) {
-      const next = compactMatchForStorage(normalizeStoredMatch(match));
-      db.run(
-        `INSERT OR REPLACE INTO matches
-         (id, platform, status, result, captured_at, updated_at, data_json)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [
-          next.id,
-          next.platform,
-          next.status,
-          next.result,
-          next.capturedAt,
-          next.updatedAt,
-          JSON.stringify(next)
-        ]
-      );
+    const currentSettings = await this.getSettings();
+    const activeDb = await this.database();
+    if (!this.sql) {
+      throw new Error("RiftLite database did not initialize");
     }
 
-    for (const deck of backup.decks ?? []) {
-      const next = normalizeStoredDeck(deck);
-      db.run(
-        `INSERT OR REPLACE INTO saved_decks
-         (id, source_url, source_key, title, legend, snapshot_json, last_imported_at, last_refresh_status, last_refresh_error)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          next.id,
-          next.sourceUrl,
-          next.sourceKey,
-          next.title,
-          next.legend,
-          next.snapshotJson,
-          next.lastImportedAt,
-          next.lastRefreshStatus,
-          next.lastRefreshError
-        ]
-      );
-    }
-
-    for (const notebook of backup.notebooks ?? []) {
-      if (notebook.deckId) {
-        this.writeDeckNotebook(db, notebook.deckId, notebook);
-      }
-    }
-
-    for (const deck of backup.decks ?? []) {
-      const normalizedDeck = normalizeStoredDeck(deck);
-      this.ensureDeckNotebookCurrentVersion(db, normalizedDeck);
-    }
-
-    const replays = [...(backup.replays ?? []), ...(backup.deletedReplays ?? [])];
-    for (const replay of replays) {
-      const next = compactReplayForStorage(replay);
-      db.run(
-        `INSERT OR REPLACE INTO replays
-         (id, match_id, platform, captured_at, data_json)
-         VALUES (?, ?, ?, ?, ?)`,
-        [next.id, next.matchId, next.platform, next.capturedAt, JSON.stringify(next)]
-      );
-    }
-
+    // Persist and snapshot the exact live state before attempting any destructive
+    // import. The restore itself is built in an isolated sql.js clone so a bad row
+    // or failed disk write cannot leave the active database half-replaced.
     await this.persist();
+    await this.createLastKnownGoodBackup("pre-restore", true);
+    let candidateDb: Database | null = new this.sql.Database(activeDb.export());
+
+    try {
+      candidateDb.run("DELETE FROM matches");
+      if (!options.preserveReplays) {
+        candidateDb.run("DELETE FROM replays");
+      }
+      candidateDb.run("DELETE FROM saved_decks");
+      candidateDb.run("DELETE FROM deck_notebooks");
+
+      const restoredSettings = this.normalizeSettings(backup.settings ?? {});
+      const settings = options.preserveAccount
+        ? this.normalizeSettings({
+            ...restoredSettings,
+            firebaseUid: currentSettings.firebaseUid,
+            firebaseRefreshToken: currentSettings.firebaseRefreshToken,
+            accountUid: currentSettings.accountUid,
+            accountEmail: currentSettings.accountEmail,
+            accountHandle: currentSettings.accountHandle,
+            accountDisplayName: currentSettings.accountDisplayName,
+            accountProfilePublic: currentSettings.accountProfilePublic,
+            accountLastVerifiedAt: currentSettings.accountLastVerifiedAt,
+            accountLastVerificationError: currentSettings.accountLastVerificationError,
+            accountCloudSyncEnabled: currentSettings.accountCloudSyncEnabled,
+            accountCloudSyncLastSyncedAt: currentSettings.accountCloudSyncLastSyncedAt,
+            accountCloudSyncLastRestoredAt: currentSettings.accountCloudSyncLastRestoredAt,
+            accountCloudSyncDeviceId: currentSettings.accountCloudSyncDeviceId,
+            accountCloudSyncDeviceName: currentSettings.accountCloudSyncDeviceName,
+            accountCloudSyncLastError: currentSettings.accountCloudSyncLastError,
+            rawCapture: currentSettings.rawCapture,
+            scorepadDeviceId: currentSettings.scorepadDeviceId,
+            scorepadDeviceSecret: currentSettings.scorepadDeviceSecret,
+            scorepadLinkedAt: currentSettings.scorepadLinkedAt,
+            screenshotDirectory: currentSettings.screenshotDirectory,
+            replayDirectory: currentSettings.replayDirectory
+          })
+        : restoredSettings;
+      candidateDb.run("INSERT OR REPLACE INTO settings (key, value_json, updated_at) VALUES (?, ?, ?)", [
+        "settings",
+        JSON.stringify(settings),
+        Date.now()
+      ]);
+
+      const matches = [...(backup.matches ?? []), ...(backup.deletedMatches ?? [])];
+      for (const match of matches) {
+        const next = compactMatchForStorage(normalizeStoredMatch(match));
+        candidateDb.run(
+          `INSERT OR REPLACE INTO matches
+           (id, platform, status, result, captured_at, updated_at, data_json)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          [
+            next.id,
+            next.platform,
+            next.status,
+            next.result,
+            next.capturedAt,
+            next.updatedAt,
+            JSON.stringify(next)
+          ]
+        );
+      }
+
+      for (const deck of backup.decks ?? []) {
+        const next = normalizeStoredDeck(deck);
+        candidateDb.run(
+          `INSERT OR REPLACE INTO saved_decks
+           (id, source_url, source_key, title, legend, snapshot_json, last_imported_at, last_refresh_status, last_refresh_error)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            next.id,
+            next.sourceUrl,
+            next.sourceKey,
+            next.title,
+            next.legend,
+            next.snapshotJson,
+            next.lastImportedAt,
+            next.lastRefreshStatus,
+            next.lastRefreshError
+          ]
+        );
+      }
+
+      for (const notebook of backup.notebooks ?? []) {
+        if (notebook.deckId) {
+          this.writeDeckNotebook(candidateDb, notebook.deckId, notebook);
+        }
+      }
+
+      for (const deck of backup.decks ?? []) {
+        const normalizedDeck = normalizeStoredDeck(deck);
+        this.ensureDeckNotebookCurrentVersion(candidateDb, normalizedDeck);
+      }
+
+      if (!options.preserveReplays) {
+        const replays = [...(backup.replays ?? []), ...(backup.deletedReplays ?? [])];
+        for (const replay of replays) {
+          const next = compactReplayForStorage(replay);
+          candidateDb.run(
+            `INSERT OR REPLACE INTO replays
+             (id, match_id, platform, captured_at, data_json)
+             VALUES (?, ?, ?, ?, ?)`,
+            [next.id, next.matchId, next.platform, next.capturedAt, JSON.stringify(next)]
+          );
+        }
+      }
+
+      const integrityIssue = this.databaseIntegrityIssue(candidateDb);
+      if (integrityIssue) {
+        throw new Error(`Restored RiftLite backup failed validation: ${integrityIssue}`);
+      }
+
+      await this.writeDatabaseFile(candidateDb);
+      this.db = candidateDb;
+      candidateDb = null;
+      try {
+        activeDb.close();
+      } catch {
+        // The validated replacement is already active and safely persisted.
+      }
+      this.invalidateMatchCache();
+      this.invalidateReplayCache();
+      this.settingsCache = null;
+    } catch (error) {
+      candidateDb?.close();
+      throw error;
+    }
   }
 
   async importLegacyData(sourcePath = join(homedir(), ".riftlite", "riftlite.db")): Promise<ImportSummary> {
@@ -806,6 +1006,7 @@ export class RiftLiteStore {
         if (!exists) summary.importedMatches += 1;
       }
       await this.persist();
+      this.invalidateMatchCache();
       return summary;
     } finally {
       legacy.close();
@@ -820,6 +1021,7 @@ export class RiftLiteStore {
     try {
       this.db = bytes?.length ? new this.sql.Database(bytes) : new this.sql.Database();
       await this.repairDatabaseIfNeeded("startup-integrity-check");
+      await this.createLastKnownGoodBackup("startup-ok", true).catch(() => undefined);
       this.migrateSchema();
       await this.migrateLegacyJson();
       await this.importLegacyData().catch(() => undefined);
@@ -924,6 +1126,7 @@ export class RiftLiteStore {
         );
       }
       await rename(this.legacyJsonPath, `${this.legacyJsonPath}.migrated`);
+      this.invalidateMatchCache();
     } catch {
       return;
     }
@@ -1024,8 +1227,20 @@ export class RiftLiteStore {
     if (!this.db) {
       return;
     }
+    await this.createLastKnownGoodBackup("prewrite").catch(() => undefined);
+    await this.writeDatabaseFile(this.db);
+  }
+
+  private async writeDatabaseFile(database: Database): Promise<void> {
     await mkdir(dirname(this.dbPath), { recursive: true });
-    await writeFile(this.dbPath, Buffer.from(this.db.export()));
+    const tempPath = `${this.dbPath}.tmp-${process.pid}-${Date.now()}`;
+    await writeFile(tempPath, Buffer.from(database.export()));
+    try {
+      await rename(tempPath, this.dbPath);
+    } catch (error) {
+      await unlink(tempPath).catch(() => undefined);
+      throw error;
+    }
   }
 
   private async withDatabaseRepair<T>(context: string, action: () => Promise<T>): Promise<T> {
@@ -1047,12 +1262,12 @@ export class RiftLiteStore {
     }
   }
 
-  private databaseIntegrityIssue(): string {
-    if (!this.db) {
+  private databaseIntegrityIssue(database = this.db): string {
+    if (!database) {
       return "";
     }
     try {
-      const value = String(this.db.exec("PRAGMA integrity_check")[0]?.values?.[0]?.[0] ?? "");
+      const value = String(database.exec("PRAGMA integrity_check")[0]?.values?.[0]?.[0] ?? "");
       return value && value.toLowerCase() !== "ok" ? value : "";
     } catch (error) {
       return error instanceof Error ? error.message : String(error);
@@ -1070,34 +1285,168 @@ export class RiftLiteStore {
       throw new Error(`RiftLite database repair failed: ${knownIssue || issue}`);
     }
     await mkdir(dirname(this.dbPath), { recursive: true });
-    await writeFile(this.dbPath, Buffer.from(this.db.export()));
+    await this.persist();
   }
 
   private async recoverFromStartupOpenFailure(error: unknown): Promise<void> {
-    await this.backupDatabase("startup-open-failed");
+    const preservedPath = await this.backupDatabase("startup-open-failed");
     const failurePath = join(dirname(this.dbPath), `riftlite-startup-open-failed-${Date.now()}.log`);
+    const errorText = error instanceof Error ? `${error.message}\n${error.stack ?? ""}` : String(error);
     await writeFile(
       failurePath,
-      error instanceof Error ? `${error.message}\n${error.stack ?? ""}` : String(error),
+      errorText,
       "utf8"
     ).catch(() => undefined);
     if (!this.sql) {
       throw error;
     }
+    if (await this.restoreLatestUsableDatabaseBackup("startup-open-failed")) {
+      return;
+    }
+    this.db?.close();
     this.db = new this.sql.Database();
     this.settingsCache = null;
+    this.matchesCache = null;
+    this.replaysCache = null;
     this.migrateSchema();
     await this.migrateLegacyJson().catch(() => undefined);
+    await this.importLegacyData().catch(() => undefined);
     await this.persist();
+    await this.createLastKnownGoodBackup("startup-fresh-after-corrupt-db", true).catch(() => undefined);
+    await writeFile(
+      failurePath,
+      `${errorText}\n\nNo usable automatic database backup was found. RiftLite preserved the unreadable database at ${preservedPath || this.dbPath} and started with a fresh local database.`,
+      "utf8"
+    ).catch(() => undefined);
   }
 
-  private async backupDatabase(context: string): Promise<void> {
+  private async backupDatabase(context: string): Promise<string> {
     if (!existsSync(this.dbPath)) {
-      return;
+      return "";
     }
     const safeContext = context.replace(/[^a-z0-9-]+/gi, "-").slice(0, 40) || "repair";
     const backupPath = join(dirname(this.dbPath), `riftlite-v06-${safeContext}-backup-${Date.now()}.sqlite`);
     await copyFile(this.dbPath, backupPath).catch(() => undefined);
+    return backupPath;
+  }
+
+  private databaseBackupDirectory(): string {
+    return join(dirname(this.dbPath), "database-backups");
+  }
+
+  private async createLastKnownGoodBackup(context: string, force = false): Promise<string> {
+    if (!existsSync(this.dbPath)) {
+      return "";
+    }
+    const now = Date.now();
+    if (!force && now - this.lastDatabaseBackupAt < DATABASE_BACKUP_MIN_INTERVAL_MS) {
+      return "";
+    }
+    const directory = this.databaseBackupDirectory();
+    await mkdir(directory, { recursive: true });
+    const safeContext = context.replace(/[^a-z0-9-]+/gi, "-").slice(0, 32) || "snapshot";
+    const backupPath = join(directory, `riftlite-v06-auto-${safeContext}-${now}.sqlite`);
+    await copyFile(this.dbPath, backupPath);
+    this.lastDatabaseBackupAt = now;
+    await this.pruneLastKnownGoodBackups();
+    return backupPath;
+  }
+
+  private async pruneLastKnownGoodBackups(): Promise<void> {
+    const files = await this.listAutoBackupFiles();
+    for (const file of files.sort((a, b) => b.mtimeMs - a.mtimeMs).slice(DATABASE_BACKUP_RETENTION)) {
+      await unlink(file.path).catch(() => undefined);
+    }
+  }
+
+  private async listAutoBackupFiles(): Promise<Array<{ path: string; mtimeMs: number }>> {
+    const directory = this.databaseBackupDirectory();
+    if (!existsSync(directory)) {
+      return [];
+    }
+    const entries = await readdir(directory, { withFileTypes: true }).catch(() => []);
+    const files: Array<{ path: string; mtimeMs: number }> = [];
+    for (const entry of entries) {
+      if (!entry.isFile() || !/^riftlite-v06-auto-.*\.sqlite$/i.test(entry.name)) {
+        continue;
+      }
+      const path = join(directory, entry.name);
+      const info = await stat(path).catch(() => null);
+      if (info) {
+        files.push({ path, mtimeMs: info.mtimeMs });
+      }
+    }
+    return files;
+  }
+
+  private async listRecoveryBackupCandidates(): Promise<Array<{ path: string; mtimeMs: number }>> {
+    const directories = [this.databaseBackupDirectory(), dirname(this.dbPath)];
+    const seen = new Set<string>();
+    const files: Array<{ path: string; mtimeMs: number }> = [];
+    for (const directory of directories) {
+      if (!existsSync(directory)) {
+        continue;
+      }
+      const entries = await readdir(directory, { withFileTypes: true }).catch(() => []);
+      for (const entry of entries) {
+        if (!entry.isFile()) {
+          continue;
+        }
+        const isCandidate =
+          /^riftlite-v06-auto-.*\.sqlite$/i.test(entry.name) ||
+          /^riftlite-v06-.*-backup-\d+\.sqlite$/i.test(entry.name);
+        if (!isCandidate) {
+          continue;
+        }
+        const path = join(directory, entry.name);
+        if (seen.has(path) || path === this.dbPath) {
+          continue;
+        }
+        seen.add(path);
+        const info = await stat(path).catch(() => null);
+        if (info) {
+          files.push({ path, mtimeMs: info.mtimeMs });
+        }
+      }
+    }
+    return files.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  }
+
+  private async restoreLatestUsableDatabaseBackup(context: string): Promise<boolean> {
+    if (!this.sql) {
+      return false;
+    }
+    const candidates = await this.listRecoveryBackupCandidates();
+    for (const candidate of candidates) {
+      let candidateDb: Database | null = null;
+      try {
+        const bytes = await readFile(candidate.path);
+        if (!bytes.length) {
+          continue;
+        }
+        candidateDb = new this.sql.Database(bytes);
+        const issue = this.databaseIntegrityIssue(candidateDb);
+        if (issue) {
+          candidateDb.close();
+          candidateDb = null;
+          continue;
+        }
+        await copyFile(candidate.path, this.dbPath);
+        this.db?.close();
+        this.db = candidateDb;
+        candidateDb = null;
+        this.settingsCache = null;
+        this.migrateSchema();
+        await this.migrateLegacyJson().catch(() => undefined);
+        await this.repairDatabaseIfNeeded(`restore-${context}`);
+        await this.persist();
+        await this.createLastKnownGoodBackup(`restored-${context}`, true).catch(() => undefined);
+        return true;
+      } catch {
+        candidateDb?.close();
+      }
+    }
+    return false;
   }
 }
 

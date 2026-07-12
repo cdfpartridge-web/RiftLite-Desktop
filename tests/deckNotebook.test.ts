@@ -105,6 +105,21 @@ describe("deck notebook", () => {
     expect(options.some((option) => option.cardName === "The Papertree")).toBe(false);
   });
 
+  it("derives prep card images from card codes when snapshots omit image urls", () => {
+    const options = deckNotebookMulliganCardOptions(deck({
+      snapshotJson: JSON.stringify({
+        title: "Prep Images",
+        legend: "Diana",
+        main_deck: [{ qty: 1, name: "Irresistible Faefolk", card_id: "UNL-112" }],
+        sideboard: [{ qty: 2, name: "Akshan, Mischievous", cardId: "SFD-109" }],
+        battlefields: [{ qty: 1, name: "Star Spring", cardId: "UNL-215" }]
+      })
+    }));
+
+    expect(options.find((option) => option.cardName === "Irresistible Faefolk")?.imageUrl).toBe("https://cdn.piltoverarchive.com/cards/UNL-112.webp");
+    expect(options.find((option) => option.cardName === "Akshan, Mischievous")?.imageUrl).toBe("https://cdn.piltoverarchive.com/cards/SFD-109.webp");
+  });
+
   it("attributes version performance by snapshot hash before source-key date ranges", () => {
     const firstDeck = deck();
     const firstHash = deckSnapshotHash(firstDeck.snapshotJson);
@@ -210,5 +225,49 @@ describe("deck notebook", () => {
     expect(sanitized.defaultGuide.mulligan.keep.cards.map((card) => card.cardName)).toEqual(["Long Sword", "Rebuke"]);
     expect(sanitized.defaultGuide.sideboard.in.cards.map((card) => card.cardName)).toEqual(["Rebuke"]);
     expect(sanitized.defaultGuide.sideboard.out.cards.map((card) => card.cardName)).toEqual(["Long Sword"]);
+    expect(sanitized.defaultGuide.mulligan.keep.cards[0]?.imageUrl).toBe("https://example.test/card.jpg");
+  });
+
+  it("repairs existing prep guide cards that were saved without image urls", () => {
+    const imageDeck = deck({
+      snapshotJson: JSON.stringify({
+        title: "Prep Images",
+        legend: "Diana",
+        main_deck: [{ qty: 1, name: "Irresistible Faefolk", card_id: "UNL-112" }],
+        sideboard: [{ qty: 2, name: "Akshan, Mischievous", cardId: "SFD-109" }],
+        battlefields: [{ qty: 1, name: "Star Spring", cardId: "UNL-215" }]
+      })
+    });
+    const notebook = normalizeDeckNotebook("deck-id", {
+      defaultGuide: {
+        id: "default",
+        legend: "",
+        legendKey: "default",
+        updatedAt: "",
+        mulligan: {
+          keep: { note: "", cards: [{ id: "main", cardKey: "unl112", cardName: "Irresistible Faefolk", cardId: "UNL-112", imageUrl: "", qty: 1 }] },
+          consider: { note: "", cards: [] },
+          avoid: { note: "", cards: [] }
+        },
+        sideboard: {
+          in: { note: "", cards: [{ id: "side", cardKey: "sfd109", cardName: "Akshan, Mischievous", cardId: "SFD-109", imageUrl: "", qty: 1 }] },
+          out: { note: "", cards: [] },
+          note: ""
+        },
+        battlefields: {
+          game1: { note: "", cards: [{ id: "bf", cardKey: "unl215", cardName: "Star Spring", cardId: "UNL-215", imageUrl: "", qty: 1 }] },
+          game1First: { note: "", cards: [] },
+          game1Second: { note: "", cards: [] },
+          note: ""
+        },
+        notes: []
+      }
+    });
+
+    const sanitized = sanitizeDeckNotebookForDeck(notebook, imageDeck);
+
+    expect(sanitized.defaultGuide.mulligan.keep.cards[0]?.imageUrl).toBe("https://cdn.piltoverarchive.com/cards/UNL-112.webp");
+    expect(sanitized.defaultGuide.sideboard.in.cards[0]?.imageUrl).toBe("https://cdn.piltoverarchive.com/cards/SFD-109.webp");
+    expect(sanitized.defaultGuide.battlefields.game1.cards[0]?.imageUrl).toBe("https://cdn.piltoverarchive.com/cards/UNL-215.webp");
   });
 });

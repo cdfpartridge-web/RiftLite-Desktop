@@ -6,6 +6,7 @@ import { DeckService } from "./deckService.js";
 import { DeckTrackerService } from "./deckTrackerService.js";
 import { FirebaseSyncService } from "./firebaseSync.js";
 import { MatchSessionTracker } from "./matchSessionTracker.js";
+import { rawCaptureMatchSummaryFromDraft, type RawCaptureFinishIdentity } from "./rawCaptureService.js";
 import { RiftLiteStore } from "./store.js";
 import { TcgaResolver } from "./tcgaResolver.js";
 
@@ -164,7 +165,11 @@ export class CaptureCoordinator {
     private readonly syncService: FirebaseSyncService,
     private readonly diagnostics: CaptureDiagnostics,
     private readonly captureReplayFrame?: ReplayFrameCapture,
-    private readonly deckTracker?: DeckTrackerService
+    private readonly deckTracker?: DeckTrackerService,
+    private readonly finalizeRawCaptureForMatch?: (
+      identity: RawCaptureFinishIdentity,
+      replay?: ReplayRecord
+    ) => Promise<ReplayRecord | null>
   ) {
     this.deckService = new DeckService(store);
   }
@@ -739,14 +744,17 @@ export class CaptureCoordinator {
       this.resolveReplayEventCards(endEvent.platform, replayEvents),
       this.stopTimedReplayCapture(endEvent.platform, true, endEvent.capturedAt)
     ]);
-    if (settings?.replayCaptureEnabled === false) {
-      return;
+    const rawCaptureIdentity = rawCaptureFinishIdentity(draft, endEvent);
+    let replay: ReplayRecord | undefined;
+    if (settings?.replayCaptureEnabled !== false) {
+      const latest = (await this.store.getMatches()).find((match) => match.id === draft.id);
+      if (latest?.keepReplay !== false) {
+        replay = await this.store.saveReplay(
+          this.createReplay(draft, resolvedReplayEvents, visualFrames, deckTrackerSnapshots)
+        ).catch(() => undefined);
+      }
     }
-    const latest = (await this.store.getMatches()).find((match) => match.id === draft.id);
-    if (latest?.keepReplay === false) {
-      return;
-    }
-    await this.store.saveReplay(this.createReplay(draft, resolvedReplayEvents, visualFrames, deckTrackerSnapshots)).catch(() => undefined);
+    await this.finalizeRawCaptureForMatch?.(rawCaptureIdentity, replay).catch(() => undefined);
   }
 
   private shouldReleaseAtlasFinalLandingReview(event: CaptureEvent): boolean {
@@ -1919,7 +1927,8 @@ export class CaptureCoordinator {
       events: draft.rawEvidence.slice(-24).map(compactCaptureEvent),
       structuredEvents,
       visualFrames,
-      deckTrackerSnapshots
+      deckTrackerSnapshots,
+      matchSnapshot: draft
     };
   }
 
@@ -2079,6 +2088,45 @@ function compactCaptureEvent(event: CaptureEvent): CaptureEvent {
   };
 }
 
+function rawCaptureFinishIdentity(draft: MatchDraft, endEvent: CaptureEvent): RawCaptureFinishIdentity {
+  const events = [...draft.rawEvidence, endEvent];
+  const values = (keys: string[]) => uniqueCaptureIdentityValues(events.flatMap((event) => (
+    keys.map((key) => readPayloadString(event.payload[key]))
+  )));
+  const roomCodes = values(["roomCode", "room_code", "previousRoomCode", "previous_room_code"]);
+  const seriesIds = values(["seriesId", "series_id", "matchSeriesId"]);
+  const matchIds = values(["matchId", "match_id"]);
+  const replayIds = values(["replayId", "replay_id"]);
+  const captureSessionIds = values(["captureSessionId", "capture_session_id"]);
+  return {
+    platform: draft.platform,
+    captureSessionId: captureSessionIds.at(-1),
+    roomCode: roomCodes.at(-1),
+    roomCodes,
+    seriesId: seriesIds.at(-1),
+    matchId: matchIds.at(-1),
+    matchIds,
+    replayId: replayIds.at(-1),
+    replayIds,
+    localMatchId: draft.id,
+    localReplayId: `replay-${draft.id}`,
+    title: `${draft.myChampion || "Unknown"} vs ${draft.opponentChampion || "Unknown"}`,
+    capturedAt: draft.capturedAt,
+    completedAt: endEvent.capturedAt,
+    match: rawCaptureMatchSummaryFromDraft(draft)
+  };
+}
+
+function uniqueCaptureIdentityValues(values: string[]): string[] {
+  const unique = new Map<string, string>();
+  for (const value of values) {
+    if (value) {
+      unique.set(value.toLowerCase(), value);
+    }
+  }
+  return Array.from(unique.values());
+}
+
 function compactPayload(payload: Record<string, unknown> = {}): Record<string, unknown> {
   const keepKeys = [
     "reason",
@@ -2099,6 +2147,11 @@ function compactPayload(payload: Record<string, unknown> = {}): Record<string, u
     "myBattlefieldImage",
     "opponentBattlefieldImage",
     "roomCode",
+    "previousRoomCode",
+    "seriesId",
+    "matchId",
+    "replayId",
+    "captureSessionId",
     "phase",
     "turnText",
     "wentFirst",

@@ -231,6 +231,74 @@ describe("MatchSessionTracker", () => {
     expect(draft.opponentChampion).toBe("Pyke");
   });
 
+  it("uses Atlas legend card text for Vendetta preview legends", () => {
+    const tracker = new MatchSessionTracker();
+    tracker.ingest(event("match-start", {
+      active: true,
+      opponentName: "Rival",
+      myChampion: "Akali, Hidden Weapon",
+      opponentChampion: "Zed, Master of Shadows",
+      score: { me: "7", opp: "4" }
+    }, "2026-07-09T10:00:00.000Z", "atlas"));
+
+    const draft = tracker.buildDraft("atlas", event("match-end", { active: false }, "2026-07-09T10:03:00.000Z", "atlas"), settings);
+
+    expect(draft.myChampion).toBe("Akali");
+    expect(draft.opponentChampion).toBe("Zed");
+  });
+
+  it("uses TCGA legend card text for Vendetta preview legends", () => {
+    const tracker = new MatchSessionTracker();
+    tracker.ingest(event("match-start", {
+      active: true,
+      opponentName: "Rival",
+      myChampion: "Akali, Hidden Weapon",
+      opponentChampion: "Zed, Master of Shadows",
+      score: { me: "7", opp: "4" }
+    }, "2026-07-09T10:00:00.000Z", "tcga"));
+
+    const draft = tracker.buildDraft("tcga", event("match-end", { active: false }, "2026-07-09T10:03:00.000Z", "tcga"), settings);
+
+    expect(draft.myChampion).toBe("Akali");
+    expect(draft.opponentChampion).toBe("Zed");
+  });
+
+  it("ignores TCGA action labels when resolving Vendetta legends from card art", () => {
+    const tracker = new MatchSessionTracker();
+    tracker.ingest(event("match-start", {
+      active: true,
+      opponentName: "Rival",
+      myChampion: "Tap",
+      opponentChampion: "Ping",
+      myChampionImage: "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/0d53b477ed43fb9bbed84858443a606b2b51a2b5-744x1039.png?accountingTag=RB&auto=format&fit=fill&q=80&w=444",
+      opponentChampionImage: "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/7620595b36b40a0c3d05c4c5469b016d1c18c6f2-744x1039.png?accountingTag=RB&auto=format&fit=fill&q=80&w=444",
+      score: { me: "4", opp: "5" }
+    }, "2026-07-09T16:12:46.919Z", "tcga"));
+
+    const draft = tracker.buildDraft("tcga", event("match-end", { active: false }, "2026-07-09T16:22:11.332Z", "tcga"), settings);
+
+    expect(draft.myChampion).toBe("Akali");
+    expect(draft.opponentChampion).toBe("Renekton");
+  });
+
+  it("resolves TCGA Kennen from hashed Riot card art when legend text is missing", () => {
+    const tracker = new MatchSessionTracker();
+    tracker.ingest(event("match-start", {
+      active: true,
+      opponentName: "Gavro",
+      myChampion: "",
+      opponentChampion: "",
+      myChampionImage: "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/0d53b477ed43fb9bbed84858443a606b2b51a2b5-744x1039.png?accountingTag=RB&auto=format&fit=fill&q=80&w=444",
+      opponentChampionImage: "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/0eab83392b310417d2630d50a3bfee3dd02b31c4-744x1039.png?accountingTag=RB&auto=format&fit=fill&q=80&w=444",
+      score: { me: "7", opp: "5" }
+    }, "2026-07-09T18:24:11.655Z", "tcga"));
+
+    const draft = tracker.buildDraft("tcga", event("match-end", { active: false }, "2026-07-09T18:26:28.209Z", "tcga"), settings);
+
+    expect(draft.myChampion).toBe("Akali");
+    expect(draft.opponentChampion).toBe("Kennen");
+  });
+
   it("resolves TCGA opponent and score from named counter players", () => {
     const tracker = new MatchSessionTracker();
     const bmuSettings = { ...settings, username: "BMU" };
@@ -2088,6 +2156,153 @@ describe("MatchSessionTracker", () => {
     expect(draft.result).toBe("Win");
   });
 
+  it("keeps explicitly numbered Atlas BO3 games with identical scores and missing battlefields distinct", () => {
+    const tracker = new MatchSessionTracker();
+    const base = {
+      active: true,
+      format: "Bo3",
+      myName: "BMU",
+      opponentName: "Rival"
+    };
+    const result = (gameNumber: number, kind: CaptureEvent["kind"], at: string) => event(kind, {
+      ...base,
+      reason: kind === "match-end" ? "result-text-detected" : "mutation",
+      atlasResultKind: "game-result",
+      atlasBo3GameNumber: gameNumber,
+      endText: `Confirm Game ${gameNumber} Winner`,
+      score: { me: "7", opp: "5", source: "atlas-score-track" }
+    }, at, "atlas");
+
+    tracker.ingest(event("match-start", {
+      ...base,
+      score: { me: "0", opp: "0", source: "atlas-score-track" }
+    }, "2026-07-09T19:00:00.000Z", "atlas"));
+    tracker.ingest(event("match-snapshot", {
+      ...base,
+      score: { me: "7", opp: "5", source: "atlas-score-track" }
+    }, "2026-07-09T19:08:00.000Z", "atlas"));
+    const gameOneEnd = result(1, "match-end", "2026-07-09T19:08:02.000Z");
+    tracker.ingest(gameOneEnd);
+    tracker.holdCurrentGame("atlas", gameOneEnd);
+    tracker.ingest(result(1, "match-snapshot", "2026-07-09T19:08:03.000Z"));
+
+    tracker.ingest(event("match-start", {
+      ...base,
+      score: { me: "0", opp: "0", source: "atlas-score-track" }
+    }, "2026-07-09T19:10:00.000Z", "atlas"));
+    tracker.ingest(event("match-snapshot", {
+      ...base,
+      score: { me: "7", opp: "5", source: "atlas-score-track" }
+    }, "2026-07-09T19:18:00.000Z", "atlas"));
+    const gameTwoEnd = result(2, "match-end", "2026-07-09T19:18:02.000Z");
+    tracker.ingest(gameTwoEnd);
+    tracker.holdCurrentGame("atlas", gameTwoEnd);
+    tracker.ingest(result(2, "match-snapshot", "2026-07-09T19:18:03.000Z"));
+
+    const terminal = event("match-end", {
+      active: false,
+      format: "Bo3",
+      atlasResultKind: "match-terminal",
+      endText: "Match complete"
+    }, "2026-07-09T19:18:04.000Z", "atlas");
+    const draft = tracker.buildDraft("atlas", terminal, { ...settings, username: "BMU" });
+
+    expect(draft.games.map((game) => `${game.gameNumber}:${game.result}:${game.myPoints}-${game.oppPoints}`))
+      .toEqual(["1:Win:7-5", "2:Win:7-5"]);
+    expect(draft.score).toBe("2-0");
+  });
+
+  it("uses Atlas result-event identity to keep unnumbered identical BO3 games distinct while suppressing echoes", () => {
+    const tracker = new MatchSessionTracker();
+    const base = {
+      active: true,
+      format: "Bo3",
+      myName: "BMU",
+      opponentName: "Rival"
+    };
+    const unnumberedResult = (kind: CaptureEvent["kind"], at: string) => event(kind, {
+      ...base,
+      reason: kind === "match-end" ? "result-text-detected" : "mutation",
+      atlasResultKind: "game-result",
+      endText: "You win",
+      score: { me: "7", opp: "5", source: "atlas-score-track" }
+    }, at, "atlas");
+
+    tracker.ingest(event("match-start", {
+      ...base,
+      score: { me: "0", opp: "0", source: "atlas-score-track" }
+    }, "2026-07-09T20:00:00.000Z", "atlas"));
+    const gameOneEnd = unnumberedResult("match-end", "2026-07-09T20:08:00.000Z");
+    tracker.ingest(gameOneEnd);
+    tracker.holdCurrentGame("atlas", gameOneEnd);
+    tracker.ingest(unnumberedResult("match-snapshot", "2026-07-09T20:08:01.000Z"));
+    expect(tracker.previewGames("atlas")).toHaveLength(1);
+
+    tracker.ingest(event("match-start", {
+      ...base,
+      score: { me: "0", opp: "0", source: "atlas-score-track" }
+    }, "2026-07-09T20:10:00.000Z", "atlas"));
+    const gameTwoEnd = unnumberedResult("match-end", "2026-07-09T20:18:00.000Z");
+    tracker.ingest(gameTwoEnd);
+    const draft = tracker.buildDraft("atlas", gameTwoEnd, { ...settings, username: "BMU" });
+
+    expect(draft.games.map((game) => `${game.gameNumber}:${game.result}:${game.myPoints}-${game.oppPoints}`))
+      .toEqual(["1:Win:7-5", "2:Win:7-5"]);
+    expect(draft.score).toBe("2-0");
+  });
+
+  it("merges late Atlas result score echoes back into the confirmed child game", () => {
+    const tracker = new MatchSessionTracker();
+    const base = {
+      active: true,
+      format: "Auto",
+      myName: "BMU",
+      configuredUsername: "BMU",
+      opponentName: "SivirPlayer",
+      myChampion: "LeBlanc",
+      opponentChampion: "Sivir"
+    };
+    const score = (me: string, opp: string) => ({ me, opp, source: "atlas-score-track" });
+
+    tracker.ingest(event("match-start", {
+      ...base,
+      score: score("0", "0")
+    }, "2026-07-01T11:02:00.000Z", "atlas"));
+    tracker.ingest(event("match-snapshot", {
+      ...base,
+      score: score("3", "10"),
+      opponentBattlefieldImage: "https://assets.riftatlas-workers.com/riftbound/cards/original/OGN-276.webp"
+    }, "2026-07-01T11:12:00.000Z", "atlas"));
+    const gameOneEnd = event("match-end", {
+      ...base,
+      reason: "result-text-detected",
+      atlasResultKind: "game-result",
+      endText: "Confirm Game 1 Winner",
+      score: score("3", "10"),
+      opponentBattlefieldImage: "https://assets.riftatlas-workers.com/riftbound/cards/original/OGN-276.webp"
+    }, "2026-07-01T11:12:20.000Z", "atlas");
+    tracker.ingest(gameOneEnd);
+    expect(tracker.shouldHoldForBo3("atlas", gameOneEnd)).toBe(true);
+    tracker.holdCurrentGame("atlas", gameOneEnd);
+
+    tracker.ingest(event("match-start", {
+      ...base,
+      score: score("0", "0")
+    }, "2026-07-01T11:12:40.000Z", "atlas"));
+    tracker.ingest(event("match-snapshot", {
+      ...base,
+      score: score("3", "10"),
+      opponentBattlefieldImage: "https://assets.riftatlas-workers.com/riftbound/cards/original/OGN-276.webp"
+    }, "2026-07-01T11:12:41.000Z", "atlas"));
+    tracker.ingest(event("match-start", {
+      ...base,
+      score: score("0", "0")
+    }, "2026-07-01T11:12:42.000Z", "atlas"));
+
+    expect(tracker.previewGames("atlas").map((game) => `${game.gameNumber}:${game.result}:${game.myPoints}-${game.oppPoints}`))
+      .toEqual(["1:Loss:3-10"]);
+  });
+
   it("asks the coordinator to review a held Atlas BO3 before a different opponent is absorbed", () => {
     const tracker = new MatchSessionTracker();
 
@@ -2298,6 +2513,32 @@ describe("MatchSessionTracker", () => {
     tracker.ingest(end);
 
     expect(tracker.shouldHoldForBo3("atlas", end)).toBe(false);
+  });
+
+  it("resolves Atlas Vendetta legends from image URLs when text is keyword noise", () => {
+    const tracker = new MatchSessionTracker();
+    tracker.ingest(event("match-start", {
+      active: true,
+      format: "Bo1",
+      myName: "BMU",
+      opponentName: "Mindow",
+      myChampion: "Tap",
+      myChampionImage: "https://assets.riftatlas-workers.com/cdn-cgi/image/width=192/riftbound/cards/small-v2/VEN-139.webp",
+      opponentChampion: "Empowered",
+      opponentChampionImage: "https://assets.riftatlas-workers.com/cdn-cgi/image/width=192/riftbound/cards/small-v2/VEN-153.webp",
+      score: { me: "0", opp: "0" }
+    }, "2026-07-09T18:00:00.000Z", "atlas"));
+
+    const end = event("match-end", {
+      active: false,
+      format: "Bo1",
+      endText: "You win",
+      score: { me: "8", opp: "4" }
+    }, "2026-07-09T18:08:00.000Z", "atlas");
+    const draft = tracker.buildDraft("atlas", end, { ...settings, username: "BMU" });
+
+    expect(draft.myChampion).toBe("Akali");
+    expect(draft.opponentChampion).toBe("Ambessa");
   });
 
   it("creates a structured Atlas replay stream from new log rows and score changes", () => {

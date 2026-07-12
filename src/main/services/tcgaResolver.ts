@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { legendFromImageUrl } from "../../shared/legendImages.js";
 import { normalizeLegendName } from "../../shared/legendNames.js";
 
 interface LookupPayload {
@@ -6,7 +7,7 @@ interface LookupPayload {
   codeMap?: Record<string, string>;
 }
 
-const CARD_CODE_RE = /\b((?:OGN|OGS|SFD|UNL)-\d+[A-Z]?)\b/i;
+const CARD_CODE_RE = /\b((?:OGN|OGS|SFD|UNL|VEN)-\d+[A-Z]?)\b/i;
 const HASH_RE = /\b([a-f0-9]{40})\b/i;
 
 export class TcgaResolver {
@@ -31,7 +32,7 @@ export class TcgaResolver {
     if (code && this.codeMap[code]) {
       return this.codeMap[code];
     }
-    const baseCode = code.match(/^((?:OGN|OGS|SFD|UNL)-\d+)[A-Z]$/)?.[1] ?? "";
+    const baseCode = code.match(/^((?:OGN|OGS|SFD|UNL|VEN)-\d+)[A-Z]$/)?.[1] ?? "";
     if (baseCode && this.codeMap[baseCode]) {
       return this.codeMap[baseCode];
     }
@@ -39,7 +40,7 @@ export class TcgaResolver {
   }
 
   async resolveLegend(value: unknown): Promise<string> {
-    return normalizeLegendName(await this.resolve(value));
+    return normalizeLegendName((await this.resolve(value)) || legendFromImageUrl(value));
   }
 
   async resolveBattlefield(value: unknown): Promise<string> {

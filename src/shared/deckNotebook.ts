@@ -1,4 +1,5 @@
 import { normalizeLegendName } from "./legendNames.js";
+import { deckTrackerImageUrlFromId } from "./deckTracker.js";
 import type {
   DeckGuideCardRef,
   DeckGuideNote,
@@ -36,6 +37,7 @@ export interface DeckVersionPerformanceRow {
 }
 
 type ResultLike = "Win" | "Loss" | "Draw" | "Incomplete";
+type DeckSnapshotEntry = Record<string, unknown>;
 
 interface NotebookRecordStats {
   total: number;
@@ -180,20 +182,25 @@ export function deckNotebookCardOptions(deck: SavedDeck): DeckNotebookCardOption
   ];
   const seen = new Map<string, DeckNotebookCardOption>();
   for (const entry of sections) {
-    const name = text(entry.name);
+    const record = entryRecord(entry);
+    const name = text(record.name);
     if (!name) {
       continue;
     }
-    const cardId = text(entry.cardId);
+    const cardId = entryCardId(record);
     const key = cardKeyFor(name, cardId);
-    if (!seen.has(key)) {
+    const imageUrl = entryImageUrl(record);
+    const existing = seen.get(key);
+    if (!existing) {
       seen.set(key, {
         cardKey: key,
         cardName: name,
         cardId,
-        imageUrl: text(entry.imageUrl),
-        qty: entryQty(entry)
+        imageUrl,
+        qty: entryQty(record)
       });
+    } else if (!existing.imageUrl && imageUrl) {
+      seen.set(key, { ...existing, imageUrl });
     }
   }
   return [...seen.values()].sort((a, b) => a.cardName.localeCompare(b.cardName));
@@ -224,16 +231,38 @@ export function deckNotebookBattlefieldCardOptions(deck: SavedDeck): DeckNoteboo
 }
 
 export function sanitizeDeckNotebookForDeck(notebook: DeckNotebook, deck: SavedDeck): DeckNotebook {
-  const allowedAll = new Set(deckNotebookCardOptions(deck).map((card) => card.cardKey));
-  const allowedMain = new Set(deckNotebookMainDeckCardOptions(deck).map((card) => card.cardKey));
-  const allowedMulligan = new Set(deckNotebookMulliganCardOptions(deck).map((card) => card.cardKey));
-  const allowedSide = new Set(deckNotebookSideboardCardOptions(deck).map((card) => card.cardKey));
-  const allowedBattlefields = new Set(deckNotebookBattlefieldCardOptions(deck).map((card) => card.cardKey));
+  const allOptions = deckNotebookCardOptions(deck);
+  const mainOptions = deckNotebookMainDeckCardOptions(deck);
+  const mulliganOptions = deckNotebookMulliganCardOptions(deck);
+  const sideOptions = deckNotebookSideboardCardOptions(deck);
+  const battlefieldOptions = deckNotebookBattlefieldCardOptions(deck);
+  const allByKey = cardOptionsByKey(allOptions);
+  const mainByKey = cardOptionsByKey(mainOptions);
+  const mulliganByKey = cardOptionsByKey(mulliganOptions);
+  const sideByKey = cardOptionsByKey(sideOptions);
+  const battlefieldByKey = cardOptionsByKey(battlefieldOptions);
+  const allowedAll = new Set(allOptions.map((card) => card.cardKey));
+  const allowedMain = new Set(mainOptions.map((card) => card.cardKey));
+  const allowedMulligan = new Set(mulliganOptions.map((card) => card.cardKey));
+  const allowedSide = new Set(sideOptions.map((card) => card.cardKey));
+  const allowedBattlefields = new Set(battlefieldOptions.map((card) => card.cardKey));
   return {
     ...notebook,
-    watchlist: notebook.watchlist.filter((item) => allowedAll.has(item.cardKey)),
-    defaultGuide: sanitizeGuideCards(notebook.defaultGuide, allowedMain, allowedMulligan, allowedSide, allowedBattlefields),
-    matchupGuides: notebook.matchupGuides.map((guide) => sanitizeGuideCards(guide, allowedMain, allowedMulligan, allowedSide, allowedBattlefields))
+    watchlist: notebook.watchlist
+      .filter((item) => allowedAll.has(item.cardKey))
+      .map((item) => enrichWatchItem(item, allByKey.get(item.cardKey))),
+    defaultGuide: sanitizeGuideCards(notebook.defaultGuide, allowedMain, allowedMulligan, allowedSide, allowedBattlefields, {
+      mainByKey,
+      mulliganByKey,
+      sideByKey,
+      battlefieldByKey
+    }),
+    matchupGuides: notebook.matchupGuides.map((guide) => sanitizeGuideCards(guide, allowedMain, allowedMulligan, allowedSide, allowedBattlefields, {
+      mainByKey,
+      mulliganByKey,
+      sideByKey,
+      battlefieldByKey
+    }))
   };
 }
 
@@ -388,20 +417,25 @@ function deckNotebookSectionCardOptions(deck: SavedDeck, section: "mainDeck" | "
   const snapshot = parseDeckSnapshot(deck.snapshotJson);
   const seen = new Map<string, DeckNotebookCardOption>();
   for (const entry of snapshot[section] ?? []) {
-    const name = text(entry.name);
+    const record = entryRecord(entry);
+    const name = text(record.name);
     if (!name) {
       continue;
     }
-    const cardId = text(entry.cardId);
+    const cardId = entryCardId(record);
     const key = cardKeyFor(name, cardId);
-    if (!seen.has(key)) {
+    const imageUrl = entryImageUrl(record);
+    const existing = seen.get(key);
+    if (!existing) {
       seen.set(key, {
         cardKey: key,
         cardName: name,
         cardId,
-        imageUrl: text(entry.imageUrl),
-        qty: entryQty(entry)
+        imageUrl,
+        qty: entryQty(record)
       });
+    } else if (!existing.imageUrl && imageUrl) {
+      seen.set(key, { ...existing, imageUrl });
     }
   }
   return [...seen.values()].sort((a, b) => a.cardName.localeCompare(b.cardName));
@@ -465,7 +499,7 @@ function normalizeGuideCard(value: Partial<DeckGuideCardRef> | null | undefined)
     cardKey,
     cardName,
     cardId,
-    imageUrl: text(value?.imageUrl),
+    imageUrl: text(value?.imageUrl) || deckTrackerImageUrlFromId(cardId),
     qty: Number.isFinite(qty) ? Math.max(1, Math.trunc(qty)) : 1,
     note: text(value?.note),
     groupName: text(record.groupName ?? record.group ?? record.role),
@@ -534,34 +568,64 @@ function sanitizeGuideCards(
   allowedMain: Set<string>,
   allowedMulligan: Set<string>,
   allowedSide: Set<string>,
-  allowedBattlefields: Set<string>
+  allowedBattlefields: Set<string>,
+  options: {
+    mainByKey: Map<string, DeckNotebookCardOption>;
+    mulliganByKey: Map<string, DeckNotebookCardOption>;
+    sideByKey: Map<string, DeckNotebookCardOption>;
+    battlefieldByKey: Map<string, DeckNotebookCardOption>;
+  }
 ): DeckMatchupGuide {
   return {
     ...guide,
     mulligan: {
-      keep: filterGuideSection(guide.mulligan.keep, allowedMulligan),
-      consider: filterGuideSection(guide.mulligan.consider, allowedMulligan),
-      avoid: filterGuideSection(guide.mulligan.avoid, allowedMulligan)
+      keep: filterGuideSection(guide.mulligan.keep, allowedMulligan, options.mulliganByKey),
+      consider: filterGuideSection(guide.mulligan.consider, allowedMulligan, options.mulliganByKey),
+      avoid: filterGuideSection(guide.mulligan.avoid, allowedMulligan, options.mulliganByKey)
     },
     sideboard: {
       ...guide.sideboard,
-      out: filterGuideSection(guide.sideboard.out, allowedMain),
-      in: filterGuideSection(guide.sideboard.in, allowedSide)
+      out: filterGuideSection(guide.sideboard.out, allowedMain, options.mainByKey),
+      in: filterGuideSection(guide.sideboard.in, allowedSide, options.sideByKey)
     },
     battlefields: {
       ...guide.battlefields,
-      game1: filterGuideSection(guide.battlefields.game1, allowedBattlefields),
-      game1First: filterGuideSection(guide.battlefields.game1First, allowedBattlefields),
-      game1Second: filterGuideSection(guide.battlefields.game1Second, allowedBattlefields)
+      game1: filterGuideSection(guide.battlefields.game1, allowedBattlefields, options.battlefieldByKey),
+      game1First: filterGuideSection(guide.battlefields.game1First, allowedBattlefields, options.battlefieldByKey),
+      game1Second: filterGuideSection(guide.battlefields.game1Second, allowedBattlefields, options.battlefieldByKey)
     }
   };
 }
 
-function filterGuideSection(section: DeckGuideSection, allowed: Set<string>): DeckGuideSection {
+function filterGuideSection(section: DeckGuideSection, allowed: Set<string>, optionsByKey: Map<string, DeckNotebookCardOption>): DeckGuideSection {
   return {
     ...section,
-    cards: section.cards.filter((card) => allowed.has(card.cardKey))
+    cards: section.cards
+      .filter((card) => allowed.has(card.cardKey))
+      .map((card) => enrichGuideCard(card, optionsByKey.get(card.cardKey)))
   };
+}
+
+function enrichGuideCard(card: DeckGuideCardRef, option?: DeckNotebookCardOption): DeckGuideCardRef {
+  return {
+    ...card,
+    cardName: card.cardName || option?.cardName || "",
+    cardId: card.cardId || option?.cardId || "",
+    imageUrl: option?.imageUrl || card.imageUrl || deckTrackerImageUrlFromId(card.cardId || option?.cardId || "")
+  };
+}
+
+function enrichWatchItem(item: DeckCardWatchItem, option?: DeckNotebookCardOption): DeckCardWatchItem {
+  return {
+    ...item,
+    cardName: item.cardName || option?.cardName || "",
+    cardId: item.cardId || option?.cardId || "",
+    imageUrl: option?.imageUrl || item.imageUrl || deckTrackerImageUrlFromId(item.cardId || option?.cardId || "")
+  };
+}
+
+function cardOptionsByKey(options: DeckNotebookCardOption[]): Map<string, DeckNotebookCardOption> {
+  return new Map(options.map((option) => [option.cardKey, option]));
 }
 
 function normalizeWatchItem(item: DeckCardWatchItem): DeckCardWatchItem | null {
@@ -586,7 +650,20 @@ function normalizeWatchItem(item: DeckCardWatchItem): DeckCardWatchItem | null {
   };
 }
 
-function entryQty(entry: { qty?: number }): number {
+function entryRecord(entry: unknown): DeckSnapshotEntry {
+  return entry && typeof entry === "object" ? entry as DeckSnapshotEntry : {};
+}
+
+function entryCardId(entry: DeckSnapshotEntry): string {
+  return text(entry.cardId ?? entry.card_id ?? entry.code ?? entry.cardCode ?? entry.card_code);
+}
+
+function entryImageUrl(entry: DeckSnapshotEntry): string {
+  return text(entry.imageUrl ?? entry.image_url ?? entry.image ?? entry.src ?? entry.artUrl ?? entry.art_url)
+    || deckTrackerImageUrlFromId(entryCardId(entry));
+}
+
+function entryQty(entry: DeckSnapshotEntry): number {
   const qty = Number(entry.qty ?? 1);
   return Number.isFinite(qty) ? Math.max(1, Math.trunc(qty)) : 1;
 }
