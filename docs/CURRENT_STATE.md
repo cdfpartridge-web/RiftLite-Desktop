@@ -610,6 +610,19 @@ On 2026-07-11 after hiding the Replay Combiner entry point:
 - production `/replays` returned 200 without the combiner entry text, while the direct `/replays/combine` page returned 200 with the Replay Combiner UI
 - no desktop rebuild, GitHub commit, source push, tag, release, or asset upload occurred
 
+On 2026-07-12 after publishing RiftLite 0.8.00 for Windows and macOS:
+
+- the website primary navigation and homepage hero now link directly to `/replays`; TypeScript, changed-file ESLint, and all 207 website tests passed
+- Vercel production deployment `dpl_DJ9n2btdpRBw2Tzg6aWpzQ36q3c2` completed and was aliased to `https://www.riftlite.com`; production `/` and `/replays` both returned 200 and the homepage contained the new replay links
+- the desktop package uses SemVer `0.8.0`, while customer-facing UI, changelog, tags, and release titles use `0.8.00`; the existing application ID and user-data directory remain unchanged for upgrade/data continuity
+- desktop verification passed: 24 test files with 251 tests, lint/TypeScript, Electron main build, game-preload build, renderer production build, Windows NSIS packaging, embedded package metadata inspection, and an isolated 12-second packaged-app smoke launch
+- Windows source was published to the separate `windows` remote without replacing its existing history; release commit `b5c06d3a549c9505522a830e8eedc97e7af9a902`, release `https://github.com/cdfpartridge-web/RiftLite-Desktop/releases/tag/v0.8.00`
+- Windows installer: `RiftLiteBetaInstall.exe`, 198016069 bytes, SHA-256 `F0387435DE3253ADE15548C071E35C6A2ECF3AECDCA8680CB922BDA34BA51800`; blockmap: 183821 bytes, SHA-256 `94C15BFE9A6FB90141CA495ECC7548EF512E97E9AD7B27B20937B87EF6046AA4`; `latest.yml`: 343 bytes, SHA-256 `94E8F85AE7DC3E87134346FBD62B28EC4E91EC9913634AFF36DD49579FD1507A`
+- shared macOS source was published separately to `origin` at commit `90db04a920c439c7b21e74c1f3e36bceda0fb688`; the `mac-v0.8.00` GitHub Actions run passed lint, all tests, packaging, upload, and release attachment: `https://github.com/cdfpartridge-web/RiftLite-Desktop-mac/actions/runs/29186567015`
+- macOS release: `https://github.com/cdfpartridge-web/RiftLite-Desktop-mac/releases/tag/mac-v0.8.00`; `latest-mac.yml` reports `0.8.0` and has SHA-256 `F14A4373F8F042E7FF618628731B113593740DB715B55CE05A91FBDC63432243`
+- macOS Apple Silicon artifacts: DMG 165154654 bytes, SHA-256 `E27B4EB4661BD4F5917022144AE07ECC63BB6F045D9ED69D075B47ACA17D0F6C`; ZIP 157900070 bytes, SHA-256 `9D773485C2BE6317487B714C1D9F0BE02B1EEC47DEEA367302521FC0F400D3D3`
+- macOS Intel artifacts: DMG 173406692 bytes, SHA-256 `7CAD02148C71B940016548A71E7185DE8B0FCDB303C8F5C67F5B8C5D2AAA0941`; ZIP 166100331 bytes, SHA-256 `57C7408B222526662D2A6F86D8E9B4DB09C36F77817CE693EEDC4823EB91F141`
+
 Always rerun after code changes. Useful commands:
 
 ```powershell
@@ -641,18 +654,9 @@ npx vitest run tests/storeRecovery.test.ts
 9. Do not push or publish until explicitly requested.
 10. When publishing, ensure GitHub release tag and `latest.yml` assets match the app version so in-app updates work for older clients.
 
-## Dirty Working Tree Snapshot
+## Working Tree Snapshot
 
-At handoff time, the tree contains modified and untracked implementation files. Important untracked files include:
-
-- `src/main/services/rawCaptureService.ts`
-- `src/renderer/RiftLiteReplayViewer.tsx`
-- `src/shared/atlasEventDeckTracker.ts`
-- `src/shared/riftLiteReplayEngine.ts`
-- their related tests
-- account-sync docs and tester release notes
-
-Do not assume an untracked file is disposable. Inspect it before any cleanup or commit.
+The intentional 0.8.00 implementation, tests, assets, and documentation were committed and pushed to both platform repositories. Generated `dist` and `release` outputs remain ignored. Always inspect `git status` before new work and preserve any changes created after this release.
 
 ## Recommended Next Engineering Order
 
