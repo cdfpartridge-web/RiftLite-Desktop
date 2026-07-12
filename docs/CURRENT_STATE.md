@@ -8,11 +8,11 @@ This is the durable handoff for continuing RiftLite work in a fresh Codex task. 
 
 - Active cross-platform release source repo:
   `C:\Users\cdfpa\OneDrive\Documents\Claude\Projects\Riftlite Beta 0.6\desktop-v06`
-- Current package version: `0.8.0` (customer-facing release `v0.8.00`)
+- Current package version: `0.8.2` (customer-facing release `v0.8.02`)
 - Current branch: `main`
 - Windows GitHub release repository (`windows` remote): `cdfpartridge-web/RiftLite-Desktop`
 - macOS GitHub release repository (`origin` remote): `cdfpartridge-web/RiftLite-Desktop-mac`
-- Current published Windows release: `v0.8.00` (2026-07-12)
+- Current published Windows release: `v0.8.02` (2026-07-12)
 - Current published macOS release: `mac-v0.8.00` (2026-07-12)
 - Windows installer output:
   `C:\Users\cdfpa\OneDrive\Documents\Claude\Projects\Riftlite Beta 0.6\desktop-v06\release\RiftLiteBetaInstall.exe`
@@ -258,6 +258,10 @@ Do not delete these, but keep them out of normal navigation and release notes un
 The external RiftReplay upload integration remains separate from first-party RiftLite Web Replay consent. Legacy hidden settings migrate off, first-party consent is bound to the linked account UID, unlinking revokes it, and visibility defaults to private.
 
 ## RiftLite Web Replay
+
+Full subsystem handover and operational reference:
+
+- `docs/WEB_REPLAY_SYSTEM_HANDOVER.md`
 
 - Settings exposes **Automatically upload Atlas replays** only for a linked RiftLite account.
 - Completed Atlas captures upload through the authenticated Replay V2 init/raw/complete protocol and are owned by that Firebase account.
@@ -571,7 +575,7 @@ On 2026-07-11 after publishing reports-channel replay delivery and rebuilding lo
 
 On 2026-07-11 after implementing the manual dual-perspective Replay Combiner locally (website not yet published):
 
-- `/replays/combine` accepts two Replay V2 links/IDs, requires a signed-in creator plus explicit confirmation that both players consented, and creates a third separate Private replay
+- `/replays/combine` accepts two Replay V2 links/IDs, requires a signed-in creator plus explicit confirmation that both players consented, and creates a third separate Unlisted replay
 - source access uses the existing rules: the creator may use their own Private replay, while another owner's source must be Unlisted or Public; the combiner reads canonical artifacts only and never opens another account's raw capture
 - pairing requires the same two Atlas player IDs, opposite capture perspectives, compatible game/series structure, and strong match evidence; room matches also require a format-aware time window plus an authoritative event fingerprint
 - the merge keeps one deterministic authoritative timeline, enriches sequence-aligned snapshots/actions with each player's own hidden hand, mulligan, deck-choice, and sideboard data, rejects public-state conflicts, never double-applies secondary commits, and rebuilds checkpoints
@@ -623,6 +627,112 @@ On 2026-07-12 after publishing RiftLite 0.8.00 for Windows and macOS:
 - macOS Apple Silicon artifacts: DMG 165154654 bytes, SHA-256 `E27B4EB4661BD4F5917022144AE07ECC63BB6F045D9ED69D075B47ACA17D0F6C`; ZIP 157900070 bytes, SHA-256 `9D773485C2BE6317487B714C1D9F0BE02B1EEC47DEEA367302521FC0F400D3D3`
 - macOS Intel artifacts: DMG 173406692 bytes, SHA-256 `7CAD02148C71B940016548A71E7185DE8B0FCDB303C8F5C67F5B8C5D2AAA0941`; ZIP 166100331 bytes, SHA-256 `57C7408B222526662D2A6F86D8E9B4DB09C36F77817CE693EEDC4823EB91F141`
 
+On 2026-07-12 after diagnosing the v0.8.0 desktop account-link mismatch report (local fix, not rebuilt or published):
+
+- the supplied capture diagnostics contained no account-link records; the paired UI errors matched a brittle one-time-token flow where the website cleared the token on the first status read and the Account page could start another status request before desktop verification finished
+- Account-page link polling is now single-flight, completed custom-token exchange uses a local immutable auth result, and the exchanged Firebase UID remains authoritative when an older/partial status response omits the redundant UID; a genuine non-empty UID disagreement is still rejected
+- the website may issue a replacement custom token only to the same authenticated desktop-link owner and only inside the original 15-minute session window, allowing recovery after a consumed token without weakening reconnect UID pinning
+- focused identity/link tests passed; full desktop verification passed 24 files / 252 tests plus TypeScript, and full website verification passed 30 files / 208 tests plus TypeScript and changed-file ESLint
+- no website deployment, installer rebuild, GitHub operation, production data write, or Discord action was performed
+
+On 2026-07-12 after publishing the account-linking hotfix as v0.8.01 for Windows:
+
+- the recovery-capable website status endpoint was deployed to production as Vercel deployment `dpl_DA22RZBGEtrW4W6SPrNKkuX4wqHJ` and aliased to `https://www.riftlite.com`; the production route responds normally and the Vercel production build passed
+- the desktop package was versioned to SemVer `0.8.1`, with customer-facing version `0.8.01`; all 252 desktop tests, TypeScript/lint, Electron/main build, game-preload build, renderer production build, Windows NSIS packaging, packaged metadata inspection, and an isolated 12-second startup smoke test passed
+- Windows source was pushed only to the `windows` remote at release commit `4f55b17`; the macOS repository was not changed
+- GitHub release: `https://github.com/cdfpartridge-web/RiftLite-Desktop/releases/tag/v0.8.01`, confirmed as the repository's Latest release
+- Windows installer: `RiftLiteBetaInstall.exe`, 198405198 bytes, SHA-256 `1441F530D702715403A0334DAFBB37D2E0F29ED50DB291557630796327067971`; blockmap: 183412 bytes, SHA-256 `75253F40CB6521EEA10BDA46C2492B60B36A81624E82DE8D149A47832BBD6D4A`; `latest.yml`: 343 bytes, SHA-256 `C14A17CCE7332F152D361C839C9E79E54155B87BDD0176991A5C824B7E3FF1CE`
+- all three assets downloaded from GitHub matched the local build exactly by size and SHA-256
+
+On 2026-07-12 after creating the local customer-facing website refresh for approval:
+
+- the website homepage was rewritten around the current v0.8.01 product: automatic TCGA/Atlas capture, first-party animated Web Replay and BO3 sideboarding, local video/coaching tools, Matchup Lab, versioned decks and visual prep, account/cloud continuity, private hubs, Discord replay reports, LFG, and live community data
+- a real public Akali-vs-Annie BO3 Web Replay opening was captured as the new hero/showcase asset in PNG and optimized WebP form; no mock gameplay state was used
+- the mobile site header now uses one horizontally scrollable navigation rail instead of stacking all destinations into several rows; the 390px layout has no document-level horizontal overflow
+- TypeScript, changed-file ESLint, all 30 website test files / 208 tests, and the full Next.js production build passed; the build retains only the pre-existing oversized Next.js community-cache warnings
+- a production-mode local preview is running at `http://127.0.0.1:3101/` for approval
+- no Vercel deployment, GitHub commit, push, release, installer rebuild, production data write, or Discord action was performed
+
+On 2026-07-12 after fixing premature automatic Discord replay reports locally:
+
+- replay `rl2_c5cbcf3bdec231aa182295aee4eaf308` proved the automatic upload raced Atlas finalization: capture ended at `13:28:16.909Z`, Discord sharing completed at `13:28:24.536Z`, and the local match became a saved 1-0 Win at `13:28:34.147Z`
+- the first automatic Discord-eligible upload now checks the current persisted match, waits 15 seconds when unresolved, then polls every 2.5 seconds for up to 30 seconds before creating the immutable Replay V2 upload
+- a resolved local result is written into the privacy-safe raw match summary before upload; resolved summaries are never replaced by later incomplete data, while manual sharing and ordinary non-Discord replay uploads keep their existing timing
+- BO1 Discord formatting now uses the match winner as `1-0` or `0-1`, so a concession with tied battlefield points no longer reports the board points as the match score
+- desktop raw-capture regression verification passed 38 tests; website Discord formatting verification passed four tests plus changed-file ESLint and TypeScript
+- the existing immutable replay and already-posted Discord message were not altered; no deployment, installer rebuild, GitHub operation, production write, or Discord action was performed
+
+On 2026-07-12 after adding automatic RiftAtlas seat tracking locally:
+
+- the Atlas WebSocket bridge now reads only authoritative `choose_first_player` commits, compares the committed `firstPlayerId` with the local `playerId` from the socket identity, and emits `Went 1st` / `Went 2nd` match evidence automatically
+- uncommitted outgoing choice intents are ignored, the WebSocket authentication/query string is not retained in match evidence, and the synthetic capture URL remains a normal Atlas game-surface URL so BO3 continuation guards behave correctly
+- the seat evidence is ingested by the existing `MatchSessionTracker`, so each BO3 child game retains its own seat value in the review popup; manual editing remains available as a fallback
+- the real Akali-vs-Annie three-game capture confirmed the available authoritative sequence maps to local seats `2nd`, `1st`, `2nd`
+- focused Atlas seat, match-session, and capture-coordinator verification passed 96 tests; full desktop verification passed 25 files / 257 tests plus TypeScript
+- this is RiftAtlas-only; TCGA behaviour is unchanged, and no installer rebuild, publish, push, production write, or external action was performed
+
+On 2026-07-12 after rebuilding the Windows installer locally with the Discord score-delay and Atlas seat fixes:
+
+- Electron main, game preload, renderer production build, x64 packaging, and NSIS generation passed; the first packaging attempt found the existing local `win-unpacked` app running, so only those six generated-build processes were closed before the clean retry
+- packaged ASAR metadata and `latest.yml` both report SemVer `0.8.1` (customer-facing `0.8.01`)
+- local installer: `release/RiftLiteBetaInstall.exe`, 198408380 bytes, SHA-256 `D2471C47C279BF163EA1E5E03C98817CE8AAC319A518D8049E038A440BEFEE8A`
+- blockmap: 183388 bytes, SHA-256 `3849340B30568084F01CE6D1F1608D9FB66F72546B51E6A11E5448870C9C756C`; `latest.yml`: 343 bytes, SHA-256 `88D6592D2051093018120EBC9A86976D5FE0CA450AD471537C3BCC8B91913DF8`
+- the packaged app remained running through a 12-second isolated smoke launch using temporary app-data directories; the real RiftLite database and settings were not touched
+- no GitHub commit, push, tag, release, asset upload, website deployment, or other external publish occurred
+
+On 2026-07-12 after fixing the first real dual-perspective Replay Combiner pair locally:
+
+- production replays `rl2_baf2d8917f11b16cc16d4efe8a911536` and `rl2_836e22c245b2a642a821a08c850891e3` were verified read-only as the same Akali-vs-Teemo BO1: opposite perspectives over the same two player IDs, starts 1.065 seconds apart, ends 2.091 seconds apart, the same 6-0 winner/result, and 266 authoritative actions in each source
+- root cause: the combiner incorrectly included optional `actorPlayerId` in authoritative action identity even though only the perspective that sent the intent can legitimately retain it; this reduced 266 genuine matches to zero, while perspective-filtered patch-operation shapes also differed legitimately
+- action pairing now uses game ordinal, authoritative sequence/client identity, and action type; a known actor enriches a missing actor, but two different known actors still fail as a material conflict
+- matching patches retain one timeline, merge owner-only operations, reconcile redacted remove/insert representations with owner-visible moves, and carry known consented hidden cards through an otherwise unpaired masked snapshot without accepting conflicting supplied public values
+- the exact live pair now combines locally with strong confidence, 266 paired actions, 99.81% event coverage, 11 enriched cards, and 119 enriched fields; all 532 per-action owner hidden-state comparisons matched their source perspective, and all rebuilt checkpoint hashes validated
+- focused combiner/server tests passed 12 tests; the full website suite passed 30 files / 211 tests, TypeScript, full ESLint with zero errors (15 existing warnings), and the Next.js production build; the existing local preview still returns 200
+- no combined production replay was created, no source replay was mutated, and no Vercel deployment, GitHub operation, installer rebuild, Discord action, or other external write occurred
+
+On 2026-07-12 after publishing the real-pair Replay Combiner repair and the previously approved customer-facing homepage refresh:
+
+- Vercel production deployment `dpl_HHw2smk1yr9AbVFUjyZZRZhSTY4m` completed and was aliased to `https://www.riftlite.com`
+- production `/`, `/replays`, `/replays/combine`, both supplied replay pages, and both canonical replay API routes returned 200
+- an unauthenticated combine request correctly returned 401; verification did not create a combined replay, mutate either source, or expose private data
+- the two supplied perspectives are ready to retry through the signed-in direct combiner UI
+- no GitHub commit, push, tag, release, installer rebuild, Discord action, or other external publish occurred
+
+On 2026-07-12 after changing combined replay sharing and hidden-information presentation:
+
+- new combined replays are now Unlisted by default: anyone with the link can view them, but they remain absent from the public replay listing
+- combined face-up cards known only from their owner's capture carry a **Hidden** label until both perspectives reveal them or they move into a public zone; the internal marker is omitted from the card inspector
+- the immutable combination generation advanced from 1 to 2, so recombining an older pair creates a new upgraded replay without rewriting or changing the earlier combined link
+- all 30 website test files / 211 tests, TypeScript, changed-file ESLint, the local Next production build, and the Vercel production build passed
+- Vercel production deployment `dpl_DiwNVmfQz4RkknUpmp98xEKM8Wcx` completed and was aliased to `https://www.riftlite.com`; production `/`, `/replays/combine`, and both supplied source replay pages returned 200
+- an unauthenticated combine request correctly returned 401; no production replay or Discord message was created during verification
+- no GitHub commit, push, tag, release, installer rebuild, or desktop source change occurred
+
+On 2026-07-12 after correcting the over-broad combined Hidden badge:
+
+- live source inspection confirmed the Atlas mechanic is explicit: `set_card_hidden` writes card field `hidden: true`; `set_card_revealed_to_opponent` writes `revealedToOpponent: true`, and later patches remove `hidden`
+- the player now shows **Hidden** only when the card is physically rendered in a battlefield zone, `hidden === true`, and `revealedToOpponent !== true`
+- ordinary combined hands, decks, mulligans, and other perspective-only information no longer receive the Hidden badge
+- the synthetic combined-hand secrecy marker was removed; existing immutable combined artifacts remain compatible because the corrected player reads the authoritative Atlas card fields
+- all 30 website test files / 212 tests, TypeScript, changed-file ESLint, the local Next production build, and the Vercel production build passed
+- Vercel production deployment `dpl_GaGtmmMEdcz7ujPoTFrxX6ZJ9Mtg` completed and was aliased to `https://www.riftlite.com`; production `/`, `/replays/combine`, the supplied replay page, and its canonical API returned 200
+- no production replay was created or mutated, and no GitHub, installer, desktop, or Discord action occurred
+
+On 2026-07-12 after diagnosing and releasing the RiftAtlas embedded black-screen recovery as Windows v0.8.02:
+
+- tester diagnostics `riftlite-capture-events (44).jsonl` (v0.7.95) and `(48).jsonl` (v0.8.1) showed the same failure signature: repeated `capture-ready`/initial Atlas snapshots in seconds, `active: false`, only landing-page marketing rows, and no normal match/WebSocket state; Atlas worked in the tester's normal browser, isolating the issue to the persistent Electron Atlas partition
+- the renderer now detects four Atlas capture-bridge initializations inside 20 seconds and offers **Repair Atlas**; the same action is always available beside Atlas refresh controls
+- repair clears only the embedded Atlas HTTP cache, Cache Storage, and service worker for `https://play.riftatlas.com`, preserving cookies, local storage, IndexedDB, RiftLite accounts, settings, matches, decks, and replays before a hard reload
+- guest webview diagnostics now retain privacy-safe main-navigation start/finish/failure, error-level console, preload-error, render-process, and responsiveness evidence; diagnostic URLs strip query strings and fragments
+- a packaged-only `--riftlite-smoke-test` flag skips protocol registration and the production single-instance lock so release smoke tests can use isolated app-data while the installed app remains open; normal startup is unchanged
+- this release also contains the already-verified unpublished Atlas per-game seat automation and delayed finalized-score lookup for automatic Discord replay reports
+- verification passed 26 test files / 261 tests, TypeScript, Electron main, game preload, renderer production build, Windows x64/NSIS packaging, ASAR/updater metadata inspection, and an isolated 12-second packaged-app smoke launch
+- packaged ASAR and `latest.yml` report SemVer `0.8.2` (customer-facing `v0.8.02`)
+- Windows installer: `RiftLiteBetaInstall.exe`, 198475265 bytes, SHA-256 `82F7F51767A7B75FDB3C54F5E86C13B6AB5131D3B2C45DA0C416AC77F4F53F2B`
+- blockmap: 184621 bytes, SHA-256 `2D5D535914BB40523F8B76E781EEEB58BDEAC009D7801FB28C1552000A2FDB82`; `latest.yml`: 343 bytes, SHA-256 `13B998B19DCA0738F88ED2D2CDFF6238F758899D3A738944257C0F46C60D399C`
+- Windows release source is pinned by tag `v0.8.02`; GitHub release: `https://github.com/cdfpartridge-web/RiftLite-Desktop/releases/tag/v0.8.02`
+- the website and macOS repository were not changed for this release
+
 Always rerun after code changes. Useful commands:
 
 ```powershell
@@ -671,6 +781,6 @@ The intentional 0.8.00 implementation, tests, assets, and documentation were com
 
 Use this exact starter message in a new task opened in the same workspace:
 
-> Work from `C:\Users\cdfpa\OneDrive\Documents\Claude\Projects\Riftlite Beta 0.6\desktop-v06`. Read `docs/CURRENT_STATE.md` first. Preserve the dirty working tree and do not rebuild or publish unless I ask. Continue with: [describe the next bug or feature].
+> Work from `C:\Users\cdfpa\OneDrive\Documents\Claude\Projects\Riftlite Beta 0.6\desktop-v06`. Read `docs/CURRENT_STATE.md` first. For any web replay work, also read `docs/WEB_REPLAY_SYSTEM_HANDOVER.md` completely. Preserve both the desktop and website dirty working trees and do not rebuild or publish unless I ask. Continue with: [describe the next bug or feature].
 
 The old task remains useful as an archive, but day-to-day engineering context should come from this file, the current code, tests, diagnostics, and attached logs.

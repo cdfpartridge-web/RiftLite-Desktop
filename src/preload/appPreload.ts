@@ -177,6 +177,7 @@ const api: RiftLiteApi = {
   checkForUpdates: () => ipcRenderer.invoke("updates:check") as Promise<UpdateStatus>,
   downloadUpdate: () => ipcRenderer.invoke("updates:download") as Promise<UpdateStatus>,
   installUpdate: () => ipcRenderer.invoke("updates:install") as Promise<void>,
+  recoverAtlasWebview: () => ipcRenderer.invoke("atlas-webview:recover") as ReturnType<RiftLiteApi["recoverAtlasWebview"]>,
   getGamePreloadUrl: (platform: GamePlatform) => ipcRenderer.invoke("game-preload:url", platform) as Promise<string>,
   getAssetUrl: (relativePath: string) => ipcRenderer.invoke("assets:url", relativePath) as Promise<string>,
   getBattlefields: () => ipcRenderer.invoke("battlefields:get") as Promise<BattlefieldOption[]>,

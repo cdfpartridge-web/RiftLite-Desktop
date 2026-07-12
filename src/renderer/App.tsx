@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import QRCode from "qrcode";
 import {
   Activity,
+  AlertTriangle,
   BarChart3,
   Bell,
   BookOpen,
@@ -181,6 +182,10 @@ import {
 } from "../shared/matchCombine";
 import { upsertMatchPreservingOrder } from "../shared/matchList";
 import { publicCommunitySyncEnabled, syncModePatch } from "../shared/syncPolicy";
+import {
+  initialAtlasReloadStormState,
+  updateAtlasReloadStormState
+} from "../shared/atlasWebviewRecovery";
 import { RiftLiteReplayViewer } from "./RiftLiteReplayViewer";
 import "./styles/app.css";
 
@@ -220,14 +225,14 @@ const RIFTLITE_WEB_REPLAY_FEATURE_VISIBLE = true;
 
 const DEFAULT_UPDATE_STATUS: UpdateStatus = {
   state: "idle",
-  currentVersion: "0.8.01",
+  currentVersion: "0.8.02",
   message: "Updater ready"
 };
 
 const FALLBACK_BOOT_SETTINGS: UserSettings = {
   username: "",
   firstRunComplete: true,
-  lastSeenVersion: "0.8.01",
+  lastSeenVersion: "0.8.02",
   syncMode: "community-and-hubs",
   communitySyncEnabled: true,
   firebaseUid: "",
@@ -317,7 +322,7 @@ const FALLBACK_BOOT_SETTINGS: UserSettings = {
   activeTeams: []
 };
 
-const APP_VERSION_META = "0.8.01";
+const APP_VERSION_META = "0.8.02";
 const VENDETTA_PREVIEW_START_MS = Date.UTC(2026, 6, 6);
 const VENDETTA_LAUNCH_START_MS = Date.UTC(2026, 6, 31);
 const COMMUNITY_SEASONS = [
@@ -371,14 +376,14 @@ const DEFAULT_HOME_FEATURED_VIDEOS: HomeFeaturedVideo[] = [
 const HOME_CONFIG_URL = "https://www.riftlite.com/api/app/home";
 const RELEASE_NOTES = {
   version: APP_VERSION_META,
-  title: "RiftLite 0.8.01",
-  intro: "RiftLite 0.8.01 fixes account linking when a secure website token is consumed while the desktop is still verifying it.",
+  title: "RiftLite 0.8.02",
+  intro: "RiftLite 0.8.02 adds safe recovery when RiftAtlas repeatedly reloads or opens to a black embedded screen.",
   items: [
-    "Account linking now completes reliably without overlapping verification requests consuming the same secure token.",
-    "A completed link can safely recover during its original verification window without weakening account identity checks.",
-    "Completed Atlas matches can upload privately to your linked RiftLite account and play inside the new RiftLite web replay tab.",
-    "BO3 web replays stay together across games and show animated sideboard changes, game setup, and series score.",
-    "Account switching remains safe and preserves local match data."
+    "RiftLite detects rapid Atlas reload loops and offers a one-click Repair Atlas action.",
+    "Repair Atlas clears only the embedded cache and service worker, preserving accounts and all local RiftLite data.",
+    "New embedded-browser diagnostics capture Atlas load failures and console errors for clearer support reports.",
+    "RiftAtlas first-player choices now fill Went 1st / Went 2nd automatically for each BO3 game.",
+    "Automatic Discord replay reports wait for finalized match results instead of posting Score Pending prematurely."
   ]
 };
 const RIOT_LEGAL_NOTICE = `RiftLite was created under Riot Games' "Legal Jibber Jabber" policy using assets owned by Riot Games. Riot Games does not endorse or sponsor this project.`;
@@ -2800,6 +2805,8 @@ function App() {
   const [screenshotStatus, setScreenshotStatus] = useState("");
   const [actionFeedback, setActionFeedback] = useState("");
   const [captureNotice, setCaptureNotice] = useState<CaptureNotice | null>(null);
+  const [atlasRecoverySuggested, setAtlasRecoverySuggested] = useState(false);
+  const [atlasRecoveryBusy, setAtlasRecoveryBusy] = useState(false);
   const [updatePromptDismissedFor, setUpdatePromptDismissedFor] = useState("");
   const [releaseNotesOpen, setReleaseNotesOpen] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
@@ -2815,6 +2822,7 @@ function App() {
   const actionFeedbackTimerRef = useRef<number | undefined>(undefined);
   const captureNoticeTimerRef = useRef<number | undefined>(undefined);
   const capturePromptSignatureRef = useRef("");
+  const atlasReloadStormRef = useRef(initialAtlasReloadStormState());
   const pendingReviewFallbackTimerRef = useRef<number | undefined>(undefined);
   const diagnosticsRefreshTimerRef = useRef<number | undefined>(undefined);
   const diagnosticsRefreshInFlightRef = useRef(false);
@@ -4500,6 +4508,32 @@ function App() {
     }
   }
 
+  async function recoverAtlasWebview() {
+    if (atlasRecoveryBusy) {
+      return;
+    }
+    setAtlasRecoveryBusy(true);
+    showActionFeedback("Repairing the embedded Atlas browser...", 6_000);
+    try {
+      const result = await window.riftlite.recoverAtlasWebview();
+      if (!result.ok) {
+        showActionFeedback(result.message, 7_000);
+        return;
+      }
+      atlasReloadStormRef.current = initialAtlasReloadStormState();
+      setAtlasRecoverySuggested(false);
+      reloadGamePage(true);
+      showActionFeedback(result.message, 6_000);
+    } catch (error) {
+      showActionFeedback(
+        error instanceof Error ? `Atlas repair failed: ${error.message}` : "Atlas repair failed. Restart RiftLite and try again.",
+        7_000
+      );
+    } finally {
+      setAtlasRecoveryBusy(false);
+    }
+  }
+
   async function setGameZoom(nextZoom: number) {
     const zoom = clampGameZoom(nextZoom);
     applyGameZoom(zoom);
@@ -4515,7 +4549,14 @@ function App() {
     if (!payload || typeof payload !== "object") {
       return;
     }
-    await window.riftlite.reportRendererEvent(payload as CaptureEvent);
+    const captureEvent = payload as CaptureEvent;
+    const nextRecoveryState = updateAtlasReloadStormState(
+      atlasReloadStormRef.current,
+      captureEvent
+    );
+    atlasReloadStormRef.current = nextRecoveryState;
+    setAtlasRecoverySuggested(nextRecoveryState.suggested);
+    await window.riftlite.reportRendererEvent(captureEvent);
   }
 
   async function primeReplayVideoTarget(platform: GamePlatform = activePlatform): Promise<void> {
@@ -6040,6 +6081,17 @@ function App() {
             >
               <RotateCcw size={16} />
             </button>
+            {activePlatform === "atlas" ? (
+              <button
+                className="segmented icon-segment"
+                data-active={atlasRecoverySuggested}
+                disabled={atlasRecoveryBusy}
+                onClick={() => void recoverAtlasWebview()}
+                title="Repair the embedded Atlas browser cache"
+              >
+                <RotateCw size={16} />
+              </button>
+            ) : null}
             <button
               className="segmented icon-segment"
               onClick={() => void takeScreenshot()}
@@ -6254,6 +6306,30 @@ function App() {
         />
       ) : null}
       {releaseNotesOpen ? <ReleaseNotesModal onClose={() => void dismissReleaseNotes()} /> : null}
+      {atlasRecoverySuggested && activePlatform === "atlas" ? (
+        <div className="atlas-recovery-prompt" role="alert" data-atlas-recovery-prompt>
+          <AlertTriangle size={20} />
+          <div>
+            <strong>Atlas is repeatedly reloading</strong>
+            <span>RiftLite can safely clear Atlas&apos;s embedded cache and service worker without removing your account or local RiftLite data.</span>
+          </div>
+          <div className="atlas-recovery-actions">
+            <button className="primary" disabled={atlasRecoveryBusy} onClick={() => void recoverAtlasWebview()}>
+              {atlasRecoveryBusy ? "Repairing..." : "Repair Atlas"}
+            </button>
+            <button
+              className="secondary"
+              disabled={atlasRecoveryBusy}
+              onClick={() => {
+                atlasReloadStormRef.current = initialAtlasReloadStormState();
+                setAtlasRecoverySuggested(false);
+              }}
+            >
+              Not now
+            </button>
+          </div>
+        </div>
+      ) : null}
       {captureNotice ? (
         <div className="capture-progress-notice" role="status" aria-live="polite">
           <div className="capture-progress-icon"><Activity size={18} /></div>

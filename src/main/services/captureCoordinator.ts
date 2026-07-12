@@ -2133,6 +2133,7 @@ function compactPayload(payload: Record<string, unknown> = {}): Record<string, u
     "active",
     "format",
     "atlasResultKind",
+    "atlasGameInstanceId",
     "endText",
     "localPlayerName",
     "configuredUsername",

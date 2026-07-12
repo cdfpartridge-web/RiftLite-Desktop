@@ -63,6 +63,8 @@ import type {
   VisionDeckTrackerStatus
 } from "../shared/types.js";
 import { emptyDeckMatchupGuide, resolveDeckMatchupGuide, sanitizeDeckNotebookForDeck } from "../shared/deckNotebook.js";
+import { atlasSeatCaptureEvent } from "../shared/atlasSeatTracker.js";
+import { clearAtlasWebviewRuntime } from "../shared/atlasWebviewRecovery.js";
 import { detectBrowsers } from "./services/browserDetection.js";
 import { scheduleAppUsageHeartbeat } from "./services/appUsageAnalytics.js";
 import { CaptureCoordinator } from "./services/captureCoordinator.js";
@@ -99,21 +101,25 @@ const REPLAY_STREAM_MAGIC = "RIFTLITE_REPLAY_STREAM_V1";
 const REPLAY_STREAM_VIDEO_START = "VIDEO_DATA";
 const REPLAY_STREAM_VIDEO_END = "END_VIDEO_DATA";
 const RIFTREPLAY_CAPTURE_FEATURE_ENABLED = true;
+const ATLAS_GAME_PARTITION = "persist:riftlite-atlas";
+const IS_PACKAGED_SMOKE_TEST = process.argv.includes("--riftlite-smoke-test");
 
 app.setName("RiftLite Beta 0.8");
 app.setPath("userData", join(app.getPath("appData"), "RiftLite Beta 0.6"));
 app.setAppUserModelId("com.riftlite.desktop.beta06");
-if (process.defaultApp && process.argv[1]) {
-  app.setAsDefaultProtocolClient("riftlite", process.execPath, [resolve(process.argv[1])]);
-} else {
-  app.setAsDefaultProtocolClient("riftlite");
+if (!IS_PACKAGED_SMOKE_TEST) {
+  if (process.defaultApp && process.argv[1]) {
+    app.setAsDefaultProtocolClient("riftlite", process.execPath, [resolve(process.argv[1])]);
+  } else {
+    app.setAsDefaultProtocolClient("riftlite");
+  }
 }
 app.commandLine.appendSwitch("ignore-gpu-blocklist");
 app.commandLine.appendSwitch("enable-gpu-rasterization");
 app.commandLine.appendSwitch("enable-zero-copy");
 app.commandLine.appendSwitch("disable-features", "WebRtcAllowInputVolumeAdjustment,WebRtcApmInAudioService");
 
-const gotSingleInstanceLock = app.requestSingleInstanceLock();
+const gotSingleInstanceLock = IS_PACKAGED_SMOKE_TEST || app.requestSingleInstanceLock();
 
 let mainWindow: BrowserWindow | null = null;
 let pendingAppNavigation: AppNavigationRequest | null = protocolNavigationFromArgs(process.argv);
@@ -751,6 +757,15 @@ function platformFromUrl(url: string): GamePlatform | null {
   return null;
 }
 
+function diagnosticPageUrl(value: string): string {
+  try {
+    const parsed = new URL(value);
+    return `${parsed.origin}${parsed.pathname}`;
+  } catch {
+    return value.split(/[?#]/, 1)[0].slice(0, 500);
+  }
+}
+
 function isTrustedAppOrigin(origin: string): boolean {
   const lower = origin.toLowerCase();
   return lower.startsWith("file://") ||
@@ -1041,6 +1056,12 @@ function ingestAtlasRawFrame(
   if (RIFTREPLAY_CAPTURE_FEATURE_ENABLED) {
     void rawCaptureService.appendFrame(frame).catch((error) => {
       void logStartupIssue("raw capture append failed", error);
+    });
+  }
+  const seatEvent = atlasSeatCaptureEvent(frame);
+  if (seatEvent && capture) {
+    void capture.handleEvent(seatEvent).catch((error) => {
+      void logStartupIssue("atlas websocket seat capture failed", error);
     });
   }
   void deckTrackerService?.ingestAtlasRawFrame(frame).catch((error) => {
@@ -4653,10 +4674,45 @@ async function createWindow(): Promise<void> {
     rememberGameWebContents(webContents);
     maybeInstallRawCaptureWebSocketTap(webContents);
     installFullscreenShortcut(webContents);
+    const reportGuestLifecycle = (
+      reason: string,
+      payload: Record<string, unknown> = {},
+      candidateUrl = webContents.getURL()
+    ) => {
+      const url = diagnosticPageUrl(candidateUrl || webContents.getURL());
+      const platform = platformFromUrl(url);
+      if (!platform) {
+        return;
+      }
+      void capture.handleEvent({
+        id: `${reason}-${Date.now()}-${randomUUID()}`,
+        platform,
+        kind: "debug",
+        capturedAt: new Date().toISOString(),
+        url,
+        payload: { reason, ...payload, url }
+      });
+    };
     const refreshGuestContext = () => {
       rememberGameWebContents(webContents);
       maybeInstallRawCaptureWebSocketTap(webContents);
     };
+    webContents.on("did-start-navigation", (_navigationEvent, url, isInPlace, isMainFrame) => {
+      if (isMainFrame && !isInPlace) {
+        reportGuestLifecycle("guest-main-navigation-start", {}, url);
+      }
+    });
+    webContents.on("did-finish-load", () => {
+      reportGuestLifecycle("guest-main-load-finished");
+    });
+    webContents.on("did-fail-load", (_loadEvent, errorCode, errorDescription, validatedURL, isMainFrame) => {
+      if (!isMainFrame) {
+        return;
+      }
+      const payload = { errorCode, errorDescription };
+      reportGuestLifecycle("guest-main-load-failed", payload, validatedURL);
+      void logStartupIssue("guest main load failed", JSON.stringify({ ...payload, url: diagnosticPageUrl(validatedURL) }));
+    });
     webContents.on("did-navigate", refreshGuestContext);
     webContents.on("did-navigate-in-page", refreshGuestContext);
     webContents.on("dom-ready", refreshGuestContext);
@@ -4712,26 +4768,22 @@ async function createWindow(): Promise<void> {
       }
     });
     webContents.on("console-message", (_consoleEvent, level, message, line, sourceId) => {
-      if (/riftlite|preload|capture/i.test(message)) {
-        void capture.handleEvent({
-          id: `host-console-${Date.now()}`,
-          platform: webContents.getURL().includes("riftatlas") ? "atlas" : "tcga",
-          kind: "debug",
-          capturedAt: new Date().toISOString(),
-          url: webContents.getURL(),
-          payload: { reason: "guest-console", level, message, line, sourceId }
+      if (level >= 2 || /riftlite|preload|capture/i.test(message)) {
+        reportGuestLifecycle("guest-console", {
+          level,
+          message: message.slice(0, 2_000),
+          line,
+          sourceId: diagnosticPageUrl(sourceId)
         });
       }
     });
     webContents.on("preload-error", (_preloadEvent, preloadPathValue, error) => {
-      void capture.handleEvent({
-        id: `host-preload-error-${Date.now()}`,
-        platform: webContents.getURL().includes("riftatlas") ? "atlas" : "tcga",
-        kind: "debug",
-        capturedAt: new Date().toISOString(),
-        url: webContents.getURL(),
-        payload: { reason: "preload-error", preloadPath: preloadPathValue, message: error.message, stack: error.stack ?? "" }
+      reportGuestLifecycle("preload-error", {
+        preloadFile: preloadPathValue.split(/[\\/]/).at(-1) ?? "",
+        message: error.message.slice(0, 2_000),
+        stack: (error.stack ?? "").slice(0, 4_000)
       });
+      void logStartupIssue("guest preload error", `${preloadPathValue}\n${formatStartupError(error)}`);
     });
   });
 
@@ -5173,6 +5225,43 @@ function registerIpc(): void {
   ipcMain.handle("analytics:spotlight-click", (_event, payload: SpotlightClickPayload) => trackSpotlightClick(payload));
   ipcMain.handle("assets:url", (_event, relativePath: string) => assetDataUrl(relativePath));
   ipcMain.handle("battlefields:get", () => loadBattlefields());
+  ipcMain.handle("atlas-webview:recover", async () => {
+    const capturedAt = new Date().toISOString();
+    try {
+      await clearAtlasWebviewRuntime(electronSession.fromPartition(ATLAS_GAME_PARTITION));
+      await capture.handleEvent({
+        id: `atlas-webview-recovery-complete-${Date.now()}`,
+        platform: "atlas",
+        kind: "debug",
+        capturedAt,
+        url: "https://play.riftatlas.com/",
+        payload: {
+          reason: "atlas-webview-recovery-complete",
+          cleared: ["http-cache", "serviceworkers", "cachestorage"],
+          preserved: ["cookies", "localstorage", "indexdb"]
+        }
+      });
+      return {
+        ok: true,
+        message: "Atlas browser cache repaired. Reloading Atlas now."
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await logStartupIssue("Atlas webview recovery failed", error);
+      await capture.handleEvent({
+        id: `atlas-webview-recovery-failed-${Date.now()}`,
+        platform: "atlas",
+        kind: "debug",
+        capturedAt,
+        url: "https://play.riftatlas.com/",
+        payload: { reason: "atlas-webview-recovery-failed", message: message.slice(0, 2_000) }
+      }).catch(() => undefined);
+      return {
+        ok: false,
+        message: "RiftLite could not repair the Atlas browser cache. Restart RiftLite and try again."
+      };
+    }
+  });
   ipcMain.handle("game-preload:url", (_event, platform: GamePlatform) => {
     void platform;
     return preloadPath("gamePreload");

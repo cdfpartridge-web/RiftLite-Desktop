@@ -1647,6 +1647,11 @@ export interface ScreenshotResult {
   source: "manual" | "hotkey" | "replay-keyframe";
 }
 
+export interface AtlasWebviewRecoveryResult {
+  ok: boolean;
+  message: string;
+}
+
 export interface RiftLiteApi {
   getSettings(): Promise<UserSettings>;
   saveSettings(settings: Partial<UserSettings>): Promise<UserSettings>;
@@ -1794,6 +1799,7 @@ export interface RiftLiteApi {
   checkForUpdates(): Promise<UpdateStatus>;
   downloadUpdate(): Promise<UpdateStatus>;
   installUpdate(): Promise<void>;
+  recoverAtlasWebview(): Promise<AtlasWebviewRecoveryResult>;
   getGamePreloadUrl(platform: GamePlatform): Promise<string>;
   getAssetUrl(relativePath: string): Promise<string>;
   getBattlefields(): Promise<BattlefieldOption[]>;

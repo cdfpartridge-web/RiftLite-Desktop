@@ -1090,6 +1090,13 @@ describe("MatchSessionTracker", () => {
       score: { me: "7", opp: "5" },
       myBattlefield: "The Papertree"
     }, "2026-04-24T15:00:00.000Z", "atlas"));
+    tracker.ingest(event("match-update", {
+      active: true,
+      reason: "atlas-websocket-seat",
+      roomCode: "GAME1",
+      atlasGameInstanceId: "INSTANCE1",
+      wentFirst: "2nd"
+    }, "2026-04-24T15:00:01.000Z", "atlas"));
 
     const gameOneEnd = event("match-end", {
       active: true,
@@ -1121,6 +1128,13 @@ describe("MatchSessionTracker", () => {
       score: { me: "4", opp: "8" },
       myBattlefield: "Grove of the God-Willow"
     }, "2026-04-24T15:10:00.000Z", "atlas"));
+    tracker.ingest(event("match-update", {
+      active: true,
+      reason: "atlas-websocket-seat",
+      roomCode: "GAME2",
+      atlasGameInstanceId: "INSTANCE2",
+      wentFirst: "1st"
+    }, "2026-04-24T15:10:01.000Z", "atlas"));
     const gameTwoEnd = event("match-end", {
       active: true,
       reason: "result-text-detected",
@@ -1142,6 +1156,13 @@ describe("MatchSessionTracker", () => {
       score: { me: "9", opp: "6" },
       myBattlefield: "Vilemaw's Lair"
     }, "2026-04-24T15:20:00.000Z", "atlas"));
+    tracker.ingest(event("match-update", {
+      active: true,
+      reason: "atlas-websocket-seat",
+      roomCode: "GAME3",
+      atlasGameInstanceId: "INSTANCE3",
+      wentFirst: "2nd"
+    }, "2026-04-24T15:20:01.000Z", "atlas"));
     const finalEnd = event("match-end", {
       active: true,
       reason: "result-text-detected",
@@ -1162,6 +1183,7 @@ describe("MatchSessionTracker", () => {
     expect(draft.games[0].myBattlefield).toBe("The Papertree");
     expect(draft.games[1].myBattlefield).toBe("Grove of the God-Willow");
     expect(draft.games[2].myBattlefield).toBe("Vilemaw's Lair");
+    expect(draft.games.map((game) => game.wentFirst)).toEqual(["2nd", "1st", "2nd"]);
   });
 
   it("does not duplicate a held Atlas game on the 0-0 bridge before the next game", () => {

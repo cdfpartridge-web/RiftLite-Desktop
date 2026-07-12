@@ -223,6 +223,9 @@ const RAW_CAPTURE_TEMPORAL_MAX_END_GAP_MS = 3 * 60 * 1000;
 const RAW_CAPTURE_TEMPORAL_MAX_MATCH_MS = 6 * 60 * 60 * 1000;
 const RAW_CAPTURE_MAX_DATE_MS = 8_640_000_000_000_000;
 const RAW_CAPTURE_AUTO_UPLOAD_RETRY_COOLDOWN_MS = 2 * 60 * 1000;
+const RAW_CAPTURE_DISCORD_RESULT_INITIAL_WAIT_MS = 15_000;
+const RAW_CAPTURE_DISCORD_RESULT_POLL_MS = 2_500;
+const RAW_CAPTURE_DISCORD_RESULT_MAX_WAIT_MS = 30_000;
 
 type RawCaptureTemporalWindow = {
   startedAt: number;
@@ -1251,6 +1254,14 @@ export class RawCaptureService {
     settings: UserSettings,
     options: { automatic?: boolean } = {}
   ): Promise<PersistedRawCaptureManifest> {
+    if (
+      options.automatic === true &&
+      rawCaptureDiscordShareEligible(manifest.metadata, settings) &&
+      !manifest.metadata.lastUploadAttemptAt &&
+      !manifest.metadata.uploadId
+    ) {
+      manifest = await this.waitForDiscordMatchSummary(manifest);
+    }
     const raw = await readFile(manifest.localPath, "utf8");
     const gzipped = gzipSync(Buffer.from(raw, "utf8"));
     const sha256 = createHash("sha256").update(gzipped).digest("hex");
@@ -1417,6 +1428,56 @@ export class RawCaptureService {
     if (automatic && !rawCaptureWebReplayAutoUploadEligible(metadata, current)) {
       throw new Error("RiftLite Web Replay automatic upload was disabled or its consenting account changed.");
     }
+  }
+
+  private async waitForDiscordMatchSummary(
+    manifest: PersistedRawCaptureManifest
+  ): Promise<PersistedRawCaptureManifest> {
+    if (rawCaptureMatchSummaryResolved(manifest.match)) {
+      return manifest;
+    }
+    let refreshed = await this.refreshPersistedMatchSummary(manifest);
+    if (rawCaptureMatchSummaryResolved(refreshed.match)) {
+      return refreshed;
+    }
+
+    await rawCaptureDelay(RAW_CAPTURE_DISCORD_RESULT_INITIAL_WAIT_MS);
+    const deadline = Date.now() + (
+      RAW_CAPTURE_DISCORD_RESULT_MAX_WAIT_MS - RAW_CAPTURE_DISCORD_RESULT_INITIAL_WAIT_MS
+    );
+    while (true) {
+      refreshed = await this.refreshPersistedMatchSummary(refreshed);
+      if (rawCaptureMatchSummaryResolved(refreshed.match) || Date.now() >= deadline) {
+        return refreshed;
+      }
+      await rawCaptureDelay(Math.min(RAW_CAPTURE_DISCORD_RESULT_POLL_MS, deadline - Date.now()));
+    }
+  }
+
+  private async refreshPersistedMatchSummary(
+    manifest: PersistedRawCaptureManifest
+  ): Promise<PersistedRawCaptureManifest> {
+    const localMatchId = manifest.localMatchId || manifest.identity.localMatchId;
+    if (!localMatchId) {
+      return manifest;
+    }
+    const currentMatch = (await this.store.getMatches()).find((match) => match.id === localMatchId);
+    const summary = rawCaptureMatchSummaryFromDraft(currentMatch);
+    if (
+      !summary ||
+      (rawCaptureMatchSummaryResolved(manifest.match) && !rawCaptureMatchSummaryResolved(summary)) ||
+      rawCaptureMatchSummariesEqual(manifest.match, summary)
+    ) {
+      return manifest;
+    }
+    await writeRawCaptureMatchSummary(manifest.localPath, summary);
+    const updated: PersistedRawCaptureManifest = {
+      ...manifest,
+      updatedAt: new Date().toISOString(),
+      match: summary
+    };
+    await writeRawCaptureManifest(updated);
+    return updated;
   }
 
   private async sharePersistedReplayToDiscord(
@@ -2501,6 +2562,24 @@ function rawCaptureAutoUploadRetryReady(metadata: RawCaptureReplayMetadata): boo
   const lastAttemptAt = rawCaptureTimestamp(metadata.lastUploadAttemptAt);
   return lastAttemptAt === null ||
     Date.now() - lastAttemptAt >= RAW_CAPTURE_AUTO_UPLOAD_RETRY_COOLDOWN_MS;
+}
+
+function rawCaptureMatchSummaryResolved(summary: RawCaptureMatchSummary | undefined): boolean {
+  return Boolean(summary && (
+    summary.result !== "incomplete" ||
+    summary.games.some((game) => game.result !== "incomplete")
+  ));
+}
+
+function rawCaptureMatchSummariesEqual(
+  left: RawCaptureMatchSummary | undefined,
+  right: RawCaptureMatchSummary
+): boolean {
+  return Boolean(left && JSON.stringify(left) === JSON.stringify(right));
+}
+
+function rawCaptureDelay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, milliseconds)));
 }
 
 function normalizedRawCaptureTimestamp(value: unknown): string | undefined {

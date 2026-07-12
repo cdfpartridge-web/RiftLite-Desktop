@@ -6,7 +6,7 @@ import { gunzipSync } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { RawCaptureService } from "../src/main/services/rawCaptureService";
 import type { RiftLiteStore } from "../src/main/services/store";
-import type { RawCaptureAppendFramePayload, ReplayRecord, UserSettings } from "../src/shared/types";
+import type { MatchDraft, RawCaptureAppendFramePayload, ReplayRecord, UserSettings } from "../src/shared/types";
 
 const tempDirs: string[] = [];
 
@@ -114,6 +114,48 @@ function twoGameBo3Replay(id = "bo3-result-replay", roomCode = "ROOM2"): ReplayR
   };
 }
 
+function oneGameBo1Replay(
+  id = "bo1-result-replay",
+  roomCode = "ROOM1",
+  result: "Win" | "Loss" | "Draw" | "Incomplete" = "Win"
+): ReplayRecord {
+  const base = replay(id, roomCode);
+  const resolved = result !== "Incomplete";
+  return {
+    ...base,
+    matchSnapshot: {
+      id: base.matchId,
+      platform: "atlas",
+      status: resolved ? "saved" : "incomplete",
+      capturedAt: base.capturedAt,
+      updatedAt: base.capturedAt,
+      result,
+      format: "Bo1",
+      score: result === "Win" ? "1-0" : result === "Loss" ? "0-1" : result === "Draw" ? "0-0" : "",
+      myName: "BMU",
+      opponentName: "Tester",
+      myChampion: "Akali",
+      opponentChampion: "Lee Sin",
+      myBattlefield: "",
+      opponentBattlefield: "",
+      deckName: "",
+      deckSourceId: "",
+      flags: "",
+      notes: "",
+      games: [{
+        gameNumber: 1,
+        result,
+        myPoints: 4,
+        oppPoints: 4,
+        myBattlefield: "",
+        oppBattlefield: ""
+      }],
+      rawEvidence: [],
+      sync: { community: "disabled", hubs: {}, teams: {} }
+    }
+  };
+}
+
 function atlasFrame(
   raw: string,
   options: { ts?: number; requestUrl?: string; socketId?: string } = {}
@@ -140,6 +182,7 @@ async function tempReplayDirectory(): Promise<string> {
 function fakeStore(initialSettings: UserSettings): RiftLiteStore {
   let currentSettings = initialSettings;
   let replays: ReplayRecord[] = [];
+  let matches: MatchDraft[] = [];
   return {
     getSettings: async () => currentSettings,
     saveReplay: async (next: ReplayRecord) => {
@@ -148,6 +191,11 @@ function fakeStore(initialSettings: UserSettings): RiftLiteStore {
     },
     getReplays: async () => replays,
     getDeletedReplays: async () => [],
+    getMatches: async () => matches,
+    saveMatch: async (next: MatchDraft) => {
+      matches = [next, ...matches.filter((item) => item.id !== next.id)];
+      return next;
+    },
     saveSettings: async (patch: Partial<UserSettings>) => {
       currentSettings = { ...currentSettings, ...patch };
       return currentSettings;
@@ -811,7 +859,7 @@ describe("RawCaptureService", () => {
       type: "room_shell_sync",
       sessionDoc: { roomCode: "DISCORD", phase: "in_game", gameNumber: 1 }
     })));
-    const saved = await service.finishForReplay(replay("discord-share", "DISCORD"));
+    const saved = await service.finishForReplay(oneGameBo1Replay("discord-share", "DISCORD"));
 
     const initBody = JSON.parse(String(fetchMock.mock.calls[1][1]?.body)) as { visibility: string };
     expect(initBody.visibility).toBe("unlisted");
@@ -822,6 +870,75 @@ describe("RawCaptureService", () => {
       visibility: "unlisted",
       discordShareStatus: "shared",
       discordSharedHubIds: ["hub-1"]
+    });
+  });
+
+  it("waits for a finalized local score before creating and sharing an automatic Discord replay", async () => {
+    vi.useFakeTimers();
+    const replayDirectory = await tempReplayDirectory();
+    const store = fakeStore({
+      ...settings({
+        enabled: true,
+        webReplayAutoUploadEnabled: true,
+        webReplayAutoUploadAccountUid: "account-1",
+        webReplayDiscordShareEnabled: true,
+        webReplayDiscordShareAccountUid: "account-1",
+        webReplayDiscordShareHubIds: ["hub-1"],
+        visibility: "private"
+      }, replayDirectory),
+      accountUid: "account-1",
+      firebaseRefreshToken: "refresh-token",
+      activeHubs: [{ id: "hub-1", name: "Team UK", sync: true, role: "member" }]
+    } as UserSettings);
+    const service = new RawCaptureService(store);
+    const incomplete = oneGameBo1Replay("delayed-discord-score", "DELAYED", "Incomplete");
+    await store.saveMatch(incomplete.matchSnapshot!);
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id_token: "id-token", user_id: "account-1" }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        replay: { replayId: "rl2_delayed", status: "uploading", visibility: "unlisted" },
+        uploadRequired: true,
+        upload: { endpoint: "/api/v2/replays/rl2_delayed/raw" },
+        completeEndpoint: "/api/v2/replays/rl2_delayed/complete",
+        playerPath: "/replays/rl2_delayed"
+      }), { status: 201 }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        replay: { replayId: "rl2_delayed", status: "ready", visibility: "unlisted" },
+        playerPath: "/replays/rl2_delayed"
+      }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        ok: true,
+        visibility: "unlisted",
+        results: [{ hubId: "hub-1", status: "shared" }]
+      }), { status: 200 }));
+
+    await service.appendFrame(atlasFrame(JSON.stringify({
+      type: "room_shell_sync",
+      sessionDoc: { roomCode: "DELAYED", phase: "in_game", gameNumber: 1 }
+    })));
+    setTimeout(() => {
+      void store.saveMatch(oneGameBo1Replay("delayed-discord-score", "DELAYED", "Win").matchSnapshot!);
+    }, 17_000);
+    const finishPromise = service.finishForReplay(incomplete);
+
+    await vi.advanceTimersByTimeAsync(14_999);
+    expect(fetchMock).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(2_501);
+    const saved = await finishPromise;
+
+    const uploaded = gunzipSync(Buffer.from(fetchMock.mock.calls[2][1]?.body as Uint8Array)).toString("utf8");
+    expect(JSON.parse(uploaded).capture.match).toEqual({
+      format: "bo1",
+      result: "win",
+      score: { perspective: 1, opponent: 0 },
+      games: [{ gameNumber: 1, result: "win", perspectivePoints: 4, opponentPoints: 4 }]
+    });
+    expect(fetchMock.mock.calls[4][0]).toBe("https://www.riftlite.com/api/v2/replays/rl2_delayed/share-discord");
+    expect(saved.rawCapture).toMatchObject({
+      uploadStatus: "uploaded",
+      processingStatus: "ready",
+      discordShareStatus: "shared"
     });
   });
 
