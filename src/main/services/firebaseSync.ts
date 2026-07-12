@@ -3,7 +3,10 @@ import { createHash, randomUUID } from "node:crypto";
 import { hostname } from "node:os";
 import { deflateRawSync, inflateRawSync } from "node:zlib";
 import { normalizeLegendName } from "../../shared/legendNames.js";
-import { isGenericAccountDisplayName } from "../../shared/accountIdentity.js";
+import {
+  isGenericAccountDisplayName,
+  resolveCompletedAccountLinkUid
+} from "../../shared/accountIdentity.js";
 import { publicCommunitySyncEnabled } from "../../shared/syncPolicy.js";
 import type {
   AccountCloudSyncCounts,
@@ -421,19 +424,22 @@ export class FirebaseSyncService {
     const status = readString(payload.status) as AccountLinkStatus["status"];
     const customToken = readString(payload.customToken);
     if (status === "complete" && customToken) {
-      this.invalidateLinkedAccountAuth();
-      this.auth = await this.signInWithCustomToken(customToken);
-      const linkedUid = readString(payload.uid);
-      if (!linkedUid || linkedUid !== this.auth.uid) {
-        this.auth = null;
+      let linkedAuth = await this.signInWithCustomToken(customToken);
+      if (!linkedAuth.uid && linkedAuth.refreshToken) {
+        linkedAuth = await this.refreshToken(linkedAuth.refreshToken);
+      }
+      const linkedUid = resolveCompletedAccountLinkUid(payload.uid, linkedAuth.uid);
+      if (!linkedUid) {
         throw new Error("The website account did not match the account returned to this desktop.");
       }
+      this.invalidateLinkedAccountAuth();
+      this.auth = linkedAuth;
       const currentSettings = await this.store.getSettings();
       const displayName = bestLocalAccountDisplayName(currentSettings, undefined, readString(payload.displayName));
       const settings = await this.store.saveSettings({
-        firebaseUid: this.auth.uid,
-        firebaseRefreshToken: this.auth.refreshToken,
-        accountUid: this.auth.uid,
+        firebaseUid: linkedAuth.uid,
+        firebaseRefreshToken: linkedAuth.refreshToken,
+        accountUid: linkedUid,
         accountEmail: readString(payload.email),
         accountDisplayName: displayName,
         accountLastVerifiedAt: "",
@@ -441,7 +447,7 @@ export class FirebaseSyncService {
       });
       await this.getAccountProfile().catch(async () => {
         await this.store.saveSettings({
-          accountUid: settings.accountUid || this.auth?.uid || "",
+          accountUid: settings.accountUid || linkedAuth.uid,
           accountEmail: settings.accountEmail,
           accountDisplayName: settings.accountDisplayName
         });

@@ -3,7 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   getRiftLiteAccountState,
   hasCompleteAccountProfile,
-  isGenericAccountDisplayName
+  isGenericAccountDisplayName,
+  resolveCompletedAccountLinkUid
 } from "../src/shared/accountIdentity.js";
 
 describe("account identity", () => {
@@ -43,5 +44,12 @@ describe("account identity", () => {
       accountHandle: "bmu",
       accountDisplayName: "BMU"
     })).toBe("reconnect");
+  });
+
+  it("accepts the exchanged Firebase identity when an older link status omits its redundant uid", () => {
+    expect(resolveCompletedAccountLinkUid("account-1", "account-1")).toBe("account-1");
+    expect(resolveCompletedAccountLinkUid("", "account-1")).toBe("account-1");
+    expect(resolveCompletedAccountLinkUid("account-1", "account-2")).toBe("");
+    expect(resolveCompletedAccountLinkUid("account-1", "")).toBe("");
   });
 });

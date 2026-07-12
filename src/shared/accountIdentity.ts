@@ -2,6 +2,20 @@ import type { AccountProfile, UserSettings } from "./types.js";
 
 export type RiftLiteAccountState = "local" | "linking" | "needs-profile" | "ready" | "reconnect";
 
+export function resolveCompletedAccountLinkUid(
+  reportedUid: unknown,
+  authenticatedUid: unknown
+): string {
+  const reported = String(reportedUid ?? "").trim();
+  const authenticated = String(authenticatedUid ?? "").trim();
+  if (!authenticated || (reported && reported !== authenticated)) {
+    return "";
+  }
+  // The successfully exchanged Firebase custom token is authoritative. Older
+  // or partially deployed status endpoints may omit the redundant uid field.
+  return reported || authenticated;
+}
+
 export function isGenericAccountDisplayName(value: unknown): boolean {
   const cleaned = String(value ?? "").trim().toLowerCase().replace(/\s+/g, " ");
   return !cleaned || cleaned === "riftlite player" || cleaned === "riftlite user" || /^player(?:[ #_-]|$)/.test(cleaned);

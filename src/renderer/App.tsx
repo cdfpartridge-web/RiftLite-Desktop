@@ -220,14 +220,14 @@ const RIFTLITE_WEB_REPLAY_FEATURE_VISIBLE = true;
 
 const DEFAULT_UPDATE_STATUS: UpdateStatus = {
   state: "idle",
-  currentVersion: "0.8.00",
+  currentVersion: "0.8.01",
   message: "Updater ready"
 };
 
 const FALLBACK_BOOT_SETTINGS: UserSettings = {
   username: "",
   firstRunComplete: true,
-  lastSeenVersion: "0.8.00",
+  lastSeenVersion: "0.8.01",
   syncMode: "community-and-hubs",
   communitySyncEnabled: true,
   firebaseUid: "",
@@ -317,7 +317,7 @@ const FALLBACK_BOOT_SETTINGS: UserSettings = {
   activeTeams: []
 };
 
-const APP_VERSION_META = "0.8.00";
+const APP_VERSION_META = "0.8.01";
 const VENDETTA_PREVIEW_START_MS = Date.UTC(2026, 6, 6);
 const VENDETTA_LAUNCH_START_MS = Date.UTC(2026, 6, 31);
 const COMMUNITY_SEASONS = [
@@ -371,14 +371,14 @@ const DEFAULT_HOME_FEATURED_VIDEOS: HomeFeaturedVideo[] = [
 const HOME_CONFIG_URL = "https://www.riftlite.com/api/app/home";
 const RELEASE_NOTES = {
   version: APP_VERSION_META,
-  title: "RiftLite 0.8.00",
-  intro: "RiftLite 0.8 brings account-linked Atlas web replays, complete BO3 playback, safer account tools, and major replay and capture improvements.",
+  title: "RiftLite 0.8.01",
+  intro: "RiftLite 0.8.01 fixes account linking when a secure website token is consumed while the desktop is still verifying it.",
   items: [
+    "Account linking now completes reliably without overlapping verification requests consuming the same secure token.",
+    "A completed link can safely recover during its original verification window without weakening account identity checks.",
     "Completed Atlas matches can upload privately to your linked RiftLite account and play inside the new RiftLite web replay tab.",
     "BO3 web replays stay together across games and show animated sideboard changes, game setup, and series score.",
-    "Account linking, profile setup, private hubs, Discord verification, and reconnect or account switching are now much clearer.",
-    "Private-hub Discord sharing can post permanent Unlisted replay links to configured reports channels.",
-    "Match capture, cloud backup safety, local replay export, mulligans, tokens, card state, and replay association have received major reliability fixes."
+    "Account switching remains safe and preserves local match data."
   ]
 };
 const RIOT_LEGAL_NOTICE = `RiftLite was created under Riot Games' "Legal Jibber Jabber" policy using assets owned by Riot Games. Riot Games does not endorse or sponsor this project.`;
@@ -11446,7 +11446,10 @@ function AccountView({ settings, onSettingsChanged }: { settings: UserSettings; 
       return undefined;
     }
     let cancelled = false;
-    const timer = window.setInterval(async () => {
+    let checking = false;
+    const checkStatus = async () => {
+      if (checking || cancelled) return;
+      checking = true;
       try {
         const result = await window.riftlite.getAccountLinkStatus(linkSession.sessionId);
         if (cancelled) return;
@@ -11466,8 +11469,12 @@ function AccountView({ settings, onSettingsChanged }: { settings: UserSettings; 
         if (!cancelled) {
           setStatus(error instanceof Error ? error.message : "Could not check account link.");
         }
+      } finally {
+        checking = false;
       }
-    }, 2500);
+    };
+    void checkStatus();
+    const timer = window.setInterval(() => void checkStatus(), 2500);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
