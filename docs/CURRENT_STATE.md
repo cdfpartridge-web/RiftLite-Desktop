@@ -8,11 +8,11 @@ This is the durable handoff for continuing RiftLite work in a fresh Codex task. 
 
 - Active cross-platform release source repo:
   `C:\Users\cdfpa\OneDrive\Documents\Claude\Projects\Riftlite Beta 0.6\desktop-v06`
-- Current package version: `0.8.2` (customer-facing release `v0.8.02`)
+- Current package version: `0.8.3` (customer-facing release `v0.8.03`)
 - Current branch: `main`
 - Windows GitHub release repository (`windows` remote): `cdfpartridge-web/RiftLite-Desktop`
 - macOS GitHub release repository (`origin` remote): `cdfpartridge-web/RiftLite-Desktop-mac`
-- Current published Windows release: `v0.8.02` (2026-07-12)
+- Current published Windows release: `v0.8.03` (2026-07-12)
 - Current published macOS release: `mac-v0.8.00` (2026-07-12)
 - Windows installer output:
   `C:\Users\cdfpa\OneDrive\Documents\Claude\Projects\Riftlite Beta 0.6\desktop-v06\release\RiftLiteBetaInstall.exe`
@@ -731,6 +731,16 @@ On 2026-07-12 after diagnosing and releasing the RiftAtlas embedded black-screen
 - Windows installer: `RiftLiteBetaInstall.exe`, 198475265 bytes, SHA-256 `82F7F51767A7B75FDB3C54F5E86C13B6AB5131D3B2C45DA0C416AC77F4F53F2B`
 - blockmap: 184621 bytes, SHA-256 `2D5D535914BB40523F8B76E781EEEB58BDEAC009D7801FB28C1552000A2FDB82`; `latest.yml`: 343 bytes, SHA-256 `13B998B19DCA0738F88ED2D2CDFF6238F758899D3A738944257C0F46C60D399C`
 - Windows release source is pinned by tag `v0.8.02`; GitHub release: `https://github.com/cdfpartridge-web/RiftLite-Desktop/releases/tag/v0.8.02`
+- the website and macOS repository were not changed for this release
+
+On 2026-07-12 after restoring Vendetta legend artwork in the desktop Community Match Matrix as Windows v0.8.03:
+
+- the desktop display resolver gained reliable artwork for Ambessa, Jayce, Mel, Nasus, Rumble, Shen, and Zed; capture recognition and existing match data are unchanged
+- verification passed 26 test files / 262 tests, TypeScript, Electron main, game preload, renderer production build, Windows x64/NSIS packaging, ASAR/updater metadata inspection, and an isolated 12-second packaged-app smoke launch
+- packaged ASAR, executable metadata, and `latest.yml` report SemVer `0.8.3` (customer-facing `v0.8.03`); the updater manifest size and SHA-512 match the installer
+- Windows installer: `RiftLiteBetaInstall.exe`, 198673009 bytes, SHA-256 `FA646144E672651C5FC9B5D821E75AA3E7A9FA187EC1B8AC6E48FBE0831AC8D4`
+- blockmap: 184273 bytes, SHA-256 `ADE57C9FCC23AE2578079DC51E0891352DB7DDDC7C9E2428BE7EF96CA06A4951`; `latest.yml`: 343 bytes, SHA-256 `3174EBB626DCCF53562A01C88FD77797BB410A8B7DC8E8C0A206D74B647841F3`
+- Windows release source is pinned by tag `v0.8.03`; GitHub release: `https://github.com/cdfpartridge-web/RiftLite-Desktop/releases/tag/v0.8.03`
 - the website and macOS repository were not changed for this release
 
 Always rerun after code changes. Useful commands:

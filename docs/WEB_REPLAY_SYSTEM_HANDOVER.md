@@ -1,7 +1,7 @@
 # RiftLite Web Replay System Handover
 
 Last verified: 2026-07-12
-Release baseline: RiftLite `v0.8.02` (package SemVer `0.8.2`)
+Release baseline: RiftLite `v0.8.03` (package SemVer `0.8.3`)
 Production website: `https://www.riftlite.com`
 System status: live, Atlas-only, account-linked, opt-in automatic capture/upload
 
@@ -66,8 +66,8 @@ The API-key flow to `https://riftreplay.com/api/v1/replays`. It uses `rawCapture
 
 - Source: `desktop-v06`
 - Branch: `main`
-- Package: `riftlite-desktop-v08`, version `0.8.0`
-- Windows release: `https://github.com/cdfpartridge-web/RiftLite-Desktop/releases/tag/v0.8.02`
+- Package: `riftlite-desktop-v08`, version `0.8.3`
+- Windows release: `https://github.com/cdfpartridge-web/RiftLite-Desktop/releases/tag/v0.8.03`
 - macOS release: `https://github.com/cdfpartridge-web/RiftLite-Desktop-mac/releases/tag/mac-v0.8.00`
 - Application ID and user-data folder still use the Beta 0.6 identity to preserve upgrades and existing data.
 

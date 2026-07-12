@@ -1,6 +1,11 @@
+function riftAtlasCardImageUrl(cardCode: string): string {
+  return `https://assets.riftatlas-workers.com/cdn-cgi/image/width=192,quality=85,format=auto,fit=scale-down/riftbound/cards/small-v2/${cardCode}.webp`;
+}
+
 const LEGEND_IMAGE_URLS: Record<string, string> = {
   "Ahri": "https://cdn.rgpub.io/public/live/map/riftbound/latest/OGN/cards/OGN-255/full-desktop-2x.avif",
   "Akali": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/0d53b477ed43fb9bbed84858443a606b2b51a2b5-744x1039.png?accountingTag=RB&auto=format&fit=fill&q=80&w=444",
+  "Ambessa": riftAtlasCardImageUrl("VEN-153"),
   "Annie": "https://cdn.rgpub.io/public/live/map/riftbound/latest/OGS/cards/OGS-017/full-desktop-2x.avif",
   "Azir": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/42c04e4d7ef5d7395494587c2e15ac945b37b71e-744x1039.png?auto=format&fit=fill&q=80&w=744",
   "Darius": "https://cdn.rgpub.io/public/live/map/riftbound/latest/OGN/cards/OGN-253/full-desktop-2x.avif",
@@ -14,6 +19,7 @@ const LEGEND_IMAGE_URLS: Record<string, string> = {
   "Jax": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/941f72a422e0143524b3dd0cba1fd87e4286ecb4-744x1039.png?auto=format&fit=fill&q=80&w=744",
   "Jhin": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/47f10693258104e9373396165e335014bf5783a2-744x1039.png?auto=format&fit=fill&q=80&w=744",
   "Jinx": "https://cdn.rgpub.io/public/live/map/riftbound/latest/OGN/cards/OGN-251/full-desktop-2x.avif",
+  "Jayce": riftAtlasCardImageUrl("VEN-149"),
   "Kai'Sa": "https://cdn.rgpub.io/public/live/map/riftbound/latest/OGN/cards/OGN-247/full-desktop-2x.avif",
   "Kennen": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/0eab83392b310417d2630d50a3bfee3dd02b31c4-744x1039.png?accountingTag=RB&auto=format&fit=fill&q=80&w=444",
   "Kha'Zix": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/ffed0102adcae6fe01d173042487ea85ebe899bc-744x1039.png?auto=format&fit=fill&q=80&w=744",
@@ -26,7 +32,9 @@ const LEGEND_IMAGE_URLS: Record<string, string> = {
   "Master Yi": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/557e41d84ac36ffa2bf805deda159f45e0a815f9-744x1039.png?auto=format&fit=fill&q=80&w=744",
   "Master Yi, Wuju Master": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/557e41d84ac36ffa2bf805deda159f45e0a815f9-744x1039.png?auto=format&fit=fill&q=80&w=744",
   "Master Yi, Wuju Bladesman": "https://cdn.rgpub.io/public/live/map/riftbound/latest/OGS/cards/OGS-019/full-desktop-2x.avif",
+  "Mel": riftAtlasCardImageUrl("VEN-151"),
   "Miss Fortune": "https://cdn.rgpub.io/public/live/map/riftbound/latest/OGN/cards/OGN-267/full-desktop-2x.avif",
+  "Nasus": riftAtlasCardImageUrl("VEN-145"),
   "Ornn": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/883dab66da8ed5ab39d968ed7fcaebd5ebaf3d43-744x1039.png?auto=format&fit=fill&q=80&w=744",
   "Poppy": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/41321ddb3b1c63492285d1c3d067ee42ade502e4-744x1039.png?auto=format&fit=fill&q=80&w=744",
   "Pyke": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/b4095d98aff998fda5a08d4c32e97a2a66ccf1e6-744x1039.png?accountingTag=RB&auto=format&fit=fill&q=80&w=744",
@@ -34,14 +42,17 @@ const LEGEND_IMAGE_URLS: Record<string, string> = {
   "Renata Glasc": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/5df25d5a1351d0a97e103ef8e155991297b86ca9-744x1039.png?auto=format&fit=fill&q=80&w=744",
   "Renekton": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/7620595b36b40a0c3d05c4c5469b016d1c18c6f2-744x1039.png?accountingTag=RB&auto=format&fit=fill&q=80&w=444",
   "Rengar": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/1f80a016015ebc77bd3d23ce471e364d70698279-744x1039.png?auto=format&fit=fill&q=80&w=744",
+  "Rumble": riftAtlasCardImageUrl("SFD-181"),
   "Sett": "https://cdn.rgpub.io/public/live/map/riftbound/latest/OGN/cards/OGN-269/full-desktop-2x.avif",
+  "Shen": riftAtlasCardImageUrl("VEN-147"),
   "Sivir": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/743887bce0027f549b85bf023475c3587a005581-744x1039.png?auto=format&fit=fill&q=80&w=744",
   "Teemo": "https://cdn.rgpub.io/public/live/map/riftbound/latest/OGN/cards/OGN-263/full-desktop-2x.avif",
   "Vex": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/d044ea46fa38cff80c39fdb0b890dd7226c22b89-744x1039.png?auto=format&fit=fill&q=80&w=744",
   "Vi": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/08c48ad82381bb5830a0b413d7a2f25dd2b20d76-744x1039.png?auto=format&fit=fill&q=80&w=744",
   "Viktor": "https://cdn.rgpub.io/public/live/map/riftbound/latest/OGN/cards/OGN-265/full-desktop-2x.avif",
   "Volibear": "https://cdn.rgpub.io/public/live/map/riftbound/latest/OGN/cards/OGN-249/full-desktop-2x.avif",
-  "Yasuo": "https://cdn.rgpub.io/public/live/map/riftbound/latest/OGN/cards/OGN-259/full-desktop-2x.avif"
+  "Yasuo": "https://cdn.rgpub.io/public/live/map/riftbound/latest/OGN/cards/OGN-259/full-desktop-2x.avif",
+  "Zed": riftAtlasCardImageUrl("VEN-143")
 };
 
 const LEGEND_CARD_CODE_MAP: Record<string, string> = {

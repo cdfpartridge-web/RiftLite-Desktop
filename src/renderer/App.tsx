@@ -225,14 +225,14 @@ const RIFTLITE_WEB_REPLAY_FEATURE_VISIBLE = true;
 
 const DEFAULT_UPDATE_STATUS: UpdateStatus = {
   state: "idle",
-  currentVersion: "0.8.02",
+  currentVersion: "0.8.03",
   message: "Updater ready"
 };
 
 const FALLBACK_BOOT_SETTINGS: UserSettings = {
   username: "",
   firstRunComplete: true,
-  lastSeenVersion: "0.8.02",
+  lastSeenVersion: "0.8.03",
   syncMode: "community-and-hubs",
   communitySyncEnabled: true,
   firebaseUid: "",
@@ -322,7 +322,7 @@ const FALLBACK_BOOT_SETTINGS: UserSettings = {
   activeTeams: []
 };
 
-const APP_VERSION_META = "0.8.02";
+const APP_VERSION_META = "0.8.03";
 const VENDETTA_PREVIEW_START_MS = Date.UTC(2026, 6, 6);
 const VENDETTA_LAUNCH_START_MS = Date.UTC(2026, 6, 31);
 const COMMUNITY_SEASONS = [
@@ -376,14 +376,12 @@ const DEFAULT_HOME_FEATURED_VIDEOS: HomeFeaturedVideo[] = [
 const HOME_CONFIG_URL = "https://www.riftlite.com/api/app/home";
 const RELEASE_NOTES = {
   version: APP_VERSION_META,
-  title: "RiftLite 0.8.02",
-  intro: "RiftLite 0.8.02 adds safe recovery when RiftAtlas repeatedly reloads or opens to a black embedded screen.",
+  title: "RiftLite 0.8.03",
+  intro: "RiftLite 0.8.03 restores missing legend artwork in the in-app Community Match Matrix.",
   items: [
-    "RiftLite detects rapid Atlas reload loops and offers a one-click Repair Atlas action.",
-    "Repair Atlas clears only the embedded cache and service worker, preserving accounts and all local RiftLite data.",
-    "New embedded-browser diagnostics capture Atlas load failures and console errors for clearer support reports.",
-    "RiftAtlas first-player choices now fill Went 1st / Went 2nd automatically for each BO3 game.",
-    "Automatic Discord replay reports wait for finalized match results instead of posting Score Pending prematurely."
+    "Added Community Match Matrix artwork for Ambessa, Jayce, Mel, Nasus, Rumble, Shen, and Zed.",
+    "Vendetta legend images now use the same reliable RiftAtlas card-art source as the replay system.",
+    "Existing accounts, settings, matches, decks, hubs, and replay data remain unchanged."
   ]
 };
 const RIOT_LEGAL_NOTICE = `RiftLite was created under Riot Games' "Legal Jibber Jabber" policy using assets owned by Riot Games. Riot Games does not endorse or sponsor this project.`;
