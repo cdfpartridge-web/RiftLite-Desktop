@@ -87,6 +87,7 @@ import type {
   DeckTrackerState,
   GamePlatform,
   HubActionResult,
+  HubHealthStatus,
   HubInboxItem,
   HubMember,
   HubMessage,
@@ -142,6 +143,7 @@ import {
   activeDiscordReplayHubIds,
   rawCaptureSettingsForDiscordHubSelection
 } from "../shared/replaySharing";
+import { replayDeliveryStages } from "../shared/replayDelivery";
 import { buildRiftLiteReplayModel, type RiftLiteReplayModel } from "../shared/riftLiteReplayEngine";
 import { activeDeckOverlayStats, buildDeckPerformance, type DeckBattlefieldPairStat, type DeckBattlefieldStat, type DeckPerformanceStats, type DeckRecordStats } from "../shared/deckPerformance";
 import {
@@ -225,14 +227,14 @@ const RIFTLITE_WEB_REPLAY_FEATURE_VISIBLE = true;
 
 const DEFAULT_UPDATE_STATUS: UpdateStatus = {
   state: "idle",
-  currentVersion: "0.8.03",
+  currentVersion: "0.8.04",
   message: "Updater ready"
 };
 
 const FALLBACK_BOOT_SETTINGS: UserSettings = {
   username: "",
   firstRunComplete: true,
-  lastSeenVersion: "0.8.03",
+  lastSeenVersion: "0.8.04",
   syncMode: "community-and-hubs",
   communitySyncEnabled: true,
   firebaseUid: "",
@@ -322,7 +324,7 @@ const FALLBACK_BOOT_SETTINGS: UserSettings = {
   activeTeams: []
 };
 
-const APP_VERSION_META = "0.8.03";
+const APP_VERSION_META = "0.8.04";
 const VENDETTA_PREVIEW_START_MS = Date.UTC(2026, 6, 6);
 const VENDETTA_LAUNCH_START_MS = Date.UTC(2026, 6, 31);
 const COMMUNITY_SEASONS = [
@@ -376,11 +378,13 @@ const DEFAULT_HOME_FEATURED_VIDEOS: HomeFeaturedVideo[] = [
 const HOME_CONFIG_URL = "https://www.riftlite.com/api/app/home";
 const RELEASE_NOTES = {
   version: APP_VERSION_META,
-  title: "RiftLite 0.8.03",
-  intro: "RiftLite 0.8.03 restores missing legend artwork in the in-app Community Match Matrix.",
+  title: "RiftLite 0.8.04",
+  intro: "RiftLite 0.8.04 makes private hubs, Discord reporting, and automatic web replay delivery easier to manage and diagnose.",
   items: [
-    "Added Community Match Matrix artwork for Ambessa, Jayce, Mel, Nasus, Rumble, Shen, and Zed.",
-    "Vendetta legend images now use the same reliable RiftAtlas card-art source as the replay system.",
+    "Private hub owners can appoint co-owners to help manage members, invites, testing tools, and authorized Discord commands.",
+    "The new Hub Health panel checks the linked account, exact hub, Discord setup, verification, latest replay, and delivery status in one place.",
+    "Automatic Discord replay posts now bind to the real Atlas match start, wait for the completed result, and retry safely when delivery is delayed.",
+    "Replay details now show clear capture, result, processing, and Discord delivery stages.",
     "Existing accounts, settings, matches, decks, hubs, and replay data remain unchanged."
   ]
 };
@@ -18366,6 +18370,7 @@ function ReplayRawCapturePanel({
   const discordHubIds = activeDiscordReplayHubIds(settings).filter((hubId) => activeHubIds.has(hubId));
   const canShareDiscord = Boolean(hasRiftLiteReplay && discordHubIds.length);
   const discordShared = rawCapture?.discordShareStatus === "shared";
+  const deliveryStages = replayDeliveryStages(rawCapture);
   return (
     <section className="rail-card replay-health-panel">
       <div className="replay-health-title">
@@ -18381,6 +18386,19 @@ function ReplayRawCapturePanel({
         <StatRow label="Visibility" value={rawCapture?.visibility || settings.rawCapture.visibility} />
         <StatRow label="Uploaded" value={rawCapture?.uploadedAt ? new Date(rawCapture.uploadedAt).toLocaleString() : "No"} />
         <StatRow label="Discord reports" value={rawCapture?.discordShareStatus?.replace(/-/g, " ") || "Not shared"} />
+      </div>
+      <div className="replay-delivery-stages" aria-label="Replay delivery progress">
+        {deliveryStages.map((stage) => (
+          <div className="replay-delivery-stage" data-state={stage.state} key={stage.id}>
+            <span className="replay-delivery-marker" aria-hidden="true">
+              {stage.state === "complete" ? <Check size={14} /> : stage.state === "failed" ? <AlertTriangle size={14} /> : <Activity size={14} />}
+            </span>
+            <div>
+              <strong>{stage.label}</strong>
+              <small>{stage.detail}{stage.timestamp ? ` · ${new Date(stage.timestamp).toLocaleString()}` : ""}</small>
+            </div>
+          </div>
+        ))}
       </div>
       {hasRiftLiteReplay && rawCapture?.uploadUrl ? (
         <div className="row-actions">
@@ -21482,8 +21500,14 @@ function hubGradient(hubId: string): string {
 
 function hubRoleLabel(hub: PrivateHub): string {
   if (hub.role === "owner") return "Owner";
-  if (hub.role === "admin") return "Admin";
+  if (hub.role === "admin") return "Co-owner";
   return hub.claimed ? "Member" : "Legacy member";
+}
+
+function hubMemberRoleLabel(role: HubMember["role"]): string {
+  if (role === "owner") return "Owner";
+  if (role === "admin") return "Co-owner";
+  return "Member";
 }
 
 function resizeHubImage(file: File): Promise<string> {
@@ -21545,6 +21569,10 @@ function HubsView({ settings, matches, hubMatches, onSave, onHubResult, onSyncPr
   const [inviteTarget, setInviteTarget] = useState("");
   const [hubMessageText, setHubMessageText] = useState("");
   const [inviteStatus, setInviteStatus] = useState("");
+  const [hubRoleStatus, setHubRoleStatus] = useState("");
+  const [hubRoleBusyUid, setHubRoleBusyUid] = useState("");
+  const [hubHealth, setHubHealth] = useState<HubHealthStatus | null>(null);
+  const [hubHealthStatus, setHubHealthStatus] = useState("");
   const [inboxStatus, setInboxStatus] = useState("");
   const [copiedHubId, setCopiedHubId] = useState("");
   const filteredHubs = useMemo(
@@ -21574,9 +21602,12 @@ function HubsView({ settings, matches, hubMatches, onSave, onHubResult, onSyncPr
     if (!settings.accountUid || !hubId) {
       setHubMembers([]);
       setHubMessages([]);
+      setHubHealth(null);
+      setHubHealthStatus("");
       return;
     }
     void refreshHubSocial(hubId);
+    void refreshHubHealth(hubId, false);
   }, [settings.accountUid, selectedHubId, targetHubId, settings.activeHubs]);
 
   useEffect(() => {
@@ -21690,6 +21721,7 @@ function HubsView({ settings, matches, hubMatches, onSave, onHubResult, onSyncPr
       setSyncStatus("Hub claimed. Account roles are now available.");
       await onRefresh();
       await refreshHubSocial(hubId);
+      await refreshHubHealth(hubId);
     } catch (error) {
       setSyncStatus(error instanceof Error ? error.message : "Hub claim failed.");
     }
@@ -21771,6 +21803,44 @@ function HubsView({ settings, matches, hubMatches, onSave, onHubResult, onSyncPr
     }
   }
 
+  async function updateHubMemberRole(member: HubMember, role: "admin" | "member") {
+    if (!selectedHub || selectedHub.role !== "owner" || member.role === "owner") return;
+    const appointing = role === "admin";
+    const confirmed = window.confirm(
+      appointing
+        ? `Make ${member.displayName || member.handle || "this member"} a co-owner? They will be able to manage hub invites, moderation, and authorized Discord commands.`
+        : `Remove ${member.displayName || member.handle || "this member"} as co-owner? They will remain a hub member.`,
+    );
+    if (!confirmed) return;
+    setHubRoleBusyUid(member.uid);
+    setHubRoleStatus(appointing ? "Appointing co-owner..." : "Removing co-owner access...");
+    try {
+      await window.riftlite.updateHubMemberRole(selectedHub.id, member.uid, role);
+      await refreshHubSocial(selectedHub.id);
+      await refreshHubHealth(selectedHub.id, false);
+      setHubRoleStatus(appointing ? "Co-owner appointed." : "Co-owner returned to member.");
+    } catch (error) {
+      setHubRoleStatus(error instanceof Error ? error.message : "Could not update the hub role.");
+    } finally {
+      setHubRoleBusyUid("");
+    }
+  }
+
+  async function refreshHubHealth(hubId: string, showStatus = true) {
+    if (!settings.accountUid || !hubId) {
+      setHubHealth(null);
+      return;
+    }
+    if (showStatus) setHubHealthStatus("Checking account, hub, Discord, and replay delivery...");
+    try {
+      const health = await window.riftlite.getHubHealth(hubId);
+      setHubHealth(health);
+      setHubHealthStatus(showStatus ? `Health refreshed ${new Date().toLocaleTimeString()}.` : "");
+    } catch (error) {
+      setHubHealthStatus(error instanceof Error ? error.message : "Could not load hub health.");
+    }
+  }
+
   async function postHubMessage() {
     const hubId = selectedHubId || targetHubId || settings.activeHubs[0]?.id || "";
     const text = hubMessageText.trim();
@@ -21831,6 +21901,18 @@ function HubsView({ settings, matches, hubMatches, onSave, onHubResult, onSyncPr
         : message
     )),
     [hubMessages, localHubAccountIds, localHubDisplayName]
+  );
+  const hubReplayAutoUploadEnabled = Boolean(
+    settings.rawCapture.enabled &&
+    settings.rawCapture.webReplayAutoUploadEnabled &&
+    settings.rawCapture.webReplayAutoUploadAccountUid === settings.accountUid
+  );
+  const hubDiscordReplayShareEnabled = Boolean(
+    hubReplayAutoUploadEnabled &&
+    settings.rawCapture.webReplayDiscordShareEnabled &&
+    settings.rawCapture.webReplayDiscordShareAccountUid === settings.accountUid &&
+    selectedHub &&
+    settings.rawCapture.webReplayDiscordShareHubIds.includes(selectedHub.id)
   );
 
   function toggleAllHubPickerMatches(checked: boolean) {
@@ -22040,6 +22122,56 @@ function HubsView({ settings, matches, hubMatches, onSave, onHubResult, onSyncPr
         <Metric label="Members" value={visibleHubMembers.length ? String(visibleHubMembers.length) : settings.accountUid ? "Refresh" : "Account"} />
         <Metric label="Latest" value={selectedHubLatest ? `${normalizeLegendName(selectedHubLatest.myChampion) || "Unknown"} vs ${normalizeLegendName(selectedHubLatest.opponentChampion) || "unknown"}` : "No matches"} />
       </section>
+      <div className="rail-card hub-health-card">
+        <div className="row-actions">
+          <div>
+            <h2>Hub Health</h2>
+            <p className="muted">One view of the account, exact hub identity, Discord setup, and replay delivery.</p>
+          </div>
+          <button className="secondary" onClick={() => void refreshHubHealth(selectedHub.id)}>
+            <RefreshCw size={16} /> Refresh health
+          </button>
+        </div>
+        {!settings.accountUid ? (
+          <p className="muted">Link a RiftLite account to run the hub health check.</p>
+        ) : !hubHealth ? (
+          <p className="muted">{hubHealthStatus || "Loading hub health..."}</p>
+        ) : (
+          <>
+            <div className="replay-health-grid hub-health-grid">
+              <StatRow label="Account" value={hubHealth.account.handle ? `@${hubHealth.account.handle}` : hubHealth.account.displayName || "Profile incomplete"} />
+              <StatRow label="Account UID" value={hubHealth.account.uid || "Unavailable"} />
+              <StatRow label="Hub ID" value={hubHealth.hub.id} />
+              <StatRow label="Hub role" value={hubHealth.hub.role === "admin" ? "Co-owner" : hubHealth.hub.role} />
+              <StatRow label="Automatic replay upload" value={hubReplayAutoUploadEnabled ? "Enabled" : "Disabled"} />
+              <StatRow label="Share to this hub" value={hubDiscordReplayShareEnabled ? "Enabled" : "Disabled"} />
+              <StatRow label="Discord setup" value={hubHealth.discord.configured ? `${hubHealth.discord.guilds.length} server${hubHealth.discord.guilds.length === 1 ? "" : "s"}` : "Not configured"} />
+              <StatRow label="Discord verified" value={hubHealth.discord.verified ? "Yes" : "No"} />
+              <StatRow label="Latest web replay" value={hubHealth.replay.latest ? `${hubHealth.replay.latest.status} · ${hubHealth.replay.latest.visibility}` : "None found"} />
+              <StatRow label="Last Discord delivery" value={hubHealth.replay.latestDiscordDelivery?.status || "No attempt"} />
+            </div>
+            {hubHealth.discord.guilds.map((guild) => (
+              <div className="event-row" key={guild.guildId}>
+                <span>Discord server <code>{guild.guildId}</code>{guild.discordUsername ? ` · ${guild.discordUsername}` : ""}</span>
+                <strong>{guild.reportsChannelConfigured ? "Reports ready" : "Reports channel missing"}</strong>
+              </div>
+            ))}
+            {hubHealth.replay.latest ? (
+              <div className="event-row">
+                <span>{hubHealth.replay.latest.title || hubHealth.replay.latest.replayId}</span>
+                <strong>{hubHealth.replay.latest.failure?.message || hubHealth.replay.latest.status}</strong>
+              </div>
+            ) : null}
+            {hubHealth.replay.latestDiscordDelivery?.error ? (
+              <p className="muted">Last Discord error: {hubHealth.replay.latestDiscordDelivery.error}</p>
+            ) : null}
+            {!hubHealth.account.profileComplete ? <p className="muted">Action needed: finish the account handle and player name.</p> : null}
+            {hubDiscordReplayShareEnabled && !hubHealth.discord.configured ? <p className="muted">Action needed: run the Discord setup command for this exact hub ID.</p> : null}
+            {hubDiscordReplayShareEnabled && hubHealth.discord.configured && !hubHealth.discord.verified ? <p className="muted">Action needed: run /verify in the configured Discord server with this RiftLite account.</p> : null}
+            {hubHealthStatus ? <p className="muted">{hubHealthStatus}</p> : null}
+          </>
+        )}
+      </div>
       <div className="rail-card hub-social-card">
         <h2>Hub tools</h2>
         <p className="muted">Claim this hub, invite linked profiles, and leave low-read message-board notes for members.</p>
@@ -22060,13 +22192,31 @@ function HubsView({ settings, matches, hubMatches, onSave, onHubResult, onSyncPr
             {inviteStatus ? <p className="muted">{inviteStatus}</p> : null}
             <div className="hub-member-list">
               <strong>Members</strong>
-              {visibleHubMembers.map((member) => (
-                <div className="event-row" key={member.id || member.uid}>
-                  <span>{member.displayName || member.handle || member.uid}</span>
-                  <strong>{member.role}</strong>
-                </div>
-              ))}
+              <p className="muted">Co-owners can manage invites, moderation, testing goals, and hub-authorized Discord commands. Discord setup also requires Manage Server permission in Discord.</p>
+              {visibleHubMembers.map((member) => {
+                const canChangeRole = selectedHub.role === "owner" && member.role !== "owner";
+                const busy = hubRoleBusyUid === member.uid;
+                return (
+                  <div className="event-row" key={member.id || member.uid}>
+                    <span>{member.displayName || member.handle || member.uid}</span>
+                    <div className="row-actions">
+                      <strong>{hubMemberRoleLabel(member.role)}</strong>
+                      {canChangeRole && member.role === "member" ? (
+                        <button className="secondary" disabled={Boolean(hubRoleBusyUid)} onClick={() => void updateHubMemberRole(member, "admin")}>
+                          {busy ? "Updating..." : "Make co-owner"}
+                        </button>
+                      ) : null}
+                      {canChangeRole && member.role === "admin" ? (
+                        <button className="secondary danger" disabled={Boolean(hubRoleBusyUid)} onClick={() => void updateHubMemberRole(member, "member")}>
+                          {busy ? "Updating..." : "Remove co-owner"}
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                );
+              })}
               {!visibleHubMembers.length ? <p className="muted">Member roles appear after the hub is claimed or refreshed.</p> : null}
+              {hubRoleStatus ? <p className="muted">{hubRoleStatus}</p> : null}
             </div>
             <div className="hub-message-list">
               <strong>Message board</strong>

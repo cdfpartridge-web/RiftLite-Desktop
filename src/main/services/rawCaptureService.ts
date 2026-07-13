@@ -259,14 +259,18 @@ export class RawCaptureService {
     const ts = Number.isFinite(payload.frame.ts) ? payload.frame.ts : Date.now();
     const requestUrl = payload.requestUrl || "";
     const socketId = payload.frame.socketId || "ws-1";
+    const webReplayAutoUploadAccountUid = riftLiteWebReplayAutoUploadAccountUid(settings);
     const discordShareHubIds = riftLiteWebReplayDiscordShareHubIds(settings);
+    const webReplayDiscordShareAccountUid = discordShareHubIds.length
+      ? normalizeRiftLiteAccountUid(settings.accountUid)
+      : "";
     const session = this.sessionForFrame(
       details,
       socketId,
       requestUrl,
       ts,
-      riftLiteWebReplayAutoUploadAccountUid(settings),
-      discordShareHubIds.length ? normalizeRiftLiteAccountUid(settings.accountUid) : "",
+      webReplayAutoUploadAccountUid,
+      webReplayDiscordShareAccountUid,
       discordShareHubIds
     );
     if (session.capped) {
@@ -315,7 +319,10 @@ export class RawCaptureService {
     rememberRawCaptureIdentity(session.replayIds, details.replayId);
     rememberRawCaptureIdentity(session.sourceCaptureSessionIds, details.captureSessionId);
     session.matchFormat = details.matchFormat || session.matchFormat;
-    if (isAuthoritativeRawCaptureFrame(details)) {
+    if (session.provisional && isAuthoritativeRawCaptureFrame(details)) {
+      session.webReplayAutoUploadAccountUid = webReplayAutoUploadAccountUid;
+      session.webReplayDiscordShareAccountUid = webReplayDiscordShareAccountUid;
+      session.webReplayDiscordShareHubIds = [...discordShareHubIds];
       session.provisional = false;
       session.continuationSessionId = undefined;
     }
@@ -639,7 +646,19 @@ export class RawCaptureService {
       if (manifest.metadata.uploadStatus !== "uploaded") {
         await writeRawCaptureMatchSummary(manifest.localPath, match);
       }
-      manifest = { ...manifest, match };
+      const resultUpdatedAt = new Date().toISOString();
+      const resultResolved = rawCaptureMatchSummaryResolved(match);
+      manifest = {
+        ...manifest,
+        match,
+        metadata: {
+          ...manifest.metadata,
+          resultStatus: resultResolved ? "resolved" : "pending",
+          resultFinalizedAt: resultResolved
+            ? manifest.metadata.resultFinalizedAt || resultUpdatedAt
+            : undefined
+        }
+      };
     }
 
     if (replay) {
@@ -1055,6 +1074,7 @@ export class RawCaptureService {
     settings: UserSettings
   ): Promise<PersistedRawCaptureManifest> {
     const match = explicitIdentity.match ?? rawCaptureMatchSummaryFromDraft(replay?.matchSnapshot);
+    const persistedAt = new Date().toISOString();
     const payload = this.buildPayload(session, match);
     const directory = await rawCaptureDirectory(settings);
     const title = explicitIdentity.title || replay?.title || explicitIdentity.localMatchId || session.captureSessionId;
@@ -1066,11 +1086,15 @@ export class RawCaptureService {
       riftLiteAccountUidEquals(session.webReplayAutoUploadAccountUid, completionAccountUid)
     );
     const completionDiscordHubIds = riftLiteWebReplayDiscordShareHubIds(settings);
+    const webReplayDiscordShareHubIds = intersectStringSets(
+      session.webReplayDiscordShareHubIds,
+      completionDiscordHubIds
+    );
     const webReplayDiscordShareEligible = Boolean(
       webReplayAutoUploadEligible &&
       session.webReplayDiscordShareAccountUid &&
       riftLiteAccountUidEquals(session.webReplayDiscordShareAccountUid, completionAccountUid) &&
-      sameStringSet(session.webReplayDiscordShareHubIds, completionDiscordHubIds)
+      webReplayDiscordShareHubIds.length
     );
     const metadata: RawCaptureReplayMetadata = {
       provider: "riftlite-v2",
@@ -1084,6 +1108,10 @@ export class RawCaptureService {
       matchIds: session.matchIds.slice(),
       uploadStatus: session.capped ? "too-large" : "not-uploaded",
       processingStatus: session.capped ? "failed" : "pending",
+      captureCompletedAt: persistedAt,
+      resultStatus: rawCaptureMatchSummaryResolved(match) ? "resolved" : "pending",
+      resultFinalizedAt: rawCaptureMatchSummaryResolved(match) ? persistedAt : undefined,
+      processingUpdatedAt: persistedAt,
       error: session.lastError || undefined,
       localPath,
       visibility: webReplayDiscordShareEligible ? "unlisted" : rawCaptureVisibility(settings),
@@ -1096,7 +1124,7 @@ export class RawCaptureService {
         ? session.webReplayDiscordShareAccountUid
         : undefined,
       webReplayDiscordShareHubIds: webReplayDiscordShareEligible
-        ? [...session.webReplayDiscordShareHubIds]
+        ? webReplayDiscordShareHubIds
         : undefined,
       discordShareStatus: webReplayDiscordShareEligible ? "pending" : undefined
     };
@@ -1105,7 +1133,7 @@ export class RawCaptureService {
     const manifest: PersistedRawCaptureManifest = {
       schema: "riftlite-raw-capture-index",
       version: 1,
-      updatedAt: new Date().toISOString(),
+      updatedAt: persistedAt,
       platform: "atlas",
       localPath,
       indexPath,
@@ -1200,7 +1228,16 @@ export class RawCaptureService {
         localMatchId: replay.matchId,
         title: replay.title,
         match,
-        metadata: { ...existing.metadata, ...rawCapture },
+        metadata: {
+          ...existing.metadata,
+          ...rawCapture,
+          ...(match ? {
+            resultStatus: rawCaptureMatchSummaryResolved(match) ? "resolved" as const : "pending" as const,
+            resultFinalizedAt: rawCaptureMatchSummaryResolved(match)
+              ? existing.metadata.resultFinalizedAt || new Date().toISOString()
+              : undefined
+          } : {})
+        },
         identity: {
           ...existing.identity,
           platform: "atlas",
@@ -1241,7 +1278,13 @@ export class RawCaptureService {
       },
       metadata: {
         ...rawCapture,
-        visibility: normalizeRawCaptureVisibility(rawCapture.visibility ?? settings.rawCapture.visibility)
+        visibility: normalizeRawCaptureVisibility(rawCapture.visibility ?? settings.rawCapture.visibility),
+        ...(match ? {
+          resultStatus: rawCaptureMatchSummaryResolved(match) ? "resolved" as const : "pending" as const,
+          resultFinalizedAt: rawCaptureMatchSummaryResolved(match)
+            ? rawCapture.resultFinalizedAt || new Date().toISOString()
+            : undefined
+        } : {})
       }
     };
     await writeRawCaptureManifest(manifest);
@@ -1257,10 +1300,30 @@ export class RawCaptureService {
     if (
       options.automatic === true &&
       rawCaptureDiscordShareEligible(manifest.metadata, settings) &&
-      !manifest.metadata.lastUploadAttemptAt &&
       !manifest.metadata.uploadId
     ) {
-      manifest = await this.waitForDiscordMatchSummary(manifest);
+      const waitForResult = !manifest.metadata.lastUploadAttemptAt;
+      manifest = await this.waitForDiscordMatchSummary(manifest, waitForResult);
+      if (!rawCaptureMatchSummaryResolved(manifest.match)) {
+        const attemptedAt = new Date().toISOString();
+        const pending: PersistedRawCaptureManifest = {
+          ...manifest,
+          updatedAt: attemptedAt,
+          metadata: {
+            ...manifest.metadata,
+            visibility: "unlisted",
+            uploadStatus: "not-uploaded",
+            processingStatus: "pending",
+            resultStatus: "pending",
+            processingUpdatedAt: attemptedAt,
+            discordShareStatus: "pending",
+            lastUploadAttemptAt: attemptedAt,
+            error: "Waiting for the completed Atlas match result before uploading and sharing this replay."
+          }
+        };
+        await writeRawCaptureManifest(pending);
+        throw new Error(pending.metadata.error);
+      }
     }
     const raw = await readFile(manifest.localPath, "utf8");
     const gzipped = gzipSync(Buffer.from(raw, "utf8"));
@@ -1275,6 +1338,7 @@ export class RawCaptureService {
           visibility,
           uploadStatus: "too-large",
           processingStatus: "failed",
+          processingUpdatedAt: new Date().toISOString(),
           checksumSha256: sha256,
           compressedBytes: bytes,
           error: `Compressed replay is larger than the ${RIFTLITE_REPLAY_V2_MAX_GZIP_BYTES / (1024 * 1024)} MiB website upload limit.`
@@ -1291,6 +1355,7 @@ export class RawCaptureService {
         ...manifest.metadata,
         visibility,
         processingStatus: "uploading",
+        processingUpdatedAt: uploadAttemptAt,
         checksumSha256: sha256,
         compressedBytes: bytes,
         lastUploadAttemptAt: uploadAttemptAt,
@@ -1396,6 +1461,7 @@ export class RawCaptureService {
           uploadId: replayId,
           uploadedAt: new Date().toISOString(),
           processingStatus: status,
+          processingUpdatedAt: new Date().toISOString(),
           visibility: serverVisibility,
           error: undefined
         }
@@ -1431,13 +1497,17 @@ export class RawCaptureService {
   }
 
   private async waitForDiscordMatchSummary(
-    manifest: PersistedRawCaptureManifest
+    manifest: PersistedRawCaptureManifest,
+    waitForResult: boolean
   ): Promise<PersistedRawCaptureManifest> {
     if (rawCaptureMatchSummaryResolved(manifest.match)) {
       return manifest;
     }
     let refreshed = await this.refreshPersistedMatchSummary(manifest);
     if (rawCaptureMatchSummaryResolved(refreshed.match)) {
+      return refreshed;
+    }
+    if (!waitForResult) {
       return refreshed;
     }
 
@@ -1471,10 +1541,19 @@ export class RawCaptureService {
       return manifest;
     }
     await writeRawCaptureMatchSummary(manifest.localPath, summary);
+    const resultUpdatedAt = new Date().toISOString();
+    const resultResolved = rawCaptureMatchSummaryResolved(summary);
     const updated: PersistedRawCaptureManifest = {
       ...manifest,
-      updatedAt: new Date().toISOString(),
-      match: summary
+      updatedAt: resultUpdatedAt,
+      match: summary,
+      metadata: {
+        ...manifest.metadata,
+        resultStatus: resultResolved ? "resolved" : "pending",
+        resultFinalizedAt: resultResolved
+          ? manifest.metadata.resultFinalizedAt || resultUpdatedAt
+          : undefined
+      }
     };
     await writeRawCaptureManifest(updated);
     return updated;
@@ -1486,6 +1565,18 @@ export class RawCaptureService {
     idToken: string
   ): Promise<PersistedRawCaptureManifest> {
     const hubIds = manifest.metadata.webReplayDiscordShareHubIds ?? [];
+    const discordAttemptAt = new Date().toISOString();
+    manifest = {
+      ...manifest,
+      updatedAt: discordAttemptAt,
+      metadata: {
+        ...manifest.metadata,
+        discordShareStatus: "pending",
+        discordLastAttemptAt: discordAttemptAt,
+        discordShareError: undefined
+      }
+    };
+    await writeRawCaptureManifest(manifest);
     try {
       const endpoint = `${RIFTLITE_REPLAY_ORIGIN}/api/v2/replays/${encodeURIComponent(replayId)}/share-discord`;
       const response = await fetchRiftLiteReplayV2WithRetry(endpoint, {
@@ -1512,14 +1603,16 @@ export class RawCaptureService {
         : sharedHubIds.length
           ? "partial"
           : "failed";
+      const deliveryUpdatedAt = new Date().toISOString();
       const updated: PersistedRawCaptureManifest = {
         ...manifest,
-        updatedAt: new Date().toISOString(),
+        updatedAt: deliveryUpdatedAt,
         metadata: {
           ...manifest.metadata,
           visibility: "unlisted",
           discordShareStatus: status,
           discordSharedHubIds: sharedHubIds,
+          discordSharedAt: allShared ? deliveryUpdatedAt : manifest.metadata.discordSharedAt,
           discordShareError: allShared ? undefined : "One or more selected hubs could not receive the replay. Check its Discord reports_channel setup."
         }
       };
@@ -1552,6 +1645,7 @@ export class RawCaptureService {
         ...manifest.metadata,
         uploadStatus: "failed",
         processingStatus: "failed",
+        processingUpdatedAt: new Date().toISOString(),
         error: truncateForUi(error, 300)
       }
     };
@@ -1723,12 +1817,15 @@ export class RawCaptureService {
     error: string,
     uploadStatus: RawCaptureReplayMetadata["uploadStatus"]
   ): Promise<ReplayRecord> {
+    const failedAt = new Date().toISOString();
     return this.store.saveReplay({
       ...replay,
       rawCapture: {
         ...replay.rawCapture!,
         uploadStatus,
-        lastUploadAttemptAt: new Date().toISOString(),
+        processingStatus: "failed",
+        lastUploadAttemptAt: failedAt,
+        processingUpdatedAt: failedAt,
         error: truncateForUi(error, 300)
       }
     });
@@ -2418,9 +2515,11 @@ function rawCaptureDiscordShareEligible(
   settings: UserSettings
 ): boolean {
   const currentHubIds = riftLiteWebReplayDiscordShareHubIds(settings);
+  const intendedHubIds = metadata.webReplayDiscordShareHubIds ?? [];
   return metadata.webReplayDiscordShareEligible === true &&
     riftLiteAccountUidEquals(metadata.webReplayDiscordShareAccountUid, settings.accountUid) &&
-    sameStringSet(metadata.webReplayDiscordShareHubIds ?? [], currentHubIds);
+    intendedHubIds.length > 0 &&
+    intendedHubIds.every((hubId) => currentHubIds.includes(hubId));
 }
 
 function rawCaptureDiscordShareNeedsRetry(
@@ -2451,6 +2550,11 @@ function sameStringSet(left: string[], right: string[]): boolean {
   const normalizedLeft = normalize(left);
   const normalizedRight = normalize(right);
   return normalizedLeft.length === normalizedRight.length && normalizedLeft.every((value, index) => value === normalizedRight[index]);
+}
+
+function intersectStringSets(left: string[], right: string[]): string[] {
+  const rightValues = new Set(right.map((value) => value.trim()).filter(Boolean));
+  return Array.from(new Set(left.map((value) => value.trim()).filter((value) => value && rightValues.has(value)))).sort();
 }
 
 function normalizeRawCaptureVisibility(value: unknown): RawCaptureVisibility {
@@ -2565,10 +2669,7 @@ function rawCaptureAutoUploadRetryReady(metadata: RawCaptureReplayMetadata): boo
 }
 
 function rawCaptureMatchSummaryResolved(summary: RawCaptureMatchSummary | undefined): boolean {
-  return Boolean(summary && (
-    summary.result !== "incomplete" ||
-    summary.games.some((game) => game.result !== "incomplete")
-  ));
+  return Boolean(summary && summary.result !== "incomplete");
 }
 
 function rawCaptureMatchSummariesEqual(

@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promis
 import { createHash, randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { setTimeout as realDelay } from "node:timers/promises";
 import { gunzipSync } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { RawCaptureService } from "../src/main/services/rawCaptureService";
@@ -868,8 +869,137 @@ describe("RawCaptureService", () => {
     expect(saved.rawCapture).toMatchObject({
       uploadStatus: "uploaded",
       visibility: "unlisted",
+      resultStatus: "resolved",
+      captureCompletedAt: expect.any(String),
+      resultFinalizedAt: expect.any(String),
+      processingUpdatedAt: expect.any(String),
       discordShareStatus: "shared",
+      discordLastAttemptAt: expect.any(String),
+      discordSharedAt: expect.any(String),
       discordSharedHubIds: ["hub-1"]
+    });
+  });
+
+  it("binds Discord replay consent when the real Atlas match starts rather than on an earlier prelude frame", async () => {
+    const replayDirectory = await tempReplayDirectory();
+    const initialSettings = {
+      ...settings({ enabled: true, visibility: "private" }, replayDirectory),
+      accountUid: "account-1",
+      firebaseRefreshToken: "refresh-token",
+      activeHubs: [{ id: "hub-1", name: "Team UK", sync: true, role: "member" }]
+    } as UserSettings;
+    const store = fakeStore(initialSettings);
+    const service = new RawCaptureService(store);
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id_token: "id-token", user_id: "account-1" }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        replay: { replayId: "rl2_authoritative_consent", status: "uploading", visibility: "unlisted" },
+        uploadRequired: true,
+        upload: { endpoint: "/api/v2/replays/rl2_authoritative_consent/raw" },
+        completeEndpoint: "/api/v2/replays/rl2_authoritative_consent/complete",
+        playerPath: "/replays/rl2_authoritative_consent"
+      }), { status: 201 }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        replay: { replayId: "rl2_authoritative_consent", status: "ready", visibility: "unlisted" },
+        playerPath: "/replays/rl2_authoritative_consent"
+      }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        ok: true,
+        visibility: "unlisted",
+        results: [{ hubId: "hub-1", status: "shared" }]
+      }), { status: 200 }));
+
+    await service.appendFrame(atlasFrame(JSON.stringify({ type: "search" })));
+    await store.saveSettings({
+      rawCapture: {
+        ...initialSettings.rawCapture,
+        enabled: true,
+        webReplayAutoUploadEnabled: true,
+        webReplayAutoUploadAccountUid: "account-1",
+        webReplayDiscordShareEnabled: true,
+        webReplayDiscordShareAccountUid: "account-1",
+        webReplayDiscordShareHubIds: ["hub-1"],
+        visibility: "unlisted"
+      }
+    });
+    await service.appendFrame(atlasFrame(JSON.stringify({
+      type: "room_shell_sync",
+      sessionDoc: { roomCode: "AUTHORITATIVE-CONSENT", phase: "in_game", gameNumber: 1 }
+    })));
+
+    const saved = await service.finishForReplay(oneGameBo1Replay("authoritative-consent", "AUTHORITATIVE-CONSENT"));
+
+    expect(fetchMock.mock.calls[4][0]).toBe(
+      "https://www.riftlite.com/api/v2/replays/rl2_authoritative_consent/share-discord"
+    );
+    expect(saved.rawCapture).toMatchObject({
+      webReplayDiscordShareEligible: true,
+      webReplayDiscordShareHubIds: ["hub-1"],
+      discordShareStatus: "shared"
+    });
+  });
+
+  it("shares only to hubs selected both at match start and match completion", async () => {
+    const replayDirectory = await tempReplayDirectory();
+    const initialSettings = {
+      ...settings({
+        enabled: true,
+        webReplayAutoUploadEnabled: true,
+        webReplayAutoUploadAccountUid: "account-1",
+        webReplayDiscordShareEnabled: true,
+        webReplayDiscordShareAccountUid: "account-1",
+        webReplayDiscordShareHubIds: ["hub-1", "hub-2"],
+        visibility: "unlisted"
+      }, replayDirectory),
+      accountUid: "account-1",
+      firebaseRefreshToken: "refresh-token",
+      activeHubs: [
+        { id: "hub-1", name: "Team UK", sync: true, role: "member" },
+        { id: "hub-2", name: "Second Hub", sync: true, role: "member" },
+        { id: "hub-3", name: "New Hub", sync: true, role: "member" }
+      ]
+    } as UserSettings;
+    const store = fakeStore(initialSettings);
+    const service = new RawCaptureService(store);
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id_token: "id-token", user_id: "account-1" }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        replay: { replayId: "rl2_consent_intersection", status: "uploading", visibility: "unlisted" },
+        uploadRequired: true,
+        upload: { endpoint: "/api/v2/replays/rl2_consent_intersection/raw" },
+        completeEndpoint: "/api/v2/replays/rl2_consent_intersection/complete",
+        playerPath: "/replays/rl2_consent_intersection"
+      }), { status: 201 }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        replay: { replayId: "rl2_consent_intersection", status: "ready", visibility: "unlisted" },
+        playerPath: "/replays/rl2_consent_intersection"
+      }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        ok: true,
+        visibility: "unlisted",
+        results: [{ hubId: "hub-1", status: "shared" }]
+      }), { status: 200 }));
+
+    await service.appendFrame(atlasFrame(JSON.stringify({
+      type: "room_shell_sync",
+      sessionDoc: { roomCode: "CONSENT-INTERSECTION", phase: "in_game", gameNumber: 1 }
+    })));
+    await store.saveSettings({
+      rawCapture: {
+        ...initialSettings.rawCapture,
+        webReplayDiscordShareHubIds: ["hub-1", "hub-3"]
+      }
+    });
+
+    const saved = await service.finishForReplay(oneGameBo1Replay("consent-intersection", "CONSENT-INTERSECTION"));
+
+    expect(JSON.parse(String(fetchMock.mock.calls[4][1]?.body))).toEqual({ hubIds: ["hub-1"] });
+    expect(saved.rawCapture).toMatchObject({
+      webReplayDiscordShareEligible: true,
+      webReplayDiscordShareHubIds: ["hub-1"],
+      discordShareStatus: "shared"
     });
   });
 
@@ -936,6 +1066,86 @@ describe("RawCaptureService", () => {
     });
     expect(fetchMock.mock.calls[4][0]).toBe("https://www.riftlite.com/api/v2/replays/rl2_delayed/share-discord");
     expect(saved.rawCapture).toMatchObject({
+      uploadStatus: "uploaded",
+      processingStatus: "ready",
+      discordShareStatus: "shared"
+    });
+  });
+
+  it("keeps an unresolved automatic Discord replay local until a completed match result is available", async () => {
+    vi.useFakeTimers();
+    const replayDirectory = await tempReplayDirectory();
+    const store = fakeStore({
+      ...settings({
+        enabled: true,
+        webReplayAutoUploadEnabled: true,
+        webReplayAutoUploadAccountUid: "account-1",
+        webReplayDiscordShareEnabled: true,
+        webReplayDiscordShareAccountUid: "account-1",
+        webReplayDiscordShareHubIds: ["hub-1"],
+        visibility: "private"
+      }, replayDirectory),
+      accountUid: "account-1",
+      firebaseRefreshToken: "refresh-token",
+      activeHubs: [{ id: "hub-1", name: "Team UK", sync: true, role: "member" }]
+    } as UserSettings);
+    const service = new RawCaptureService(store);
+    const incomplete = oneGameBo1Replay("pending-discord-score", "PENDING", "Incomplete");
+    await store.saveMatch(incomplete.matchSnapshot!);
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+
+    await service.appendFrame(atlasFrame(JSON.stringify({
+      type: "room_shell_sync",
+      sessionDoc: { roomCode: "PENDING", phase: "in_game", gameNumber: 1 }
+    })));
+    const finishPromise = service.finishForReplay(incomplete);
+    let finishSettled = false;
+    void finishPromise.finally(() => {
+      finishSettled = true;
+    });
+
+    for (let poll = 0; poll < 100 && !finishSettled; poll += 1) {
+      await realDelay(1);
+      await vi.runOnlyPendingTimersAsync();
+    }
+    expect(finishSettled).toBe(true);
+    const pending = await finishPromise;
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(pending.rawCapture).toMatchObject({
+      uploadStatus: "not-uploaded",
+      processingStatus: "pending",
+      captureCompletedAt: expect.any(String),
+      resultStatus: "pending",
+      discordShareStatus: "pending",
+      visibility: "unlisted"
+    });
+    expect(pending.rawCapture?.error).toContain("Waiting for the completed Atlas match result");
+
+    await store.saveMatch(oneGameBo1Replay("pending-discord-score", "PENDING", "Win").matchSnapshot!);
+    await vi.advanceTimersByTimeAsync(120_000);
+    fetchMock
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id_token: "id-token", user_id: "account-1" }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        replay: { replayId: "rl2_pending", status: "uploading", visibility: "unlisted" },
+        uploadRequired: true,
+        upload: { endpoint: "/api/v2/replays/rl2_pending/raw" },
+        completeEndpoint: "/api/v2/replays/rl2_pending/complete",
+        playerPath: "/replays/rl2_pending"
+      }), { status: 201 }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        replay: { replayId: "rl2_pending", status: "ready", visibility: "unlisted" },
+        playerPath: "/replays/rl2_pending"
+      }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        ok: true,
+        visibility: "unlisted",
+        results: [{ hubId: "hub-1", status: "shared" }]
+      }), { status: 200 }));
+
+    expect(await service.uploadPendingRawCaptures()).toBe(1);
+    const uploaded = (await store.getReplays()).find((item) => item.id === incomplete.id);
+    expect(uploaded?.rawCapture).toMatchObject({
       uploadStatus: "uploaded",
       processingStatus: "ready",
       discordShareStatus: "shared"

@@ -18,6 +18,7 @@ import type {
   AccountProfileBackfillResult,
   CommunityMatch,
   HubActionResult,
+  HubHealthStatus,
   HubInboxItem,
   HubInvite,
   HubMember,
@@ -1067,6 +1068,18 @@ export class FirebaseSyncService {
   async getHubMembers(hubId: string): Promise<HubMember[]> {
     const payload = await this.authenticatedWebsiteRequest(`/api/hubs/${encodeURIComponent(hubId)}/members`, { method: "GET" });
     return Array.isArray(payload.members) ? payload.members.filter(isRecord).map(normalizeHubMember) : [];
+  }
+
+  async getHubHealth(hubId: string): Promise<HubHealthStatus> {
+    const payload = await this.authenticatedWebsiteRequest(`/api/hubs/${encodeURIComponent(hubId)}/health`, { method: "GET" });
+    return normalizeHubHealthStatus(payload);
+  }
+
+  async updateHubMemberRole(hubId: string, uid: string, role: "admin" | "member"): Promise<void> {
+    await this.authenticatedWebsiteRequest(`/api/hubs/${encodeURIComponent(hubId)}/members/${encodeURIComponent(uid)}`, {
+      method: "PATCH",
+      body: { role }
+    });
   }
 
   async createHubInvite(hubId: string, targetHandle = ""): Promise<HubInvite> {
@@ -2324,6 +2337,87 @@ function normalizeHubMember(value: Record<string, unknown>): HubMember {
     role: role === "owner" || role === "admin" ? role : "member",
     joinedAt: readNumber(value.joinedAt),
     updatedAt: readNumber(value.updatedAt)
+  };
+}
+
+function normalizeHubHealthStatus(value: Record<string, unknown>): HubHealthStatus {
+  const account = isRecord(value.account) ? value.account : {};
+  const hub = isRecord(value.hub) ? value.hub : {};
+  const discord = isRecord(value.discord) ? value.discord : {};
+  const replay = isRecord(value.replay) ? value.replay : {};
+  const latest = isRecord(replay.latest) ? replay.latest : null;
+  const delivery = isRecord(replay.latestDiscordDelivery) ? replay.latestDiscordDelivery : null;
+  const role = readString(hub.role);
+  const capabilities = new Set([
+    "view",
+    "participate",
+    "manage_content",
+    "manage_invites",
+    "manage_members",
+    "manage_discord",
+    "manage_testing_goals",
+    "appoint_coowners",
+    "transfer_ownership"
+  ]);
+  return {
+    account: {
+      uid: readString(account.uid),
+      email: readString(account.email),
+      handle: readString(account.handle),
+      displayName: readString(account.displayName),
+      profileComplete: Boolean(account.profileComplete),
+      identityUids: Array.isArray(account.identityUids) ? account.identityUids.map(readString).filter(Boolean) : []
+    },
+    hub: {
+      id: readString(hub.id),
+      name: readString(hub.name),
+      role: role === "owner" || role === "admin" ? role : "member",
+      capabilities: Array.isArray(hub.capabilities)
+        ? hub.capabilities.map(readString).filter((capability): capability is HubHealthStatus["hub"]["capabilities"][number] => capabilities.has(capability))
+        : []
+    },
+    discord: {
+      configured: Boolean(discord.configured),
+      verified: Boolean(discord.verified),
+      guilds: Array.isArray(discord.guilds) ? discord.guilds.filter(isRecord).map((guild) => ({
+        guildId: readString(guild.guildId),
+        verifiedRoleId: readString(guild.verifiedRoleId),
+        feedChannelId: readString(guild.feedChannelId),
+        reportsChannelId: readString(guild.reportsChannelId),
+        verifiedRoleConfigured: Boolean(guild.verifiedRoleConfigured),
+        feedChannelConfigured: Boolean(guild.feedChannelConfigured),
+        reportsChannelConfigured: Boolean(guild.reportsChannelConfigured),
+        verifiedForAccount: Boolean(guild.verifiedForAccount),
+        discordUsername: readString(guild.discordUsername),
+        updatedAt: readNumber(guild.updatedAt)
+      })) : []
+    },
+    replay: {
+      latest: latest ? {
+        replayId: readString(latest.replayId),
+        title: readString(latest.title),
+        status: readString(latest.status),
+        visibility: readString(latest.visibility),
+        capturedAt: readString(latest.capturedAt),
+        createdAt: readString(latest.createdAt),
+        updatedAt: readString(latest.updatedAt),
+        ...(isRecord(latest.failure) ? { failure: {
+          code: readString(latest.failure.code),
+          message: readString(latest.failure.message)
+        } } : {})
+      } : null,
+      latestDiscordDelivery: delivery ? {
+        replayId: readString(delivery.replayId),
+        guildId: readString(delivery.guildId),
+        channelId: readString(delivery.channelId),
+        status: readString(delivery.status),
+        attempts: readNumber(delivery.attempts),
+        attemptedAt: readNumber(delivery.attemptedAt),
+        postedAt: readNumber(delivery.postedAt),
+        updatedAt: readNumber(delivery.updatedAt),
+        error: readString(delivery.error)
+      } : null
+    }
   };
 }
 

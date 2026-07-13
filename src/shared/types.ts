@@ -1205,6 +1205,12 @@ export interface RawCaptureReplayMetadata {
   discordSharedHubIds?: string[];
   discordShareError?: string;
   lastUploadAttemptAt?: string;
+  captureCompletedAt?: string;
+  resultStatus?: "pending" | "resolved";
+  resultFinalizedAt?: string;
+  processingUpdatedAt?: string;
+  discordLastAttemptAt?: string;
+  discordSharedAt?: string;
 }
 
 export interface RawCaptureStatus {
@@ -1435,6 +1441,75 @@ export interface HubMember {
   role: "owner" | "admin" | "member";
   joinedAt: number;
   updatedAt: number;
+}
+
+export type HubCapability =
+  | "view"
+  | "participate"
+  | "manage_content"
+  | "manage_invites"
+  | "manage_members"
+  | "manage_discord"
+  | "manage_testing_goals"
+  | "appoint_coowners"
+  | "transfer_ownership";
+
+export interface HubHealthDiscordGuild {
+  guildId: string;
+  verifiedRoleId: string;
+  feedChannelId: string;
+  reportsChannelId: string;
+  verifiedRoleConfigured: boolean;
+  feedChannelConfigured: boolean;
+  reportsChannelConfigured: boolean;
+  verifiedForAccount: boolean;
+  discordUsername: string;
+  updatedAt: number;
+}
+
+export interface HubHealthStatus {
+  account: {
+    uid: string;
+    email: string;
+    handle: string;
+    displayName: string;
+    profileComplete: boolean;
+    identityUids: string[];
+  };
+  hub: {
+    id: string;
+    name: string;
+    role: "owner" | "admin" | "member";
+    capabilities: HubCapability[];
+  };
+  discord: {
+    configured: boolean;
+    verified: boolean;
+    guilds: HubHealthDiscordGuild[];
+  };
+  replay: {
+    latest: null | {
+      replayId: string;
+      title: string;
+      status: string;
+      visibility: string;
+      capturedAt: string;
+      createdAt: string;
+      updatedAt: string;
+      failure?: { code: string; message: string };
+    };
+    latestDiscordDelivery: null | {
+      replayId: string;
+      guildId: string;
+      channelId: string;
+      status: string;
+      attempts: number;
+      attemptedAt: number;
+      postedAt: number;
+      updatedAt: number;
+      error: string;
+    };
+  };
 }
 
 export interface HubInvite {
@@ -1769,6 +1844,8 @@ export interface RiftLiteApi {
   acceptHubInvite(inviteId: string): Promise<HubActionResult | null>;
   declineHubInvite(inviteId: string): Promise<void>;
   getHubMembers(hubId: string): Promise<HubMember[]>;
+  getHubHealth(hubId: string): Promise<HubHealthStatus>;
+  updateHubMemberRole(hubId: string, uid: string, role: "admin" | "member"): Promise<void>;
   createHubInvite(hubId: string, targetHandle?: string): Promise<HubInvite>;
   getHubMessages(hubId: string): Promise<HubMessage[]>;
   postHubMessage(hubId: string, text: string): Promise<HubMessage>;

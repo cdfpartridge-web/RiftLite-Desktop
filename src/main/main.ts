@@ -5137,6 +5137,8 @@ function registerIpc(): void {
   ipcMain.handle("hubs:invite:accept", (_event, inviteId: string) => syncService.acceptHubInvite(inviteId));
   ipcMain.handle("hubs:invite:decline", (_event, inviteId: string) => syncService.declineHubInvite(inviteId));
   ipcMain.handle("hubs:members", (_event, hubId: string) => syncService.getHubMembers(hubId));
+  ipcMain.handle("hubs:health", (_event, hubId: string) => syncService.getHubHealth(hubId));
+  ipcMain.handle("hubs:member:update", (_event, hubId: string, uid: string, role: "admin" | "member") => syncService.updateHubMemberRole(hubId, uid, role));
   ipcMain.handle("hubs:invite", (_event, hubId: string, targetHandle?: string) => syncService.createHubInvite(hubId, targetHandle));
   ipcMain.handle("hubs:messages", (_event, hubId: string) => syncService.getHubMessages(hubId));
   ipcMain.handle("hubs:message:post", (_event, hubId: string, text: string) => syncService.postHubMessage(hubId, text));
