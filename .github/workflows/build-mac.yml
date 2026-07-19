@@ -68,7 +68,7 @@ jobs:
         run: npx electron-builder --mac dmg zip --x64 --arm64 --publish never
 
       - name: Upload macOS installers
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: riftlite-mac-installers
           path: |
@@ -78,7 +78,7 @@ jobs:
 
       - name: Attach installers to GitHub release
         if: github.ref_type == 'tag'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             release/RiftLiteBetaInstall-*.dmg
