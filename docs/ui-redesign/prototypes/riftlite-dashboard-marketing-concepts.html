@@ -1,0 +1,1904 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; style-src 'unsafe-inline' blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; img-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; font-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; media-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; worker-src blob:; connect-src blob: data:; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<title>Riftlite Marketing Dashboard</title>
+<style>:root{color-scheme:light dark;background:light-dark(rgb(255 255 255), rgb(24 24 24))}html,body{margin:0}body{box-sizing:border-box;padding:1rem;background:inherit}iframe{display:block;width:100%;max-width:none;height:calc(100vh - 2rem);margin:0 auto;border:0}</style>
+</head>
+<body>
+<iframe sandbox="allow-scripts" referrerpolicy="no-referrer" title="Riftlite Marketing Dashboard" srcdoc="&lt;!doctype html&gt;
+&lt;html lang=&quot;en&quot;&gt;
+&lt;head&gt;
+&lt;meta charset=&quot;utf-8&quot;&gt;
+&lt;meta name=&quot;viewport&quot; content=&quot;width=device-width, initial-scale=1&quot;&gt;
+&lt;meta name=&quot;referrer&quot; content=&quot;no-referrer&quot;&gt;
+&lt;meta http-equiv=&quot;Content-Security-Policy&quot; content=&quot;default-src &#x27;none&#x27;; script-src &#x27;unsafe-inline&#x27; &#x27;unsafe-eval&#x27; &#x27;wasm-unsafe-eval&#x27; blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; style-src &#x27;unsafe-inline&#x27; blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; img-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; font-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; media-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; worker-src blob:; connect-src blob: data:; frame-src &#x27;none&#x27;; object-src &#x27;none&#x27;; base-uri &#x27;none&#x27;; form-action &#x27;none&#x27;&quot;&gt;
+&lt;title&gt;Riftlite Marketing Dashboard&lt;/title&gt;
+&lt;style&gt;:root {
+  color-scheme: light dark;
+  background-color: var(--background) !important;
+
+  /* Agent-facing contract; keep in sync with SKILL.md. */
+  --background: light-dark(rgb(255 255 255), rgb(24 24 24));
+  --foreground: light-dark(rgb(26 28 31), rgb(255 255 255));
+  --card: color-mix(in oklab, var(--foreground) 5%, transparent);
+  --card-foreground: var(--foreground);
+  --popover: light-dark(rgb(255 255 255), rgb(45 45 45));
+  --popover-foreground: var(--foreground);
+  --primary: light-dark(rgb(51 156 255), rgb(131 195 255));
+  --primary-foreground: light-dark(rgb(255 255 255), rgb(13 13 13));
+  --secondary: light-dark(rgb(255 255 255 / 96%), rgb(54 54 54 / 96%));
+  --secondary-foreground: var(--foreground);
+  --muted: color-mix(in srgb, var(--foreground) 10%, transparent);
+  --muted-foreground: light-dark(
+    rgb(26 28 31 / 49.4%),
+    rgb(255 255 255 / 49.8%)
+  );
+  --accent: light-dark(rgb(229 242 255), rgb(13 39 63));
+  --accent-foreground: var(--primary);
+  --destructive: light-dark(rgb(226 85 7), rgb(255 133 73));
+  --border: light-dark(rgb(26 28 31 / 8%), rgb(255 255 255 / 8.2%));
+  --input: light-dark(
+    rgb(26 28 31 / 11.8%),
+    color-mix(in oklab, rgb(0 0 0) 10%, transparent)
+  );
+  --ring: light-dark(rgb(51 156 255), rgb(131 195 255 / 76%));
+  --font-size-base: 14px;
+  --viz-series-1: var(--primary);
+  --viz-series-2: light-dark(rgb(243 136 59), rgb(245 154 86));
+  --viz-series-3: light-dark(rgb(93 201 119), rgb(116 213 139));
+  --viz-series-4: light-dark(rgb(235 119 177), rgb(240 143 192));
+  --viz-series-5: light-dark(rgb(155 121 236), rgb(170 145 239));
+  --viz-series-6: light-dark(rgb(58 185 177), rgb(90 203 194));
+
+  /* Internal implementation variables; not part of the agent contract. */
+  --font-sans: -apple-system, system-ui, &quot;Segoe UI&quot;, sans-serif;
+  --font-mono:
+    ui-monospace, SFMono-Regular, &quot;SF Mono&quot;, Menlo, Consolas, &quot;Liberation Mono&quot;,
+    monospace;
+  --font-size-normal: max(11px, var(--font-size-base));
+  --font-size-tooltip: calc(var(--font-size-base) - 1px);
+  --font-size-small: max(11px, calc(var(--font-size-base) - 2px));
+  --font-size-h1: calc(var(--font-size-normal) * 1.7142857143);
+  --font-size-h2: calc(var(--font-size-normal) * 1.4285714286);
+  --font-size-h3: calc(var(--font-size-normal) * 1.2857142857);
+  --font-weight-normal: 430;
+  --font-weight-medium: 500;
+  --line-height-normal: calc(var(--font-size-normal) * 1.5);
+  --line-height-tooltip: calc(var(--font-size-tooltip) * 1.4285714286);
+  --line-height-small: calc(var(--font-size-small) + 4px);
+  --radius: 12.5px;
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-2xl: calc(var(--radius) * 1.6);
+  --radius-full: 9999px;
+  --shadow-sm: 0 1px 2px -1px rgb(0 0 0 / 8%);
+  --checkmark-image: url(&quot;data:image/svg+xml,%3Csvg xmlns=&#x27;http://www.w3.org/2000/svg&#x27; viewBox=&#x27;0 0 17 17&#x27;%3E%3Cpath d=&#x27;M12.8961 3.64101C13.1297 3.41418 13.4984 3.37523 13.7779 3.56581C14.0571 3.75635 14.1554 4.11331 14.0299 4.41347L13.9615 4.53847L7.71151 13.7045C7.59411 13.8767 7.4063 13.9877 7.19881 14.0072C6.99136 14.0267 6.78564 13.9533 6.63826 13.806L2.88826 10.056L2.79842 9.9457C2.6192 9.67407 2.64927 9.30496 2.88826 9.06581C3.12738 8.82669 3.49647 8.79676 3.76815 8.97597L3.8785 9.06581L7.03084 12.2182L12.8053 3.74941L12.8961 3.64101Z&#x27;/%3E%3C/svg%3E&quot;);
+
+  /* Legacy aliases; not part of the current agent contract. */
+  --viz-bg: transparent;
+  --viz-panel: var(--card);
+  --viz-border: var(--border);
+  --viz-text: var(--foreground);
+  --viz-muted: var(--muted-foreground);
+  --viz-accent: var(--primary);
+  --viz-accent-text: var(--primary-foreground);
+  --viz-accent-bg: var(--accent);
+  --viz-font-size: var(--font-size-base);
+  --viz-warning: var(--destructive);
+  --color-background-primary: var(--background);
+  --color-text-primary: var(--foreground);
+  --color-border-secondary: var(--border);
+}
+
+:root[data-theme=&quot;light&quot;] {
+  color-scheme: light;
+}
+
+:root[data-theme=&quot;dark&quot;] {
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html &gt; body {
+  margin: 0;
+  padding: 5px;
+  color: var(--foreground);
+  background: transparent !important;
+  font-family: var(--font-sans);
+  font-size: var(--font-size-normal);
+  font-weight: var(--font-weight-normal);
+  line-height: var(--line-height-normal);
+}
+
+a {
+  color: color-mix(in srgb, var(--viz-accent) 80%, var(--viz-text) 20%);
+  cursor: pointer;
+  font-weight: var(--viz-font-weight-medium);
+  text-decoration: none;
+  text-underline-offset: 2px;
+}
+
+a:is(:hover, :focus-visible) {
+  text-decoration-line: underline;
+  text-decoration-style: dashed;
+  text-decoration-thickness: 0.5px;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+p {
+  margin-block: 0;
+}
+
+h1 {
+  font-size: var(--font-size-h1);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.25;
+}
+
+h2 {
+  font-size: var(--font-size-h2);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.25;
+}
+
+h3,
+h4,
+h5,
+h6 {
+  font-size: var(--font-size-h3);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.3;
+}
+
+b,
+strong,
+th {
+  font-weight: var(--font-weight-medium);
+}
+
+code:not(pre code) {
+  display: inline;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  corner-shape: superellipse(1.5);
+  background: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  overflow-wrap: anywhere;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+  word-break: break-word;
+}
+
+.table-responsive {
+  width: 100%;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  color: var(--foreground);
+  font: inherit;
+  text-align: start;
+}
+
+.table :is(th, td) {
+  padding-block: 10px;
+  padding-inline: 0 24px;
+  overflow-wrap: anywhere;
+  border-bottom: 1px solid var(--border);
+  text-align: start;
+  vertical-align: top;
+}
+
+.table-responsive &gt; .table :is(th, td) {
+  overflow-wrap: break-word;
+}
+
+.table :is(th, td):last-child {
+  padding-inline-end: 0;
+}
+
+.table :is(caption, thead th) {
+  font-weight: 600;
+}
+
+.table thead th {
+  padding-block: 8px;
+  border-bottom-color: color-mix(in srgb, var(--foreground) 16%, transparent);
+}
+
+.table tbody tr:last-child :is(th, td) {
+  border-bottom: 0;
+}
+
+.table.table-sm :is(th, td) {
+  padding-block: 6px;
+}
+
+.table.table-sm :is(th, td):not(:last-child) {
+  padding-inline-end: 16px;
+}
+
+.table :is(.text-end, [align=&quot;right&quot;]) {
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+}
+
+.table :is(.text-center, [align=&quot;center&quot;]) {
+  text-align: center;
+}
+
+.table .text-nowrap {
+  white-space: nowrap;
+}
+
+#widget {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  padding: 0;
+  background: transparent !important;
+}
+
+.card {
+  min-width: 0;
+  padding: 12px;
+  overflow: hidden;
+  overflow-wrap: break-word;
+  border-radius: var(--radius-2xl);
+  corner-shape: superellipse(1.5);
+  color: var(--card-foreground);
+  background: var(--card);
+}
+
+#widget &gt; :not(.card) {
+  width: 100% !important;
+  max-width: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.tooltip {
+  position: fixed;
+  z-index: 50;
+  top: 0;
+  left: 0;
+  width: max-content;
+  max-width: min(
+    20rem,
+    var(--tooltip-available-width, calc(100vw - 10px)),
+    calc(100vw - 10px)
+  );
+  max-height: min(
+    var(--tooltip-available-height, calc(100vh - 10px)),
+    calc(100vh - 10px)
+  );
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  corner-shape: superellipse(1.5);
+  color: var(--popover-foreground);
+  background: var(--popover);
+  box-shadow: none;
+  font-size: var(--font-size-tooltip);
+  line-height: var(--line-height-tooltip);
+  overflow-wrap: break-word;
+  white-space: normal;
+  pointer-events: none;
+  user-select: none;
+}
+
+.viz-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(max(180px, 24%), 1fr));
+  gap: 10px;
+}
+
+.viz-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.viz-stat-value {
+  font-size: var(--font-size-h2);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.25;
+}
+
+.viz-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.viz-badge {
+  padding: 3px 8px;
+  border-radius: var(--radius-full);
+  color: var(--accent-foreground);
+  background: var(--accent);
+  font-weight: var(--font-weight-medium);
+}
+
+small,
+.text-small,
+.viz-badge {
+  font-size: var(--font-size-small);
+  line-height: var(--line-height-small);
+}
+
+.text-muted {
+  color: var(--muted-foreground);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.viz-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.viz-controls &gt; .form-label {
+  display: grid;
+  min-width: min(100%, 260px);
+  flex: 1 1 280px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 2px 12px;
+  margin-bottom: 0;
+}
+
+.viz-controls &gt; .form-label &gt; :is(.form-control, .form-range, .form-select) {
+  grid-column: 1 / -1;
+}
+
+.btn,
+.form-check-input,
+.form-control,
+.form-range,
+.form-select {
+  font: inherit;
+}
+
+.btn {
+  appearance: button;
+  display: inline-flex;
+  inline-size: fit-content;
+  max-inline-size: 100%;
+  min-height: 28px;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  margin: 0;
+  padding: 0 8px;
+  -webkit-app-region: no-drag;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-lg);
+  corner-shape: superellipse(1.5);
+  color: var(--secondary-foreground);
+  background: var(--secondary);
+  cursor: var(--cursor-interaction, pointer);
+  text-align: center;
+  text-decoration: none;
+  white-space: nowrap;
+  user-select: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+.btn:is(.btn-block, .viz-tile) {
+  inline-size: 100%;
+}
+
+.btn.viz-tile {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+a.btn {
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.btn:not(:disabled):hover {
+  background: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+}
+
+.btn-primary {
+  border-color: transparent;
+  color: var(--primary-foreground);
+  background: var(--foreground);
+  background-clip: padding-box;
+}
+
+.btn-primary .text-muted {
+  color: color-mix(in srgb, var(--primary-foreground) 50%, transparent);
+}
+
+.btn-primary:not(:disabled):hover {
+  background: color-mix(in srgb, var(--foreground) 80%, transparent);
+  background-clip: padding-box;
+}
+
+.btn-ghost {
+  border-color: transparent;
+  color: var(--muted-foreground);
+  background: transparent;
+}
+
+.btn-ghost:not(:disabled):hover {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+}
+
+.btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+[data-lucide] {
+  stroke-width: 1.6;
+}
+
+.form-label {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--foreground);
+}
+
+.form-control {
+  display: block;
+  width: 100%;
+  min-height: 28px;
+  padding: 0 8px;
+  outline: none;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-lg);
+  corner-shape: superellipse(1.5);
+  color: var(--foreground);
+  background: var(--secondary);
+}
+
+.form-control::placeholder {
+  color: var(--muted-foreground);
+}
+
+.form-control[type=&quot;file&quot;] {
+  padding: 0;
+  overflow: hidden;
+  cursor: var(--cursor-interaction, pointer);
+}
+
+.form-control[type=&quot;file&quot;]::file-selector-button {
+  min-height: 26px;
+  margin-right: 8px;
+  padding: 0 8px;
+  border: 0;
+  border-right: 1px solid var(--input);
+  color: var(--secondary-foreground);
+  background: var(--secondary);
+  cursor: inherit;
+  font: inherit;
+}
+
+.form-control[type=&quot;file&quot;]:not(:disabled):hover::file-selector-button {
+  background: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+}
+
+.form-control-color[type=&quot;color&quot;] {
+  width: 40px;
+  height: 28px;
+  padding: 3px;
+  cursor: var(--cursor-interaction, pointer);
+}
+
+.form-control-color[type=&quot;color&quot;]::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+.form-control-color[type=&quot;color&quot;]::-webkit-color-swatch {
+  border: 0;
+  border-radius: calc(var(--radius-lg) - 4px);
+  corner-shape: superellipse(1.5);
+}
+
+textarea.form-control {
+  height: auto;
+  min-height: 72px;
+  padding: 8px 10px;
+  resize: vertical;
+}
+
+.form-control:focus-visible {
+  border-color: var(--ring);
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.form-control:disabled,
+.form-select:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.form-select {
+  appearance: none;
+  display: block;
+  width: 100%;
+  min-height: 28px;
+  margin: 0;
+  padding: 0 32px 0 8px;
+  outline: none;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-lg);
+  corner-shape: superellipse(1.5);
+  color: var(--foreground);
+  background-color: var(--secondary);
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--muted-foreground) 50%),
+    linear-gradient(135deg, var(--muted-foreground) 50%, transparent 50%);
+  background-position:
+    calc(100% - 14px) 50%,
+    calc(100% - 10px) 50%;
+  background-repeat: no-repeat;
+  background-size: 4px 4px;
+  cursor: var(--cursor-interaction, default);
+}
+
+.form-select:not(:disabled):hover {
+  background-color: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+}
+
+.form-select:focus-visible {
+  border-color: var(--ring);
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.form-check {
+  display: flex;
+  min-height: 20px;
+  align-items: center;
+  gap: 6px;
+}
+
+.form-check-input {
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  margin: 0;
+  border: 1px solid var(--input);
+  color: var(--primary-foreground);
+  background-color: transparent;
+  cursor: var(--cursor-interaction, default);
+  transition:
+    background-color 150ms,
+    border-color 150ms,
+    box-shadow 150ms;
+}
+
+.form-check:not(.form-switch) .form-check-input[type=&quot;checkbox&quot;] {
+  border-color: var(--input);
+  border-radius: var(--radius-sm);
+  corner-shape: superellipse(1.5);
+  background-color: var(--secondary);
+  box-shadow: var(--shadow-sm);
+}
+
+.form-check:not(.form-switch)
+  .form-check-input:not(:disabled):not(:checked):hover {
+  background-color: var(--card);
+}
+
+.form-check:not(.form-switch) .form-check-input[type=&quot;checkbox&quot;]:checked {
+  border-color: var(--primary);
+  background-color: var(--primary);
+}
+
+.form-check:not(.form-switch)
+  .form-check-input[type=&quot;checkbox&quot;]:checked::before {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: var(--primary-foreground);
+  content: &quot;&quot;;
+  mask: var(--checkmark-image) center / 12px 12px no-repeat;
+}
+
+.form-check-input[type=&quot;radio&quot;] {
+  width: 14px;
+  height: 14px;
+  border-radius: var(--radius-full);
+}
+
+.form-check-input[type=&quot;radio&quot;]:checked {
+  border: 2px solid var(--primary);
+  background:
+    radial-gradient(circle, var(--primary-foreground) 0 2.5px, transparent 3px),
+    var(--primary);
+}
+
+.form-check:not(.form-switch) .form-check-input:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.form-check:not(.form-switch) .form-check-input:disabled {
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.form-check:not(.form-switch) .form-check-input:disabled + .form-check-label {
+  cursor: not-allowed;
+}
+
+.form-switch .form-check-input:disabled,
+.form-switch .form-check-input:disabled + .form-check-label {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.form-check-label {
+  color: var(--foreground);
+  cursor: var(--cursor-interaction, default);
+}
+
+.form-switch .form-check-input {
+  position: relative;
+  width: 32px;
+  height: 20px;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--muted);
+  box-shadow: none;
+  transition: background-color 200ms cubic-bezier(0, 0, 0.2, 1);
+}
+
+.form-switch .form-check-input::before {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 16px;
+  height: 16px;
+  box-sizing: border-box;
+  border: 1px solid light-dark(var(--primary-foreground), var(--foreground));
+  border-radius: var(--radius-full);
+  background: light-dark(var(--primary-foreground), var(--foreground));
+  box-shadow: var(--shadow-sm);
+  content: &quot;&quot;;
+  transform: translate(2px, -50%);
+  transition: transform 200ms cubic-bezier(0, 0, 0.2, 1);
+}
+
+.form-switch .form-check-input:checked {
+  background: var(--primary);
+}
+
+.form-switch .form-check-input:checked::before {
+  transform: translate(14px, -50%);
+}
+
+.form-switch .form-check-input:focus-visible {
+  box-shadow: 0 0 0 2px var(--ring);
+}
+
+.form-range {
+  appearance: none;
+  display: block;
+  width: 100%;
+  height: 28px;
+  flex: 1;
+  margin: 0;
+  padding: 0;
+  outline: none;
+  border: 0;
+  accent-color: var(--primary);
+  background: linear-gradient(
+      color-mix(in srgb, var(--foreground) 7%, transparent),
+      color-mix(in srgb, var(--foreground) 7%, transparent)
+    )
+    center / 100% 2px no-repeat;
+}
+
+.form-range::-webkit-slider-runnable-track {
+  height: 28px;
+  background: transparent;
+}
+
+.form-range::-webkit-slider-thumb {
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  margin-top: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: light-dark(var(--primary-foreground), var(--foreground));
+}
+
+.form-range:focus-visible::-webkit-slider-thumb {
+  border-color: var(--ring);
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.form-range::-moz-range-track {
+  height: 28px;
+  background: transparent;
+}
+
+.form-range::-moz-range-thumb {
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: light-dark(var(--primary-foreground), var(--foreground));
+}
+
+.form-range:focus-visible::-moz-range-thumb {
+  border-color: var(--ring);
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.form-range:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.btn:not(.btn-primary, .viz-tile):is(
+    [aria-pressed=&quot;true&quot;],
+    [aria-selected=&quot;true&quot;],
+    .is-selected
+  ) {
+  border-color: var(--primary);
+  color: var(--primary-foreground);
+  background: var(--primary);
+}
+
+.btn.viz-tile:is([aria-pressed=&quot;true&quot;], [aria-selected=&quot;true&quot;], .is-selected) {
+  border-color: var(--primary);
+  box-shadow: inset 0 0 0 1px var(--primary);
+}
+
+.btn:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+#widget &gt; svg {
+  width: 100%;
+}
+
+.text-warning,
+.text-destructive {
+  color: var(--destructive);
+}
+
+html&gt;body{padding:0}&lt;/style&gt;
+&lt;/head&gt;
+&lt;body&gt;
+&lt;style&gt;
+  #riftlite-marketing-dashboard {
+    color: var(--foreground);
+    font-size: var(--font-size-base);
+  }
+
+  #riftlite-marketing-dashboard * {
+    box-sizing: border-box;
+  }
+
+  #riftlite-marketing-dashboard h2,
+  #riftlite-marketing-dashboard h3,
+  #riftlite-marketing-dashboard p {
+    margin-top: 0;
+  }
+
+  #riftlite-marketing-dashboard .rl-prototype-controls {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: end;
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+  }
+
+  #riftlite-marketing-dashboard .rl-app {
+    display: grid;
+    grid-template-columns: minmax(10rem, 0.22fr) minmax(0, 1fr);
+    gap: 1rem;
+    width: 100%;
+  }
+
+  #riftlite-marketing-dashboard .rl-rail {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    padding-inline-end: 1rem;
+    border-inline-end: 1px solid var(--border);
+  }
+
+  #riftlite-marketing-dashboard .rl-brand,
+  #riftlite-marketing-dashboard .rl-card-header,
+  #riftlite-marketing-dashboard .rl-page-header,
+  #riftlite-marketing-dashboard .rl-row,
+  #riftlite-marketing-dashboard .rl-match-row,
+  #riftlite-marketing-dashboard .rl-activity-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+
+  #riftlite-marketing-dashboard .rl-brand {
+    margin-bottom: 1rem;
+  }
+
+  #riftlite-marketing-dashboard .rl-brand-copy span,
+  #riftlite-marketing-dashboard .rl-card-header span,
+  #riftlite-marketing-dashboard .rl-match-row span,
+  #riftlite-marketing-dashboard .rl-activity-row span {
+    display: block;
+  }
+
+  #riftlite-marketing-dashboard .rl-nav-list,
+  #riftlite-marketing-dashboard .rl-utility-list,
+  #riftlite-marketing-dashboard .rl-stack {
+    display: grid;
+    gap: 0.75rem;
+  }
+
+  #riftlite-marketing-dashboard .rl-nav-list {
+    margin-bottom: 1.5rem;
+  }
+
+  #riftlite-marketing-dashboard .rl-utility-list {
+    margin-top: auto;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border);
+  }
+
+  #riftlite-marketing-dashboard .rl-side-state {
+    margin-bottom: 1rem;
+  }
+
+  #riftlite-marketing-dashboard .rl-main {
+    min-width: 0;
+  }
+
+  #riftlite-marketing-dashboard .rl-page-header {
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 1rem;
+  }
+
+  #riftlite-marketing-dashboard .rl-page-header p {
+    margin-bottom: 0;
+  }
+
+  #riftlite-marketing-dashboard .rl-header-actions,
+  #riftlite-marketing-dashboard .rl-actions,
+  #riftlite-marketing-dashboard .rl-tab-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+
+  #riftlite-marketing-dashboard .rl-readiness {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 1rem;
+    margin-bottom: 1rem;
+    padding-block: 0.75rem;
+    border-block: 1px solid var(--border);
+  }
+
+  #riftlite-marketing-dashboard .rl-readiness span,
+  #riftlite-marketing-dashboard .rl-readiness strong {
+    display: block;
+  }
+
+  #riftlite-marketing-dashboard .rl-attention {
+    margin-bottom: 1rem;
+  }
+
+  #riftlite-marketing-dashboard .rl-home-grid {
+    display: grid;
+    gap: 1rem;
+    align-items: start;
+  }
+
+  #riftlite-marketing-dashboard[data-layout=&quot;balanced&quot;] .rl-home-grid {
+    grid-template-columns: minmax(0, 1.45fr) minmax(15rem, 0.75fr);
+    grid-template-areas:
+      &quot;action sponsor&quot;
+      &quot;matches deck&quot;
+      &quot;matches feature&quot;
+      &quot;insight feature&quot;
+      &quot;activity activity&quot;;
+  }
+
+  #riftlite-marketing-dashboard[data-layout=&quot;revenue&quot;] .rl-home-grid {
+    grid-template-columns: minmax(0, 1.15fr) minmax(15rem, 0.85fr);
+    grid-template-areas:
+      &quot;sponsor sponsor&quot;
+      &quot;feature action&quot;
+      &quot;feature deck&quot;
+      &quot;matches matches&quot;
+      &quot;insight activity&quot;;
+  }
+
+  #riftlite-marketing-dashboard[data-layout=&quot;session&quot;] .rl-home-grid {
+    grid-template-columns: minmax(0, 1.45fr) minmax(15rem, 0.75fr);
+    grid-template-areas:
+      &quot;action deck&quot;
+      &quot;sponsor sponsor&quot;
+      &quot;matches feature&quot;
+      &quot;insight activity&quot;;
+  }
+
+  #riftlite-marketing-dashboard [data-slot=&quot;action&quot;] { grid-area: action; }
+  #riftlite-marketing-dashboard [data-slot=&quot;sponsor&quot;] { grid-area: sponsor; }
+  #riftlite-marketing-dashboard [data-slot=&quot;matches&quot;] { grid-area: matches; }
+  #riftlite-marketing-dashboard [data-slot=&quot;deck&quot;] { grid-area: deck; }
+  #riftlite-marketing-dashboard [data-slot=&quot;feature&quot;] { grid-area: feature; }
+  #riftlite-marketing-dashboard [data-slot=&quot;insight&quot;] { grid-area: insight; }
+  #riftlite-marketing-dashboard [data-slot=&quot;activity&quot;] { grid-area: activity; }
+
+  #riftlite-marketing-dashboard .rl-card-header {
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 0.75rem;
+  }
+
+  #riftlite-marketing-dashboard .rl-card-header h3,
+  #riftlite-marketing-dashboard .rl-match-row p,
+  #riftlite-marketing-dashboard .rl-activity-row p {
+    margin-bottom: 0;
+  }
+
+  #riftlite-marketing-dashboard .rl-match-list,
+  #riftlite-marketing-dashboard .rl-activity-list {
+    display: grid;
+    gap: 0;
+  }
+
+  #riftlite-marketing-dashboard .rl-match-row,
+  #riftlite-marketing-dashboard .rl-activity-row {
+    justify-content: space-between;
+    align-items: flex-start;
+    padding-block: 0.75rem;
+    border-top: 1px solid var(--border);
+  }
+
+  #riftlite-marketing-dashboard .rl-match-row:first-child,
+  #riftlite-marketing-dashboard .rl-activity-row:first-child {
+    border-top: 0;
+  }
+
+  #riftlite-marketing-dashboard .rl-match-main,
+  #riftlite-marketing-dashboard .rl-activity-main {
+    min-width: 0;
+    flex: 1;
+  }
+
+  #riftlite-marketing-dashboard .rl-promo-copy {
+    min-height: 5rem;
+  }
+
+  #riftlite-marketing-dashboard .rl-promo-copy p {
+    margin-bottom: 0;
+  }
+
+  #riftlite-marketing-dashboard .rl-promo-controls {
+    justify-content: space-between;
+    margin-top: 1rem;
+  }
+
+  #riftlite-marketing-dashboard .rl-page-grid,
+  #riftlite-marketing-dashboard .rl-community-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1rem;
+  }
+
+  #riftlite-marketing-dashboard .rl-wide {
+    grid-column: 1 / -1;
+  }
+
+  #riftlite-marketing-dashboard .rl-game-board {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(10rem, 0.28fr);
+    gap: 1rem;
+  }
+
+  #riftlite-marketing-dashboard .rl-game-field {
+    display: grid;
+    gap: 1rem;
+    min-height: 16rem;
+    align-content: space-between;
+    padding-block: 1rem;
+    border-block: 1px solid var(--border);
+  }
+
+  #riftlite-marketing-dashboard .rl-game-zone {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 5rem;
+    color: var(--muted-foreground);
+  }
+
+  #riftlite-marketing-dashboard .rl-toast {
+    margin-top: 1rem;
+  }
+
+  #riftlite-marketing-dashboard [hidden] {
+    display: none !important;
+  }
+
+  @media (max-width: 900px) {
+    #riftlite-marketing-dashboard .rl-app {
+      grid-template-columns: 1fr;
+    }
+
+    #riftlite-marketing-dashboard .rl-rail {
+      padding-inline-end: 0;
+      padding-bottom: 1rem;
+      border-inline-end: 0;
+      border-bottom: 1px solid var(--border);
+    }
+
+    #riftlite-marketing-dashboard .rl-nav-list,
+    #riftlite-marketing-dashboard .rl-utility-list {
+      display: flex;
+      flex-wrap: wrap;
+    }
+
+    #riftlite-marketing-dashboard .rl-utility-list {
+      margin-top: 0;
+    }
+
+    #riftlite-marketing-dashboard .rl-readiness {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+  }
+
+  @media (max-width: 600px) {
+    #riftlite-marketing-dashboard .rl-prototype-controls {
+      grid-template-columns: 1fr;
+    }
+
+    #riftlite-marketing-dashboard .rl-page-header,
+    #riftlite-marketing-dashboard .rl-game-board,
+    #riftlite-marketing-dashboard .rl-page-grid,
+    #riftlite-marketing-dashboard .rl-community-grid {
+      grid-template-columns: 1fr;
+      display: grid;
+    }
+
+    #riftlite-marketing-dashboard .rl-readiness {
+      grid-template-columns: 1fr;
+    }
+
+    #riftlite-marketing-dashboard .rl-wide {
+      grid-column: auto;
+    }
+
+    #riftlite-marketing-dashboard[data-layout=&quot;balanced&quot;] .rl-home-grid {
+      grid-template-columns: 1fr;
+      grid-template-areas:
+        &quot;action&quot;
+        &quot;sponsor&quot;
+        &quot;deck&quot;
+        &quot;matches&quot;
+        &quot;feature&quot;
+        &quot;insight&quot;
+        &quot;activity&quot;;
+    }
+
+    #riftlite-marketing-dashboard[data-layout=&quot;revenue&quot;] .rl-home-grid {
+      grid-template-columns: 1fr;
+      grid-template-areas:
+        &quot;sponsor&quot;
+        &quot;action&quot;
+        &quot;feature&quot;
+        &quot;deck&quot;
+        &quot;matches&quot;
+        &quot;insight&quot;
+        &quot;activity&quot;;
+    }
+
+    #riftlite-marketing-dashboard[data-layout=&quot;session&quot;] .rl-home-grid {
+      grid-template-columns: 1fr;
+      grid-template-areas:
+        &quot;action&quot;
+        &quot;deck&quot;
+        &quot;sponsor&quot;
+        &quot;matches&quot;
+        &quot;feature&quot;
+        &quot;insight&quot;
+        &quot;activity&quot;;
+    }
+
+    #riftlite-marketing-dashboard .rl-match-row,
+    #riftlite-marketing-dashboard .rl-activity-row {
+      display: grid;
+    }
+  }
+&lt;/style&gt;
+
+&lt;div id=&quot;riftlite-marketing-dashboard&quot; data-layout=&quot;balanced&quot; data-page=&quot;home&quot;&gt;
+  &lt;div class=&quot;rl-prototype-controls&quot; aria-label=&quot;Prototype controls&quot;&gt;
+    &lt;div class=&quot;viz-controls&quot;&gt;
+      &lt;label class=&quot;form-label&quot; for=&quot;rl-layout-select&quot;&gt;
+        Dashboard layout
+        &lt;select class=&quot;form-select&quot; id=&quot;rl-layout-select&quot;&gt;
+          &lt;option value=&quot;balanced&quot;&gt;Balanced revenue rail (recommended)&lt;/option&gt;
+          &lt;option value=&quot;revenue&quot;&gt;Revenue-forward hero&lt;/option&gt;
+          &lt;option value=&quot;session&quot;&gt;Session-first sponsor strip&lt;/option&gt;
+        &lt;/select&gt;
+      &lt;/label&gt;
+      &lt;label class=&quot;form-label&quot; for=&quot;rl-state-select&quot;&gt;
+        Simulated app state
+        &lt;select class=&quot;form-select&quot; id=&quot;rl-state-select&quot;&gt;
+          &lt;option value=&quot;ready&quot;&gt;Ready to play&lt;/option&gt;
+          &lt;option value=&quot;review&quot;&gt;Review pending&lt;/option&gt;
+          &lt;option value=&quot;attention&quot;&gt;Tracking problem&lt;/option&gt;
+          &lt;option value=&quot;offline&quot;&gt;Offline&lt;/option&gt;
+        &lt;/select&gt;
+      &lt;/label&gt;
+      &lt;label class=&quot;form-label&quot; for=&quot;rl-theme-select&quot;&gt;
+        Preview theme
+        &lt;select class=&quot;form-select&quot; id=&quot;rl-theme-select&quot;&gt;
+          &lt;option value=&quot;dark&quot; selected&gt;Dark&lt;/option&gt;
+          &lt;option value=&quot;light&quot;&gt;Light&lt;/option&gt;
+          &lt;option value=&quot;system&quot;&gt;System&lt;/option&gt;
+        &lt;/select&gt;
+      &lt;/label&gt;
+    &lt;/div&gt;
+    &lt;button class=&quot;btn&quot; type=&quot;button&quot; id=&quot;rl-reset&quot;&gt;Reset sample&lt;/button&gt;
+  &lt;/div&gt;
+
+  &lt;div class=&quot;rl-app&quot;&gt;
+    &lt;aside class=&quot;rl-rail&quot; aria-label=&quot;RiftLite navigation&quot;&gt;
+      &lt;div class=&quot;rl-brand&quot;&gt;
+        &lt;span class=&quot;viz-badge&quot;&gt;RL&lt;/span&gt;
+        &lt;div class=&quot;rl-brand-copy&quot;&gt;
+          &lt;strong&gt;RiftLite&lt;/strong&gt;
+          &lt;span class=&quot;text-small text-muted&quot;&gt;Desktop companion&lt;/span&gt;
+        &lt;/div&gt;
+      &lt;/div&gt;
+
+      &lt;div class=&quot;rl-side-state&quot;&gt;
+        &lt;span class=&quot;text-small text-muted&quot;&gt;Match tracking&lt;/span&gt;
+        &lt;strong id=&quot;rl-side-state&quot;&gt;Ready&lt;/strong&gt;
+      &lt;/div&gt;
+
+      &lt;nav class=&quot;rl-nav-list&quot; aria-label=&quot;Primary&quot;&gt;
+        &lt;button class=&quot;btn btn-primary&quot; type=&quot;button&quot; data-rl-page=&quot;home&quot; aria-pressed=&quot;true&quot;&gt;&lt;i data-lucide=&quot;home&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt; Home&lt;/button&gt;
+        &lt;button class=&quot;btn btn-ghost&quot; type=&quot;button&quot; data-rl-page=&quot;play&quot; aria-pressed=&quot;false&quot;&gt;&lt;i data-lucide=&quot;play&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt; Play&lt;/button&gt;
+        &lt;button class=&quot;btn btn-ghost&quot; type=&quot;button&quot; data-rl-page=&quot;review&quot; aria-pressed=&quot;false&quot;&gt;&lt;i data-lucide=&quot;film&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt; Review&lt;/button&gt;
+        &lt;button class=&quot;btn btn-ghost&quot; type=&quot;button&quot; data-rl-page=&quot;prepare&quot; aria-pressed=&quot;false&quot;&gt;&lt;i data-lucide=&quot;book-open&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt; Prepare&lt;/button&gt;
+        &lt;button class=&quot;btn btn-ghost&quot; type=&quot;button&quot; data-rl-page=&quot;community&quot; aria-pressed=&quot;false&quot;&gt;&lt;i data-lucide=&quot;users&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt; Community&lt;/button&gt;
+      &lt;/nav&gt;
+
+      &lt;nav class=&quot;rl-utility-list&quot; aria-label=&quot;Utilities&quot;&gt;
+        &lt;button class=&quot;btn btn-ghost&quot; type=&quot;button&quot; data-prototype-action=&quot;Open Account &amp; integrations&quot;&gt;&lt;i data-lucide=&quot;user&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt; Account&lt;/button&gt;
+        &lt;button class=&quot;btn btn-ghost&quot; type=&quot;button&quot; data-prototype-action=&quot;Open Settings&quot;&gt;&lt;i data-lucide=&quot;settings&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt; Settings&lt;/button&gt;
+      &lt;/nav&gt;
+    &lt;/aside&gt;
+
+    &lt;main class=&quot;rl-main&quot;&gt;
+      &lt;header class=&quot;rl-page-header&quot;&gt;
+        &lt;div&gt;
+          &lt;h2 id=&quot;rl-page-title&quot;&gt;Home&lt;/h2&gt;
+          &lt;p class=&quot;text-muted&quot; id=&quot;rl-page-subtitle&quot;&gt;Your next match, recent work, and featured Riftbound content.&lt;/p&gt;
+        &lt;/div&gt;
+        &lt;div class=&quot;rl-header-actions&quot;&gt;
+          &lt;button class=&quot;btn btn-ghost&quot; type=&quot;button&quot; data-prototype-action=&quot;Open Help&quot;&gt;Help&lt;/button&gt;
+          &lt;button class=&quot;btn btn-primary&quot; type=&quot;button&quot; id=&quot;rl-primary-action&quot;&gt;Start playing&lt;/button&gt;
+        &lt;/div&gt;
+      &lt;/header&gt;
+
+      &lt;section class=&quot;rl-view&quot; data-rl-view=&quot;home&quot;&gt;
+        &lt;div class=&quot;rl-readiness&quot; aria-label=&quot;Readiness summary&quot;&gt;
+          &lt;div&gt;&lt;span class=&quot;text-small text-muted&quot;&gt;Provider&lt;/span&gt;&lt;strong id=&quot;rl-provider&quot;&gt;RiftAtlas&lt;/strong&gt;&lt;/div&gt;
+          &lt;div&gt;&lt;span class=&quot;text-small text-muted&quot;&gt;Match tracking&lt;/span&gt;&lt;strong id=&quot;rl-tracking&quot;&gt;Ready&lt;/strong&gt;&lt;/div&gt;
+          &lt;div&gt;&lt;span class=&quot;text-small text-muted&quot;&gt;Active deck&lt;/span&gt;&lt;strong id=&quot;rl-deck-state&quot;&gt;Akali Tempo · v7&lt;/strong&gt;&lt;/div&gt;
+          &lt;div&gt;&lt;span class=&quot;text-small text-muted&quot;&gt;Replay outcomes&lt;/span&gt;&lt;strong id=&quot;rl-replay-state&quot;&gt;Local ready · Web ready&lt;/strong&gt;&lt;/div&gt;
+        &lt;/div&gt;
+
+        &lt;section class=&quot;card rl-attention&quot; id=&quot;rl-attention&quot; hidden aria-live=&quot;polite&quot;&gt;
+          &lt;div class=&quot;rl-card-header&quot;&gt;&lt;span class=&quot;viz-badge&quot;&gt;Attention&lt;/span&gt;&lt;/div&gt;
+          &lt;h3 id=&quot;rl-attention-title&quot;&gt;Tracking needs attention&lt;/h3&gt;
+          &lt;p id=&quot;rl-attention-copy&quot;&gt;The problem and exact recovery action appear here without removing dashboard marketing.&lt;/p&gt;
+        &lt;/section&gt;
+
+        &lt;div class=&quot;rl-home-grid&quot;&gt;
+          &lt;section class=&quot;card&quot; data-slot=&quot;action&quot;&gt;
+            &lt;div class=&quot;rl-card-header&quot;&gt;&lt;span class=&quot;viz-badge&quot;&gt;Next action&lt;/span&gt;&lt;/div&gt;
+            &lt;h3 id=&quot;rl-action-title&quot;&gt;Ready for your next match&lt;/h3&gt;
+            &lt;p id=&quot;rl-action-copy&quot;&gt;Tracking, your active deck, local recording, and private Web Replay are ready.&lt;/p&gt;
+            &lt;button class=&quot;btn btn-primary&quot; type=&quot;button&quot; id=&quot;rl-home-action&quot;&gt;Start playing&lt;/button&gt;
+          &lt;/section&gt;
+
+          &lt;section class=&quot;card&quot; data-slot=&quot;sponsor&quot; aria-labelledby=&quot;rl-promo-title&quot;&gt;
+            &lt;div class=&quot;rl-card-header&quot;&gt;
+              &lt;span class=&quot;viz-badge&quot; id=&quot;rl-promo-label&quot;&gt;Sponsored · Featured partner&lt;/span&gt;
+              &lt;span class=&quot;text-small text-muted&quot; id=&quot;rl-promo-count&quot;&gt;1 / 3&lt;/span&gt;
+            &lt;/div&gt;
+            &lt;div class=&quot;rl-promo-copy&quot; aria-live=&quot;polite&quot;&gt;
+              &lt;h3 id=&quot;rl-promo-title&quot;&gt;TCGplayer international&lt;/h3&gt;
+              &lt;p id=&quot;rl-promo-body&quot;&gt;Shop Riftbound singles through a RiftLite partner placement without leaving the dashboard flow.&lt;/p&gt;
+            &lt;/div&gt;
+            &lt;div class=&quot;rl-actions rl-promo-controls&quot;&gt;
+              &lt;button class=&quot;btn btn-primary&quot; type=&quot;button&quot; id=&quot;rl-promo-cta&quot;&gt;Shop partner&lt;/button&gt;
+              &lt;div class=&quot;rl-actions&quot;&gt;
+                &lt;button class=&quot;btn btn-ghost&quot; type=&quot;button&quot; id=&quot;rl-promo-prev&quot; aria-label=&quot;Previous promotion&quot;&gt;Previous&lt;/button&gt;
+                &lt;button class=&quot;btn btn-ghost&quot; type=&quot;button&quot; id=&quot;rl-promo-next&quot; aria-label=&quot;Next promotion&quot;&gt;Next&lt;/button&gt;
+              &lt;/div&gt;
+            &lt;/div&gt;
+          &lt;/section&gt;
+
+          &lt;section class=&quot;card&quot; data-slot=&quot;matches&quot;&gt;
+            &lt;div class=&quot;rl-card-header&quot;&gt;
+              &lt;div&gt;&lt;h3&gt;Recent matches&lt;/h3&gt;&lt;span class=&quot;text-small text-muted&quot;&gt;Reviewed local history&lt;/span&gt;&lt;/div&gt;
+              &lt;button class=&quot;btn btn-ghost&quot; type=&quot;button&quot; data-rl-page=&quot;review&quot;&gt;View all&lt;/button&gt;
+            &lt;/div&gt;
+            &lt;div class=&quot;rl-match-list&quot;&gt;
+              &lt;div class=&quot;rl-match-row&quot;&gt;
+                &lt;div class=&quot;rl-match-main&quot;&gt;&lt;strong&gt;Akali vs Annie&lt;/strong&gt;&lt;span class=&quot;text-small text-muted&quot;&gt;Today · BO3 · Akali Tempo v7&lt;/span&gt;&lt;/div&gt;
+                &lt;span class=&quot;viz-badge&quot;&gt;Win 2–1 · Local + Web&lt;/span&gt;
+              &lt;/div&gt;
+              &lt;div class=&quot;rl-match-row&quot;&gt;
+                &lt;div class=&quot;rl-match-main&quot;&gt;&lt;strong&gt;Akali vs Teemo&lt;/strong&gt;&lt;span class=&quot;text-small text-muted&quot;&gt;Today · BO1 · Akali Tempo v7&lt;/span&gt;&lt;/div&gt;
+                &lt;span class=&quot;viz-badge&quot;&gt;Loss 0–1 · Media missing&lt;/span&gt;
+              &lt;/div&gt;
+              &lt;div class=&quot;rl-match-row&quot;&gt;
+                &lt;div class=&quot;rl-match-main&quot;&gt;&lt;strong&gt;Akali mirror&lt;/strong&gt;&lt;span class=&quot;text-small text-muted&quot;&gt;Yesterday · BO1 · Akali Tempo v6&lt;/span&gt;&lt;/div&gt;
+                &lt;span class=&quot;viz-badge&quot;&gt;Win 1–0 · Match only&lt;/span&gt;
+              &lt;/div&gt;
+            &lt;/div&gt;
+          &lt;/section&gt;
+
+          &lt;section class=&quot;card&quot; data-slot=&quot;deck&quot;&gt;
+            &lt;div class=&quot;rl-card-header&quot;&gt;&lt;span class=&quot;viz-badge&quot;&gt;Active deck&lt;/span&gt;&lt;span class=&quot;text-small text-muted&quot;&gt;18 reviewed matches&lt;/span&gt;&lt;/div&gt;
+            &lt;h3&gt;Akali Tempo&lt;/h3&gt;
+            &lt;p&gt;Version 7 · matchup prep and tracker are ready.&lt;/p&gt;
+            &lt;div class=&quot;rl-actions&quot;&gt;
+              &lt;button class=&quot;btn btn-primary&quot; type=&quot;button&quot; data-rl-page=&quot;prepare&quot;&gt;Open prep&lt;/button&gt;
+              &lt;button class=&quot;btn btn-ghost&quot; type=&quot;button&quot; data-prototype-action=&quot;Choose another deck&quot;&gt;Change&lt;/button&gt;
+            &lt;/div&gt;
+          &lt;/section&gt;
+
+          &lt;section class=&quot;card&quot; data-slot=&quot;feature&quot; aria-labelledby=&quot;rl-feature-title&quot;&gt;
+            &lt;div class=&quot;rl-card-header&quot;&gt;
+              &lt;span class=&quot;viz-badge&quot; id=&quot;rl-feature-label&quot;&gt;Community spotlight&lt;/span&gt;
+              &lt;span class=&quot;text-small text-muted&quot; id=&quot;rl-feature-count&quot;&gt;1 / 4&lt;/span&gt;
+            &lt;/div&gt;
+            &lt;div class=&quot;rl-promo-copy&quot; aria-live=&quot;polite&quot;&gt;
+              &lt;h3 id=&quot;rl-feature-title&quot;&gt;Featured creator: Ritual TCG&lt;/h3&gt;
+              &lt;p id=&quot;rl-feature-body&quot;&gt;Creator features remain visible on Home, with the full catalogue available in Community.&lt;/p&gt;
+            &lt;/div&gt;
+            &lt;div class=&quot;rl-actions&quot;&gt;
+              &lt;button class=&quot;btn&quot; type=&quot;button&quot; id=&quot;rl-feature-cta&quot;&gt;Open spotlight&lt;/button&gt;
+              &lt;button class=&quot;btn btn-ghost&quot; type=&quot;button&quot; id=&quot;rl-feature-next&quot;&gt;Next feature&lt;/button&gt;
+            &lt;/div&gt;
+          &lt;/section&gt;
+
+          &lt;section class=&quot;card&quot; data-slot=&quot;insight&quot;&gt;
+            &lt;div class=&quot;rl-card-header&quot;&gt;&lt;span class=&quot;viz-badge&quot;&gt;Insight&lt;/span&gt;&lt;span class=&quot;text-small text-muted&quot;&gt;5 completed games&lt;/span&gt;&lt;/div&gt;
+            &lt;h3&gt;Your Teemo matchup needs evidence&lt;/h3&gt;
+            &lt;p&gt;You are 1–4 in the current sample. Compare the community matchup, then add a sideboard note.&lt;/p&gt;
+            &lt;button class=&quot;btn&quot; type=&quot;button&quot; data-prototype-action=&quot;Open Matchup Lab&quot;&gt;Open Matchup Lab&lt;/button&gt;
+          &lt;/section&gt;
+
+          &lt;section class=&quot;card&quot; data-slot=&quot;activity&quot;&gt;
+            &lt;div class=&quot;rl-card-header&quot;&gt;&lt;h3&gt;Replay &amp; integration activity&lt;/h3&gt;&lt;span class=&quot;text-small text-muted&quot;&gt;Latest outcomes&lt;/span&gt;&lt;/div&gt;
+            &lt;div class=&quot;rl-activity-list&quot;&gt;
+              &lt;div class=&quot;rl-activity-row&quot;&gt;&lt;div class=&quot;rl-activity-main&quot;&gt;&lt;strong&gt;Web Replay ready&lt;/strong&gt;&lt;span class=&quot;text-small text-muted&quot;&gt;Akali vs Annie · Private · 2 minutes ago&lt;/span&gt;&lt;/div&gt;&lt;button class=&quot;btn btn-ghost&quot; type=&quot;button&quot; data-prototype-action=&quot;Open Web Replay&quot;&gt;Open&lt;/button&gt;&lt;/div&gt;
+              &lt;div class=&quot;rl-activity-row&quot;&gt;&lt;div class=&quot;rl-activity-main&quot;&gt;&lt;strong&gt;Local replay needs media&lt;/strong&gt;&lt;span class=&quot;text-small text-muted&quot;&gt;Match data is safe; recovery is available&lt;/span&gt;&lt;/div&gt;&lt;button class=&quot;btn btn-ghost&quot; type=&quot;button&quot; data-prototype-action=&quot;Recover local replay media&quot;&gt;Recover&lt;/button&gt;&lt;/div&gt;
+            &lt;/div&gt;
+          &lt;/section&gt;
+        &lt;/div&gt;
+      &lt;/section&gt;
+
+      &lt;section class=&quot;rl-view&quot; data-rl-view=&quot;play&quot; hidden&gt;
+        &lt;div class=&quot;rl-page-grid&quot;&gt;
+          &lt;section class=&quot;card rl-wide&quot;&gt;
+            &lt;div class=&quot;rl-card-header&quot;&gt;&lt;span class=&quot;viz-badge&quot;&gt;RiftAtlas · Match detected&lt;/span&gt;&lt;span class=&quot;text-small text-muted&quot;&gt;BO3 · Game 2 setup · Recording&lt;/span&gt;&lt;/div&gt;
+            &lt;div class=&quot;rl-game-board&quot;&gt;
+              &lt;div class=&quot;rl-game-field&quot; role=&quot;img&quot; aria-label=&quot;Schematic embedded RiftAtlas game area&quot;&gt;
+                &lt;div class=&quot;rl-game-zone&quot;&gt;Opponent board&lt;/div&gt;
+                &lt;div class=&quot;rl-game-zone&quot;&gt;Provider-owned gameplay area&lt;/div&gt;
+                &lt;div class=&quot;rl-game-zone&quot;&gt;Your board&lt;/div&gt;
+              &lt;/div&gt;
+              &lt;aside class=&quot;rl-stack&quot;&gt;
+                &lt;div&gt;&lt;span class=&quot;text-small text-muted&quot;&gt;Deck tracker&lt;/span&gt;&lt;h3&gt;32 cards remaining&lt;/h3&gt;&lt;/div&gt;
+                &lt;div&gt;&lt;span class=&quot;text-small text-muted&quot;&gt;Matchup prep&lt;/span&gt;&lt;strong&gt;Akali vs Annie ready&lt;/strong&gt;&lt;/div&gt;
+                &lt;button class=&quot;btn&quot; type=&quot;button&quot; data-prototype-action=&quot;Open capture details&quot;&gt;Capture details&lt;/button&gt;
+              &lt;/aside&gt;
+            &lt;/div&gt;
+          &lt;/section&gt;
+        &lt;/div&gt;
+      &lt;/section&gt;
+
+      &lt;section class=&quot;rl-view&quot; data-rl-view=&quot;review&quot; hidden&gt;
+        &lt;div class=&quot;rl-tab-row&quot; role=&quot;group&quot; aria-label=&quot;Review sections&quot;&gt;
+          &lt;button class=&quot;btn btn-primary&quot; type=&quot;button&quot; data-review-tab=&quot;Matches&quot; aria-pressed=&quot;true&quot;&gt;Matches&lt;/button&gt;
+          &lt;button class=&quot;btn btn-ghost&quot; type=&quot;button&quot; data-review-tab=&quot;Local replays&quot; aria-pressed=&quot;false&quot;&gt;Local replays&lt;/button&gt;
+          &lt;button class=&quot;btn btn-ghost&quot; type=&quot;button&quot; data-review-tab=&quot;Web replays&quot; aria-pressed=&quot;false&quot;&gt;Web replays&lt;/button&gt;
+          &lt;button class=&quot;btn btn-ghost&quot; type=&quot;button&quot; data-review-tab=&quot;My stats&quot; aria-pressed=&quot;false&quot;&gt;My stats&lt;/button&gt;
+        &lt;/div&gt;
+        &lt;section class=&quot;card&quot;&gt;
+          &lt;div class=&quot;rl-card-header&quot;&gt;&lt;h3 id=&quot;rl-review-title&quot;&gt;Matches&lt;/h3&gt;&lt;button class=&quot;btn&quot; type=&quot;button&quot; data-prototype-action=&quot;Open filters&quot;&gt;Filters&lt;/button&gt;&lt;/div&gt;
+          &lt;div class=&quot;table-responsive&quot;&gt;
+            &lt;table class=&quot;table&quot;&gt;
+              &lt;thead&gt;&lt;tr&gt;&lt;th&gt;Matchup&lt;/th&gt;&lt;th&gt;Result&lt;/th&gt;&lt;th&gt;Source&lt;/th&gt;&lt;th&gt;Artifacts&lt;/th&gt;&lt;/tr&gt;&lt;/thead&gt;
+              &lt;tbody&gt;
+                &lt;tr&gt;&lt;td&gt;Akali vs Annie&lt;/td&gt;&lt;td&gt;Win 2–1&lt;/td&gt;&lt;td&gt;RiftAtlas&lt;/td&gt;&lt;td&gt;Local + Web&lt;/td&gt;&lt;/tr&gt;
+                &lt;tr&gt;&lt;td&gt;Akali vs Teemo&lt;/td&gt;&lt;td&gt;Loss 0–1&lt;/td&gt;&lt;td&gt;RiftAtlas&lt;/td&gt;&lt;td&gt;Media missing&lt;/td&gt;&lt;/tr&gt;
+                &lt;tr&gt;&lt;td&gt;Akali mirror&lt;/td&gt;&lt;td&gt;Win 1–0&lt;/td&gt;&lt;td&gt;TCGplayer&lt;/td&gt;&lt;td&gt;Match only&lt;/td&gt;&lt;/tr&gt;
+              &lt;/tbody&gt;
+            &lt;/table&gt;
+          &lt;/div&gt;
+        &lt;/section&gt;
+      &lt;/section&gt;
+
+      &lt;section class=&quot;rl-view&quot; data-rl-view=&quot;prepare&quot; hidden&gt;
+        &lt;div class=&quot;rl-page-grid&quot;&gt;
+          &lt;section class=&quot;card&quot;&gt;
+            &lt;div class=&quot;rl-card-header&quot;&gt;&lt;span class=&quot;viz-badge&quot;&gt;Active&lt;/span&gt;&lt;span class=&quot;text-small text-muted&quot;&gt;Version 7&lt;/span&gt;&lt;/div&gt;
+            &lt;h3&gt;Akali Tempo&lt;/h3&gt;
+            &lt;p&gt;Tracker ready · 18 reviewed matches · updated two days ago.&lt;/p&gt;
+            &lt;button class=&quot;btn btn-primary&quot; type=&quot;button&quot; data-prototype-action=&quot;Open deck workspace&quot;&gt;Open deck&lt;/button&gt;
+          &lt;/section&gt;
+          &lt;section class=&quot;card&quot;&gt;
+            &lt;div class=&quot;rl-card-header&quot;&gt;&lt;span class=&quot;viz-badge&quot;&gt;Next matchup&lt;/span&gt;&lt;span class=&quot;text-small text-muted&quot;&gt;Annie&lt;/span&gt;&lt;/div&gt;
+            &lt;h3&gt;Prep summary&lt;/h3&gt;
+            &lt;p&gt;Mulligan, sideboard, battlefield, and notebook guidance in one workspace.&lt;/p&gt;
+            &lt;button class=&quot;btn&quot; type=&quot;button&quot; data-prototype-action=&quot;Open matchup plan&quot;&gt;Open matchup plan&lt;/button&gt;
+          &lt;/section&gt;
+          &lt;section class=&quot;card rl-wide&quot;&gt;
+            &lt;div class=&quot;rl-card-header&quot;&gt;&lt;h3&gt;Deck library&lt;/h3&gt;&lt;button class=&quot;btn&quot; type=&quot;button&quot; data-prototype-action=&quot;Import deck&quot;&gt;Import deck&lt;/button&gt;&lt;/div&gt;
+            &lt;div class=&quot;rl-activity-list&quot;&gt;
+              &lt;div class=&quot;rl-activity-row&quot;&gt;&lt;div class=&quot;rl-activity-main&quot;&gt;&lt;strong&gt;Akali Tempo&lt;/strong&gt;&lt;span class=&quot;text-small text-muted&quot;&gt;Active · Version 7&lt;/span&gt;&lt;/div&gt;&lt;span class=&quot;viz-badge&quot;&gt;18 matches&lt;/span&gt;&lt;/div&gt;
+              &lt;div class=&quot;rl-activity-row&quot;&gt;&lt;div class=&quot;rl-activity-main&quot;&gt;&lt;strong&gt;Jinx Aggro&lt;/strong&gt;&lt;span class=&quot;text-small text-muted&quot;&gt;Version 3&lt;/span&gt;&lt;/div&gt;&lt;span class=&quot;viz-badge&quot;&gt;7 matches&lt;/span&gt;&lt;/div&gt;
+            &lt;/div&gt;
+          &lt;/section&gt;
+        &lt;/div&gt;
+      &lt;/section&gt;
+
+      &lt;section class=&quot;rl-view&quot; data-rl-view=&quot;community&quot; hidden&gt;
+        &lt;div class=&quot;rl-tab-row&quot; role=&quot;group&quot; aria-label=&quot;Community sections&quot;&gt;
+          &lt;button class=&quot;btn btn-primary&quot; type=&quot;button&quot; aria-pressed=&quot;true&quot;&gt;Meta&lt;/button&gt;
+          &lt;button class=&quot;btn btn-ghost&quot; type=&quot;button&quot;&gt;Decks&lt;/button&gt;
+          &lt;button class=&quot;btn btn-ghost&quot; type=&quot;button&quot;&gt;Find match&lt;/button&gt;
+          &lt;button class=&quot;btn btn-ghost&quot; type=&quot;button&quot;&gt;Teams&lt;/button&gt;
+          &lt;button class=&quot;btn btn-ghost&quot; type=&quot;button&quot;&gt;Private Hubs&lt;/button&gt;
+          &lt;button class=&quot;btn btn-ghost&quot; type=&quot;button&quot;&gt;Spotlight&lt;/button&gt;
+        &lt;/div&gt;
+        &lt;div class=&quot;rl-community-grid&quot;&gt;
+          &lt;section class=&quot;card rl-wide&quot;&gt;
+            &lt;div class=&quot;rl-card-header&quot;&gt;&lt;span class=&quot;viz-badge&quot;&gt;Featured partner&lt;/span&gt;&lt;span class=&quot;text-small text-muted&quot;&gt;Remotely configurable&lt;/span&gt;&lt;/div&gt;
+            &lt;h3&gt;Commercial inventory continues into Spotlight&lt;/h3&gt;
+            &lt;p&gt;Home keeps visible revenue surfaces; Community provides room for longer creator, video, stream, Discord, and sponsor experiences.&lt;/p&gt;
+            &lt;button class=&quot;btn btn-primary&quot; type=&quot;button&quot; data-prototype-action=&quot;Open partner campaign&quot;&gt;Open partner&lt;/button&gt;
+          &lt;/section&gt;
+          &lt;section class=&quot;card&quot;&gt;&lt;h3&gt;Community meta&lt;/h3&gt;&lt;p&gt;Public deck and matchup trends with clear sample sizes.&lt;/p&gt;&lt;button class=&quot;btn&quot; type=&quot;button&quot; data-prototype-action=&quot;Explore deck meta&quot;&gt;Explore meta&lt;/button&gt;&lt;/section&gt;
+          &lt;section class=&quot;card&quot;&gt;&lt;h3&gt;Featured stream&lt;/h3&gt;&lt;p&gt;Click-to-play preview so media does not load until requested.&lt;/p&gt;&lt;button class=&quot;btn&quot; type=&quot;button&quot; data-prototype-action=&quot;Play featured stream&quot;&gt;Play preview&lt;/button&gt;&lt;/section&gt;
+        &lt;/div&gt;
+      &lt;/section&gt;
+
+      &lt;div class=&quot;card rl-toast text-small&quot; id=&quot;rl-toast&quot; role=&quot;status&quot; aria-live=&quot;polite&quot; hidden&gt;&lt;/div&gt;
+    &lt;/main&gt;
+  &lt;/div&gt;
+&lt;/div&gt;
+
+&lt;script&gt;
+  (() =&gt; {
+    const root = document.getElementById(&quot;riftlite-marketing-dashboard&quot;);
+    if (!root) return;
+
+    const layoutSelect = root.querySelector(&quot;#rl-layout-select&quot;);
+    const stateSelect = root.querySelector(&quot;#rl-state-select&quot;);
+    const themeSelect = root.querySelector(&quot;#rl-theme-select&quot;);
+    const pageTitle = root.querySelector(&quot;#rl-page-title&quot;);
+    const pageSubtitle = root.querySelector(&quot;#rl-page-subtitle&quot;);
+    const primaryAction = root.querySelector(&quot;#rl-primary-action&quot;);
+    const toast = root.querySelector(&quot;#rl-toast&quot;);
+    const attention = root.querySelector(&quot;#rl-attention&quot;);
+
+    const pages = {
+      home: { title: &quot;Home&quot;, subtitle: &quot;Your next match, recent work, and featured Riftbound content.&quot;, action: &quot;Start playing&quot; },
+      play: { title: &quot;Play&quot;, subtitle: &quot;Provider gameplay stays dominant while tracking remains visible.&quot;, action: &quot;Open Scorepad&quot; },
+      review: { title: &quot;Review&quot;, subtitle: &quot;Matches, Local replays, Web replays, and personal stats.&quot;, action: &quot;Review latest match&quot; },
+      prepare: { title: &quot;Prepare&quot;, subtitle: &quot;Decks, matchup plans, notebook, performance, and Matchup Lab.&quot;, action: &quot;Import deck&quot; },
+      community: { title: &quot;Community&quot;, subtitle: &quot;Meta, decks, LFG, teams, Private Hubs, creators, and partners.&quot;, action: &quot;Find a match&quot; }
+    };
+
+    const states = {
+      ready: {
+        side: &quot;Ready&quot;,
+        provider: &quot;RiftAtlas&quot;,
+        tracking: &quot;Ready&quot;,
+        deck: &quot;Akali Tempo · v7&quot;,
+        replay: &quot;Local ready · Web ready&quot;,
+        title: &quot;Ready for your next match&quot;,
+        copy: &quot;Tracking, your active deck, local recording, and private Web Replay are ready.&quot;,
+        action: &quot;Start playing&quot;,
+        attention: null
+      },
+      review: {
+        side: &quot;Review ready&quot;,
+        provider: &quot;RiftAtlas&quot;,
+        tracking: &quot;Review pending&quot;,
+        deck: &quot;Akali Tempo · v7&quot;,
+        replay: &quot;Local finalizing · Web queued&quot;,
+        title: &quot;Akali vs Annie is ready to review&quot;,
+        copy: &quot;Confirm the captured result before the match is added to stats and replay delivery continues.&quot;,
+        action: &quot;Review match&quot;,
+        attention: { title: &quot;Captured match waiting&quot;, copy: &quot;The review action moves above routine dashboard content; sponsor and creator inventory remain visible.&quot; }
+      },
+      attention: {
+        side: &quot;Needs attention&quot;,
+        provider: &quot;RiftAtlas&quot;,
+        tracking: &quot;Capture paused&quot;,
+        deck: &quot;Akali Tempo · v7&quot;,
+        replay: &quot;Local available · Web paused&quot;,
+        title: &quot;Repair RiftAtlas tracking&quot;,
+        copy: &quot;The provider is visible, but capture events stopped arriving. Existing match and replay data remain safe.&quot;,
+        action: &quot;Repair tracking&quot;,
+        attention: { title: &quot;Tracking needs attention&quot;, copy: &quot;Show the exact provider recovery action here, without replacing or disguising promotional content.&quot; }
+      },
+      offline: {
+        side: &quot;Offline&quot;,
+        provider: &quot;RiftAtlas offline&quot;,
+        tracking: &quot;Local tools available&quot;,
+        deck: &quot;Akali Tempo · v7&quot;,
+        replay: &quot;Local available · Web waiting&quot;,
+        title: &quot;Continue with local tools&quot;,
+        copy: &quot;Match history, decks, Scorepad, and Local replays remain available while online services reconnect.&quot;,
+        action: &quot;Open diagnostics&quot;,
+        attention: { title: &quot;Online services unavailable&quot;, copy: &quot;Remote promotions keep their last safe content or a stable local fallback; they never masquerade as an empty dashboard.&quot; }
+      }
+    };
+
+    const promotions = [
+      { label: &quot;Sponsored · Featured partner&quot;, title: &quot;TCGplayer international&quot;, body: &quot;Shop Riftbound singles through a RiftLite partner placement without leaving the dashboard flow.&quot;, action: &quot;Shop partner&quot; },
+      { label: &quot;Community spotlight&quot;, title: &quot;Ritual TCG creator feature&quot;, body: &quot;A creator campaign can promote coaching, coverage, or a new video while remaining clearly separate from app status.&quot;, action: &quot;Watch feature&quot; },
+      { label: &quot;Support RiftLite&quot;, title: &quot;Keep the tools growing&quot;, body: &quot;A Metafy support placement can help cover servers, development time, and community features.&quot;, action: &quot;Support on Metafy&quot; }
+    ];
+
+    const features = [
+      { label: &quot;Community spotlight&quot;, title: &quot;Featured creator: Ritual TCG&quot;, body: &quot;Creator features remain visible on Home, with the full catalogue available in Community.&quot;, action: &quot;Open spotlight&quot; },
+      { label: &quot;Featured video&quot;, title: &quot;Latest RiftLite match review&quot;, body: &quot;Video stays click-to-play so embedded media is not created until the user requests it.&quot;, action: &quot;Play preview&quot; },
+      { label: &quot;Featured stream&quot;, title: &quot;Community coverage&quot;, body: &quot;Live and recorded streams share one manually controlled feature slot with a clear source label.&quot;, action: &quot;Watch stream&quot; },
+      { label: &quot;RiftLite community&quot;, title: &quot;Discord, support, and updates&quot;, body: &quot;A growth surface for help, tester feedback, community chat, and future release announcements.&quot;, action: &quot;Open Discord&quot; }
+    ];
+
+    let promoIndex = 0;
+    let featureIndex = 0;
+    let toastTimer = 0;
+
+    function showToast(message) {
+      window.clearTimeout(toastTimer);
+      toast.textContent = `Prototype: ${message}`;
+      toast.hidden = false;
+      toastTimer = window.setTimeout(() =&gt; { toast.hidden = true; }, 2600);
+    }
+
+    function setButtonState(button, selected) {
+      button.setAttribute(&quot;aria-pressed&quot;, String(selected));
+      button.classList.toggle(&quot;btn-primary&quot;, selected);
+      button.classList.toggle(&quot;btn-ghost&quot;, !selected);
+    }
+
+    function setPage(page) {
+      const config = pages[page] || pages.home;
+      root.dataset.page = page;
+      root.querySelectorAll(&quot;[data-rl-view]&quot;).forEach((view) =&gt; {
+        view.hidden = view.getAttribute(&quot;data-rl-view&quot;) !== page;
+      });
+      root.querySelectorAll(&quot;.rl-nav-list [data-rl-page]&quot;).forEach((button) =&gt; {
+        setButtonState(button, button.getAttribute(&quot;data-rl-page&quot;) === page);
+      });
+      pageTitle.textContent = config.title;
+      pageSubtitle.textContent = config.subtitle;
+      primaryAction.textContent = config.action;
+      layoutSelect.disabled = page !== &quot;home&quot;;
+      stateSelect.disabled = page !== &quot;home&quot;;
+    }
+
+    function setState(key) {
+      const state = states[key] || states.ready;
+      root.querySelector(&quot;#rl-side-state&quot;).textContent = state.side;
+      root.querySelector(&quot;#rl-provider&quot;).textContent = state.provider;
+      root.querySelector(&quot;#rl-tracking&quot;).textContent = state.tracking;
+      root.querySelector(&quot;#rl-deck-state&quot;).textContent = state.deck;
+      root.querySelector(&quot;#rl-replay-state&quot;).textContent = state.replay;
+      root.querySelector(&quot;#rl-action-title&quot;).textContent = state.title;
+      root.querySelector(&quot;#rl-action-copy&quot;).textContent = state.copy;
+      root.querySelector(&quot;#rl-home-action&quot;).textContent = state.action;
+      if (state.attention) {
+        root.querySelector(&quot;#rl-attention-title&quot;).textContent = state.attention.title;
+        root.querySelector(&quot;#rl-attention-copy&quot;).textContent = state.attention.copy;
+        attention.hidden = false;
+      } else {
+        attention.hidden = true;
+      }
+    }
+
+    function setTheme(theme) {
+      const documentRoot = root.ownerDocument.documentElement;
+      if (theme === &quot;system&quot;) {
+        delete documentRoot.dataset.theme;
+      } else {
+        documentRoot.dataset.theme = theme;
+      }
+    }
+
+    function renderPromotion() {
+      const item = promotions[promoIndex];
+      root.querySelector(&quot;#rl-promo-label&quot;).textContent = item.label;
+      root.querySelector(&quot;#rl-promo-title&quot;).textContent = item.title;
+      root.querySelector(&quot;#rl-promo-body&quot;).textContent = item.body;
+      root.querySelector(&quot;#rl-promo-cta&quot;).textContent = item.action;
+      root.querySelector(&quot;#rl-promo-count&quot;).textContent = `${promoIndex + 1} / ${promotions.length}`;
+    }
+
+    function renderFeature() {
+      const item = features[featureIndex];
+      root.querySelector(&quot;#rl-feature-label&quot;).textContent = item.label;
+      root.querySelector(&quot;#rl-feature-title&quot;).textContent = item.title;
+      root.querySelector(&quot;#rl-feature-body&quot;).textContent = item.body;
+      root.querySelector(&quot;#rl-feature-cta&quot;).textContent = item.action;
+      root.querySelector(&quot;#rl-feature-count&quot;).textContent = `${featureIndex + 1} / ${features.length}`;
+    }
+
+    root.querySelectorAll(&quot;[data-rl-page]&quot;).forEach((button) =&gt; {
+      button.addEventListener(&quot;click&quot;, () =&gt; setPage(button.getAttribute(&quot;data-rl-page&quot;) || &quot;home&quot;));
+    });
+
+    layoutSelect.addEventListener(&quot;change&quot;, () =&gt; {
+      root.dataset.layout = layoutSelect.value;
+    });
+
+    stateSelect.addEventListener(&quot;change&quot;, () =&gt; setState(stateSelect.value));
+    themeSelect.addEventListener(&quot;change&quot;, () =&gt; setTheme(themeSelect.value));
+
+    root.querySelector(&quot;#rl-promo-prev&quot;).addEventListener(&quot;click&quot;, () =&gt; {
+      promoIndex = (promoIndex - 1 + promotions.length) % promotions.length;
+      renderPromotion();
+    });
+
+    root.querySelector(&quot;#rl-promo-next&quot;).addEventListener(&quot;click&quot;, () =&gt; {
+      promoIndex = (promoIndex + 1) % promotions.length;
+      renderPromotion();
+    });
+
+    root.querySelector(&quot;#rl-promo-cta&quot;).addEventListener(&quot;click&quot;, () =&gt; showToast(`${promotions[promoIndex].action} would open through the safe external-link flow.`));
+
+    root.querySelector(&quot;#rl-feature-next&quot;).addEventListener(&quot;click&quot;, () =&gt; {
+      featureIndex = (featureIndex + 1) % features.length;
+      renderFeature();
+    });
+
+    root.querySelector(&quot;#rl-feature-cta&quot;).addEventListener(&quot;click&quot;, () =&gt; showToast(`${features[featureIndex].action} would open or begin click-to-play media.`));
+
+    root.querySelector(&quot;#rl-home-action&quot;).addEventListener(&quot;click&quot;, () =&gt; showToast(states[stateSelect.value].action));
+    primaryAction.addEventListener(&quot;click&quot;, () =&gt; showToast(primaryAction.textContent || &quot;Primary action&quot;));
+
+    root.querySelectorAll(&quot;[data-prototype-action]&quot;).forEach((button) =&gt; {
+      button.addEventListener(&quot;click&quot;, () =&gt; showToast(button.getAttribute(&quot;data-prototype-action&quot;) || &quot;Action&quot;));
+    });
+
+    root.querySelectorAll(&quot;[data-review-tab]&quot;).forEach((button) =&gt; {
+      button.addEventListener(&quot;click&quot;, () =&gt; {
+        root.querySelectorAll(&quot;[data-review-tab]&quot;).forEach((peer) =&gt; setButtonState(peer, peer === button));
+        root.querySelector(&quot;#rl-review-title&quot;).textContent = button.getAttribute(&quot;data-review-tab&quot;) || &quot;Matches&quot;;
+      });
+    });
+
+    root.querySelector(&quot;#rl-reset&quot;).addEventListener(&quot;click&quot;, () =&gt; {
+      layoutSelect.value = &quot;balanced&quot;;
+      stateSelect.value = &quot;ready&quot;;
+      themeSelect.value = &quot;dark&quot;;
+      root.dataset.layout = &quot;balanced&quot;;
+      promoIndex = 0;
+      featureIndex = 0;
+      setState(&quot;ready&quot;);
+      setTheme(&quot;dark&quot;);
+      renderPromotion();
+      renderFeature();
+      setPage(&quot;home&quot;);
+      showToast(&quot;Sample reset&quot;);
+    });
+
+    setPage(&quot;home&quot;);
+    setState(&quot;ready&quot;);
+    setTheme(&quot;dark&quot;);
+    renderPromotion();
+    renderFeature();
+  })();
+&lt;/script&gt;
+
+&lt;script src=&quot;https://unpkg.com/@floating-ui/core@1.7.3/dist/floating-ui.core.umd.min.js&quot;&gt;&lt;/script&gt;
+&lt;script src=&quot;https://unpkg.com/@floating-ui/dom@1.7.4/dist/floating-ui.dom.umd.min.js&quot;&gt;&lt;/script&gt;
+&lt;script&gt;
+(() =&gt; {
+  if (window.FloatingUIDOM == null) {
+    return;
+  }
+  const { autoUpdate, computePosition, flip, offset, shift, size } =
+    window.FloatingUIDOM;
+  const tooltipPlacements = new Set([&quot;top&quot;, &quot;right&quot;, &quot;bottom&quot;, &quot;left&quot;]);
+  const tooltipId = `codex-visualization-tooltip-${
+    window.crypto?.randomUUID?.() ?? Date.now().toString(36)
+  }`;
+  const tooltipGap = 5;
+  const hoverDelay = 700;
+  const skipDelay = 300;
+  let activeTrigger = null;
+  let pendingTrigger = null;
+  let tooltip = null;
+  let openTimeout = null;
+  let autoUpdateCleanup = null;
+  let positionRequest = 0;
+  let skipDelayUntil = 0;
+
+  const getTrigger = (target) =&gt;
+    target?.nodeType === Node.ELEMENT_NODE
+      ? target.closest(&quot;[data-tooltip]&quot;)
+      : null;
+  const containsTarget = (trigger, target) =&gt;
+    target?.nodeType != null &amp;&amp; trigger.contains(target);
+  const getContent = (trigger) =&gt;
+    trigger.getAttribute(&quot;data-tooltip&quot;)?.trim() ?? &quot;&quot;;
+  const getPlacement = (trigger) =&gt; {
+    const placement = trigger.getAttribute(&quot;data-tooltip-placement&quot;);
+    return tooltipPlacements.has(placement) ? placement : &quot;top&quot;;
+  };
+  const getTooltip = () =&gt; {
+    if (tooltip == null) {
+      tooltip = document.createElement(&quot;div&quot;);
+      tooltip.id = tooltipId;
+      tooltip.className = &quot;tooltip&quot;;
+      tooltip.setAttribute(&quot;role&quot;, &quot;tooltip&quot;);
+    }
+    return tooltip;
+  };
+  const setDescribedBy = (trigger, described) =&gt; {
+    const ids = new Set(
+      (trigger.getAttribute(&quot;aria-describedby&quot;) ?? &quot;&quot;)
+        .split(/\s+/)
+        .filter(Boolean),
+    );
+    if (described) {
+      ids.add(tooltipId);
+    } else {
+      ids.delete(tooltipId);
+    }
+    if (ids.size === 0) {
+      trigger.removeAttribute(&quot;aria-describedby&quot;);
+    } else {
+      trigger.setAttribute(&quot;aria-describedby&quot;, [...ids].join(&quot; &quot;));
+    }
+  };
+  const clearOpenTimeout = () =&gt; {
+    if (openTimeout != null) {
+      window.clearTimeout(openTimeout);
+      openTimeout = null;
+    }
+    pendingTrigger = null;
+  };
+  const closeTooltip = (activateSkipDelay = true) =&gt; {
+    clearOpenTimeout();
+    positionRequest += 1;
+    autoUpdateCleanup?.();
+    autoUpdateCleanup = null;
+    if (activeTrigger == null) {
+      return;
+    }
+    setDescribedBy(activeTrigger, false);
+    activeTrigger = null;
+    tooltip?.remove();
+    if (activateSkipDelay) {
+      skipDelayUntil = Date.now() + skipDelay;
+    }
+  };
+  const updatePosition = (trigger, floating) =&gt; {
+    const request = ++positionRequest;
+    void computePosition(trigger, floating, {
+      middleware: [
+        offset(tooltipGap),
+        flip({ padding: tooltipGap }),
+        shift({ padding: tooltipGap }),
+        size({
+          padding: tooltipGap,
+          apply({ availableHeight, availableWidth, elements }) {
+            elements.floating.style.setProperty(
+              &quot;--tooltip-available-width&quot;,
+              `${Math.max(0, availableWidth)}px`,
+            );
+            elements.floating.style.setProperty(
+              &quot;--tooltip-available-height&quot;,
+              `${Math.max(0, availableHeight)}px`,
+            );
+          },
+        }),
+      ],
+      placement: getPlacement(trigger),
+      strategy: &quot;fixed&quot;,
+    })
+      .then(({ x, y }) =&gt; {
+        if (activeTrigger !== trigger || request !== positionRequest) {
+          return;
+        }
+        const scale = window.devicePixelRatio || 1;
+        floating.style.transform = `translate(${Math.round(x * scale) / scale}px, ${Math.round(y * scale) / scale}px)`;
+        floating.style.visibility = &quot;visible&quot;;
+      })
+      .catch(() =&gt; {
+        if (activeTrigger === trigger &amp;&amp; request === positionRequest) {
+          closeTooltip(false);
+        }
+      });
+  };
+  const openTooltip = (trigger) =&gt; {
+    const content = getContent(trigger);
+    if (!trigger.isConnected || content.length === 0) {
+      return;
+    }
+    clearOpenTimeout();
+    if (activeTrigger === trigger) {
+      return;
+    }
+    closeTooltip();
+    const floating = getTooltip();
+    floating.textContent = content;
+    floating.style.visibility = &quot;hidden&quot;;
+    floating.style.transform = &quot;translate(0, 0)&quot;;
+    document.body.appendChild(floating);
+    activeTrigger = trigger;
+    setDescribedBy(trigger, true);
+    autoUpdateCleanup = autoUpdate(trigger, floating, () =&gt; {
+      updatePosition(trigger, floating);
+    });
+  };
+  const requestOpen = (trigger, immediate = false) =&gt; {
+    if (
+      getContent(trigger).length === 0 ||
+      activeTrigger === trigger ||
+      pendingTrigger === trigger
+    ) {
+      return;
+    }
+    clearOpenTimeout();
+    pendingTrigger = trigger;
+    const delay =
+      immediate || activeTrigger != null || Date.now() &lt; skipDelayUntil
+        ? 0
+        : hoverDelay;
+    if (delay === 0) {
+      openTooltip(trigger);
+      return;
+    }
+    openTimeout = window.setTimeout(() =&gt; {
+      openTimeout = null;
+      pendingTrigger = null;
+      openTooltip(trigger);
+    }, delay);
+  };
+  const handlePointerOpen = (event) =&gt; {
+    if (event.pointerType === &quot;touch&quot;) {
+      return;
+    }
+    const trigger = getTrigger(event.target);
+    if (trigger == null || containsTarget(trigger, event.relatedTarget)) {
+      return;
+    }
+    requestOpen(trigger);
+  };
+  const handleLeave = (event) =&gt; {
+    const trigger = getTrigger(event.target);
+    if (trigger == null || containsTarget(trigger, event.relatedTarget)) {
+      return;
+    }
+    if (activeTrigger === trigger || pendingTrigger === trigger) {
+      closeTooltip();
+    }
+  };
+  const handleFocusIn = (event) =&gt; {
+    const trigger = getTrigger(event.target);
+    if (trigger?.matches(&quot;:focus-visible&quot;)) {
+      requestOpen(trigger, true);
+    }
+  };
+  const handleKeyDown = (event) =&gt; {
+    if (event.key === &quot;Escape&quot;) {
+      closeTooltip();
+    }
+  };
+  const handleContextMenu = (event) =&gt; {
+    const trigger = getTrigger(event.target);
+    if (activeTrigger === trigger || pendingTrigger === trigger) {
+      closeTooltip();
+    }
+  };
+  const destroy = () =&gt; {
+    closeTooltip(false);
+    document.removeEventListener(&quot;pointerover&quot;, handlePointerOpen);
+    document.removeEventListener(&quot;pointerout&quot;, handleLeave);
+    document.removeEventListener(&quot;focusin&quot;, handleFocusIn);
+    document.removeEventListener(&quot;focusout&quot;, handleLeave);
+    document.removeEventListener(&quot;keydown&quot;, handleKeyDown);
+    document.removeEventListener(&quot;contextmenu&quot;, handleContextMenu);
+    tooltip = null;
+  };
+
+  document.addEventListener(&quot;pointerover&quot;, handlePointerOpen);
+  document.addEventListener(&quot;pointerout&quot;, handleLeave);
+  document.addEventListener(&quot;focusin&quot;, handleFocusIn);
+  document.addEventListener(&quot;focusout&quot;, handleLeave);
+  document.addEventListener(&quot;keydown&quot;, handleKeyDown);
+  document.addEventListener(&quot;contextmenu&quot;, handleContextMenu);
+  window.addEventListener(&quot;pagehide&quot;, destroy, { once: true });
+})();
+&lt;/script&gt;
+&lt;script id=&quot;codex-visualization-lucide&quot; async src=&quot;https://unpkg.com/lucide@1.17.0/dist/umd/lucide.js&quot;&gt;&lt;/script&gt;
+&lt;script&gt;
+(() =&gt; {
+  const initialize = () =&gt; {
+    globalThis.lucide?.createIcons({ attrs: { width: 16, height: 16 } });
+  };
+  if (globalThis.lucide != null) {
+    initialize();
+    return;
+  }
+  document
+    .getElementById(&quot;codex-visualization-lucide&quot;)
+    ?.addEventListener(&quot;load&quot;, initialize, { once: true });
+})();
+&lt;/script&gt;
+
+&lt;/body&gt;
+&lt;/html&gt;
+"></iframe>
+</body>
+</html>

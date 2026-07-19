@@ -59,6 +59,7 @@ const LEGEND_ALIAS_MAP: Record<string, string> = {
   "inquisitive": "Ahri",
   "nine-tailed fox": "Ahri",
   "hidden weapon": "Akali",
+  "rogue assassin": "Akali",
   "fist of shadow": "Akali",
   "unseen blade": "Akali",
   "matriarch of war": "Ambessa",
@@ -108,6 +109,7 @@ const LEGEND_ALIAS_MAP: Record<string, string> = {
   "purifier": "Lucian",
   "lady of luminosity": "Lux",
   "newly awakened": "Mel",
+  "soul's reflection": "Mel",
   "wuju bladesman": MASTER_YI_WUJU_BLADESMAN,
   "wuju master": MASTER_YI_WUJU_MASTER,
   "wuji master": MASTER_YI_WUJU_MASTER,
@@ -128,6 +130,7 @@ const LEGEND_ALIAS_MAP: Record<string, string> = {
   "chem-baroness": "Renata Glasc",
   "mastermind": "Renata Glasc",
   "butcher of the desert": "Renekton",
+  "butcher of the sands": "Renekton",
   "pouncing": "Rengar",
   "pridestalker": "Rengar",
   "mechanized menace": "Rumble",
@@ -214,6 +217,7 @@ export function normalizeLegendFields<T extends { myChampion: string; opponentCh
 
 function normalizeAliasKey(value: string): string {
   return value
+    .replace(/[\u2018\u2019\u0060\u00b4]/g, "'")
     .replace(/\s+-\s+starter$/i, "")
     .replace(/[’']/g, "'")
     .replace(/\s+/g, " ")

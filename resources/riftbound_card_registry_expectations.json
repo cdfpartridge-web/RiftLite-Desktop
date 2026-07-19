@@ -1,0 +1,139 @@
+{
+  "schemaVersion": 1,
+  "requiredPrintIds": [
+    "OGN-007A",
+    "SFD-020A",
+    "SFD-T03",
+    "UNL-089A",
+    "UNL-226*",
+    "UNL-T01",
+    "UNL-T02",
+    "UNL-T03",
+    "UNL-T04",
+    "UNL-T05",
+    "UNL-T06",
+    "UNL-T07",
+    "UNL-T08",
+    "VEN-R01",
+    "VEN-R02",
+    "VEN-R03",
+    "VEN-R04",
+    "VEN-R05",
+    "VEN-R06",
+    "VEN-SP1",
+    "VEN-T04"
+  ],
+  "requiredSpecialBattlefields": [
+    "Baron Pit",
+    "Brush",
+    "Catacombs of the Poros",
+    "Frozen Vault",
+    "Shadow Isles Ferry",
+    "The Mage Seeker Vault",
+    "Training Facility"
+  ],
+  "sets": {
+    "OGN": {
+      "minUniquePrints": 352,
+      "minTypeCounts": {
+        "Battlefield": 24,
+        "Legend": 36
+      },
+      "minVariantCounts": {
+        "alternateArt": 30,
+        "overnumbered": 12,
+        "signature": 12
+      },
+      "requiredPrintIds": [
+        "OGN-275",
+        "OGN-298"
+      ]
+    },
+    "OGS": {
+      "minUniquePrints": 24,
+      "minTypeCounts": {
+        "Legend": 4
+      },
+      "requiredPrintIds": [
+        "OGS-001",
+        "OGS-024"
+      ]
+    },
+    "SFD": {
+      "minUniquePrints": 288,
+      "minTypeCounts": {
+        "Battlefield": 15,
+        "Legend": 24
+      },
+      "minVariantCounts": {
+        "alternateArt": 24,
+        "overnumbered": 30,
+        "signature": 12
+      },
+      "requiredPrintIds": [
+        "SFD-207",
+        "SFD-221"
+      ]
+    },
+    "UNL": {
+      "minUniquePrints": 288,
+      "minTypeCounts": {
+        "Battlefield": 17,
+        "Legend": 36
+      },
+      "minVariantCounts": {
+        "alternateArt": 30,
+        "overnumbered": 18,
+        "signature": 12
+      },
+      "requiredPrintIds": [
+        "UNL-205",
+        "UNL-217",
+        "UNL-218",
+        "UNL-219"
+      ]
+    },
+    "VEN": {
+      "minUniquePrints": 226,
+      "minTypeCounts": {
+        "Battlefield": 10,
+        "Legend": 18,
+        "Rune": 6
+      },
+      "minVariantCounts": {
+        "alternateArt": 15,
+        "overnumbered": 9
+      },
+      "requiredPrintIds": [
+        "VEN-139",
+        "VEN-141",
+        "VEN-143",
+        "VEN-145",
+        "VEN-147",
+        "VEN-149",
+        "VEN-151",
+        "VEN-153",
+        "VEN-155",
+        "VEN-157",
+        "VEN-158",
+        "VEN-159",
+        "VEN-160",
+        "VEN-161",
+        "VEN-162",
+        "VEN-163",
+        "VEN-164",
+        "VEN-165",
+        "VEN-166",
+        "VEN-189",
+        "VEN-190",
+        "VEN-191",
+        "VEN-192",
+        "VEN-193",
+        "VEN-194",
+        "VEN-195",
+        "VEN-196",
+        "VEN-197"
+      ]
+    }
+  }
+}

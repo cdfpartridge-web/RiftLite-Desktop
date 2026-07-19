@@ -58,5 +58,17 @@
   {"name": "Vaults of Helia", "aliases": ["VaultsofHelia", "Vault of Helia"], "is_active": true, "image_name": "Vaults of Helia"},
   {"name": "Shadow Isles Ferry", "aliases": [], "is_active": true, "image_name": "Shadow Isles Ferry"},
   {"name": "The Mage Seeker Vault", "aliases": [], "is_active": true, "image_name": "The Mage Seeker Vault"},
-  {"name": "Training Facility", "aliases": [], "is_active": true, "image_name": "Training Facility"}
+  {"name": "Training Facility", "aliases": [], "is_active": true, "image_name": "Training Facility"},
+  {"name": "Trapping Grounds", "aliases": [], "is_active": true, "image_name": "Trapping Grounds"},
+  {"name": "Valley of Idols", "aliases": [], "is_active": true, "image_name": "Valley of Idols"},
+  {"name": "Dragon Roost", "aliases": [], "is_active": true, "image_name": "Dragon Roost"},
+  {"name": "Heisho, Shell of the World", "aliases": [], "is_active": true, "image_name": "Heisho, Shell of the World"},
+  {"name": "Kinkou Temple", "aliases": [], "is_active": true, "image_name": "Kinkou Temple"},
+  {"name": "Mystic Vortex", "aliases": [], "is_active": true, "image_name": "Mystic Vortex"},
+  {"name": "Piltovan Forge", "aliases": ["Piltover Forge"], "is_active": true, "image_name": "Piltovan Forge"},
+  {"name": "Protective Sands", "aliases": [], "is_active": true, "image_name": "Protective Sands"},
+  {"name": "Risen Altar", "aliases": [], "is_active": true, "image_name": "Risen Altar"},
+  {"name": "Sandswept Tomb", "aliases": [], "is_active": true, "image_name": "Sandswept Tomb"},
+  {"name": "Shadow Temple", "aliases": [], "is_active": true, "image_name": "Shadow Temple"},
+  {"name": "Threshold of the Gray", "aliases": ["Threshold of the Grey"], "is_active": true, "image_name": "Threshold of the Gray"}
 ]

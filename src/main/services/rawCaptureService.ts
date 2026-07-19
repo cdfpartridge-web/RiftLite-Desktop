@@ -16,6 +16,7 @@ import type {
   RiftLiteReplayUploadResult,
   UserSettings
 } from "../../shared/types.js";
+import { canonicalLegendName } from "../../shared/legendNames.js";
 import type { RiftLiteStore } from "./store.js";
 
 type RawCapturePayload = {
@@ -73,6 +74,250 @@ export type RawCaptureMatchSummary = {
     opponentPoints?: number;
   }>;
 };
+
+export type RawCaptureDiscordActiveDeck = {
+  title?: string;
+  legend: string;
+  sourceUrl: string;
+};
+
+function rawCaptureMetadataValuesEqual(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) {
+    return true;
+  }
+  if (Array.isArray(left) && Array.isArray(right)) {
+    return left.length === right.length && left.every((value, index) => Object.is(value, right[index]));
+  }
+  return false;
+}
+
+const RAW_CAPTURE_UPLOAD_LANE_FIELDS = [
+  "uploadStatus",
+  "uploadUrl",
+  "uploadId",
+  "uploadedAt",
+  "processingStatus",
+  "checksumSha256",
+  "compressedBytes",
+  "error",
+  "lastUploadAttemptAt",
+  "processingUpdatedAt"
+] as const satisfies ReadonlyArray<keyof RawCaptureReplayMetadata>;
+
+const RAW_CAPTURE_DISCORD_LANE_FIELDS = [
+  "webReplayAutoUploadEligible",
+  "webReplayAutoUploadAccountUid",
+  "webReplayDiscordShareEligible",
+  "webReplayDiscordShareAccountUid",
+  "webReplayDiscordShareHubIds",
+  "discordShareStatus",
+  "discordSharedHubIds",
+  "discordShareError",
+  "discordLastAttemptAt",
+  "discordSharedAt"
+] as const satisfies ReadonlyArray<keyof RawCaptureReplayMetadata>;
+
+const RAW_CAPTURE_RESULT_LANE_FIELDS = [
+  "resultStatus",
+  "resultFinalizedAt"
+] as const satisfies ReadonlyArray<keyof RawCaptureReplayMetadata>;
+
+type RawCaptureMetadataRecord = Record<string, unknown>;
+type RawCaptureLaneRevision = readonly [attempt: number, completion: number, rank: number];
+
+function rawCaptureMetadataFieldChanged(
+  base: RawCaptureMetadataRecord,
+  next: RawCaptureMetadataRecord,
+  key: keyof RawCaptureReplayMetadata
+): boolean {
+  const baseHasKey = Object.prototype.hasOwnProperty.call(base, key);
+  const nextHasKey = Object.prototype.hasOwnProperty.call(next, key);
+  return baseHasKey !== nextHasKey || !rawCaptureMetadataValuesEqual(base[key], next[key]);
+}
+
+function rawCaptureLaneChanged(
+  base: RawCaptureMetadataRecord,
+  next: RawCaptureMetadataRecord,
+  fields: ReadonlyArray<keyof RawCaptureReplayMetadata>
+): boolean {
+  return fields.some((key) => rawCaptureMetadataFieldChanged(base, next, key));
+}
+
+function rawCaptureMetadataTimestamp(value: string | undefined): number {
+  const parsed = Date.parse(value ?? "");
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function compareRawCaptureLaneRevision(left: RawCaptureLaneRevision, right: RawCaptureLaneRevision): number {
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index] !== right[index]) {
+      return left[index] - right[index];
+    }
+  }
+  return 0;
+}
+
+function rawCaptureUploadRevision(metadata: RawCaptureReplayMetadata): RawCaptureLaneRevision {
+  const processingRank: Record<NonNullable<RawCaptureReplayMetadata["processingStatus"]>, number> = {
+    pending: 1,
+    uploading: 2,
+    processing: 3,
+    failed: 4,
+    ready: 5
+  };
+  const uploadRank: Record<RawCaptureReplayMetadata["uploadStatus"], number> = {
+    disabled: 1,
+    "not-uploaded": 2,
+    failed: 3,
+    "too-large": 4,
+    uploaded: 5
+  };
+  const attempt = rawCaptureMetadataTimestamp(metadata.lastUploadAttemptAt) ||
+    rawCaptureMetadataTimestamp(metadata.uploadedAt) ||
+    rawCaptureMetadataTimestamp(metadata.processingUpdatedAt) ||
+    rawCaptureMetadataTimestamp(metadata.captureCompletedAt);
+  const completion = Math.max(
+    rawCaptureMetadataTimestamp(metadata.uploadedAt),
+    rawCaptureMetadataTimestamp(metadata.processingUpdatedAt)
+  );
+  return [
+    attempt,
+    completion,
+    uploadRank[metadata.uploadStatus] * 10 + (metadata.processingStatus ? processingRank[metadata.processingStatus] : 0)
+  ];
+}
+
+function rawCaptureDiscordRevision(metadata: RawCaptureReplayMetadata): RawCaptureLaneRevision {
+  const statusRank: Record<NonNullable<RawCaptureReplayMetadata["discordShareStatus"]>, number> = {
+    pending: 1,
+    failed: 2,
+    partial: 3,
+    shared: 4
+  };
+  const attempt = rawCaptureMetadataTimestamp(metadata.discordLastAttemptAt) ||
+    rawCaptureMetadataTimestamp(metadata.discordSharedAt) ||
+    rawCaptureMetadataTimestamp(metadata.captureCompletedAt);
+  return [
+    attempt,
+    rawCaptureMetadataTimestamp(metadata.discordSharedAt),
+    metadata.discordShareStatus ? statusRank[metadata.discordShareStatus] : 0
+  ];
+}
+
+function rawCaptureUploadUpdateWins(
+  current: RawCaptureReplayMetadata,
+  incoming: RawCaptureReplayMetadata
+): boolean {
+  const currentUploaded = current.uploadStatus === "uploaded";
+  const incomingUploaded = incoming.uploadStatus === "uploaded";
+  if (currentUploaded !== incomingUploaded) {
+    // Once a remote replay exists, a failed retry cannot make it cease to exist.
+    return incomingUploaded;
+  }
+  return compareRawCaptureLaneRevision(
+    rawCaptureUploadRevision(incoming),
+    rawCaptureUploadRevision(current)
+  ) > 0;
+}
+
+function rawCaptureDiscordUpdateWins(
+  current: RawCaptureReplayMetadata,
+  incoming: RawCaptureReplayMetadata
+): boolean {
+  return compareRawCaptureLaneRevision(
+    rawCaptureDiscordRevision(incoming),
+    rawCaptureDiscordRevision(current)
+  ) > 0;
+}
+
+/**
+ * Applies only the raw-capture fields changed by an operation. Upload, result
+ * and Discord work can finish out of order, so replacing a complete metadata
+ * snapshot would let an older operation roll unrelated newer state backwards.
+ */
+export function mergeRawCaptureReplayMetadata(
+  current: RawCaptureReplayMetadata | undefined,
+  operationBase: RawCaptureReplayMetadata | undefined,
+  incoming: RawCaptureReplayMetadata
+): RawCaptureReplayMetadata {
+  if (
+    current?.captureSessionId &&
+    incoming.captureSessionId &&
+    current.captureSessionId !== incoming.captureSessionId
+  ) {
+    return current;
+  }
+  const merged = { ...(current ?? incoming) } as Record<string, unknown>;
+  const currentRecord = (current ?? {}) as unknown as RawCaptureMetadataRecord;
+  const baseRecord = (operationBase ?? {}) as unknown as RawCaptureMetadataRecord;
+  const incomingRecord = incoming as unknown as RawCaptureMetadataRecord;
+
+  // A first attachment that lost a race may fill in missing core metadata.
+  // Delivery/result lanes still use their revisions below so a concurrent
+  // successful operation is not discarded merely because its caller started
+  // before the first database attachment completed.
+  const racingFirstAttachment = !operationBase && Boolean(current);
+
+  const incomingUploadChanged = rawCaptureLaneChanged(baseRecord, incomingRecord, RAW_CAPTURE_UPLOAD_LANE_FIELDS);
+  const currentUploadChanged = rawCaptureLaneChanged(baseRecord, currentRecord, RAW_CAPTURE_UPLOAD_LANE_FIELDS);
+  const keepCurrentUpload = Boolean(
+    current && incomingUploadChanged && currentUploadChanged && !rawCaptureUploadUpdateWins(current, incoming)
+  );
+  const incomingDiscordChanged = rawCaptureLaneChanged(baseRecord, incomingRecord, RAW_CAPTURE_DISCORD_LANE_FIELDS);
+  const currentDiscordChanged = rawCaptureLaneChanged(baseRecord, currentRecord, RAW_CAPTURE_DISCORD_LANE_FIELDS);
+  const keepCurrentDiscord = Boolean(
+    current && incomingDiscordChanged && currentDiscordChanged && !rawCaptureDiscordUpdateWins(current, incoming)
+  );
+  const incomingResultChanged = rawCaptureLaneChanged(baseRecord, incomingRecord, RAW_CAPTURE_RESULT_LANE_FIELDS);
+  const currentResultChanged = rawCaptureLaneChanged(baseRecord, currentRecord, RAW_CAPTURE_RESULT_LANE_FIELDS);
+  const keepCurrentResult = Boolean(
+    current &&
+    incomingResultChanged &&
+    currentResultChanged &&
+    (
+      (current.resultStatus === "resolved" && incoming.resultStatus !== "resolved") ||
+      (
+        current.resultStatus === incoming.resultStatus &&
+        rawCaptureMetadataTimestamp(current.resultFinalizedAt) >= rawCaptureMetadataTimestamp(incoming.resultFinalizedAt)
+      )
+    )
+  );
+
+  const changedKeys = new Set([...Object.keys(baseRecord), ...Object.keys(incomingRecord)]);
+  for (const key of changedKeys) {
+    const currentHasKey = Object.prototype.hasOwnProperty.call(currentRecord, key);
+    const uploadLaneKey = RAW_CAPTURE_UPLOAD_LANE_FIELDS.includes(key as typeof RAW_CAPTURE_UPLOAD_LANE_FIELDS[number]);
+    const discordLaneKey = RAW_CAPTURE_DISCORD_LANE_FIELDS.includes(key as typeof RAW_CAPTURE_DISCORD_LANE_FIELDS[number]);
+    const resultLaneKey = RAW_CAPTURE_RESULT_LANE_FIELDS.includes(key as typeof RAW_CAPTURE_RESULT_LANE_FIELDS[number]);
+    if (keepCurrentUpload && uploadLaneKey && (!racingFirstAttachment || currentHasKey)) {
+      continue;
+    }
+    if (keepCurrentDiscord && discordLaneKey && (!racingFirstAttachment || currentHasKey)) {
+      continue;
+    }
+    if (keepCurrentResult && resultLaneKey && (!racingFirstAttachment || currentHasKey)) {
+      continue;
+    }
+    if (racingFirstAttachment && !uploadLaneKey && !discordLaneKey && !resultLaneKey && currentHasKey) {
+      continue;
+    }
+    const baseHasKey = Object.prototype.hasOwnProperty.call(baseRecord, key);
+    const incomingHasKey = Object.prototype.hasOwnProperty.call(incomingRecord, key);
+    if (
+      baseHasKey === incomingHasKey &&
+      rawCaptureMetadataValuesEqual(baseRecord[key], incomingRecord[key])
+    ) {
+      continue;
+    }
+    const value = incomingRecord[key];
+    if (!incomingHasKey || value === undefined) {
+      delete merged[key];
+    } else {
+      merged[key] = Array.isArray(value) ? [...value] : value;
+    }
+  }
+  return merged as unknown as RawCaptureReplayMetadata;
+}
 
 type RawCaptureSourceRange = {
   fromSeq: number;
@@ -165,6 +410,10 @@ type RawCaptureRuntimeSettings = UserSettings["rawCapture"] & {
   uploadEnabled?: boolean;
 };
 
+export type LinkedAccountIdTokenProvider = (expectedAccountUid: string) => Promise<string | null>;
+export type WebReplayPublishedHandler = (localMatchId: string, webReplayId: string) => Promise<void> | void;
+export type ReplayUpdatedHandler = (replay: ReplayRecord) => Promise<void> | void;
+
 export type RawCaptureFinishIdentity = {
   platform?: GamePlatform;
   captureSessionId?: string;
@@ -208,6 +457,9 @@ type PersistedRawCaptureManifest = {
 
 const RAW_CAPTURE_MAX_BYTES = 10 * 1024 * 1024;
 const RAW_CAPTURE_MAX_MESSAGES = 12000;
+const RAW_CAPTURE_MAX_ACTIVE_SESSIONS = 16;
+const RAW_CAPTURE_MAX_ACTIVE_BYTES = 32 * 1024 * 1024;
+const RAW_CAPTURE_SESSION_IDLE_MS = 6 * 60 * 60 * 1000;
 const RAW_CAPTURE_FILTER_POLICY_VERSION = 2;
 const RAW_CAPTURE_DROP_TYPES: Record<string, string> = {
   presence_update: "drop_type:presence_update"
@@ -216,6 +468,7 @@ const LEGACY_RIFTREPLAY_UPLOAD_ENDPOINT = "https://riftreplay.com/api/v1/replays
 const RIFTLITE_REPLAY_ORIGIN = "https://www.riftlite.com";
 const RIFTLITE_REPLAY_V2_INIT_ENDPOINT = `${RIFTLITE_REPLAY_ORIGIN}/api/v2/replays/init`;
 const RIFTLITE_REPLAY_V2_MAX_GZIP_BYTES = 4 * 1024 * 1024;
+const PILTOVER_DECK_PATH_RE = /^\/decks\/view\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/?$/i;
 const RAW_CAPTURE_INDEX_SUFFIX = ".riftlite-index.json";
 const FIREBASE_API_KEY = "AIzaSyBNqEY-i_CggjhDKVltoPQFrSOEfHF7fBA";
 const RAW_CAPTURE_TEMPORAL_MAX_PRELUDE_MS = 15 * 60 * 1000;
@@ -240,7 +493,14 @@ export class RawCaptureService {
   private lastAssociationError = "";
   private pendingUploadPromise: Promise<number> | null = null;
 
-  constructor(private readonly store: RiftLiteStore) {}
+  constructor(
+    private readonly store: RiftLiteStore,
+    private readonly linkedAccountIdTokenProvider: LinkedAccountIdTokenProvider = (expectedAccountUid) => (
+      firebaseIdTokenFromSettings(store, expectedAccountUid)
+    ),
+    private readonly webReplayPublishedHandler: WebReplayPublishedHandler = () => undefined,
+    private readonly replayUpdatedHandler: ReplayUpdatedHandler = () => undefined
+  ) {}
 
   async appendFrame(payload: RawCaptureAppendFramePayload): Promise<void> {
     if (payload.platform !== "atlas") {
@@ -257,6 +517,7 @@ export class RawCaptureService {
       return;
     }
     const ts = Number.isFinite(payload.frame.ts) ? payload.frame.ts : Date.now();
+    this.pruneStaleSessions(ts);
     const requestUrl = payload.requestUrl || "";
     const socketId = payload.frame.socketId || "ws-1";
     const webReplayAutoUploadAccountUid = riftLiteWebReplayAutoUploadAccountUid(settings);
@@ -276,10 +537,19 @@ export class RawCaptureService {
     if (session.capped) {
       return;
     }
-    const nextByteSize = session.byteSize + Buffer.byteLength(raw, "utf8");
-    if (nextByteSize > RAW_CAPTURE_MAX_BYTES || session.frames.length >= RAW_CAPTURE_MAX_MESSAGES) {
+    const frameBytes = Buffer.byteLength(raw, "utf8");
+    const nextByteSize = session.byteSize + frameBytes;
+    const nextAggregateByteSize = Array.from(this.sessions.values())
+      .reduce((total, activeSession) => total + activeSession.byteSize, 0) + frameBytes;
+    if (
+      nextByteSize > RAW_CAPTURE_MAX_BYTES ||
+      nextAggregateByteSize > RAW_CAPTURE_MAX_ACTIVE_BYTES ||
+      session.frames.length >= RAW_CAPTURE_MAX_MESSAGES
+    ) {
       session.capped = true;
-      session.lastError = "Raw capture too large. RiftLite stopped buffering this replay.";
+      session.lastError = nextAggregateByteSize > RAW_CAPTURE_MAX_ACTIVE_BYTES
+        ? "Raw capture memory limit reached. RiftLite stopped buffering additional replay data."
+        : "Raw capture too large. RiftLite stopped buffering this replay.";
       return;
     }
     if (!session.sockets[socketId]) {
@@ -463,6 +733,7 @@ export class RawCaptureService {
     webReplayDiscordShareAccountUid: string,
     webReplayDiscordShareHubIds: string[]
   ): ActiveRawCaptureSession {
+    const atCapacity = this.sessions.size >= RAW_CAPTURE_MAX_ACTIVE_SESSIONS;
     const session: ActiveRawCaptureSession = {
       captureSessionId: randomUUID(),
       platform: "atlas",
@@ -473,7 +744,7 @@ export class RawCaptureService {
       diagnostics: [],
       nextSeq: 0,
       byteSize: 0,
-      capped: false,
+      capped: atCapacity,
       firstSeenAt: ts,
       lastSeenAt: ts,
       roomCode: "",
@@ -497,10 +768,26 @@ export class RawCaptureService {
       droppedCount: 0,
       droppedBytes: 0,
       lastFrameType: "",
-      lastError: ""
+      lastError: atCapacity
+        ? "Raw capture session limit reached. RiftLite ignored additional replay sessions."
+        : ""
     };
-    this.sessions.set(session.captureSessionId, session);
+    if (!atCapacity) {
+      this.sessions.set(session.captureSessionId, session);
+    }
     return session;
+  }
+
+  private pruneStaleSessions(now: number): void {
+    for (const session of this.sessions.values()) {
+      if (
+        !this.finalizingSessionIds.has(session.captureSessionId) &&
+        now >= session.lastSeenAt &&
+        now - session.lastSeenAt > RAW_CAPTURE_SESSION_IDLE_MS
+      ) {
+        this.removeSession(session.captureSessionId);
+      }
+    }
   }
 
   private mergeProvisionalSession(
@@ -680,7 +967,7 @@ export class RawCaptureService {
       await writeRawCaptureManifest(manifest);
     }
     let saved = replay
-      ? await this.store.saveReplay({ ...replay, rawCapture: manifest.metadata })
+      ? await this.saveReplayRawCapture(replay, manifest.metadata)
       : null;
 
     const legacyAutoUploadEnabled = rawCaptureUploadEnabled(settings);
@@ -706,20 +993,20 @@ export class RawCaptureService {
           this.lastUploadUrl = manifest.metadata.uploadUrl || this.lastUploadUrl;
           uploadedAnything = true;
           if (saved) {
-            saved = await this.store.saveReplay({ ...saved, rawCapture: manifest.metadata });
+            saved = await this.saveReplayRawCapture(saved, manifest.metadata);
           }
         } catch (error) {
           const persistedFailure = await readRawCaptureManifest(manifest.indexPath);
           if (persistedFailure?.metadata.uploadStatus === "too-large") {
             manifest = persistedFailure;
             if (saved) {
-              saved = await this.store.saveReplay({ ...saved, rawCapture: manifest.metadata });
+              saved = await this.saveReplayRawCapture(saved, manifest.metadata);
             }
           } else if (!uploadedAnything) {
             const message = error instanceof Error ? error.message : "RiftLite replay upload failed.";
             manifest = persistedFailure ?? await this.saveManifestUploadFailure(manifest, message);
             if (saved) {
-              saved = await this.store.saveReplay({ ...saved, rawCapture: manifest.metadata });
+              saved = await this.saveReplayRawCapture(saved, manifest.metadata);
             }
           }
         }
@@ -744,6 +1031,7 @@ export class RawCaptureService {
     if (!apiKey) {
       return this.saveUploadFailure(replay, "RiftReplay API key is missing.", "not-uploaded");
     }
+    const uploadAttemptAt = new Date().toISOString();
     try {
       const raw = await readFile(replay.rawCapture.localPath, "utf8");
       const gzipped = gzipSync(Buffer.from(raw, "utf8"));
@@ -761,13 +1049,18 @@ export class RawCaptureService {
         uploadUrl,
         uploadId,
         uploadedAt: new Date().toISOString(),
-        lastUploadAttemptAt: new Date().toISOString(),
+        lastUploadAttemptAt: uploadAttemptAt,
         error: undefined
       };
       this.lastUploadUrl = uploadUrl || this.lastUploadUrl;
-      return this.store.saveReplay({ ...replay, rawCapture: metadata });
+      return this.saveReplayRawCapture(replay, metadata);
     } catch (error) {
-      return this.saveUploadFailure(replay, error instanceof Error ? error.message : "RiftReplay upload failed.", "failed");
+      return this.saveUploadFailure(
+        replay,
+        error instanceof Error ? error.message : "RiftReplay upload failed.",
+        "failed",
+        uploadAttemptAt
+      );
     }
   }
 
@@ -944,11 +1237,11 @@ export class RawCaptureService {
     } catch (error) {
       const failed = await readRawCaptureManifest(manifest.indexPath);
       if (failed) {
-        await this.store.saveReplay({ ...replay, rawCapture: failed.metadata });
+        await this.saveReplayRawCapture(replay, failed.metadata);
       }
       throw error;
     }
-    await this.store.saveReplay({ ...replay, rawCapture: uploaded.metadata });
+    await this.saveReplayRawCapture(replay, uploaded.metadata);
     return {
       replayId: uploaded.metadata.uploadId || "",
       url: uploaded.metadata.uploadUrl || "",
@@ -983,8 +1276,8 @@ export class RawCaptureService {
       throw new Error("The web replay is not ready to share yet.");
     }
 
-    const idToken = await firebaseIdTokenFromSettings(settings);
-    await this.assertRiftLiteReplayUploadAccountCurrent(settings, manifest.metadata, false);
+    const replayAuth = await this.canonicalReplayAuth(settings, manifest.metadata, false);
+    await this.assertRiftLiteReplayUploadAccountCurrent(replayAuth.settings, manifest.metadata, false);
     manifest = {
       ...manifest,
       updatedAt: new Date().toISOString(),
@@ -1002,8 +1295,8 @@ export class RawCaptureService {
       }
     };
     await writeRawCaptureManifest(manifest);
-    const shared = await this.sharePersistedReplayToDiscord(manifest, remoteReplayId, idToken);
-    await this.store.saveReplay({ ...replay, rawCapture: shared.metadata });
+    const shared = await this.sharePersistedReplayToDiscord(manifest, remoteReplayId, replayAuth.idToken);
+    await this.saveReplayRawCapture(replay, shared.metadata);
     return {
       replayId: remoteReplayId,
       url: shared.metadata.uploadUrl || `${RIFTLITE_REPLAY_ORIGIN}/replays/${encodeURIComponent(remoteReplayId)}`,
@@ -1368,8 +1661,10 @@ export class RawCaptureService {
       if (options.automatic === true) {
         await this.assertRiftLiteReplayUploadAccountCurrent(settings, uploading.metadata, true);
       }
-      const idToken = await firebaseIdTokenFromSettings(settings);
-      await this.assertRiftLiteReplayUploadAccountCurrent(settings, uploading.metadata, options.automatic === true);
+      const replayAuth = await this.canonicalReplayAuth(settings, uploading.metadata, options.automatic === true);
+      const idToken = replayAuth.idToken;
+      const authenticatedSettings = replayAuth.settings;
+      await this.assertRiftLiteReplayUploadAccountCurrent(authenticatedSettings, uploading.metadata, options.automatic === true);
       const initResponse = await fetchRiftLiteReplayV2WithRetry(RIFTLITE_REPLAY_V2_INIT_ENDPOINT, {
         method: "POST",
         headers: {
@@ -1403,14 +1698,14 @@ export class RawCaptureService {
       }
       let serverVisibility = rawCaptureVisibilityFromValue(initReplay?.visibility);
       if (serverVisibility !== visibility) {
-        await this.assertRiftLiteReplayUploadAccountCurrent(settings, uploading.metadata, options.automatic === true);
+        await this.assertRiftLiteReplayUploadAccountCurrent(authenticatedSettings, uploading.metadata, options.automatic === true);
         serverVisibility = await updateRiftLiteReplayV2Visibility(replayId, visibility, idToken);
       }
       const uploadRequired = initBody?.uploadRequired === true;
       if (uploadRequired) {
         const upload = readObject(initBody?.upload);
         const uploadEndpoint = riftLiteReplayV2Endpoint(readStringDeep(upload, ["endpoint", "url"]));
-        await this.assertRiftLiteReplayUploadAccountCurrent(settings, uploading.metadata, options.automatic === true);
+        await this.assertRiftLiteReplayUploadAccountCurrent(authenticatedSettings, uploading.metadata, options.automatic === true);
         const uploadResponse = await fetchRiftLiteReplayV2WithRetry(uploadEndpoint, {
           method: "PUT",
           headers: {
@@ -1428,7 +1723,7 @@ export class RawCaptureService {
       }
 
       const completeEndpoint = riftLiteReplayV2Endpoint(readStringDeep(initBody, ["completeEndpoint"]));
-      await this.assertRiftLiteReplayUploadAccountCurrent(settings, uploading.metadata, options.automatic === true);
+      await this.assertRiftLiteReplayUploadAccountCurrent(authenticatedSettings, uploading.metadata, options.automatic === true);
       const completeResponse = await fetchRiftLiteReplayV2WithRetry(completeEndpoint, {
         method: "POST",
         headers: { "Authorization": `Bearer ${idToken}` }
@@ -1441,7 +1736,7 @@ export class RawCaptureService {
       const completeReplay = readObject(completeBody?.replay) ?? initReplay;
       const completedVisibility = rawCaptureVisibilityFromValue(completeReplay?.visibility);
       if (completedVisibility !== visibility) {
-        await this.assertRiftLiteReplayUploadAccountCurrent(settings, uploading.metadata, options.automatic === true);
+        await this.assertRiftLiteReplayUploadAccountCurrent(authenticatedSettings, uploading.metadata, options.automatic === true);
         serverVisibility = await updateRiftLiteReplayV2Visibility(replayId, visibility, idToken);
       } else {
         serverVisibility = completedVisibility;
@@ -1467,7 +1762,12 @@ export class RawCaptureService {
         }
       };
       await writeRawCaptureManifest(completed);
-      if (options.automatic === true && rawCaptureDiscordShareEligible(completed.metadata, settings)) {
+      const localMatchId = manifest.localMatchId || manifest.identity.localMatchId || "";
+      if (localMatchId) {
+        await Promise.resolve(this.webReplayPublishedHandler(localMatchId, replayId)).catch(() => undefined);
+      }
+      if (options.automatic === true && rawCaptureDiscordShareEligible(completed.metadata, authenticatedSettings)) {
+        await this.assertRiftLiteReplayUploadAccountCurrent(authenticatedSettings, completed.metadata, true);
         completed = await this.sharePersistedReplayToDiscord(completed, replayId, idToken);
       }
       return completed;
@@ -1494,6 +1794,35 @@ export class RawCaptureService {
     if (automatic && !rawCaptureWebReplayAutoUploadEligible(metadata, current)) {
       throw new Error("RiftLite Web Replay automatic upload was disabled or its consenting account changed.");
     }
+  }
+
+  private async canonicalReplayAuth(
+    settings: UserSettings,
+    metadata: RawCaptureReplayMetadata,
+    automatic: boolean
+  ): Promise<{ idToken: string; settings: UserSettings }> {
+    const expectedAccountUid = normalizeRiftLiteAccountUid(settings.accountUid);
+    if (!expectedAccountUid || !settings.firebaseRefreshToken) {
+      throw new Error("Link your RiftLite account before uploading to RiftLite Web Replay.");
+    }
+    const idToken = await this.linkedAccountIdTokenProvider(expectedAccountUid);
+    if (!idToken) {
+      throw new Error("Could not refresh the canonical RiftLite account token.");
+    }
+    // The canonical provider may repair an old alias credential and rotate the
+    // stored refresh token. Adopt that repaired credential only when the pinned
+    // account itself is unchanged; an account switch still fails closed.
+    const authenticatedSettings = await this.store.getSettings();
+    if (
+      normalizeRiftLiteAccountUid(authenticatedSettings.accountUid) !== expectedAccountUid ||
+      !authenticatedSettings.firebaseRefreshToken
+    ) {
+      throw new Error("The linked RiftLite account changed during replay authentication.");
+    }
+    if (automatic && !rawCaptureWebReplayAutoUploadEligible(metadata, authenticatedSettings)) {
+      throw new Error("RiftLite Web Replay automatic upload was disabled or its consenting account changed.");
+    }
+    return { idToken, settings: authenticatedSettings };
   }
 
   private async waitForDiscordMatchSummary(
@@ -1579,13 +1908,14 @@ export class RawCaptureService {
     await writeRawCaptureManifest(manifest);
     try {
       const endpoint = `${RIFTLITE_REPLAY_ORIGIN}/api/v2/replays/${encodeURIComponent(replayId)}/share-discord`;
+      const activeDeck = await this.discordActiveDeckForManifest(manifest);
       const response = await fetchRiftLiteReplayV2WithRetry(endpoint, {
         method: "POST",
         headers: {
           "Authorization": `Bearer ${idToken}`,
           "Content-Type": "application/json"
         },
-        body: JSON.stringify({ hubIds })
+        body: JSON.stringify({ hubIds, ...(activeDeck ? { activeDeck } : {}) })
       });
       const text = await response.text();
       const body = parseJsonObject(text);
@@ -1815,25 +2145,52 @@ export class RawCaptureService {
   private async saveUploadFailure(
     replay: ReplayRecord,
     error: string,
-    uploadStatus: RawCaptureReplayMetadata["uploadStatus"]
+    uploadStatus: RawCaptureReplayMetadata["uploadStatus"],
+    attemptedAt = new Date().toISOString()
   ): Promise<ReplayRecord> {
-    const failedAt = new Date().toISOString();
-    return this.store.saveReplay({
-      ...replay,
-      rawCapture: {
-        ...replay.rawCapture!,
-        uploadStatus,
-        processingStatus: "failed",
-        lastUploadAttemptAt: failedAt,
-        processingUpdatedAt: failedAt,
-        error: truncateForUi(error, 300)
-      }
+    return this.saveReplayRawCapture(replay, {
+      ...replay.rawCapture!,
+      uploadStatus,
+      processingStatus: "failed",
+      lastUploadAttemptAt: attemptedAt,
+      processingUpdatedAt: new Date().toISOString(),
+      error: truncateForUi(error, 300)
     });
+  }
+
+  private async saveReplayRawCapture(
+    replay: ReplayRecord,
+    rawCapture: RawCaptureReplayMetadata
+  ): Promise<ReplayRecord> {
+    const updated = await this.store.updateReplay(replay.id, (current) => ({
+      ...current,
+      rawCapture: mergeRawCaptureReplayMetadata(current.rawCapture, replay.rawCapture, rawCapture)
+    }));
+    const saved = updated ?? await this.store.saveReplay({ ...replay, rawCapture });
+    try {
+      await this.replayUpdatedHandler(saved);
+    } catch {
+      // Renderer delivery is best effort; persisted replay state remains authoritative.
+    }
+    return saved;
   }
 
   private async loadReplay(replayId: string): Promise<ReplayRecord | null> {
     const replays = [...await this.store.getReplays(), ...await this.store.getDeletedReplays()];
     return replays.find((item) => item.id === replayId) ?? null;
+  }
+
+  private async discordActiveDeckForManifest(
+    manifest: PersistedRawCaptureManifest
+  ): Promise<RawCaptureDiscordActiveDeck | undefined> {
+    const replay = manifest.localReplayId ? await this.loadReplay(manifest.localReplayId) : null;
+    let match = replay?.matchSnapshot;
+    const localMatchId = manifest.localMatchId || manifest.identity.localMatchId;
+    if (!match && localMatchId) {
+      const matches = [...await this.store.getMatches(), ...await this.store.getDeletedMatches()];
+      match = matches.find((candidate) => candidate.id === localMatchId);
+    }
+    return rawCaptureDiscordActiveDeckFromMatch(match);
   }
 }
 
@@ -1875,6 +2232,51 @@ export function rawCaptureMatchSummaryFromDraft(
     score: rawCaptureMatchScore(match.score, games, format),
     games
   };
+}
+
+export function rawCaptureDiscordActiveDeckFromMatch(
+  match: ReplayRecord["matchSnapshot"] | undefined
+): RawCaptureDiscordActiveDeck | undefined {
+  if (!match?.deckSnapshotJson?.trim()) return undefined;
+  const snapshot = parseJsonObject(match.deckSnapshotJson);
+  if (!snapshot) return undefined;
+  const legendEntry = readObject(snapshot.legend_entry) ?? readObject(snapshot.legendEntry);
+  const rawDeckLegend = [snapshot.legend, snapshot.legend_key, snapshot.legendKey, legendEntry?.name]
+    .find((value): value is string => typeof value === "string" && Boolean(value.trim()));
+  const capturedLegend = canonicalLegendName(match.myChampion);
+  const deckLegend = canonicalLegendName(rawDeckLegend);
+  const sourceUrl = rawCaptureVerifiedPiltoverDeckUrl(match.deckSourceUrl);
+  if (!capturedLegend || !deckLegend || capturedLegend !== deckLegend || !sourceUrl) return undefined;
+  const snapshotTitle = typeof snapshot.title === "string" ? snapshot.title : "";
+  const title = (match.deckName || snapshotTitle).replace(/\s+/g, " ").trim().slice(0, 120);
+  return {
+    ...(title ? { title } : {}),
+    legend: deckLegend,
+    sourceUrl
+  };
+}
+
+function rawCaptureVerifiedPiltoverDeckUrl(value: unknown): string {
+  const raw = typeof value === "string" ? value.trim() : "";
+  if (!raw || raw.length > 500) return "";
+  try {
+    const url = new URL(raw);
+    if (
+      url.protocol !== "https:" ||
+      url.port ||
+      url.username ||
+      url.password ||
+      !["piltoverarchive.com", "www.piltoverarchive.com"].includes(url.hostname.toLowerCase())
+    ) {
+      return "";
+    }
+    const match = PILTOVER_DECK_PATH_RE.exec(url.pathname);
+    return match?.[1]
+      ? `https://piltoverarchive.com/decks/view/${match[1].toLowerCase()}`
+      : "";
+  } catch {
+    return "";
+  }
 }
 
 function rawCaptureMatchResult(value: unknown): RawCaptureMatchResult {
@@ -2069,9 +2471,13 @@ function hasLinkedRiftLiteReplayAccount(settings: UserSettings): boolean {
   return Boolean(normalizeRiftLiteAccountUid(settings.accountUid) && settings.firebaseRefreshToken);
 }
 
-async function firebaseIdTokenFromSettings(settings: UserSettings): Promise<string> {
+async function firebaseIdTokenFromSettings(store: RiftLiteStore, expectedAccountUid: string): Promise<string> {
+  const settings = await store.getSettings();
   if (!hasLinkedRiftLiteReplayAccount(settings)) {
     throw new Error("Link your RiftLite account before uploading to RiftLite Web Replay.");
+  }
+  if (!riftLiteAccountUidEquals(settings.accountUid, expectedAccountUid)) {
+    throw new Error("The linked RiftLite account changed during replay authentication.");
   }
   const response = await fetch(`https://securetoken.googleapis.com/v1/token?key=${FIREBASE_API_KEY}`, {
     method: "POST",

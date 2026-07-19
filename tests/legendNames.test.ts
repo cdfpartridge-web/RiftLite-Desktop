@@ -29,12 +29,16 @@ describe("normalizeLegendName", () => {
 
   it("normalizes Vendetta preview legend aliases", () => {
     expect(normalizeLegendName("Hidden Weapon")).toBe("Akali");
+    expect(normalizeLegendName("Rogue Assassin")).toBe("Akali");
     expect(normalizeLegendName("Matriarch of War")).toBe("Ambessa");
     expect(normalizeLegendName("Defender of Tomorrow")).toBe("Jayce");
     expect(normalizeLegendName("Heart of the Tempest")).toBe("Kennen");
     expect(normalizeLegendName("Newly Awakened")).toBe("Mel");
+    expect(normalizeLegendName("Soul's Reflection")).toBe("Mel");
+    expect(normalizeLegendName("Soul’s Reflection")).toBe("Mel");
     expect(normalizeLegendName("Aspect of the Jackal")).toBe("Nasus");
     expect(normalizeLegendName("Butcher of the Desert")).toBe("Renekton");
+    expect(normalizeLegendName("Butcher of the Sands")).toBe("Renekton");
     expect(normalizeLegendName("Mechanized Menace")).toBe("Rumble");
     expect(normalizeLegendName("Eye of Twilight")).toBe("Shen");
     expect(normalizeLegendName("Master of Shadows")).toBe("Zed");
@@ -45,6 +49,11 @@ describe("normalizeLegendName", () => {
     expect(legendFromImageUrl("https://assets.riftatlas-workers.com/riftbound/cards/small-v2/VEN-139.webp")).toBe("Akali");
     expect(legendFromImageUrl("https://assets.riftatlas-workers.com/riftbound/cards/small-v2/VEN-190.webp")).toBe("Renekton");
     expect(legendFromImageUrl("https://assets.riftatlas-workers.com/riftbound/cards/small-v2/VEN-149.webp")).toBe("Jayce");
+    expect(legendFromImageUrl("https://assets.riftatlas-workers.com/riftbound/cards/small-v2/VEN-189-star.webp")).toBe("Akali");
+    expect(legendFromImageUrl("https://assets.riftatlas-workers.com/riftbound/cards/small-v2/VEN-192.webp")).toBe("Nasus");
+    expect(legendFromImageUrl("https://assets.riftatlas-workers.com/riftbound/cards/small-v2/VEN-194.webp")).toBe("Jayce");
+    expect(legendFromImageUrl("https://assets.riftatlas-workers.com/riftbound/cards/small-v2/VEN-195.webp")).toBe("Mel");
+    expect(legendFromImageUrl("https://assets.riftatlas-workers.com/riftbound/cards/small-v2/VEN-196.webp")).toBe("Ambessa");
     expect(legendFromImageUrl("https://assets.riftatlas-workers.com/riftbound/cards/small-v2/SFD-181.webp")).toBe("Rumble");
     expect(legendFromImageUrl("https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/0eab83392b310417d2630d50a3bfee3dd02b31c4-744x1039.png?accountingTag=RB&auto=format&fit=fill&q=80&w=444")).toBe("Kennen");
   });

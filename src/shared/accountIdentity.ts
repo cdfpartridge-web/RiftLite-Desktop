@@ -16,6 +16,35 @@ export function resolveCompletedAccountLinkUid(
   return reported || authenticated;
 }
 
+export function linkedAccountAuthUidMatches(
+  settings: Pick<UserSettings, "accountUid" | "firebaseUid">,
+  authenticatedUid: unknown
+): boolean {
+  const authenticated = String(authenticatedUid ?? "").trim();
+  if (!settings.accountUid) return true;
+  return Boolean(authenticated && [settings.accountUid, settings.firebaseUid]
+    .map((value) => String(value ?? "").trim())
+    .filter(Boolean)
+    .includes(authenticated));
+}
+
+export function verifiedAccountConnectionUid(
+  storedAccountUid: unknown,
+  reportedCanonicalUid: unknown,
+  authenticatedUid: unknown,
+  identityUids: unknown
+): string {
+  const stored = String(storedAccountUid ?? "").trim();
+  const canonical = String(reportedCanonicalUid ?? "").trim();
+  const authenticated = String(authenticatedUid ?? "").trim();
+  const aliases = new Set(Array.isArray(identityUids)
+    ? identityUids.map((value) => String(value ?? "").trim()).filter(Boolean)
+    : []);
+  if (!stored || !canonical || !authenticated) return "";
+  aliases.add(canonical);
+  return aliases.has(stored) && aliases.has(authenticated) ? canonical : "";
+}
+
 export function isGenericAccountDisplayName(value: unknown): boolean {
   const cleaned = String(value ?? "").trim().toLowerCase().replace(/\s+/g, " ");
   return !cleaned || cleaned === "riftlite player" || cleaned === "riftlite user" || /^player(?:[ #_-]|$)/.test(cleaned);

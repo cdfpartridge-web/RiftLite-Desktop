@@ -11,6 +11,73 @@ export interface ReplayDeliveryStage {
   timestamp?: string;
 }
 
+export interface ReplayDeliverySummary {
+  statusLabel: string;
+  uploadLabel: string;
+  discordLabel: string;
+}
+
+function replayDiscordEligible(metadata: RawCaptureReplayMetadata | undefined): boolean {
+  return Boolean(
+    metadata?.webReplayDiscordShareEligible ||
+    metadata?.webReplayDiscordShareHubIds?.length ||
+    metadata?.discordShareStatus
+  );
+}
+
+export function replayDeliverySummary(
+  metadata: RawCaptureReplayMetadata | undefined,
+  captureEnabled = false
+): ReplayDeliverySummary {
+  if (!metadata) {
+    return {
+      statusLabel: captureEnabled ? "waiting for next Atlas replay" : "disabled",
+      uploadLabel: "No capture yet",
+      discordLabel: "Not selected"
+    };
+  }
+
+  const automaticUpload = Boolean(metadata.webReplayAutoUploadEligible);
+  const waitingForResult = automaticUpload && metadata.resultStatus === "pending";
+  const discordEligible = replayDiscordEligible(metadata);
+  const uploadFailed = metadata.uploadStatus === "failed" || metadata.uploadStatus === "too-large";
+  const statusLabel = uploadFailed
+    ? metadata.uploadStatus === "too-large" ? "capture too large" : "upload failed"
+    : metadata.uploadStatus === "uploaded"
+      ? metadata.processingStatus === "ready" ? "ready" : "processing replay"
+      : metadata.processingStatus === "uploading"
+        ? "uploading replay"
+        : waitingForResult
+          ? "preparing replay"
+          : automaticUpload
+            ? "queued for upload"
+            : metadata.uploadStatus === "disabled"
+              ? "upload disabled"
+              : "saved locally";
+  const uploadLabel = metadata.uploadedAt
+    ? "Uploaded"
+    : uploadFailed
+      ? "Failed"
+      : waitingForResult
+        ? "Waiting for score"
+        : automaticUpload
+          ? "Queued"
+          : "Not uploaded";
+  const discordLabel = !discordEligible
+    ? "Not selected"
+    : metadata.discordShareStatus === "shared"
+      ? "Shared"
+      : metadata.discordShareStatus === "partial"
+        ? "Partial"
+        : metadata.discordShareStatus === "failed"
+          ? "Failed"
+          : metadata.uploadStatus === "uploaded"
+            ? "Sending"
+            : "Queued";
+
+  return { statusLabel, uploadLabel, discordLabel };
+}
+
 export function replayDeliveryStages(metadata: RawCaptureReplayMetadata | undefined): ReplayDeliveryStage[] {
   const captureComplete = Boolean(metadata?.localPath || metadata?.captureCompletedAt);
   const resultResolved = metadata?.resultStatus === "resolved" || (
@@ -21,11 +88,7 @@ export function replayDeliveryStages(metadata: RawCaptureReplayMetadata | undefi
   const uploadActive = metadata?.processingStatus === "uploading";
   const processingComplete = metadata?.processingStatus === "ready";
   const processingFailed = metadata?.processingStatus === "failed";
-  const discordEligible = Boolean(
-    metadata?.webReplayDiscordShareEligible ||
-    metadata?.webReplayDiscordShareHubIds?.length ||
-    metadata?.discordShareStatus
-  );
+  const discordEligible = replayDiscordEligible(metadata);
 
   return [
     {

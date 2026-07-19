@@ -13,6 +13,11 @@ import type {
   GamePlatform,
   SavedDeck
 } from "./types.js";
+import {
+  riftboundCanonicalArtCode,
+  riftboundCardCodeAliases,
+  riftboundCardCodeFromValue
+} from "./cardIdentity.js";
 
 export type MainDeckCard = {
   cardKey: string;
@@ -56,26 +61,33 @@ export function normalizeDeckTrackerKey(value: string): string {
 }
 
 export function deckTrackerCodeFromImage(value: string): string {
-  const match = value.match(/\b([A-Z]{2,5}-\d{1,4}[A-Z]?)\b/i);
-  return match?.[1]?.toUpperCase() ?? "";
+  return riftboundCardCodeFromValue(value);
 }
 
 export function deckTrackerCardKey(card: Partial<Pick<DeckEntry, "cardId" | "imageUrl" | "name">> & { code?: string }): string {
   return normalizeDeckTrackerKey(card.cardId || card.code || deckTrackerCodeFromImage(card.imageUrl || "") || card.name || "");
 }
 
-function deckTrackerCodeAliases(value: string): string[] {
-  const raw = value.trim();
-  if (!raw) {
-    return [];
-  }
-  const code = raw.match(/\b([A-Z]{2,5}-\d{1,4}[A-Z]?)\b/i)?.[1]?.toUpperCase() ?? raw.toUpperCase();
-  const aliases = [normalizeDeckTrackerKey(code)];
-  const baseCode = code.match(/^([A-Z]{2,5}-\d{1,4})[A-Z]$/)?.[1] ?? "";
-  if (baseCode) {
-    aliases.push(normalizeDeckTrackerKey(baseCode));
-  }
-  return aliases.filter(Boolean);
+export function deckTrackerIdentityAliases(card: {
+  cardKey?: string;
+  cardId?: string;
+  code?: string;
+  imageUrl?: string;
+  name?: string;
+}): string[] {
+  const imageCode = deckTrackerCodeFromImage(card.imageUrl || "");
+  const directAliases = [
+    card.cardKey,
+    card.cardId,
+    card.code,
+    imageCode,
+    card.name
+  ].map((value) => normalizeDeckTrackerKey(value || "")).filter(Boolean);
+  const codeAliases = [card.cardId, card.code, imageCode]
+    .flatMap((value) => riftboundCardCodeAliases(value || ""))
+    .map(normalizeDeckTrackerKey)
+    .filter(Boolean);
+  return [...new Set([...directAliases, ...codeAliases])];
 }
 
 export function mainDeckTrackerCards(deck: SavedDeck | null): MainDeckCard[] {
@@ -100,14 +112,7 @@ function deckTrackerCardsFromSection(deck: SavedDeck | null, role: "main" | "sid
   return combineTrackerCards(cards.map((entry) => {
     const code = deckTrackerCodeFromImage(entry.imageUrl || "");
     const cardKey = deckTrackerCardKey({ ...entry, code });
-    const aliases = [
-      cardKey,
-      normalizeDeckTrackerKey(entry.cardId || ""),
-      normalizeDeckTrackerKey(code),
-      normalizeDeckTrackerKey(entry.name),
-      ...deckTrackerCodeAliases(entry.cardId || ""),
-      ...deckTrackerCodeAliases(code)
-    ].filter(Boolean);
+    const aliases = deckTrackerIdentityAliases({ ...entry, cardKey, code });
     return {
       cardKey,
       aliases: [...new Set(aliases)],
@@ -147,13 +152,8 @@ function legendDeckTrackerCard(deck: SavedDeck | null): DeckTrackerLibraryCard |
   const code = deckTrackerCodeFromImage(imageUrl) || deckTrackerCodeFromImage(cardId);
   const cardKey = deckTrackerCardKey({ cardId, imageUrl, name, code }) || normalizeDeckTrackerKey(name);
   const aliases = [
-    cardKey,
-    normalizeDeckTrackerKey(cardId),
-    normalizeDeckTrackerKey(code),
-    normalizeDeckTrackerKey(name),
-    normalizeDeckTrackerKey(deck.legend || ""),
-    ...deckTrackerCodeAliases(cardId),
-    ...deckTrackerCodeAliases(code)
+    ...deckTrackerIdentityAliases({ cardKey, cardId, code, imageUrl, name }),
+    normalizeDeckTrackerKey(deck.legend || "")
   ].filter(Boolean);
   return {
     cardKey,
@@ -186,13 +186,7 @@ export function observationCountsForDeck(
   const snapshotConfidence = new Map<string, DeckTrackerConfidence>();
   const eventInstances = new Map<string, Set<string>>();
   for (const observation of observations) {
-    const observationAliases = [
-      observation.cardKey,
-      observation.cardId,
-      observation.code,
-      observation.name,
-      deckTrackerCodeFromImage(observation.imageUrl)
-    ].map(normalizeDeckTrackerKey).filter(Boolean);
+    const observationAliases = deckTrackerIdentityAliases(observation);
     const matchedKey = observationAliases.map((alias) => aliases.get(alias)).find(Boolean);
     if (!matchedKey) {
       continue;
@@ -504,7 +498,7 @@ function combineTrackerCards(cards: MainDeckCard[]): MainDeckCard[] {
 }
 
 export function deckTrackerImageUrlFromId(value: string): string {
-  const normalized = value.match(/\b([A-Z]{2,5}-\d{1,4}[A-Z]?)\b/i)?.[1]?.toUpperCase() ?? "";
+  const normalized = riftboundCanonicalArtCode(value);
   return normalized ? `https://cdn.piltoverarchive.com/cards/${normalized}.webp` : "";
 }
 
@@ -519,13 +513,7 @@ function normalizedSideboardChanges(changes: DeckTrackerSideboardChange[]): Deck
 }
 
 function matchSideboardCardKey(change: DeckTrackerSideboardChange, aliases: Map<string, string>): string {
-  const candidates = [
-    change.cardKey,
-    change.cardId,
-    change.code,
-    change.name,
-    deckTrackerCodeFromImage(change.imageUrl)
-  ].map(normalizeDeckTrackerKey).filter(Boolean);
+  const candidates = deckTrackerIdentityAliases(change);
   return candidates.map((candidate) => aliases.get(candidate) || candidate).find((candidate) => aliases.has(candidate) || candidate === change.cardKey) ?? "";
 }
 

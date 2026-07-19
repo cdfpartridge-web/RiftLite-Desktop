@@ -1,6 +1,8 @@
 # RiftLite Current Engineering State
 
-Last updated: 2026-07-12
+> **Current local handover:** After reading this file, read `docs/HANDOVER_2026-07-19_V0.9.00.md`. It records the locally promoted v0.9.00 desktop, security/account work, installer validation, and pending website changes. The current published release remains v0.8.04.
+
+Last updated: 2026-07-19
 
 This is the durable handoff for continuing RiftLite work in a fresh Codex task. Read this file before changing code.
 
@@ -8,12 +10,12 @@ This is the durable handoff for continuing RiftLite work in a fresh Codex task. 
 
 - Active cross-platform release source repo:
   `C:\Users\cdfpa\OneDrive\Documents\Claude\Projects\Riftlite Beta 0.6\desktop-v06`
-- Current package version: `0.8.3` (customer-facing release `v0.8.03`)
-- Current branch: `main`
+- Current local package version: `0.9.0` (customer-facing build `v0.9.00`); not yet published
+- Current branch: `windows-release-v0.8.03` (the branch name is older than the local build)
 - Windows GitHub release repository (`windows` remote): `cdfpartridge-web/RiftLite-Desktop`
 - macOS GitHub release repository (`origin` remote): `cdfpartridge-web/RiftLite-Desktop-mac`
-- Current published Windows release: `v0.8.03` (2026-07-12)
-- Current published macOS release: `mac-v0.8.00` (2026-07-12)
+- Current published Windows release: `v0.8.04` (2026-07-17)
+- Current published macOS release: `mac-v0.8.04` (2026-07-17)
 - Windows installer output:
   `C:\Users\cdfpa\OneDrive\Documents\Claude\Projects\Riftlite Beta 0.6\desktop-v06\release\RiftLiteBetaInstall.exe`
 

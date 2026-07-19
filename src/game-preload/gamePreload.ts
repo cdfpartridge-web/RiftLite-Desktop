@@ -1,4 +1,5 @@
 import { ipcRenderer } from "electron";
+import { riftboundCardCodeFromValue } from "../shared/cardIdentity.js";
 import { readTcgaLocalPlayerName, readTcgaProfileName } from "../shared/tcgaIdentity.js";
 import type { BattlefieldCandidate, CaptureEvent, CaptureKind, GamePlatform } from "../shared/types.js";
 
@@ -88,6 +89,16 @@ const BATTLEFIELD_NAMES = [
   { name: "ZaunWarrens", canonical: "Zaun Warrens" },
   { name: "DuskRoseLab", canonical: "Dusk Rose Lab" },
   { name: "Star Spring", canonical: "Star Spring" },
+  { name: "Dragon Roost", canonical: "Dragon Roost" },
+  { name: "Heisho, Shell of the World", canonical: "Heisho, Shell of the World" },
+  { name: "Kinkou Temple", canonical: "Kinkou Temple" },
+  { name: "Mystic Vortex", canonical: "Mystic Vortex" },
+  { name: "Protective Sands", canonical: "Protective Sands" },
+  { name: "Risen Altar", canonical: "Risen Altar" },
+  { name: "Shadow Temple", canonical: "Shadow Temple" },
+  { name: "Threshold of the Gray", canonical: "Threshold of the Gray" },
+  { name: "Trapping Grounds", canonical: "Trapping Grounds" },
+  { name: "Valley of Idols", canonical: "Valley of Idols" },
   { name: "Baron Pit", canonical: "Baron Pit" },
   { name: "Minefield", canonical: "Minefield" },
   { name: "Void Gate", canonical: "Void Gate" },
@@ -110,6 +121,8 @@ let lastSnapshotPublishedAt = 0;
 let atlasInteractionQuietUntil = 0;
 let atlasInteractionSettleTimer: number | undefined;
 let atlasDeferredMutationSnapshot = false;
+let atlasEmptyShellReported = false;
+let atlasShellReadyReported = false;
 
 type CounterPlayer = {
   name: string;
@@ -763,6 +776,20 @@ function battlefieldImageFor(candidates: BattlefieldCandidate[], side: Battlefie
   return uniqueImages[0] ?? "";
 }
 
+function battlefieldCodeFor(candidates: BattlefieldCandidate[], side: BattlefieldCandidate["side"], requireUnique = false): string {
+  const usable = candidates.filter((candidate) =>
+    candidate.side === side &&
+    !candidate.hidden &&
+    candidate.code &&
+    !isGeneratedBattlefieldCandidate(candidate)
+  );
+  const uniqueCodes = Array.from(new Set(usable.map((candidate) => riftboundCardCodeFromValue(candidate.code)).filter(Boolean)));
+  if (requireUnique && uniqueCodes.length !== 1) {
+    return "";
+  }
+  return uniqueCodes[0] ?? "";
+}
+
 function isGeneratedBattlefieldCandidate(candidate: BattlefieldCandidate): boolean {
   return /\bbaron\s+pit\b/i.test(`${candidate.text} ${candidate.code}`) ||
     /baron[-_\s]?pit|e44f173629322a4e0c32d3f8902c294d4482ef42/i.test(candidate.image);
@@ -842,8 +869,7 @@ function normalizeBattlefieldSearch(value: string): string {
 }
 
 function cardCodeFromImage(value: string): string {
-  const match = value.match(/\b([A-Z]{2,5}-\d{1,4})\b/i);
-  return match?.[1]?.toUpperCase() ?? "";
+  return riftboundCardCodeFromValue(value);
 }
 
 function readTcgaSnapshot(): Record<string, unknown> {
@@ -859,6 +885,7 @@ function readTcgaSnapshot(): Record<string, unknown> {
   const battlefieldCandidates = collectTcgaBattlefieldCandidates();
   const battlefieldText = readTcgaBattlefieldText(bodyText, localCounter?.name || localPlayerName, opponentName);
   const myBattlefieldImage = battlefieldText.me ? "" : battlefieldImageFor(battlefieldCandidates, "me", true);
+  const myBattlefieldCode = battlefieldCodeFor(battlefieldCandidates, "me", true);
   const opponentFallbackImage = imageIdentity(
     ".game-card.Battlefields.opponent-card.card-hidden-no img.card-front",
     ".game-card.Battlefields.opponent-card.card-hidden-no img"
@@ -866,6 +893,7 @@ function readTcgaSnapshot(): Record<string, unknown> {
   const opponentBattlefieldImage = battlefieldText.opponent
     ? ""
     : battlefieldImageFor(battlefieldCandidates, "opponent") || (isCardBackImage(opponentFallbackImage) ? "" : opponentFallbackImage);
+  const opponentBattlefieldCode = battlefieldCodeFor(battlefieldCandidates, "opponent");
   const endText = findTcgaEndText();
   const tcgaPhase = readTcgaPhase(bodyText);
   const cards = DECK_TRACKER_FEATURE_ENABLED ? collectTcgaVisibleCards() : [];
@@ -891,10 +919,14 @@ function readTcgaSnapshot(): Record<string, unknown> {
     },
     myChampion: tcgaLegendCardText(myLegendCard),
     opponentChampion: tcgaLegendCardText(opponentLegendCard),
+    myChampionCode: riftboundCardCodeFromValue(myLegendCard.code),
+    opponentChampionCode: riftboundCardCodeFromValue(opponentLegendCard.code),
     myChampionImage: myLegendCard.image,
     opponentChampionImage: opponentLegendCard.image,
     myBattlefield: battlefieldText.me,
     opponentBattlefield: battlefieldText.opponent,
+    myBattlefieldCode,
+    opponentBattlefieldCode,
     myBattlefieldImage,
     opponentBattlefieldImage,
     battlefieldCandidates,
@@ -967,7 +999,7 @@ function readTcgaLegendCard(owner: "me" | "opponent"): { text: string; image: st
 function tcgaLegendCardText(card: { text: string; code: string }): string {
   const values = [card.text, card.code]
     .join(" ")
-    .replace(/\b[A-Z]{2,5}-\d{1,4}[A-Z]?\b/gi, " ")
+    .replace(/\b[A-Z]{2,5}-(?:(?:SP|R|T)\d{1,4}|\d{1,4}[A-Z]?)(?:\*|-STAR)?(?:\/\d+)?(?=$|[^A-Z0-9])/gi, " ")
     .replace(/\b(legend|unit|champion|spell|gear|battlefield|rune)\b/gi, " ")
     .replace(/\s+/g, " ")
     .trim();
@@ -1171,10 +1203,14 @@ function readAtlasSnapshot(): Record<string, unknown> {
     atlasPlayerCandidates: atlasPlayers.candidates,
     myChampion: atlasLegendCardText(myLegendCard),
     opponentChampion: atlasLegendCardText(opponentLegendCard),
+    myChampionCode: riftboundCardCodeFromValue(myLegendCard.code),
+    opponentChampionCode: riftboundCardCodeFromValue(opponentLegendCard.code),
     myChampionImage: myLegendCard.image,
     opponentChampionImage: opponentLegendCard.image,
     myBattlefield: "",
     opponentBattlefield: "",
+    myBattlefieldCode: riftboundCardCodeFromValue(myBattlefieldCard.code),
+    opponentBattlefieldCode: riftboundCardCodeFromValue(opponentBattlefieldCard.code),
     myBattlefieldImage: myBattlefieldCard.image,
     opponentBattlefieldImage: opponentBattlefieldCard.image,
     battlefieldCandidates: [
@@ -1423,7 +1459,7 @@ function atlasCardByZone(cards: Array<Record<string, string>>, owner: "self" | "
 
 function atlasLegendCardText(card: { text: string; code: string }): string {
   const text = usefulAtlasCardText(card.text)
-    .replace(/\b[A-Z]{2,5}-\d{1,4}[A-Z]?\b/gi, " ")
+    .replace(/\b[A-Z]{2,5}-(?:(?:SP|R|T)\d{1,4}|\d{1,4}[A-Z]?)(?:\*|-STAR)?(?:\/\d+)?(?=$|[^A-Z0-9])/gi, " ")
     .replace(/\s+/g, " ")
     .trim();
   if (!text || text.length < 3 || isAtlasGenericName(text) || isAtlasLegendTextNoise(text)) {
@@ -1885,6 +1921,56 @@ function safeStorageKeys(): string[] {
   }
 }
 
+function reportAtlasShellStatusIfNeeded(allowEmpty = false): void {
+  if (
+    platform !== "atlas" ||
+    atlasShellReadyReported ||
+    document.readyState !== "complete" ||
+    document.visibilityState === "hidden"
+  ) {
+    return;
+  }
+  const hiddenShellSelector = "[hidden], [aria-hidden='true'], .sr-only, [class*='sr-only'], script, style, template, noscript";
+  const isVisibleShellElement = (element: Element) => {
+    if (element.closest(hiddenShellSelector)) return false;
+    const bounds = element.getBoundingClientRect();
+    const style = window.getComputedStyle(element);
+    return bounds.width > 1 && bounds.height > 1 && style.display !== "none" && style.visibility !== "hidden" && style.opacity !== "0";
+  };
+  const interactiveElements = Array.from(document.querySelectorAll("button, input, select, textarea, canvas, [role='button'], [role='dialog']"))
+    .filter(isVisibleShellElement);
+  const gameSurfaceElements = Array.from(document.querySelectorAll("canvas, [data-card-id], [data-drop-zone], [data-zone-owner]"))
+    .filter(isVisibleShellElement);
+  const visibleText = Array.from(document.querySelectorAll("h1, h2, h3, p, li, label, button, a, [role='button'], [role='dialog']"))
+    .filter(isVisibleShellElement)
+    .map((element) => textOf(element))
+    .filter(Boolean)
+    .join(" ")
+    .slice(0, 5_000);
+  const hasAtlasAppText = /\blobby\b|host room|join room|find random match|quick match|choose deck|import deck|new deck|match history|sign in|log in/i.test(visibleText);
+  const hasAtlasApp = hasAtlasAppText || interactiveElements.length >= 4 || gameSurfaceElements.length > 0;
+  if (hasAtlasApp) {
+    atlasShellReadyReported = true;
+    send("debug", {
+      reason: "atlas-app-shell-ready",
+      interactiveCount: interactiveElements.length,
+      gameSurfaceCount: gameSurfaceElements.length,
+      visibleTextLength: visibleText.length
+    });
+    return;
+  }
+  if (allowEmpty && !atlasEmptyShellReported && interactiveElements.length <= 3) {
+    atlasEmptyShellReported = true;
+    send("debug", {
+      reason: "atlas-app-shell-empty",
+      ...debugSnapshot(),
+      interactiveCount: interactiveElements.length,
+      visibleTextLength: visibleText.length,
+      visibleText: visibleText.slice(0, 800)
+    });
+  }
+}
+
 function snapshot(): Record<string, unknown> {
   return platform === "tcga" ? readTcgaSnapshot() : readAtlasSnapshot();
 }
@@ -1918,8 +2004,12 @@ function publishSnapshot(reason: string): void {
     score: data.score,
     myName: data.myName,
     opponentName: data.opponentName,
+    myChampionCode: data.myChampionCode,
+    opponentChampionCode: data.opponentChampionCode,
     myChampion: data.myChampion || data.myChampionImage,
     opponentChampion: data.opponentChampion || data.opponentChampionImage,
+    myBattlefieldCode: data.myBattlefieldCode,
+    opponentBattlefieldCode: data.opponentBattlefieldCode,
     myBattlefield: data.myBattlefield || data.myBattlefieldImage,
     opponentBattlefield: data.opponentBattlefield || data.opponentBattlefieldImage,
     turnText: data.turnText,
@@ -2089,6 +2179,13 @@ function installDomObserver(): void {
     send("capture-ready", { mode: "dom-observer", host: location.host });
     sendDebug("capture-ready-debug");
     publishSnapshot("initial");
+    if (platform === "atlas") {
+      for (const delay of [250, 750, 1_500, 3_000, 5_000]) {
+        window.setTimeout(() => reportAtlasShellStatusIfNeeded(false), delay);
+      }
+      window.setTimeout(() => reportAtlasShellStatusIfNeeded(true), 8_000);
+      window.setTimeout(() => reportAtlasShellStatusIfNeeded(true), 18_000);
+    }
     const heartbeat = () => {
       publishSnapshot("safety-heartbeat");
       window.setTimeout(heartbeat, previousActive ? ACTIVE_HEARTBEAT_MS : IDLE_HEARTBEAT_MS);

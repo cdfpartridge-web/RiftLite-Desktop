@@ -2673,4 +2673,87 @@ describe("MatchSessionTracker", () => {
     expect(replayEvents[0].type).toBe("setup");
     expect(replayEvents[1].type).toBe("play");
   });
+
+  it("retains exact signed and overnumbered setup codes for offline resolution", () => {
+    const tracker = new MatchSessionTracker();
+    tracker.ingest(event("match-start", {
+      active: true,
+      opponentName: "Rival",
+      myChampionCode: "UNL-226*",
+      opponentChampionCode: "VEN-194",
+      myBattlefieldCode: "VEN-157",
+      opponentBattlefieldCode: "UNL-218",
+      score: { me: "1", opp: "0" }
+    }, "2026-07-18T20:00:00.000Z", "atlas"));
+
+    expect(tracker.get("atlas")?.sticky).toMatchObject({
+      myChampionCode: "UNL-226*",
+      opponentChampionCode: "VEN-194",
+      myBattlefieldCode: "VEN-157",
+      opponentBattlefieldCode: "UNL-218"
+    });
+  });
+
+  it.each(["tcga", "atlas"] as const)("preserves code-only battlefield pairs in every %s BO3 game", (platform) => {
+    const tracker = new MatchSessionTracker();
+    const base = {
+      active: true,
+      format: "Bo3",
+      myName: "ConfiguredUser",
+      opponentName: "Code Rival",
+      myChampion: "Akali",
+      opponentChampion: "Jayce"
+    };
+    const pair = (myBattlefieldCode: string, opponentBattlefieldCode: string) => ({
+      myBattlefieldCode,
+      opponentBattlefieldCode
+    });
+
+    tracker.ingest(event("match-start", {
+      ...base,
+      score: { me: "0", opp: "0" },
+      ...pair("VEN-157", "UNL-218")
+    }, "2026-07-18T21:00:00.000Z", platform));
+    tracker.ingest(event("match-snapshot", {
+      ...base,
+      score: { me: "7", opp: "4" },
+      ...pair("VEN-157", "UNL-218")
+    }, "2026-07-18T21:10:00.000Z", platform));
+    tracker.ingest(event("match-snapshot", {
+      ...base,
+      score: { me: "0", opp: "0" },
+      ...pair("VEN-158", "UNL-217")
+    }, "2026-07-18T21:11:00.000Z", platform));
+    tracker.ingest(event("match-snapshot", {
+      ...base,
+      score: { me: "4", opp: "7" },
+      ...pair("VEN-158", "UNL-217")
+    }, "2026-07-18T21:21:00.000Z", platform));
+    tracker.ingest(event("match-snapshot", {
+      ...base,
+      score: { me: "0", opp: "0" },
+      ...pair("VEN-159", "VEN-160")
+    }, "2026-07-18T21:22:00.000Z", platform));
+    tracker.ingest(event("match-snapshot", {
+      ...base,
+      score: { me: "7", opp: "2" },
+      ...pair("VEN-159", "VEN-160")
+    }, "2026-07-18T21:32:00.000Z", platform));
+
+    const end = event("match-end", {
+      ...base,
+      active: false,
+      endText: "You win",
+      score: { me: "7", opp: "2" },
+      ...pair("VEN-159", "VEN-160")
+    }, "2026-07-18T21:33:00.000Z", platform);
+    const draft = tracker.buildDraft(platform, end, settings);
+
+    expect(draft.games.map((game) => [game.myBattlefieldCode, game.oppBattlefieldCode])).toEqual([
+      ["VEN-157", "UNL-218"],
+      ["VEN-158", "UNL-217"],
+      ["VEN-159", "VEN-160"]
+    ]);
+    expect(draft.games.every((game) => !game.myBattlefield && !game.oppBattlefield && !game.myBattlefieldImage && !game.oppBattlefieldImage)).toBe(true);
+  });
 });

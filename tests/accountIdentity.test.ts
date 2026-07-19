@@ -4,6 +4,8 @@ import {
   getRiftLiteAccountState,
   hasCompleteAccountProfile,
   isGenericAccountDisplayName,
+  linkedAccountAuthUidMatches,
+  verifiedAccountConnectionUid,
   resolveCompletedAccountLinkUid
 } from "../src/shared/accountIdentity.js";
 
@@ -51,5 +53,24 @@ describe("account identity", () => {
     expect(resolveCompletedAccountLinkUid("", "account-1")).toBe("account-1");
     expect(resolveCompletedAccountLinkUid("account-1", "account-2")).toBe("");
     expect(resolveCompletedAccountLinkUid("account-1", "")).toBe("");
+  });
+
+  it("accepts a server-verified Firebase alias without accepting unrelated accounts", () => {
+    const settings = { accountUid: "canonical-1", firebaseUid: "desktop-alias-1" };
+    expect(linkedAccountAuthUidMatches(settings, "desktop-alias-1")).toBe(true);
+    expect(linkedAccountAuthUidMatches(settings, "canonical-1")).toBe(true);
+    expect(linkedAccountAuthUidMatches(settings, "unrelated-2")).toBe(false);
+    expect(verifiedAccountConnectionUid(
+      "canonical-1",
+      "canonical-1",
+      "desktop-alias-1",
+      ["canonical-1", "desktop-alias-1"]
+    )).toBe("canonical-1");
+    expect(verifiedAccountConnectionUid(
+      "unrelated-2",
+      "canonical-1",
+      "desktop-alias-1",
+      ["canonical-1", "desktop-alias-1"]
+    )).toBe("");
   });
 });

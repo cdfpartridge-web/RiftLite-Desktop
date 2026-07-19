@@ -198,6 +198,10 @@ export class CaptureCoordinator {
     return this.tracker.getLiveOverlayMatch();
   }
 
+  hasActiveCaptureSession(platform: GamePlatform): boolean {
+    return Boolean(this.tracker.get(platform));
+  }
+
   handleEvent(event: CaptureEvent): Promise<void> {
     const previous = this.platformEventQueues.get(event.platform) ?? Promise.resolve();
     const next = previous
@@ -1536,10 +1540,14 @@ export class CaptureCoordinator {
       snapshot.opponentName,
       snapshot.myChampion,
       snapshot.opponentChampion,
+      snapshot.myChampionCode,
+      snapshot.opponentChampionCode,
       snapshot.myChampionImage,
       snapshot.opponentChampionImage,
       snapshot.myBattlefield,
       snapshot.opponentBattlefield,
+      snapshot.myBattlefieldCode,
+      snapshot.opponentBattlefieldCode,
       snapshot.myBattlefieldImage,
       snapshot.opponentBattlefieldImage
     ].some(hasPayloadValue);
@@ -1570,10 +1578,14 @@ export class CaptureCoordinator {
       snapshot.opponentName,
       snapshot.myChampion,
       snapshot.opponentChampion,
+      snapshot.myChampionCode,
+      snapshot.opponentChampionCode,
       snapshot.myChampionImage,
       snapshot.opponentChampionImage,
       snapshot.myBattlefield,
       snapshot.opponentBattlefield,
+      snapshot.myBattlefieldCode,
+      snapshot.opponentBattlefieldCode,
       snapshot.myBattlefieldImage,
       snapshot.opponentBattlefieldImage
     ].some(hasPayloadValue);
@@ -1622,11 +1634,26 @@ export class CaptureCoordinator {
     if (platform !== "tcga" && platform !== "atlas") {
       return { myChampion: "", opponentChampion: "", myBattlefield: "", opponentBattlefield: "" };
     }
+    const resolveFirst = async (
+      resolver: (value: unknown) => Promise<string>,
+      values: unknown[]
+    ): Promise<string> => {
+      for (const value of values) {
+        if (!hasPayloadValue(value)) {
+          continue;
+        }
+        const resolved = await resolver(value);
+        if (resolved) {
+          return resolved;
+        }
+      }
+      return "";
+    };
     const [myChampion, opponentChampion, myBattlefield, opponentBattlefield] = await Promise.all([
-      this.tcgaResolver.resolveLegend(snapshot.myChampionImage),
-      this.tcgaResolver.resolveLegend(snapshot.opponentChampionImage),
-      this.tcgaResolver.resolveBattlefield(snapshot.myBattlefieldImage),
-      this.tcgaResolver.resolveBattlefield(snapshot.opponentBattlefieldImage)
+      resolveFirst((value) => this.tcgaResolver.resolveLegend(value), [snapshot.myChampionCode, snapshot.myChampionImage]),
+      resolveFirst((value) => this.tcgaResolver.resolveLegend(value), [snapshot.opponentChampionCode, snapshot.opponentChampionImage]),
+      resolveFirst((value) => this.tcgaResolver.resolveBattlefield(value), [snapshot.myBattlefieldCode, snapshot.myBattlefieldImage]),
+      resolveFirst((value) => this.tcgaResolver.resolveBattlefield(value), [snapshot.opponentBattlefieldCode, snapshot.opponentBattlefieldImage])
     ]);
     return { myChampion, opponentChampion, myBattlefield, opponentBattlefield };
   }
@@ -1637,8 +1664,8 @@ export class CaptureCoordinator {
     }
     const games = await Promise.all(draft.games.map(async (game) => {
       const [myBattlefield, oppBattlefield] = await Promise.all([
-        this.resolveDraftBattlefieldName(game.myBattlefield, game.myBattlefieldImage),
-        this.resolveDraftBattlefieldName(game.oppBattlefield, game.oppBattlefieldImage)
+        this.resolveDraftBattlefieldName(game.myBattlefieldCode, game.myBattlefield, game.myBattlefieldImage),
+        this.resolveDraftBattlefieldName(game.oppBattlefieldCode, game.oppBattlefield, game.oppBattlefieldImage)
       ]);
       return {
         ...game,
@@ -1649,18 +1676,33 @@ export class CaptureCoordinator {
     return {
       ...draft,
       games,
-      myBattlefield: draft.myBattlefield || games[0]?.myBattlefield || "",
-      opponentBattlefield: draft.opponentBattlefield || games[0]?.oppBattlefield || ""
+      myBattlefield: games[0]?.myBattlefield || draft.myBattlefield || "",
+      opponentBattlefield: games[0]?.oppBattlefield || draft.opponentBattlefield || ""
     };
   }
 
-  private async resolveDraftBattlefieldName(existing: unknown, image: unknown): Promise<string> {
+  private async resolveDraftBattlefieldName(code: unknown, existing: unknown, image: unknown): Promise<string> {
+    const codeText = readPayloadString(code);
+    if (codeText) {
+      const resolvedCode = await this.tcgaResolver.resolveBattlefield(codeText);
+      if (resolvedCode) {
+        return resolvedCode;
+      }
+    }
     const existingText = readPayloadString(existing);
     if (existingText && !isUnresolvedCardCode(existingText)) {
       return existingText;
     }
-    const resolved = await this.tcgaResolver.resolveBattlefield(existingText || image);
-    return resolved || (isUnresolvedCardCode(existingText) ? "" : existingText);
+    for (const value of [existingText, image]) {
+      if (!hasPayloadValue(value)) {
+        continue;
+      }
+      const resolved = await this.tcgaResolver.resolveBattlefield(value);
+      if (resolved) {
+        return resolved;
+      }
+    }
+    return isUnresolvedCardCode(existingText) ? "" : existingText;
   }
 
   private async resolveReplayEventCards(
@@ -2141,10 +2183,14 @@ function compactPayload(payload: Record<string, unknown> = {}): Record<string, u
     "opponentName",
     "myChampion",
     "opponentChampion",
+    "myChampionCode",
+    "opponentChampionCode",
     "myChampionImage",
     "opponentChampionImage",
     "myBattlefield",
     "opponentBattlefield",
+    "myBattlefieldCode",
+    "opponentBattlefieldCode",
     "myBattlefieldImage",
     "opponentBattlefieldImage",
     "roomCode",
@@ -2283,7 +2329,7 @@ function truncateValue(value: unknown, limit: number): string {
 }
 
 function isUnresolvedCardCode(value: string): boolean {
-  return /^(?:OGN|OGS|SFD|UNL)-\d+[A-Z]?$/i.test(value.trim());
+  return /^[A-Z]{2,5}-(?:(?:SP|R|T)\d{1,4}|\d{1,4}[A-Z]?)(?:\*|-STAR)?(?:\/\d+)?$/i.test(value.trim());
 }
 
 function isIntermediateAtlasConfirmGameResult(event: CaptureEvent): boolean {

@@ -1,7 +1,8 @@
+import { safeStorage } from "electron";
 import { createConnection, type Socket } from "node:net";
-import { readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 
 const DISCORD_CLIENT_ID = "1507035519916179496";
@@ -18,11 +19,30 @@ export interface DiscordVoiceJoinResult {
   usedFallback: boolean;
 }
 
-interface DiscordRpcTokenCache {
+export interface DiscordRpcTokenCache {
   accessToken: string;
   refreshToken: string;
   expiresAt: number;
 }
+
+export interface DiscordRpcTokenEncryption {
+  isAvailable(): boolean;
+  encrypt(value: string): Buffer;
+  decrypt(value: Buffer): string;
+}
+
+interface EncryptedDiscordRpcTokenCache {
+  format: "riftlite.discord-rpc-token";
+  version: 2;
+  encrypted: string;
+}
+
+const DISCORD_TOKEN_CACHE_FORMAT = "riftlite.discord-rpc-token";
+const electronTokenEncryption: DiscordRpcTokenEncryption = {
+  isAvailable: () => safeStorage.isEncryptionAvailable(),
+  encrypt: (value) => safeStorage.encryptString(value),
+  decrypt: (value) => safeStorage.decryptString(value)
+};
 
 interface RpcPayload {
   cmd?: string;
@@ -302,22 +322,112 @@ function discordIpcPaths(): string[] {
   return paths;
 }
 
-async function readTokenCache(filePath: string): Promise<DiscordRpcTokenCache | null> {
-  try {
-    const parsed = JSON.parse(await readFile(filePath, "utf8")) as Partial<DiscordRpcTokenCache>;
-    if (typeof parsed.accessToken === "string" && typeof parsed.expiresAt === "number") {
-      return {
-        accessToken: parsed.accessToken,
-        refreshToken: typeof parsed.refreshToken === "string" ? parsed.refreshToken : "",
-        expiresAt: parsed.expiresAt
-      };
-    }
-  } catch {
-    // Missing or corrupt cache simply reauthorizes.
+function normalizeTokenCache(value: unknown): DiscordRpcTokenCache | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
   }
-  return null;
+  const parsed = value as Partial<DiscordRpcTokenCache>;
+  if (typeof parsed.accessToken !== "string" || typeof parsed.expiresAt !== "number" || !Number.isFinite(parsed.expiresAt)) {
+    return null;
+  }
+  return {
+    accessToken: parsed.accessToken,
+    refreshToken: typeof parsed.refreshToken === "string" ? parsed.refreshToken : "",
+    expiresAt: parsed.expiresAt
+  };
 }
 
-async function writeTokenCache(filePath: string, token: DiscordRpcTokenCache): Promise<void> {
-  await writeFile(filePath, JSON.stringify(token), "utf8").catch(() => undefined);
+function encryptionAvailable(encryption: DiscordRpcTokenEncryption): boolean {
+  try {
+    return encryption.isAvailable();
+  } catch {
+    return false;
+  }
+}
+
+function isEncryptedTokenCache(value: unknown): value is EncryptedDiscordRpcTokenCache {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const parsed = value as Partial<EncryptedDiscordRpcTokenCache>;
+  return parsed.format === DISCORD_TOKEN_CACHE_FORMAT &&
+    parsed.version === 2 &&
+    typeof parsed.encrypted === "string" &&
+    Boolean(parsed.encrypted);
+}
+
+export async function readTokenCache(
+  filePath: string,
+  encryption: DiscordRpcTokenEncryption = electronTokenEncryption
+): Promise<DiscordRpcTokenCache | null> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await readFile(filePath, "utf8")) as unknown;
+  } catch {
+    // Missing or corrupt cache simply reauthorizes.
+    return null;
+  }
+
+  if (isEncryptedTokenCache(parsed)) {
+    if (!encryptionAvailable(encryption)) {
+      return null;
+    }
+    try {
+      return normalizeTokenCache(
+        JSON.parse(encryption.decrypt(Buffer.from(parsed.encrypted, "base64"))) as unknown
+      );
+    } catch {
+      return null;
+    }
+  }
+
+  const legacy = normalizeTokenCache(parsed);
+  if (!legacy) {
+    return null;
+  }
+  if (encryptionAvailable(encryption)) {
+    // Return the usable token even if migration cannot be written. The atomic
+    // writer leaves the legacy source intact on failure, so no account state is
+    // lost and the next read can retry migration.
+    await writeTokenCache(filePath, legacy, encryption);
+  }
+  return legacy;
+}
+
+export async function writeTokenCache(
+  filePath: string,
+  token: DiscordRpcTokenCache,
+  encryption: DiscordRpcTokenEncryption = electronTokenEncryption
+): Promise<void> {
+  let serialized: string;
+  try {
+    if (encryptionAvailable(encryption)) {
+      const encrypted = encryption.encrypt(JSON.stringify(token)).toString("base64");
+      serialized = JSON.stringify({
+        format: DISCORD_TOKEN_CACHE_FORMAT,
+        version: 2,
+        encrypted
+      } satisfies EncryptedDiscordRpcTokenCache);
+    } else {
+      // Compatibility-only fallback: supported systems migrate this plaintext
+      // file automatically as soon as Electron safeStorage becomes available.
+      serialized = JSON.stringify(token);
+    }
+    await writeTokenCacheAtomically(filePath, serialized);
+  } catch {
+    // Voice authentication remains valid for this session. Never downgrade to
+    // plaintext merely because encryption or an encrypted write failed.
+  }
+}
+
+async function writeTokenCacheAtomically(filePath: string, serialized: string): Promise<void> {
+  await mkdir(dirname(filePath), { recursive: true });
+  const temporaryPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(temporaryPath, serialized, { encoding: "utf8", mode: 0o600 });
+    await rename(temporaryPath, filePath);
+    await chmod(filePath, 0o600).catch(() => undefined);
+  } finally {
+    await unlink(temporaryPath).catch(() => undefined);
+  }
 }

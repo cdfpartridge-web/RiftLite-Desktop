@@ -117,6 +117,8 @@ const api: RiftLiteApi = {
   createHub: (name, password) => ipcRenderer.invoke("hubs:create", name, password) as Promise<HubActionResult>,
   joinHub: (name, password) => ipcRenderer.invoke("hubs:join", name, password) as Promise<HubActionResult>,
   refreshAccountHubs: () => ipcRenderer.invoke("hubs:refresh-account") as ReturnType<RiftLiteApi["refreshAccountHubs"]>,
+  leaveHub: (hubId) => ipcRenderer.invoke("hubs:leave", hubId) as ReturnType<RiftLiteApi["leaveHub"]>,
+  deleteHub: (hubId, confirmation) => ipcRenderer.invoke("hubs:delete", hubId, confirmation) as ReturnType<RiftLiteApi["deleteHub"]>,
   syncPrivateHubs: () => ipcRenderer.invoke("hubs:sync-private") as Promise<PrivateHubSyncResult>,
   syncMatchesToHubs: (matchIds, hubIds) => ipcRenderer.invoke("hubs:sync-selected", matchIds, hubIds) as Promise<PrivateHubSyncResult>,
   deleteHubMatch: (hubId, matchId) => ipcRenderer.invoke("hubs:delete-match", hubId, matchId) as Promise<void>,
@@ -136,6 +138,9 @@ const api: RiftLiteApi = {
   setAccountCloudSyncEnabled: (enabled) => ipcRenderer.invoke("account:cloud-sync:set-enabled", enabled) as ReturnType<RiftLiteApi["setAccountCloudSyncEnabled"]>,
   uploadAccountCloudSync: () => ipcRenderer.invoke("account:cloud-sync:upload") as ReturnType<RiftLiteApi["uploadAccountCloudSync"]>,
   restoreAccountCloudSync: () => ipcRenderer.invoke("account:cloud-sync:restore") as ReturnType<RiftLiteApi["restoreAccountCloudSync"]>,
+  getAccountCloudSyncConflicts: () => ipcRenderer.invoke("account:cloud-sync:conflicts") as ReturnType<RiftLiteApi["getAccountCloudSyncConflicts"]>,
+  keepAccountCloudSyncConflictCurrent: (conflictId) => ipcRenderer.invoke("account:cloud-sync:conflict:keep-current", conflictId) as ReturnType<RiftLiteApi["keepAccountCloudSyncConflictCurrent"]>,
+  restoreAccountCloudSyncConflictLegacy: (conflictId) => ipcRenderer.invoke("account:cloud-sync:conflict:restore-legacy", conflictId) as ReturnType<RiftLiteApi["restoreAccountCloudSyncConflictLegacy"]>,
   unlinkAccount: () => ipcRenderer.invoke("account:unlink") as ReturnType<RiftLiteApi["unlinkAccount"]>,
   searchPublicProfiles: (query) => ipcRenderer.invoke("profiles:search", query) as ReturnType<RiftLiteApi["searchPublicProfiles"]>,
   claimHub: (hubId, password) => ipcRenderer.invoke("hubs:claim", hubId, password) as ReturnType<RiftLiteApi["claimHub"]>,
@@ -189,7 +194,7 @@ const api: RiftLiteApi = {
   openOverlayTextFolder: () => ipcRenderer.invoke("overlay:open-text-folder") as Promise<void>,
   getDiagnosticsPath: () => ipcRenderer.invoke("diagnostics:path") as Promise<string>,
   getDiagnosticsSummary: () => ipcRenderer.invoke("diagnostics:summary") as Promise<CaptureDiagnosticsSummary>,
-  createDiagnosticsBundle: () => ipcRenderer.invoke("diagnostics:bundle") as Promise<string>,
+  createDiagnosticsBundle: (options) => ipcRenderer.invoke("diagnostics:bundle", options) as Promise<string | null>,
   openDiagnosticsFolder: () => ipcRenderer.invoke("diagnostics:open") as Promise<void>,
   takeScreenshot: () => ipcRenderer.invoke("screenshot:take") as Promise<ScreenshotResult>,
   chooseScreenshotDirectory: () => ipcRenderer.invoke("screenshot:choose-directory") as Promise<UserSettings>,
@@ -214,6 +219,11 @@ const api: RiftLiteApi = {
     const listener = (_event: Electron.IpcRendererEvent, payload: MatchDraft) => callback(payload);
     ipcRenderer.on("match:draft", listener);
     return () => ipcRenderer.removeListener("match:draft", listener);
+  },
+  onReplayUpdated: (callback) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: ReplayRecord) => callback(payload);
+    ipcRenderer.on("replay:updated", listener);
+    return () => ipcRenderer.removeListener("replay:updated", listener);
   },
   onScreenshotSaved: (callback) => {
     const listener = (_event: Electron.IpcRendererEvent, payload: ScreenshotResult) => callback(payload);

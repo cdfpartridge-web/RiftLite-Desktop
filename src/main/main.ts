@@ -1,12 +1,12 @@
-import { app, BrowserWindow, clipboard, desktopCapturer, dialog, globalShortcut, ipcMain, Menu, nativeImage, screen, session as electronSession, shell } from "electron";
+import { app, BrowserWindow, clipboard, desktopCapturer, dialog, globalShortcut, ipcMain, Menu, nativeImage, safeStorage, screen, session as electronSession, shell } from "electron";
 import type { NativeImage, OpenDialogOptions, SaveDialogOptions, WebContents } from "electron";
 import { execFile } from "node:child_process";
 import { once } from "node:events";
 import { createReadStream, createWriteStream } from "node:fs";
-import { access, appendFile, mkdir, open, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { access, appendFile, copyFile, mkdir, open, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createInterface } from "node:readline";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { promisify } from "node:util";
 import { deflateRawSync, inflateRawSync } from "node:zlib";
@@ -64,9 +64,40 @@ import type {
 } from "../shared/types.js";
 import { emptyDeckMatchupGuide, resolveDeckMatchupGuide, sanitizeDeckNotebookForDeck } from "../shared/deckNotebook.js";
 import { atlasSeatCaptureEvent } from "../shared/atlasSeatTracker.js";
+import { atlasCardRenderingCssForUrl } from "../shared/atlasCardRendering.js";
 import { clearAtlasWebviewRuntime } from "../shared/atlasWebviewRecovery.js";
+import { RIFTLITE_BUILD_IDENTITY } from "../shared/buildIdentity.js";
+import {
+  embeddedWebviewPolicy,
+  gamePlatformForTrustedUrl,
+  isAllowedEmbeddedNavigation,
+  isAllowedGameMainFrameNavigation,
+  isAllowedGamePopupNavigation,
+  sameWebFrameIdentity,
+  type EmbeddedWebviewPolicy
+} from "../shared/embeddedContentSecurity.js";
+import { GAME_WEBVIEW_PARTITIONS } from "../shared/gameWebview.js";
+import { RawCaptureIngressLimiter, validatedCaptureEvent, validatedRawCaptureFrame } from "../shared/ipcPayloadSecurity.js";
+import {
+  clearAtlasClerkAuthCookies,
+  gamePopupBrowserWindowOptions,
+  gamePopupSharesParentSession,
+  isAtlasClerkAuthorizationFailureNavigation,
+  isAtlasClerkAuthorizationInvalidPage
+} from "./services/gamePopupSecurity.js";
+import {
+  isReplayMediaFilename,
+  matchingMissingReplayIdForMedia,
+  replayMediaCapturedAt,
+  replayMediaDurationMsFromFfmpegOutput,
+  replayMediaMimeType,
+  replayMediaPlatform
+} from "../shared/replayMediaRecovery.js";
 import { detectBrowsers } from "./services/browserDetection.js";
 import { scheduleAppUsageHeartbeat } from "./services/appUsageAnalytics.js";
+import { AtlasEmptyShellMainRecoveryGuard } from "./services/atlasEmptyShellMainRecovery.js";
+import { AccountCloudSyncQueue } from "./services/accountCloudSyncQueue.js";
+import { runAccountCloudRestore } from "./services/accountCloudRestoreCoordinator.js";
 import { CaptureCoordinator } from "./services/captureCoordinator.js";
 import { CaptureDiagnostics } from "./services/captureDiagnostics.js";
 import { AtlasFrameDeduper, type AtlasFrameSource } from "./services/atlasFrameDeduper.js";
@@ -76,6 +107,7 @@ import { joinDiscordVoiceChannel } from "./services/discordRpc.js";
 import { FirebaseSyncService } from "./services/firebaseSync.js";
 import { OverlayServer } from "./services/overlayServer.js";
 import { RawCaptureService } from "./services/rawCaptureService.js";
+import { attachReplayVideoToStore } from "./services/replayVideoAttachment.js";
 import {
   clearReplayEmbedCookies,
   prepareReplayEmbedSession,
@@ -86,6 +118,7 @@ import {
   RIFTLITE_REPLAY_PARTITION
 } from "./services/replayEmbedSession.js";
 import { RiftLiteStore } from "./services/store.js";
+import { SecureCredentialVault } from "./services/secureCredentialVault.js";
 import { SimEventReceiver } from "./services/simEventReceiver.js";
 import { TcgaResolver } from "./services/tcgaResolver.js";
 import { UpdaterService } from "./services/updaterService.js";
@@ -101,22 +134,44 @@ const REPLAY_STREAM_MAGIC = "RIFTLITE_REPLAY_STREAM_V1";
 const REPLAY_STREAM_VIDEO_START = "VIDEO_DATA";
 const REPLAY_STREAM_VIDEO_END = "END_VIDEO_DATA";
 const RIFTREPLAY_CAPTURE_FEATURE_ENABLED = true;
-const ATLAS_GAME_PARTITION = "persist:riftlite-atlas";
+const ATLAS_GAME_PARTITION = GAME_WEBVIEW_PARTITIONS.atlas;
 const IS_PACKAGED_SMOKE_TEST = process.argv.includes("--riftlite-smoke-test");
+const UI_SNAPSHOT_PATH = process.env.RIFTLITE_UI_SNAPSHOT_PATH?.trim() ?? "";
+const UI_SNAPSHOT_TOUR_ACTION = IS_PACKAGED_SMOKE_TEST
+  ? process.env.RIFTLITE_UI_SNAPSHOT_TOUR_ACTION?.trim().toLowerCase() ?? ""
+  : "";
+const UI_SNAPSHOT_VIEW = IS_PACKAGED_SMOKE_TEST
+  ? process.env.RIFTLITE_UI_SNAPSHOT_VIEW?.trim().toLowerCase() ?? ""
+  : "";
+const UI_SNAPSHOT_PLATFORM = IS_PACKAGED_SMOKE_TEST
+  ? process.env.RIFTLITE_UI_SNAPSHOT_PLATFORM?.trim().toLowerCase() ?? ""
+  : "";
+const UI_SNAPSHOT_COLLAPSED = IS_PACKAGED_SMOKE_TEST && process.env.RIFTLITE_UI_SNAPSHOT_COLLAPSED === "1";
+const UI_SNAPSHOT_ATLAS_WAIT_MS = IS_PACKAGED_SMOKE_TEST
+  ? Math.max(1_000, Math.min(30_000, Number.parseInt(process.env.RIFTLITE_UI_SNAPSHOT_ATLAS_WAIT_MS ?? "14000", 10) || 14_000))
+  : 0;
+const SMOKE_USER_DATA_PATH = IS_PACKAGED_SMOKE_TEST
+  ? process.env.RIFTLITE_SMOKE_USER_DATA_PATH?.trim()
+    ?? process.env.RIFTLITE_UI_DEV_USER_DATA_PATH?.trim()
+    ?? ""
+  : "";
+let atlasSmokeDiagnosticsTaken = false;
 
-app.setName("RiftLite Beta 0.8");
-app.setPath("userData", join(app.getPath("appData"), "RiftLite Beta 0.6"));
-app.setAppUserModelId("com.riftlite.desktop.beta06");
+app.setName(RIFTLITE_BUILD_IDENTITY.appName);
+app.setPath(
+  "userData",
+  SMOKE_USER_DATA_PATH
+    ? resolve(SMOKE_USER_DATA_PATH)
+    : join(app.getPath("appData"), RIFTLITE_BUILD_IDENTITY.userDataDirectory)
+);
+app.setAppUserModelId(RIFTLITE_BUILD_IDENTITY.appId);
 if (!IS_PACKAGED_SMOKE_TEST) {
   if (process.defaultApp && process.argv[1]) {
-    app.setAsDefaultProtocolClient("riftlite", process.execPath, [resolve(process.argv[1])]);
+    app.setAsDefaultProtocolClient(RIFTLITE_BUILD_IDENTITY.protocol, process.execPath, [resolve(process.argv[1])]);
   } else {
-    app.setAsDefaultProtocolClient("riftlite");
+    app.setAsDefaultProtocolClient(RIFTLITE_BUILD_IDENTITY.protocol);
   }
 }
-app.commandLine.appendSwitch("ignore-gpu-blocklist");
-app.commandLine.appendSwitch("enable-gpu-rasterization");
-app.commandLine.appendSwitch("enable-zero-copy");
 app.commandLine.appendSwitch("disable-features", "WebRtcAllowInputVolumeAdjustment,WebRtcApmInAudioService");
 
 const gotSingleInstanceLock = IS_PACKAGED_SMOKE_TEST || app.requestSingleInstanceLock();
@@ -140,35 +195,38 @@ let registeredScreenshotHotkey = "";
 let registeredShadowClipHotkey = "";
 let registeredReplayFlagHotkey = "";
 const gameWebContentsByPlatform = new Map<GamePlatform, WebContents>();
+const embeddedWebviewPolicyBySession = new WeakMap<object, EmbeddedWebviewPolicy>();
 const rawCaptureDebuggerContents = new WeakSet<WebContents>();
 const atlasDeckTrackerFrameDebugCounts = new Map<string, number>();
 const atlasFrameDeduper = new AtlasFrameDeduper();
+const rawCaptureIngressLimiter = new RawCaptureIngressLimiter();
 const replayFrameHashByPlatform = new Map<GamePlatform, { hash: string; capturedAt: number }>();
 const ensuredReplayFrameDirectories = new Set<string>();
 let replayFrameDirectoryCache: { path: string; expiresAt: number } | null = null;
 const replayVideoSessions = new Map<string, ReplayVideoSession>();
 let replayVideoDisplayTarget: { platform: GamePlatform; mode: ReplayVideoCaptureMode; expiresAt: number } | null = null;
-let accountCloudSyncTimer: ReturnType<typeof setTimeout> | null = null;
 let rawCaptureUploadRetryTimer: ReturnType<typeof setInterval> | null = null;
+let atlasWebviewRecoveryInFlight: Promise<{ ok: boolean; message: string }> | null = null;
+const atlasEmptyShellMainRecovery = new AtlasEmptyShellMainRecoveryGuard();
+const ATLAS_EMPTY_SHELL_MAIN_RELOAD_DELAY_MS = 500;
+
+const accountCloudSyncQueue = new AccountCloudSyncQueue(
+  async (reason) => {
+    const settings = await store.getSettings();
+    if (!settings.accountCloudSyncEnabled || !settings.accountUid) {
+      return;
+    }
+    await syncService.uploadAccountCloudSync(`${reason}. Account sync updated.`, { automatic: true });
+  },
+  async (error) => {
+    await store.saveSettings({
+      accountCloudSyncLastError: error instanceof Error ? error.message : "Account cloud sync failed."
+    }).catch(() => undefined);
+  }
+);
 
 function queueAccountCloudSync(reason = "Local data changed"): void {
-  if (accountCloudSyncTimer) {
-    clearTimeout(accountCloudSyncTimer);
-  }
-  accountCloudSyncTimer = setTimeout(() => {
-    accountCloudSyncTimer = null;
-    void (async () => {
-      const settings = await store.getSettings();
-      if (!settings.accountCloudSyncEnabled || !settings.accountUid) {
-        return;
-      }
-      await syncService.uploadAccountCloudSync(`${reason}. Account sync updated.`);
-    })().catch(async (error) => {
-      await store.saveSettings({
-        accountCloudSyncLastError: error instanceof Error ? error.message : "Account cloud sync failed."
-      }).catch(() => undefined);
-    });
-  }, 20_000);
+  accountCloudSyncQueue.queue(reason);
 }
 
 function startupLogPath(): string {
@@ -297,7 +355,7 @@ function resourcesRoot(): string {
   if (app.isPackaged) {
     return join(process.resourcesPath, "resources");
   }
-  return resolve(__dirname, "..", "..", "..", "resources");
+  return resolve(__dirname, "..", "..", "resources");
 }
 
 function assetPath(relativePath: string): string {
@@ -375,13 +433,52 @@ async function assetDataUrl(relativePath: string): Promise<string> {
 async function loadBattlefields(): Promise<BattlefieldOption[]> {
   const raw = await readFile(assetPath("battlefield_catalog.json"), "utf8");
   const parsed = JSON.parse(raw) as Array<Record<string, unknown>>;
-  return parsed
-    .filter((item) => item.is_active !== false)
-    .map((item) => ({
-      name: typeof item.name === "string" ? item.name.trim() : "",
-      aliases: Array.isArray(item.aliases) ? item.aliases.filter((alias): alias is string => typeof alias === "string") : []
-    }))
-    .filter((item) => item.name)
+  const merged = new Map<string, BattlefieldOption & { active: boolean }>();
+  const add = (item: Record<string, unknown>, active: boolean): void => {
+    const name = typeof item.name === "string" ? item.name.trim() : "";
+    if (!name) return;
+    const key = name.toLowerCase().replace(/[^a-z0-9]/g, "");
+    const aliases = Array.isArray(item.aliases)
+      ? item.aliases.filter((alias): alias is string => typeof alias === "string" && Boolean(alias.trim())).map((alias) => alias.trim())
+      : [];
+    const existing = merged.get(key);
+    merged.set(key, {
+      name: existing?.name || name,
+      aliases: [...new Set([...(existing?.aliases ?? []), ...aliases])],
+      active
+    });
+  };
+
+  // The generated registry supplies all official collectible battlefields.
+  // The small catalog remains an override for aliases, rotation state and
+  // platform-only battlefields, so an invalid/missing optional registry cannot
+  // break the picker in an already-installed build.
+  try {
+    const registryRaw = await readFile(assetPath("riftbound_card_registry.json"), "utf8");
+    const registry = JSON.parse(registryRaw) as Record<string, unknown>;
+    const cards = Array.isArray(registry.cards) ? registry.cards : [];
+    for (const value of cards) {
+      if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+      const card = value as Record<string, unknown>;
+      if (String(card.type ?? "").toLowerCase() !== "battlefield" || String(card.supertype ?? "").toLowerCase() === "token") continue;
+      add(card, true);
+    }
+    const specialBattlefields = Array.isArray(registry.specialBattlefields) ? registry.specialBattlefields : [];
+    for (const value of specialBattlefields) {
+      if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+      const battlefield = value as Record<string, unknown>;
+      add(battlefield, battlefield.isActive !== false);
+    }
+  } catch {
+    // Fall through to the packaged last-known-good catalog.
+  }
+
+  for (const item of parsed) {
+    add(item, item.is_active !== false);
+  }
+  return [...merged.values()]
+    .filter((item) => item.active)
+    .map(({ name, aliases }) => ({ name, aliases }))
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
@@ -389,13 +486,14 @@ function mimeType(filePath: string): string {
   const lower = filePath.toLowerCase();
   if (lower.endsWith(".png")) return "image/png";
   if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
+  if (lower.endsWith(".webp")) return "image/webp";
   if (lower.endsWith(".ico")) return "image/x-icon";
   if (lower.endsWith(".svg")) return "image/svg+xml";
   return "application/octet-stream";
 }
 
 function defaultScreenshotDirectory(): string {
-  return join(app.getPath("pictures"), "RiftLite");
+  return join(app.getPath("pictures"), RIFTLITE_BUILD_IDENTITY.mediaDirectoryName);
 }
 
 function screenshotDirectory(settings: UserSettings): string {
@@ -403,7 +501,7 @@ function screenshotDirectory(settings: UserSettings): string {
 }
 
 function defaultReplayDirectory(): string {
-  return join(app.getPath("documents"), "RiftLite", "Replay Bundles");
+  return join(app.getPath("documents"), RIFTLITE_BUILD_IDENTITY.mediaDirectoryName, "Replay Bundles");
 }
 
 function replayDirectory(settings: UserSettings): string {
@@ -419,7 +517,7 @@ function replayBundleDirectory(settings?: UserSettings): string {
 }
 
 function backupDirectory(): string {
-  return join(app.getPath("documents"), "RiftLite", "Backups");
+  return join(app.getPath("documents"), RIFTLITE_BUILD_IDENTITY.mediaDirectoryName, "Backups");
 }
 
 function backupTimestamp(): string {
@@ -427,7 +525,7 @@ function backupTimestamp(): string {
 }
 
 function legacyReplayVideoDirectory(): string {
-  return join(app.getPath("documents"), "RiftLite", "Replay Videos");
+  return join(app.getPath("documents"), RIFTLITE_BUILD_IDENTITY.mediaDirectoryName, "Replay Videos");
 }
 
 function replayVideoDirectory(settings?: UserSettings): string {
@@ -747,14 +845,7 @@ function safeFileComponent(value: string, fallback = "RiftLite Replay"): string 
 }
 
 function platformFromUrl(url: string): GamePlatform | null {
-  const lower = url.toLowerCase();
-  if (lower.includes("play.riftatlas.com") || lower.includes("riftatlas")) {
-    return "atlas";
-  }
-  if (lower.includes("tcg-arena.fr") || lower.includes("tcga")) {
-    return "tcga";
-  }
-  return null;
+  return gamePlatformForTrustedUrl(url, isDev);
 }
 
 function diagnosticPageUrl(value: string): string {
@@ -767,10 +858,106 @@ function diagnosticPageUrl(value: string): string {
 }
 
 function isTrustedAppOrigin(origin: string): boolean {
-  const lower = origin.toLowerCase();
-  return lower.startsWith("file://") ||
-    lower.startsWith("http://127.0.0.1:5173") ||
-    lower.startsWith("http://localhost:5173");
+  if (origin.toLowerCase() === "file://") {
+    return true;
+  }
+  try {
+    const parsed = new URL(origin);
+    return parsed.origin === "http://127.0.0.1:5173" || parsed.origin === "http://localhost:5173";
+  } catch {
+    return false;
+  }
+}
+
+function isTrustedAppPageUrl(value: string): boolean {
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol === "file:") {
+      const expected = resolve(join(__dirname, "..", "renderer", "index.html")).toLowerCase();
+      return resolve(fileURLToPath(parsed)).toLowerCase() === expected;
+    }
+    return isDev && (
+      parsed.origin === "http://127.0.0.1:5173" || parsed.origin === "http://localhost:5173"
+    );
+  } catch {
+    return false;
+  }
+}
+
+function isTrustedAppWebContents(webContents: WebContents): boolean {
+  const isAppWindow = mainWindow?.webContents.id === webContents.id ||
+    deckTrackerWindow?.webContents.id === webContents.id;
+  return Boolean(
+    isAppWindow &&
+    !webContents.isDestroyed() &&
+    webContents.session === electronSession.defaultSession &&
+    isTrustedAppPageUrl(webContents.getURL())
+  );
+}
+
+function isTopLevelIpcFrame(event: {
+  sender: WebContents;
+  senderFrame?: { processId: number; routingId: number; url: string } | null;
+}): boolean {
+  const frame = event.senderFrame;
+  const mainFrame = event.sender.isDestroyed() ? null : event.sender.mainFrame;
+  return Boolean(
+    frame &&
+    mainFrame &&
+    sameWebFrameIdentity(frame, mainFrame) &&
+    frame.url === mainFrame.url
+  );
+}
+
+function isTrustedAppIpcSender(event: {
+  sender: WebContents;
+  senderFrame?: { processId: number; routingId: number; url: string } | null;
+}): boolean {
+  return isTopLevelIpcFrame(event) &&
+    isTrustedAppWebContents(event.sender) &&
+    Boolean(event.senderFrame && isTrustedAppPageUrl(event.senderFrame.url));
+}
+
+function trustedGameIpcPlatform(event: {
+  sender: WebContents;
+  senderFrame?: { processId: number; routingId: number; url: string } | null;
+}): GamePlatform | null {
+  if (!isTopLevelIpcFrame(event) || event.sender.isDestroyed()) {
+    return null;
+  }
+  const policy = embeddedWebviewPolicyBySession.get(event.sender.session);
+  if (!policy || policy.kind !== "game") {
+    return null;
+  }
+  if (
+    event.sender.session !== electronSession.fromPartition(GAME_WEBVIEW_PARTITIONS[policy.platform]) ||
+    gameWebContentsByPlatform.get(policy.platform)?.id !== event.sender.id ||
+    !isAllowedEmbeddedNavigation(policy, event.sender.getURL()) ||
+    !event.senderFrame ||
+    !isAllowedEmbeddedNavigation(policy, event.senderFrame.url)
+  ) {
+    return null;
+  }
+  return policy.platform;
+}
+
+function assertTrustedAppIpcSender(event: {
+  sender: WebContents;
+  senderFrame?: { processId: number; routingId: number; url: string } | null;
+}): void {
+  if (!isTrustedAppIpcSender(event)) {
+    throw new Error("IPC request rejected: untrusted sender.");
+  }
+}
+
+function handleTrustedAppIpc(
+  channel: string,
+  listener: (event: Electron.IpcMainInvokeEvent, ...args: any[]) => any
+): void {
+  ipcMain.handle(channel, (event, ...args) => {
+    assertTrustedAppIpcSender(event);
+    return listener(event, ...args);
+  });
 }
 
 async function replayWindowCaptureSource(): Promise<ReplayWindowCaptureSource | null> {
@@ -796,11 +983,6 @@ function rememberGameWebContents(webContents: WebContents): void {
   }
 }
 
-function isRiftLiteReplayWebContents(webContents: WebContents): boolean {
-  return webContents.session === electronSession.fromPartition(RIFTLITE_REPLAY_PARTITION) ||
-    isAllowedRiftLiteReplayNavigation(webContents.getURL());
-}
-
 function isAllowedRiftLiteReplayNavigation(value: string): boolean {
   try {
     const url = new URL(value);
@@ -817,6 +999,182 @@ function isRiftLiteReplayOrigin(value: string): boolean {
   } catch {
     return false;
   }
+}
+
+function installRestrictedEmbeddedPermissions(
+  webContents: WebContents,
+  policy: EmbeddedWebviewPolicy,
+  permissions: ReadonlySet<string>
+): void {
+  const embeddedSession = webContents.session;
+  const exactRequester = (requestingContents: WebContents | null, requestingUrl: string, isMainFrame: boolean) => (
+    requestingContents?.id === webContents.id &&
+    !webContents.isDestroyed() &&
+    isMainFrame &&
+    isAllowedEmbeddedNavigation(policy, requestingUrl || webContents.getURL())
+  );
+  embeddedSession.setPermissionCheckHandler((requestingContents, permission, _origin, details) => (
+    exactRequester(requestingContents, details.requestingUrl || "", details.isMainFrame) &&
+    permissions.has(String(permission))
+  ));
+  embeddedSession.setPermissionRequestHandler((requestingContents, permission, callback, details) => {
+    callback(
+      exactRequester(requestingContents, details.requestingUrl, details.isMainFrame) &&
+      permissions.has(String(permission))
+    );
+  });
+}
+
+function secureGamePopup(
+  webContents: WebContents,
+  policy: Extract<EmbeddedWebviewPolicy, { kind: "game" }>
+): void {
+  webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//i.test(url) && !isAllowedGamePopupNavigation(policy, url)) {
+      void openExternalResource(url).catch(() => undefined);
+    }
+    return { action: "deny" };
+  });
+  const restrictPopupNavigation = (event: Electron.Event, url: string) => {
+    if (isAllowedGamePopupNavigation(policy, url)) {
+      return;
+    }
+    event.preventDefault();
+    if (/^https?:\/\//i.test(url)) {
+      void openExternalResource(url).catch(() => undefined);
+    }
+  };
+  webContents.on("will-navigate", restrictPopupNavigation);
+  webContents.on("will-redirect", restrictPopupNavigation);
+}
+
+function secureGameWebContents(webContents: WebContents, policy: Extract<EmbeddedWebviewPolicy, { kind: "game" }>): void {
+  let atlasClerkRepairAttempted = false;
+  const repairAtlasClerkSignIn = async (popup?: BrowserWindow): Promise<void> => {
+    if (policy.platform !== "atlas" || atlasClerkRepairAttempted) {
+      return;
+    }
+    atlasClerkRepairAttempted = true;
+    const removedCookieCount = await clearAtlasClerkAuthCookies(webContents.session);
+    if (popup && !popup.isDestroyed()) {
+      popup.destroy();
+    }
+    if (!webContents.isDestroyed()) {
+      await webContents.loadURL("https://play.riftatlas.com/sign-in?redirect_url=%2F");
+    }
+    void logStartupIssue("Atlas Clerk sign-in repaired", `Removed ${removedCookieCount} invalid authentication cookies.`);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      await dialog.showMessageBox(mainWindow, {
+        type: "info",
+        title: "RiftAtlas sign-in repaired",
+        message: "RiftAtlas sign-in was reset safely.",
+        detail: "RiftLite removed an invalid RiftAtlas sign-in session. Choose Sign in and try again. Your RiftLite account, matches, decks, and replays were not changed.",
+        buttons: ["Continue"],
+        defaultId: 0
+      });
+    }
+  };
+  const repairAtlasClerkPageIfNeeded = async (contents: WebContents, popup?: BrowserWindow): Promise<void> => {
+    if (policy.platform !== "atlas" || atlasClerkRepairAttempted || contents.isDestroyed()) {
+      return;
+    }
+    const pageUrl = contents.getURL();
+    if (!pageUrl.startsWith("https://clerk.riftatlas.com/")) {
+      return;
+    }
+    const bodyText = await contents.executeJavaScript(
+      "String(document.body?.innerText || '').slice(0, 4000)",
+      true
+    );
+    if (!isAtlasClerkAuthorizationInvalidPage(pageUrl, String(bodyText ?? ""))) {
+      return;
+    }
+    await repairAtlasClerkSignIn(popup);
+  };
+  installRestrictedEmbeddedPermissions(
+    webContents,
+    policy,
+    new Set(["clipboard-sanitized-write", "fullscreen"])
+  );
+  webContents.setWindowOpenHandler(({ url }) => {
+    if (!isAllowedGamePopupNavigation(policy, url)) {
+      if (/^https?:\/\//i.test(url)) {
+        void openExternalResource(url).catch(() => undefined);
+      }
+      return { action: "deny" };
+    }
+    return {
+      action: "allow",
+      overrideBrowserWindowOptions: gamePopupBrowserWindowOptions(webContents.session)
+    };
+  });
+  webContents.on("did-create-window", (popup) => {
+    if (!gamePopupSharesParentSession(webContents, popup.webContents)) {
+      popup.destroy();
+      void logStartupIssue("game OAuth popup session mismatch", policy.platform);
+      return;
+    }
+    popup.setMenu(null);
+    popup.setMenuBarVisibility(false);
+    secureGamePopup(popup.webContents, policy);
+    popup.webContents.on("did-navigate", (_event, url, httpResponseCode) => {
+      if (isAtlasClerkAuthorizationFailureNavigation(url, httpResponseCode)) {
+        void repairAtlasClerkSignIn(popup).catch((error) => logStartupIssue("Atlas Clerk sign-in repair failed", error));
+      }
+    });
+    popup.webContents.on("did-finish-load", () => {
+      void repairAtlasClerkPageIfNeeded(popup.webContents, popup)
+        .catch((error) => logStartupIssue("Atlas Clerk sign-in repair failed", error));
+    });
+  });
+  webContents.on("did-navigate", (_event, url, httpResponseCode) => {
+    if (isAtlasClerkAuthorizationFailureNavigation(url, httpResponseCode)) {
+      void repairAtlasClerkSignIn().catch((error) => logStartupIssue("Atlas Clerk sign-in repair failed", error));
+    }
+  });
+  webContents.on("did-finish-load", () => {
+    void repairAtlasClerkPageIfNeeded(webContents)
+      .catch((error) => logStartupIssue("Atlas Clerk sign-in repair failed", error));
+  });
+  const restrictGameNavigation = (event: Electron.Event, url: string) => {
+    if (isAllowedGameMainFrameNavigation(policy, url)) {
+      return;
+    }
+    event.preventDefault();
+    if (/^https?:\/\//i.test(url)) {
+      void openExternalResource(url).catch(() => undefined);
+    }
+  };
+  webContents.on("will-navigate", restrictGameNavigation);
+  webContents.on("will-redirect", restrictGameNavigation);
+}
+
+function secureHomeMediaWebContents(
+  webContents: WebContents,
+  policy: Extract<EmbeddedWebviewPolicy, { kind: "home-video" }>
+): void {
+  installRestrictedEmbeddedPermissions(
+    webContents,
+    policy,
+    new Set(["clipboard-sanitized-write", "fullscreen"])
+  );
+  webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//i.test(url)) {
+      void openExternalResource(url).catch(() => undefined);
+    }
+    return { action: "deny" };
+  });
+  const restrictNavigation = (event: Electron.Event, url: string) => {
+    if (isAllowedEmbeddedNavigation(policy, url)) {
+      return;
+    }
+    event.preventDefault();
+    if (/^https?:\/\//i.test(url)) {
+      void openExternalResource(url).catch(() => undefined);
+    }
+  };
+  webContents.on("will-navigate", restrictNavigation);
+  webContents.on("will-redirect", restrictNavigation);
 }
 
 function secureRiftLiteReplayWebContents(webContents: WebContents): void {
@@ -1647,23 +2005,43 @@ function prepareReplayVideoDisplayTarget(platform: GamePlatform, mode: ReplayVid
 }
 
 function configureDisplayMediaCapture(): void {
-  electronSession.defaultSession.setPermissionCheckHandler((_webContents, permission, requestingOrigin, details) => {
+  electronSession.defaultSession.setPermissionCheckHandler((webContents, permission, requestingOrigin, details) => {
     const requestedPermission = String(permission);
     if (requestedPermission === "display-capture" || requestedPermission === "media") {
-      return isTrustedAppOrigin(requestingOrigin || details.securityOrigin || "");
+      return Boolean(
+        webContents &&
+        isTrustedAppWebContents(webContents) &&
+        details.isMainFrame &&
+        isTrustedAppOrigin(requestingOrigin || details.securityOrigin || "")
+      );
     }
     return false;
   });
   electronSession.defaultSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
     if (permission === "display-capture" || permission === "media") {
       const requestingUrl = typeof details.requestingUrl === "string" ? details.requestingUrl : "";
-      callback(isTrustedAppOrigin(requestingUrl || webContents.getURL()));
+      callback(
+        isTrustedAppWebContents(webContents) &&
+        details.isMainFrame &&
+        isTrustedAppPageUrl(requestingUrl || webContents.getURL())
+      );
       return;
     }
     callback(false);
   });
   electronSession.defaultSession.setDisplayMediaRequestHandler(async (request, callback) => {
-    const trustedOrigin = isTrustedAppOrigin(request.securityOrigin);
+    const requestingContents = [mainWindow?.webContents, deckTrackerWindow?.webContents]
+      .find((candidate): candidate is WebContents => Boolean(
+        candidate &&
+        !candidate.isDestroyed() &&
+        sameWebFrameIdentity(request.frame, candidate.mainFrame)
+      ));
+    const trustedOrigin = Boolean(
+      requestingContents &&
+      isTrustedAppWebContents(requestingContents) &&
+      sameWebFrameIdentity(request.frame, requestingContents.mainFrame) &&
+      isTrustedAppOrigin(request.securityOrigin)
+    );
 
     if (!trustedOrigin || !request.videoRequested || request.audioRequested) {
       callback({});
@@ -1705,21 +2083,26 @@ function configureDisplayMediaCapture(): void {
 }
 
 async function attachReplayVideo(matchId: string, video: ReplayVideoAsset): Promise<ReplayRecord | null> {
-  const replays = await store.getReplays();
-  const replay = replays.find((item) => item.matchId === matchId);
-  if (!replay) {
+  const result = await attachReplayVideoToStore(store, matchId, video);
+  if (!result.replay) {
+    void diagnostics?.record({
+      id: randomUUID(),
+      platform: video.platform,
+      kind: "debug",
+      capturedAt: new Date().toISOString(),
+      url: "",
+      payload: {
+        reason: "replay-video-attach-replay-timeout",
+        matchId
+      }
+    }).catch(() => undefined);
     return null;
   }
-  if (
-    replay.video?.durationMs &&
-    video.durationMs &&
-    replay.video.durationMs > video.durationMs + 10_000
-  ) {
+  if (!result.attached) {
     await discardReplayVideoAsset(video).catch(() => undefined);
-    return replay;
+    return result.replay;
   }
-  const saved = await store.saveReplay({ ...replay, video });
-  return rawCaptureService.finishForReplay(saved);
+  return rawCaptureService.finishForReplay(result.replay);
 }
 
 function pathInside(childPath: string, rootPath: string): boolean {
@@ -1773,13 +2156,16 @@ async function deleteReplayVideoByMatch(matchId: string): Promise<void> {
     ...await store.getDeletedReplays()
   ].filter((replay) => replay.matchId === matchId);
   for (const replay of replays) {
-    if (!replay.video) {
-      continue;
+    let removedVideo: ReplayVideoAsset | undefined;
+    const updated = await store.updateReplay(replay.id, (current) => {
+      removedVideo = current.video;
+      const nextReplay = { ...current, video: undefined };
+      delete nextReplay.video;
+      return nextReplay;
+    });
+    if (updated && removedVideo) {
+      await discardReplayVideoAsset(removedVideo).catch(() => undefined);
     }
-    await discardReplayVideoAsset(replay.video).catch(() => undefined);
-    const nextReplay = { ...replay, video: undefined };
-    delete nextReplay.video;
-    await store.saveReplay(nextReplay);
   }
 }
 
@@ -4515,20 +4901,215 @@ function csvCell(value: string): string {
   return /[",\r\n]/.test(safeText) ? `"${safeText.replace(/"/g, "\"\"")}"` : safeText;
 }
 
+type RecoveredReplayVideoProbe = {
+  durationMs: number;
+  width: number;
+  height: number;
+  fps: number;
+  codec: string;
+  hasAudio: boolean;
+};
+
+async function probeRecoveredReplayVideo(filePath: string): Promise<RecoveredReplayVideoProbe> {
+  const fallback: RecoveredReplayVideoProbe = {
+    durationMs: 0,
+    width: 1920,
+    height: 1080,
+    fps: 24,
+    codec: replayMediaMimeType(filePath) === "video/mp4" ? "H.264 MP4" : "VP8 WebM",
+    hasAudio: false
+  };
+  const ffmpegPath = replayVideoFfmpegPath();
+  if (!ffmpegPath || !(await pathExists(ffmpegPath))) return fallback;
+  let output = "";
+  try {
+    await execFileAsync(ffmpegPath, ["-hide_banner", "-i", filePath], {
+      windowsHide: true,
+      timeout: 30_000,
+      maxBuffer: 1024 * 1024
+    });
+  } catch (error) {
+    output = error && typeof error === "object"
+      ? `${String((error as { stdout?: unknown }).stdout ?? "")}\n${String((error as { stderr?: unknown }).stderr ?? "")}`
+      : String(error ?? "");
+  }
+  let durationMs = replayMediaDurationMsFromFfmpegOutput(output);
+  if (!durationMs) {
+    try {
+      const scanned = await execFileAsync(ffmpegPath, [
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-progress",
+        "pipe:2",
+        "-nostats",
+        "-i",
+        filePath,
+        "-map",
+        "0:v:0",
+        "-c",
+        "copy",
+        "-f",
+        "null",
+        "-"
+      ], {
+        windowsHide: true,
+        timeout: 30_000,
+        maxBuffer: 4 * 1024 * 1024
+      });
+      const scanOutput = `${String(scanned.stdout ?? "")}\n${String(scanned.stderr ?? "")}`;
+      durationMs = replayMediaDurationMsFromFfmpegOutput(scanOutput);
+    } catch (error) {
+      const scanOutput = error && typeof error === "object"
+        ? `${String((error as { stdout?: unknown }).stdout ?? "")}\n${String((error as { stderr?: unknown }).stderr ?? "")}`
+        : String(error ?? "");
+      durationMs = replayMediaDurationMsFromFfmpegOutput(scanOutput);
+    }
+  }
+  const videoMatch = output.match(/Video:\s*([^,\n]+).*?([1-9]\d{2,5})x([1-9]\d{2,5})/i);
+  const fpsMatch = output.match(/(?:,|\s)(\d+(?:\.\d+)?)\s*fps(?:,|\s)/i);
+  return {
+    durationMs: Number.isFinite(durationMs) ? durationMs : 0,
+    width: Number(videoMatch?.[2]) || fallback.width,
+    height: Number(videoMatch?.[3]) || fallback.height,
+    fps: Math.max(1, Math.round(Number(fpsMatch?.[1]) || fallback.fps)),
+    codec: videoMatch?.[1]?.trim() || fallback.codec,
+    hasAudio: /Audio:\s*[^\n]+/i.test(output)
+  };
+}
+
+async function importReplayMediaFromPath(sourcePath: string): Promise<ReplayRecord> {
+  if (!isReplayMediaFilename(sourcePath)) {
+    throw new Error("That file is not a supported WebM or MP4 replay recording.");
+  }
+  const sourceStats = await stat(sourcePath);
+  if (!sourceStats.isFile() || sourceStats.size <= 0) {
+    throw new Error("That replay recording is empty.");
+  }
+
+  const replayId = randomUUID();
+  const settings = await store.getSettings();
+  let importedPath = resolve(sourcePath);
+  let copiedIntoStorage = false;
+  if (!await replayVideoPathAllowed(importedPath)) {
+    const directory = join(replayVideoImportDirectory(settings), safeFileComponent(replayId, "replay"));
+    await mkdir(directory, { recursive: true });
+    importedPath = join(directory, basename(sourcePath));
+    await copyFile(sourcePath, importedPath);
+    copiedIntoStorage = true;
+  }
+
+  const mimeType = replayMediaMimeType(importedPath);
+  const probe = await probeRecoveredReplayVideo(importedPath);
+  const containerFinalized = await makeReplayVideoSeekable(importedPath, mimeType).catch(() => false);
+  const importedStats = await stat(importedPath);
+  const readable = await validateReplayVideoReadable(importedPath, importedStats.size, mimeType).catch(() => false);
+  if (!readable) {
+    if (copiedIntoStorage) {
+      await unlink(importedPath).catch(() => undefined);
+      await unlink(replayVideoSeekableMarkerPath(importedPath)).catch(() => undefined);
+    }
+    throw new Error("That recording does not contain readable replay video.");
+  }
+  const platform = replayMediaPlatform(basename(sourcePath));
+  const fallbackDate = sourceStats.birthtimeMs > 0 ? sourceStats.birthtime : sourceStats.mtime;
+  const startedAt = replayMediaCapturedAt(basename(sourcePath), fallbackDate);
+  const endedAt = new Date(new Date(startedAt).getTime() + Math.max(0, probe.durationMs)).toISOString();
+  const video: ReplayVideoAsset = {
+    path: importedPath,
+    url: pathToFileURL(importedPath).href,
+    filename: basename(importedPath),
+    directory: dirname(importedPath),
+    mimeType,
+    source: "riftreplay",
+    platform,
+    startedAt,
+    endedAt,
+    durationMs: probe.durationMs,
+    sizeBytes: importedStats.size,
+    width: probe.width,
+    height: probe.height,
+    fps: probe.fps,
+    captureIntervalMs: Math.round(1000 / Math.max(1, probe.fps)),
+    bitrateKbps: actualReplayBitrateKbps(importedStats.size, probe.durationMs) ?? 0,
+    actualBitrateKbps: actualReplayBitrateKbps(importedStats.size, probe.durationMs),
+    codec: probe.codec,
+    quality: probe.width >= 1800 ? "sharp" : "balanced",
+    hasAudio: probe.hasAudio,
+    containerFinalized
+  };
+
+  const replays = await store.getReplays();
+  const matchingReplayId = matchingMissingReplayIdForMedia(replays, platform, startedAt, endedAt, probe.durationMs);
+  const matchingMissingReplay = replays.find((replay) => replay.id === matchingReplayId);
+  if (matchingMissingReplay) {
+    return store.saveReplay({
+      ...matchingMissingReplay,
+      video,
+      importedAt: new Date().toISOString(),
+      importedFrom: sourcePath
+    });
+  }
+
+  const title = `Recovered ${platform === "atlas" ? "Atlas" : "TCGA"} recording`;
+  return store.saveReplay({
+    id: replayId,
+    matchId: replayId,
+    platform,
+    capturedAt: startedAt,
+    schemaVersion: 4,
+    title,
+    players: { me: "", opponent: "" },
+    events: [],
+    video,
+    importedAt: new Date().toISOString(),
+    importedFrom: sourcePath,
+    search: {
+      title,
+      platform,
+      players: [],
+      legends: [],
+      battlefields: [],
+      format: "",
+      result: "",
+      score: "",
+      capturedAt: startedAt,
+      deckName: ""
+    }
+  });
+}
+
+async function replayImportFiles(directory: string): Promise<string[]> {
+  const entries = await readdir(directory, { withFileTypes: true });
+  const files = entries.filter((entry) => entry.isFile()).map((entry) => join(directory, entry.name));
+  const videoDirectory = entries.find((entry) => entry.isDirectory() && entry.name.toLowerCase() === "video");
+  if (videoDirectory) {
+    const videoEntries = await readdir(join(directory, videoDirectory.name), { withFileTypes: true });
+    files.push(...videoEntries.filter((entry) => entry.isFile()).map((entry) => join(directory, videoDirectory.name, entry.name)));
+  }
+  return files.filter((file) => file.toLowerCase().endsWith(".riftreplay") || isReplayMediaFilename(file)).slice(0, 500);
+}
+
 async function importReplayBundle(): Promise<ReplayRecord | null> {
   const directory = replayBundleDirectory(await store.getSettings());
   await mkdir(directory, { recursive: true });
   const options: OpenDialogOptions = {
     title: "Import RiftLite replay",
     defaultPath: directory,
-    filters: [{ name: "RiftLite Replay", extensions: ["riftreplay"] }],
+    filters: [
+      { name: "RiftLite Replay or Recording", extensions: ["riftreplay", "webm", "mp4"] },
+      { name: "RiftLite Replay", extensions: ["riftreplay"] },
+      { name: "Replay Recording", extensions: ["webm", "mp4"] }
+    ],
     properties: ["openFile"]
   };
   const result = mainWindow ? await dialog.showOpenDialog(mainWindow, options) : await dialog.showOpenDialog(options);
   if (result.canceled || !result.filePaths[0]) {
     return null;
   }
-  return importReplayBundleFromPath(result.filePaths[0]);
+  return isReplayMediaFilename(result.filePaths[0])
+    ? importReplayMediaFromPath(result.filePaths[0])
+    : importReplayBundleFromPath(result.filePaths[0]);
 }
 
 async function importReplayFolder(): Promise<ReplayRecord[]> {
@@ -4543,15 +5124,24 @@ async function importReplayFolder(): Promise<ReplayRecord[]> {
   if (result.canceled || !result.filePaths[0]) {
     return [];
   }
-  const files = await readdir(result.filePaths[0]);
+  const files = await replayImportFiles(result.filePaths[0]);
+  const knownMediaPaths = new Set((await store.getReplays())
+    .map((replay) => replay.video?.path?.trim())
+    .filter((path): path is string => Boolean(path))
+    .map((path) => resolve(path).toLowerCase()));
   const imported: ReplayRecord[] = [];
   const failures: string[] = [];
-  for (const file of files.filter((item) => item.toLowerCase().endsWith(".riftreplay"))) {
+  for (const file of files) {
     try {
-      imported.push(await importReplayBundleFromPath(join(result.filePaths[0], file)));
+      if (isReplayMediaFilename(file)) {
+        if (knownMediaPaths.has(resolve(file).toLowerCase())) continue;
+        imported.push(await importReplayMediaFromPath(file));
+      } else {
+        imported.push(await importReplayBundleFromPath(file));
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      failures.push(`${file}: ${message}`);
+      failures.push(`${basename(file)}: ${message}`);
     }
   }
   if (!imported.length && failures.length) {
@@ -4596,6 +5186,171 @@ function getMainWindowBounds(): { width: number; height: number; minWidth: numbe
   };
 }
 
+async function captureAtlasSmokeDiagnostics(webContents: WebContents): Promise<void> {
+  if (webContents.isDestroyed() || !UI_SNAPSHOT_PATH) {
+    return;
+  }
+  const image = await webContents.capturePage();
+  const size = image.getSize();
+  const bitmap = image.toBitmap();
+  let sampledPixels = 0;
+  let luminanceTotal = 0;
+  let luminanceSquaredTotal = 0;
+  let brightPixels = 0;
+  const pixelStride = Math.max(1, Math.floor((size.width * size.height) / 120_000));
+  for (let pixelIndex = 0; pixelIndex < size.width * size.height; pixelIndex += pixelStride) {
+    const offset = pixelIndex * 4;
+    const blue = bitmap[offset] ?? 0;
+    const green = bitmap[offset + 1] ?? 0;
+    const red = bitmap[offset + 2] ?? 0;
+    const luminance = (red * 0.2126) + (green * 0.7152) + (blue * 0.0722);
+    sampledPixels += 1;
+    luminanceTotal += luminance;
+    luminanceSquaredTotal += luminance * luminance;
+    if (luminance >= 40) {
+      brightPixels += 1;
+    }
+  }
+  const meanLuminance = sampledPixels ? luminanceTotal / sampledPixels : 0;
+  const variance = sampledPixels
+    ? Math.max(0, (luminanceSquaredTotal / sampledPixels) - (meanLuminance * meanLuminance))
+    : 0;
+  const dom = await webContents.executeJavaScript(`(() => {
+    const elementDetails = (element) => {
+      if (!(element instanceof HTMLElement)) return null;
+      const bounds = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return {
+        tag: element.tagName,
+        id: element.id,
+        classes: String(element.className || "").slice(0, 300),
+        text: String(element.innerText || "").replace(/\\s+/g, " ").trim().slice(0, 300),
+        bounds: { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height },
+        style: {
+          display: style.display,
+          visibility: style.visibility,
+          opacity: style.opacity,
+          color: style.color,
+          backgroundColor: style.backgroundColor,
+          transform: style.transform
+        }
+      };
+    };
+    const allElements = Array.from(document.querySelectorAll("body *"));
+    const lobbyElements = allElements
+      .filter((element) => /^PLAY\\.RIFTATLAS\\s+Lobby/.test(String(element.innerText || "").replace(/\\s+/g, " ").trim()))
+      .sort((left, right) => {
+        const leftBounds = left.getBoundingClientRect();
+        const rightBounds = right.getBoundingClientRect();
+        return (leftBounds.width * leftBounds.height) - (rightBounds.width * rightBounds.height);
+      })
+      .slice(0, 10);
+    const pointStack = (x, y) => document.elementsFromPoint(x, y).slice(0, 12).map(elementDetails).filter(Boolean);
+    return {
+      url: location.href,
+      title: document.title,
+      readyState: document.readyState,
+      visibilityState: document.visibilityState,
+      viewport: { width: innerWidth, height: innerHeight, devicePixelRatio },
+      body: elementDetails(document.body),
+      bodyChildren: Array.from(document.body?.children || []).map(elementDetails).filter(Boolean),
+      lobbyElements: lobbyElements.map(elementDetails).filter(Boolean),
+      headerPointStack: pointStack(innerWidth / 2, Math.min(80, innerHeight / 4)),
+      centerPointStack: pointStack(innerWidth / 2, innerHeight / 2),
+      interactiveCount: document.querySelectorAll("button, input, select, textarea, [role='button'], [role='dialog']").length,
+      text: String(document.body?.innerText || "").replace(/\\s+/g, " ").trim().slice(0, 2_000)
+    };
+  })()`, true);
+  const parsedSnapshotPath = resolve(UI_SNAPSHOT_PATH);
+  const extensionIndex = parsedSnapshotPath.lastIndexOf(".");
+  const basePath = extensionIndex > parsedSnapshotPath.lastIndexOf("\\")
+    ? parsedSnapshotPath.slice(0, extensionIndex)
+    : parsedSnapshotPath;
+  await Promise.all([
+    writeFile(`${basePath}-atlas-guest.png`, image.toPNG()),
+    writeFile(`${basePath}-atlas-diagnostics.json`, JSON.stringify({
+      capturedAt: new Date().toISOString(),
+      image: {
+        width: size.width,
+        height: size.height,
+        sampledPixels,
+        meanLuminance,
+        standardDeviation: Math.sqrt(variance),
+        brightPixelRatio: sampledPixels ? brightPixels / sampledPixels : 0
+      },
+      dom
+    }, null, 2), "utf8")
+  ]);
+}
+
+function handleAtlasShellStatusEvent(sender: WebContents, event: CaptureEvent): void {
+  if (event.platform !== "atlas" || event.kind !== "debug") {
+    return;
+  }
+  const reason = typeof event.payload.reason === "string" ? event.payload.reason : "";
+  const senderUrl = sender.isDestroyed() ? "" : sender.getURL();
+  if (platformFromUrl(senderUrl) !== "atlas") {
+    return;
+  }
+  if (reason === "atlas-app-shell-ready") {
+    atlasEmptyShellMainRecovery.markAtlasShellReady();
+    return;
+  }
+  if (reason !== "atlas-app-shell-empty") {
+    return;
+  }
+
+  const decision = atlasEmptyShellMainRecovery.considerEmptyShell(
+    sender.id,
+    senderUrl,
+    capture.hasActiveCaptureSession("atlas")
+  );
+  if (decision.action !== "schedule-reload") {
+    return;
+  }
+
+  const { navigationKey, recoveryKey } = decision;
+  setTimeout(() => {
+    const currentAtlasGuest = gameWebContentsByPlatform.get("atlas");
+    const senderStillCurrent = !sender.isDestroyed() &&
+      currentAtlasGuest?.id === sender.id &&
+      platformFromUrl(sender.getURL()) === "atlas";
+    if (capture.hasActiveCaptureSession("atlas") || !senderStillCurrent) {
+      atlasEmptyShellMainRecovery.abandonScheduledReload(recoveryKey);
+      return;
+    }
+    if (!atlasEmptyShellMainRecovery.commitScheduledReload(recoveryKey, sender.id, navigationKey)) {
+      return;
+    }
+
+    const capturedAt = new Date().toISOString();
+    const url = diagnosticPageUrl(sender.getURL());
+    void capture.handleEvent({
+      id: `atlas-app-shell-main-reload-${Date.now()}-${randomUUID()}`,
+      platform: "atlas",
+      kind: "debug",
+      capturedAt,
+      url,
+      payload: {
+        reason: "atlas-app-shell-main-reload",
+        navigationKey,
+        recoveryKey,
+        delayMs: ATLAS_EMPTY_SHELL_MAIN_RELOAD_DELAY_MS
+      }
+    });
+    void logStartupIssue("Atlas empty shell main fail-safe reload", JSON.stringify({
+      navigationKey,
+      recoveryKey,
+      url
+    }));
+    try {
+      sender.reloadIgnoringCache();
+    } catch (error) {
+      void logStartupIssue("Atlas empty shell main fail-safe reload failed", error);
+    }
+  }, ATLAS_EMPTY_SHELL_MAIN_RELOAD_DELAY_MS);
+}
+
 async function createWindow(): Promise<void> {
   const iconPath = assetPath("riftlite-app.ico");
   const icon = nativeImage.createFromPath(iconPath);
@@ -4605,7 +5360,7 @@ async function createWindow(): Promise<void> {
     height: bounds.height,
     minWidth: bounds.minWidth,
     minHeight: bounds.minHeight,
-    title: "RiftLite Beta 0.8",
+    title: RIFTLITE_BUILD_IDENTITY.appName,
     icon,
     backgroundColor: "#0c101a",
     autoHideMenuBar: true,
@@ -4634,9 +5389,22 @@ async function createWindow(): Promise<void> {
     }
   }, 5000);
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    void openExternalResource(url).catch(() => undefined);
+    if (/^(?:https?|mailto|discord):/i.test(url)) {
+      void openExternalResource(url).catch(() => undefined);
+    }
     return { action: "deny" };
   });
+  const restrictAppNavigation = (event: Electron.Event, url: string) => {
+    if (isTrustedAppPageUrl(url)) {
+      return;
+    }
+    event.preventDefault();
+    if (/^(?:https?|mailto|discord):/i.test(url)) {
+      void openExternalResource(url).catch(() => undefined);
+    }
+  };
+  mainWindow.webContents.on("will-navigate", restrictAppNavigation);
+  mainWindow.webContents.on("will-redirect", restrictAppNavigation);
   mainWindow.webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL) => {
     void logStartupIssue("renderer did-fail-load", `${errorCode} ${errorDescription} ${validatedURL}`);
   });
@@ -4647,20 +5415,31 @@ async function createWindow(): Promise<void> {
     void logStartupIssue("app preload error", `${preloadPathValue}\n${formatStartupError(error)}`);
   });
   mainWindow.webContents.on("will-attach-webview", (event, webPreferences, params) => {
-    if (params.partition !== RIFTLITE_REPLAY_PARTITION) {
+    const policy = embeddedWebviewPolicy(params.src ?? "", params.partition ?? "", isDev);
+    if (!policy) {
+      event.preventDefault();
       return;
     }
-    webPreferences.preload = undefined;
+    webPreferences.preload = policy.kind === "game" ? preloadPath("gamePreload") : undefined;
     webPreferences.nodeIntegration = false;
+    webPreferences.nodeIntegrationInSubFrames = false;
     webPreferences.contextIsolation = true;
     webPreferences.sandbox = true;
     webPreferences.webSecurity = true;
-    if (!isAllowedRiftLiteReplayNavigation(params.src)) {
-      event.preventDefault();
-    }
+    webPreferences.allowRunningInsecureContent = false;
+    embeddedWebviewPolicyBySession.set(electronSession.fromPartition(params.partition), policy);
   });
   mainWindow.webContents.on("did-attach-webview", (_event, webContents) => {
-    if (isRiftLiteReplayWebContents(webContents)) {
+    const policy = embeddedWebviewPolicyBySession.get(webContents.session);
+    const currentUrl = webContents.getURL();
+    if (!policy || (currentUrl && currentUrl !== "about:blank" && !isAllowedEmbeddedNavigation(policy, currentUrl))) {
+      webContents.close();
+      return;
+    }
+    if (
+      policy.kind === "replay" &&
+      webContents.session === electronSession.fromPartition(RIFTLITE_REPLAY_PARTITION)
+    ) {
       riftLiteReplayWebContents = webContents;
       secureRiftLiteReplayWebContents(webContents);
       installFullscreenShortcut(webContents);
@@ -4671,9 +5450,58 @@ async function createWindow(): Promise<void> {
       });
       return;
     }
-    rememberGameWebContents(webContents);
+    if (policy.kind === "home-video") {
+      secureHomeMediaWebContents(webContents, policy);
+      installFullscreenShortcut(webContents);
+      return;
+    }
+    if (policy.kind !== "game") {
+      webContents.close();
+      return;
+    }
+    gameWebContentsByPlatform.set(policy.platform, webContents);
+    secureGameWebContents(webContents, policy);
+    atlasEmptyShellMainRecovery.beginNavigation(webContents.id, webContents.getURL());
     maybeInstallRawCaptureWebSocketTap(webContents);
     installFullscreenShortcut(webContents);
+    let atlasCardRenderingGeneration = 0;
+    let atlasCardRenderingCssKey = "";
+    let atlasCardRenderingPendingGeneration: number | null = null;
+    const invalidateAtlasCardRendering = () => {
+      atlasCardRenderingGeneration += 1;
+      atlasCardRenderingCssKey = "";
+      atlasCardRenderingPendingGeneration = null;
+    };
+    const installAtlasCardRendering = () => {
+      if (webContents.isDestroyed()) {
+        return;
+      }
+      const cardRenderingCss = atlasCardRenderingCssForUrl(webContents.getURL());
+      const generation = atlasCardRenderingGeneration;
+      if (!cardRenderingCss || atlasCardRenderingCssKey || atlasCardRenderingPendingGeneration === generation) {
+        return;
+      }
+      atlasCardRenderingPendingGeneration = generation;
+      void webContents.insertCSS(cardRenderingCss).then((cssKey) => {
+        if (
+          webContents.isDestroyed() ||
+          generation !== atlasCardRenderingGeneration ||
+          !atlasCardRenderingCssForUrl(webContents.getURL())
+        ) {
+          if (!webContents.isDestroyed()) {
+            void webContents.removeInsertedCSS(cssKey).catch(() => undefined);
+          }
+          return;
+        }
+        atlasCardRenderingCssKey = cssKey;
+      }).catch((error) => {
+        void logStartupIssue("Atlas card rendering CSS failed", error);
+      }).finally(() => {
+        if (atlasCardRenderingPendingGeneration === generation) {
+          atlasCardRenderingPendingGeneration = null;
+        }
+      });
+    };
     const reportGuestLifecycle = (
       reason: string,
       payload: Record<string, unknown> = {},
@@ -4699,11 +5527,27 @@ async function createWindow(): Promise<void> {
     };
     webContents.on("did-start-navigation", (_navigationEvent, url, isInPlace, isMainFrame) => {
       if (isMainFrame && !isInPlace) {
+        invalidateAtlasCardRendering();
+        atlasEmptyShellMainRecovery.beginNavigation(webContents.id, url);
         reportGuestLifecycle("guest-main-navigation-start", {}, url);
       }
     });
     webContents.on("did-finish-load", () => {
       reportGuestLifecycle("guest-main-load-finished");
+      installAtlasCardRendering();
+      if (
+        IS_PACKAGED_SMOKE_TEST &&
+        UI_SNAPSHOT_PATH &&
+        platformFromUrl(webContents.getURL()) === "atlas" &&
+        !atlasSmokeDiagnosticsTaken
+      ) {
+        atlasSmokeDiagnosticsTaken = true;
+        setTimeout(() => {
+          void captureAtlasSmokeDiagnostics(webContents).catch((error) => {
+            void logStartupIssue("Atlas smoke diagnostics failed", error);
+          });
+        }, 4_500);
+      }
     });
     webContents.on("did-fail-load", (_loadEvent, errorCode, errorDescription, validatedURL, isMainFrame) => {
       if (!isMainFrame) {
@@ -4716,7 +5560,12 @@ async function createWindow(): Promise<void> {
     webContents.on("did-navigate", refreshGuestContext);
     webContents.on("did-navigate-in-page", refreshGuestContext);
     webContents.on("dom-ready", refreshGuestContext);
-    webContents.once("destroyed", () => forgetGameWebContents(webContents));
+    webContents.once("destroyed", () => {
+      invalidateAtlasCardRendering();
+      rawCaptureIngressLimiter.forget(webContents.id);
+      forgetGameWebContents(webContents);
+      atlasEmptyShellMainRecovery.forgetGuest(webContents.id);
+    });
     webContents.on("render-process-gone", (_goneEvent, details) => {
       const platform = platformFromUrl(webContents.getURL());
       const payload = {
@@ -4801,7 +5650,8 @@ async function createWindow(): Promise<void> {
 }
 
 function protocolNavigationFromArgs(argv: string[]): AppNavigationRequest | null {
-  const raw = argv.find((item) => item.toLowerCase().startsWith("riftlite://"));
+  const acceptedPrefixes = [`${RIFTLITE_BUILD_IDENTITY.protocol}://`, "riftlite://"];
+  const raw = argv.find((item) => acceptedPrefixes.some((prefix) => item.toLowerCase().startsWith(prefix)));
   if (!raw) return null;
   try {
     const url = new URL(raw);
@@ -4845,7 +5695,7 @@ async function openDeckTrackerWindow(): Promise<void> {
     height: 520,
     minWidth: 280,
     minHeight: 300,
-    title: "RiftLite Deck Tracker",
+    title: `${RIFTLITE_BUILD_IDENTITY.appName} Deck Tracker`,
     icon,
     backgroundColor: "#07101d",
     autoHideMenuBar: true,
@@ -4865,9 +5715,22 @@ async function openDeckTrackerWindow(): Promise<void> {
     deckTrackerWindow = null;
   });
   deckTrackerWindow.webContents.setWindowOpenHandler(({ url }) => {
-    void openExternalResource(url).catch(() => undefined);
+    if (/^(?:https?|mailto|discord):/i.test(url)) {
+      void openExternalResource(url).catch(() => undefined);
+    }
     return { action: "deny" };
   });
+  const restrictDeckTrackerNavigation = (event: Electron.Event, url: string) => {
+    if (isTrustedAppPageUrl(url)) {
+      return;
+    }
+    event.preventDefault();
+    if (/^(?:https?|mailto|discord):/i.test(url)) {
+      void openExternalResource(url).catch(() => undefined);
+    }
+  };
+  deckTrackerWindow.webContents.on("will-navigate", restrictDeckTrackerNavigation);
+  deckTrackerWindow.webContents.on("will-redirect", restrictDeckTrackerNavigation);
   deckTrackerWindow.webContents.on("render-process-gone", (_event, details) => {
     void logStartupIssue("deck tracker renderer process gone", JSON.stringify(details));
   });
@@ -4885,8 +5748,15 @@ async function openDeckTrackerWindow(): Promise<void> {
 }
 
 function registerIpc(): void {
-  ipcMain.handle("settings:get", () => store.getSettings());
-  ipcMain.handle("settings:save", async (_event, patch: Partial<UserSettings>) => {
+  handleTrustedAppIpc("settings:get", (event) => {
+    assertTrustedAppIpcSender(event);
+    return store.getSettings();
+  });
+  handleTrustedAppIpc("settings:save", async (event, patch: Partial<UserSettings>) => {
+    assertTrustedAppIpcSender(event);
+    if (!patch || typeof patch !== "object" || Array.isArray(patch)) {
+      throw new Error("Settings patch is invalid.");
+    }
     const accountIdentityChanged =
       Object.prototype.hasOwnProperty.call(patch, "accountUid") ||
       Object.prototype.hasOwnProperty.call(patch, "firebaseUid") ||
@@ -4923,102 +5793,142 @@ function registerIpc(): void {
         void logStartupIssue("raw capture pending upload after settings save failed", error);
       });
     }
+    queueAccountCloudSync("Settings changed");
     return saved;
   });
-  ipcMain.handle("capture:debug-enabled", async () => (await store.getSettings()).debugMode);
-  ipcMain.handle("capture:health:get", () => capture.getHealth());
-  ipcMain.handle("capture:force-review", (_event, platform: GamePlatform) => capture.forceReview(platform));
-  ipcMain.handle("matches:get", () => store.getMatches());
-  ipcMain.handle("matches:deleted", () => store.getDeletedMatches());
-  ipcMain.handle("matches:save-draft", async (_event, draft: MatchDraft) => {
+  ipcMain.handle("capture:debug-enabled", async (event) => {
+    if (!isTrustedAppIpcSender(event) && !trustedGameIpcPlatform(event)) {
+      throw new Error("IPC request rejected: untrusted sender.");
+    }
+    return (await store.getSettings()).debugMode;
+  });
+  handleTrustedAppIpc("capture:health:get", () => capture.getHealth());
+  handleTrustedAppIpc("capture:force-review", (_event, platform: GamePlatform) => capture.forceReview(platform));
+  handleTrustedAppIpc("matches:get", () => store.getMatches());
+  handleTrustedAppIpc("matches:deleted", () => store.getDeletedMatches());
+  handleTrustedAppIpc("matches:save-draft", async (_event, draft: MatchDraft) => {
     const saved = await store.saveMatch(draft);
     queueAccountCloudSync("Match saved");
     return saved;
   });
-  ipcMain.handle("matches:confirm", async (_event, draft: MatchDraft) => {
+  handleTrustedAppIpc("matches:confirm", async (_event, draft: MatchDraft) => {
     const saved = await capture.confirmMatch(draft);
     queueAccountCloudSync("Match saved");
     return saved;
   });
-  ipcMain.handle("matches:combine-preview", (_event, matchIds: string[]) => store.previewCombinedMatches(matchIds));
-  ipcMain.handle("matches:combine-save", async (_event, payload) => {
+  handleTrustedAppIpc("matches:combine-preview", (_event, matchIds: string[]) => store.previewCombinedMatches(matchIds));
+  handleTrustedAppIpc("matches:combine-save", async (_event, payload) => {
     const combined = await store.combineMatches(payload);
     const synced = await syncService.syncMatch(combined, { quiet: true }).catch(() => combined);
     const saved = await store.saveMatch(synced);
     queueAccountCloudSync("Match repair saved");
     return saved;
   });
-  ipcMain.handle("matches:combine-undo", (_event, combinedMatchId: string) => store.undoCombinedMatch(combinedMatchId));
-  ipcMain.handle("matches:delete", (_event, id: string) => store.deleteMatch(id));
-  ipcMain.handle("matches:restore", (_event, id: string) => store.restoreMatch(id));
-  ipcMain.handle("matches:purge", (_event, id: string) => store.purgeMatch(id));
-  ipcMain.handle("matches:export-csv", (_event, payload: MatchHistoryCsvExportPayload) => exportMatchHistoryCsv(payload));
-  ipcMain.handle("decks:get", () => deckService.getDecks());
-  ipcMain.handle("decks:import", async (_event, url: string) => {
+  handleTrustedAppIpc("matches:combine-undo", async (_event, combinedMatchId: string) => {
+    const restored = await store.undoCombinedMatch(combinedMatchId);
+    queueAccountCloudSync("Match combination undone");
+    return restored;
+  });
+  handleTrustedAppIpc("matches:delete", async (_event, id: string) => {
+    await store.deleteMatch(id);
+    queueAccountCloudSync("Match deleted");
+  });
+  handleTrustedAppIpc("matches:restore", async (_event, id: string) => {
+    const restored = await store.restoreMatch(id);
+    queueAccountCloudSync("Match restored");
+    return restored;
+  });
+  handleTrustedAppIpc("matches:purge", async (_event, id: string) => {
+    await store.purgeMatch(id);
+    queueAccountCloudSync("Deleted match removed");
+  });
+  handleTrustedAppIpc("matches:export-csv", (_event, payload: MatchHistoryCsvExportPayload) => exportMatchHistoryCsv(payload));
+  handleTrustedAppIpc("decks:get", () => deckService.getDecks());
+  handleTrustedAppIpc("decks:import", async (_event, url: string) => {
     const deck = await deckService.importDeck(url);
     queueAccountCloudSync("Deck imported");
     return deck;
   });
-  ipcMain.handle("decks:import-text", async (_event, text: string) => {
+  handleTrustedAppIpc("decks:import-text", async (_event, text: string) => {
     const deck = await deckService.importDeckText(text);
     queueAccountCloudSync("Deck imported");
     return deck;
   });
-  ipcMain.handle("decks:refresh", async (_event, id: string) => {
+  handleTrustedAppIpc("decks:refresh", async (_event, id: string) => {
     const deck = await deckService.refreshDeck(id);
     queueAccountCloudSync("Deck refreshed");
     return deck;
   });
-  ipcMain.handle("decks:rename", async (_event, id: string, title: string) => {
+  handleTrustedAppIpc("decks:rename", async (_event, id: string, title: string) => {
     const deck = await deckService.renameDeck(id, title);
     queueAccountCloudSync("Deck renamed");
     return deck;
   });
-  ipcMain.handle("decks:delete", async (_event, id: string) => {
+  handleTrustedAppIpc("decks:delete", async (_event, id: string) => {
     await deckService.deleteDeck(id);
     queueAccountCloudSync("Deck deleted");
   });
-  ipcMain.handle("decks:set-active", async (_event, id: string) => {
+  handleTrustedAppIpc("decks:set-active", async (_event, id: string) => {
     const settings = await deckService.setActiveDeck(id);
     queueAccountCloudSync("Active deck changed");
     return settings;
   });
-  ipcMain.handle("decks:notebook:get", (_event, deckId: string) => store.getDeckNotebook(deckId));
-  ipcMain.handle("decks:notebook:save", async (_event, deckId: string, notebook: DeckNotebook) => {
+  handleTrustedAppIpc("decks:notebook:get", (_event, deckId: string) => store.getDeckNotebook(deckId));
+  handleTrustedAppIpc("decks:notebook:save", async (_event, deckId: string, notebook: DeckNotebook) => {
     const saved = await store.saveDeckNotebook(deckId, notebook);
     queueAccountCloudSync("Deck notebook saved");
     return saved;
   });
-  ipcMain.handle("decks:notebook:export", (_event, deckId: string) => exportDeckNotebook(deckId));
-  ipcMain.handle("decks:notebook:import", () => importDeckNotebook());
-  ipcMain.handle("decks:package:export", (_event, deckId: string, notebook?: DeckNotebook) => exportDeckPackage(deckId, notebook));
-  ipcMain.handle("decks:package:import", () => importDeckPackage());
-  ipcMain.handle("decks:package:export-text", (_event, deckId: string, notebook?: DeckNotebook) => exportDeckPackageText(deckId, notebook));
-  ipcMain.handle("decks:package:import-text", (_event, text: string) => importDeckPackageText(text));
-  ipcMain.handle("decks:prep:export-pdf", (_event, deckId: string, notebook?: DeckNotebook) => exportDeckPrepPdf(deckId, notebook));
-  ipcMain.handle("decks:prep:get-active", (_event, opponentLegend?: string) => getActiveDeckPrep(opponentLegend));
-  ipcMain.handle("clipboard:write-text", (_event, text: string) => {
+  handleTrustedAppIpc("decks:notebook:export", (_event, deckId: string) => exportDeckNotebook(deckId));
+  handleTrustedAppIpc("decks:notebook:import", async () => {
+    const notebook = await importDeckNotebook();
+    if (notebook) {
+      queueAccountCloudSync("Deck notebook imported");
+    }
+    return notebook;
+  });
+  handleTrustedAppIpc("decks:package:export", (_event, deckId: string, notebook?: DeckNotebook) => exportDeckPackage(deckId, notebook));
+  handleTrustedAppIpc("decks:package:import", async () => {
+    const imported = await importDeckPackage();
+    if (imported) {
+      queueAccountCloudSync("Deck package imported");
+    }
+    return imported;
+  });
+  handleTrustedAppIpc("decks:package:export-text", (_event, deckId: string, notebook?: DeckNotebook) => exportDeckPackageText(deckId, notebook));
+  handleTrustedAppIpc("decks:package:import-text", async (_event, text: string) => {
+    const imported = await importDeckPackageText(text);
+    queueAccountCloudSync("Deck package imported");
+    return imported;
+  });
+  handleTrustedAppIpc("decks:prep:export-pdf", (_event, deckId: string, notebook?: DeckNotebook) => exportDeckPrepPdf(deckId, notebook));
+  handleTrustedAppIpc("decks:prep:get-active", (_event, opponentLegend?: string) => getActiveDeckPrep(opponentLegend));
+  handleTrustedAppIpc("clipboard:write-text", (_event, text: string) => {
     clipboard.writeText(String(text ?? ""));
     return true;
   });
-  ipcMain.handle("deck-tracker:get-state", () => deckTrackerService.getState());
-  ipcMain.handle("deck-tracker:set-pinned", (_event, deckId: string, cardKeys: string[]) => deckTrackerService.setPinnedCards(deckId, cardKeys));
-  ipcMain.handle("deck-tracker:adjust", (_event, cardKey: string, delta: number) => deckTrackerService.adjustCard(cardKey, delta));
-  ipcMain.handle("deck-tracker:sideboard-adjust", (_event, cardKey: string, direction: "in" | "out", delta: number) => (
+  handleTrustedAppIpc("deck-tracker:get-state", () => deckTrackerService.getState());
+  handleTrustedAppIpc("deck-tracker:set-pinned", async (_event, deckId: string, cardKeys: string[]) => {
+    const state = await deckTrackerService.setPinnedCards(deckId, cardKeys);
+    queueAccountCloudSync("Deck tracker pins changed");
+    return state;
+  });
+  handleTrustedAppIpc("deck-tracker:adjust", (_event, cardKey: string, delta: number) => deckTrackerService.adjustCard(cardKey, delta));
+  handleTrustedAppIpc("deck-tracker:sideboard-adjust", (_event, cardKey: string, direction: "in" | "out", delta: number) => (
     deckTrackerService.adjustSideboardCard(cardKey, direction, delta)
   ));
-  ipcMain.handle("deck-tracker:sideboard-reset", () => deckTrackerService.resetSideboard());
-  ipcMain.handle("deck-tracker:reset", () => deckTrackerService.resetMatch());
-  ipcMain.handle("deck-tracker:open-window", () => openDeckTrackerWindow());
-  ipcMain.handle("vision-deck-tracker:get-status", () => deckTrackerService.getVisionStatus());
-  ipcMain.handle("vision-deck-tracker:set-enabled", (_event, enabled: boolean) => deckTrackerService.setVisionEnabled(Boolean(enabled)));
-  ipcMain.handle("vision-deck-tracker:calibrate", (_event, platform: GamePlatform) => deckTrackerService.calibrateVisionTracker(platform));
-  ipcMain.handle("vision-deck-tracker:confirm-suggestion", (_event, cardKey: string) => deckTrackerService.confirmVisionSuggestion(cardKey));
-  ipcMain.handle("vision-deck-tracker:reject-suggestion", (_event, cardKey: string) => deckTrackerService.rejectVisionSuggestion(cardKey));
-  ipcMain.handle("vision-deck-tracker:observations", (_event, platform: GamePlatform, observations: DeckTrackerObservation[], status: Partial<VisionDeckTrackerStatus>) => (
+  handleTrustedAppIpc("deck-tracker:sideboard-reset", () => deckTrackerService.resetSideboard());
+  handleTrustedAppIpc("deck-tracker:reset", () => deckTrackerService.resetMatch());
+  handleTrustedAppIpc("deck-tracker:open-window", () => openDeckTrackerWindow());
+  handleTrustedAppIpc("vision-deck-tracker:get-status", () => deckTrackerService.getVisionStatus());
+  handleTrustedAppIpc("vision-deck-tracker:set-enabled", (_event, enabled: boolean) => deckTrackerService.setVisionEnabled(Boolean(enabled)));
+  handleTrustedAppIpc("vision-deck-tracker:calibrate", (_event, platform: GamePlatform) => deckTrackerService.calibrateVisionTracker(platform));
+  handleTrustedAppIpc("vision-deck-tracker:confirm-suggestion", (_event, cardKey: string) => deckTrackerService.confirmVisionSuggestion(cardKey));
+  handleTrustedAppIpc("vision-deck-tracker:reject-suggestion", (_event, cardKey: string) => deckTrackerService.rejectVisionSuggestion(cardKey));
+  handleTrustedAppIpc("vision-deck-tracker:observations", (_event, platform: GamePlatform, observations: DeckTrackerObservation[], status: Partial<VisionDeckTrackerStatus>) => (
     deckTrackerService.reportVisionObservations(platform, observations, status)
   ));
-  ipcMain.handle("vision-deck-tracker:debug", async (_event, platform: GamePlatform, payload: unknown) => {
+  handleTrustedAppIpc("vision-deck-tracker:debug", async (_event, platform: GamePlatform, payload: unknown) => {
     const capturedAt = new Date().toISOString();
     const safePayload = sanitizeVisionDebugPayload(payload);
     await diagnostics.record({
@@ -5030,35 +5940,46 @@ function registerIpc(): void {
       payload: safePayload
     });
   });
-  ipcMain.handle("replays:get", () => store.getReplays());
-  ipcMain.handle("replays:deleted", () => store.getDeletedReplays());
-  ipcMain.handle("replays:save", (_event, replay: ReplayRecord) => store.saveReplay(replay));
-  ipcMain.handle("replays:delete", (_event, id: string) => store.deleteReplay(id));
-  ipcMain.handle("replays:restore", (_event, id: string) => store.restoreReplay(id));
-  ipcMain.handle("replays:purge", (_event, id: string) => store.purgeReplay(id));
-  ipcMain.handle("replays:export", (_event, replayId: string) => exportReplayBundle(replayId));
-  ipcMain.handle("replays:export-mp4", (_event, replayId: string, options: ReplayMp4ExportOptions) => exportReplayMp4(replayId, options));
-  ipcMain.handle("replays:export-presentation-mp4", (_event, replayId: string, payload: ReplayPresentationRecordingPayload) => exportReplayPresentationMp4(replayId, payload));
-  ipcMain.handle("replays:export-flags-text", (_event, replayId: string) => exportReplayFlagsText(replayId));
-  ipcMain.handle("raw-capture:upload", (_event, replayId: string) => rawCaptureService.uploadRawCapture(replayId));
-  ipcMain.handle("raw-capture:status", () => rawCaptureService.getStatus());
-  ipcMain.handle("raw-capture:payload", (_event, replayId: string) => rawCaptureService.getRawCapturePayload(replayId));
-  ipcMain.handle("raw-capture:upload-riftlite", (_event, replayId: string, visibility?: RawCaptureVisibility) => (
-    rawCaptureService.uploadRawCaptureToRiftLite(replayId, visibility)
-  ));
-  ipcMain.handle("raw-capture:share-discord", (_event, replayId: string) => (
-    rawCaptureService.shareRawCaptureToDiscord(replayId)
-  ));
-  ipcMain.handle("replay:embed:prepare", (_event, replayId: string) => prepareRiftLiteReplayEmbed(replayId));
-  ipcMain.handle("replay:embed:prepare-library", () => prepareRiftLiteReplayLibraryEmbed());
-  ipcMain.handle("replays:import", () => importReplayBundle());
-  ipcMain.handle("replays:import-folder", () => importReplayFolder());
-  ipcMain.handle("replays:open-folder", async () => {
+  handleTrustedAppIpc("replays:get", () => store.getReplays());
+  handleTrustedAppIpc("replays:deleted", () => store.getDeletedReplays());
+  handleTrustedAppIpc("replays:save", (_event, replay: ReplayRecord) => store.saveReplay(replay));
+  handleTrustedAppIpc("replays:delete", (_event, id: string) => store.deleteReplay(id));
+  handleTrustedAppIpc("replays:restore", (_event, id: string) => store.restoreReplay(id));
+  handleTrustedAppIpc("replays:purge", (_event, id: string) => store.purgeReplay(id));
+  handleTrustedAppIpc("replays:export", (_event, replayId: string) => exportReplayBundle(replayId));
+  handleTrustedAppIpc("replays:export-mp4", (_event, replayId: string, options: ReplayMp4ExportOptions) => exportReplayMp4(replayId, options));
+  handleTrustedAppIpc("replays:export-presentation-mp4", (_event, replayId: string, payload: ReplayPresentationRecordingPayload) => exportReplayPresentationMp4(replayId, payload));
+  handleTrustedAppIpc("replays:export-flags-text", (_event, replayId: string) => exportReplayFlagsText(replayId));
+  handleTrustedAppIpc("raw-capture:upload", (event, replayId: string) => {
+    assertTrustedAppIpcSender(event);
+    return rawCaptureService.uploadRawCapture(replayId);
+  });
+  handleTrustedAppIpc("raw-capture:status", (event) => {
+    assertTrustedAppIpcSender(event);
+    return rawCaptureService.getStatus();
+  });
+  handleTrustedAppIpc("raw-capture:payload", (event, replayId: string) => {
+    assertTrustedAppIpcSender(event);
+    return rawCaptureService.getRawCapturePayload(replayId);
+  });
+  handleTrustedAppIpc("raw-capture:upload-riftlite", (event, replayId: string, visibility?: RawCaptureVisibility) => {
+    assertTrustedAppIpcSender(event);
+    return rawCaptureService.uploadRawCaptureToRiftLite(replayId, visibility);
+  });
+  handleTrustedAppIpc("raw-capture:share-discord", (event, replayId: string) => {
+    assertTrustedAppIpcSender(event);
+    return rawCaptureService.shareRawCaptureToDiscord(replayId);
+  });
+  handleTrustedAppIpc("replay:embed:prepare", (_event, replayId: string) => prepareRiftLiteReplayEmbed(replayId));
+  handleTrustedAppIpc("replay:embed:prepare-library", () => prepareRiftLiteReplayLibraryEmbed());
+  handleTrustedAppIpc("replays:import", () => importReplayBundle());
+  handleTrustedAppIpc("replays:import-folder", () => importReplayFolder());
+  handleTrustedAppIpc("replays:open-folder", async () => {
     const directory = replayBundleDirectory(await store.getSettings());
     await mkdir(directory, { recursive: true });
     await shell.openPath(directory);
   });
-  ipcMain.handle("replays:choose-directory", async () => {
+  handleTrustedAppIpc("replays:choose-directory", async () => {
     const settings = await store.getSettings();
     const options: OpenDialogOptions = {
       title: "Choose RiftLite replay folder",
@@ -5072,39 +5993,61 @@ function registerIpc(): void {
     replayFrameDirectoryCache = null;
     return store.saveSettings({ replayDirectory: result.filePaths[0] });
   });
-  ipcMain.handle("replays:open-directory", async () => {
+  handleTrustedAppIpc("replays:open-directory", async () => {
     const directory = replayBundleDirectory(await store.getSettings());
     await mkdir(directory, { recursive: true });
     await shell.openPath(directory);
   });
-  ipcMain.handle("replays:video:start", (_event, options: ReplayVideoStartOptions) => startReplayVideoCaptureFile(options));
-  ipcMain.handle("replays:video:prepare-target", (_event, platform: GamePlatform, mode: ReplayVideoCaptureMode) => prepareReplayVideoDisplayTarget(platform, mode));
-  ipcMain.handle("replays:video:window-source", () => replayWindowCaptureSource());
-  ipcMain.handle("replays:video:chunk", (_event, sessionId: string, chunk: ArrayBuffer | Uint8Array) => appendReplayVideoChunk(sessionId, chunk));
-  ipcMain.handle("replays:video:finish", (_event, sessionId: string, options: ReplayVideoFinalizeOptions) => finishReplayVideoCaptureFile(sessionId, options));
-  ipcMain.handle("replays:video:merge", (_event, segments: ReplayVideoAsset[], options: ReplayVideoMergeOptions) => mergeReplayVideoSegments(segments, options));
-  ipcMain.handle("replays:video:attach", (_event, matchId: string, video: ReplayVideoAsset) => attachReplayVideo(matchId, video));
-  ipcMain.handle("replays:video:discard", (_event, video: ReplayVideoAsset) => discardReplayVideoAsset(video));
-  ipcMain.handle("replays:video:delete-by-match", (_event, matchId: string) => deleteReplayVideoByMatch(matchId));
-  ipcMain.handle("replays:video:keyframe", (_event, options: ReplayVideoKeyframeOptions) => saveReplayVideoKeyframe(options));
-  ipcMain.handle("replays:video:load", (_event, video: ReplayVideoAsset) => loadReplayVideo(video));
-  ipcMain.handle("legacy:import", () => store.importLegacyData());
-  ipcMain.handle("backup:export", (_event, options?: Partial<RiftLiteBackupOptions>) => exportRiftLiteBackup(options ?? {}));
-  ipcMain.handle("backup:restore", () => restoreRiftLiteBackup());
-  ipcMain.handle("community:matches", (_event, forceRefresh = false) => syncService.getCommunityMatches(Boolean(forceRefresh)));
-  ipcMain.handle("hubs:create", async (_event, name: string, password: string) => syncService.createHub(name, password, await store.getSettings()));
-  ipcMain.handle("hubs:join", async (_event, name: string, password: string) => syncService.joinHub(name, password, await store.getSettings()));
-  ipcMain.handle("hubs:refresh-account", () => syncService.refreshAccountHubs());
-  ipcMain.handle("hubs:matches", (_event, hubId: string, forceRefresh = false) => syncService.getHubMatches(hubId, Boolean(forceRefresh)));
-  ipcMain.handle("hubs:sync-private", () => capture.syncPrivateHubs());
-  ipcMain.handle("hubs:sync-selected", (_event, matchIds: string[], hubIds: string[]) => capture.syncMatchesToHubs(matchIds, hubIds));
-  ipcMain.handle("hubs:delete-match", (_event, hubId: string, matchId: string) => syncService.deleteHubMatch(hubId, matchId));
-  ipcMain.handle("teams:matches", (_event, teamId: string, forceRefresh = false) => syncService.getTeamMatches(teamId, Boolean(forceRefresh)));
-  ipcMain.handle("teams:sync-enabled", () => capture.syncTeams());
-  ipcMain.handle("teams:sync-selected", (_event, matchIds: string[], teamIds: string[]) => capture.syncMatchesToTeams(matchIds, teamIds));
-  ipcMain.handle("teams:delete-match", (_event, teamId: string, matchId: string) => syncService.deleteTeamMatch(teamId, matchId));
-  ipcMain.handle("account:link:start", () => syncService.startAccountLink());
-  ipcMain.handle("account:link:status", async (_event, sessionId: string) => {
+  handleTrustedAppIpc("replays:video:start", (_event, options: ReplayVideoStartOptions) => startReplayVideoCaptureFile(options));
+  handleTrustedAppIpc("replays:video:prepare-target", (_event, platform: GamePlatform, mode: ReplayVideoCaptureMode) => prepareReplayVideoDisplayTarget(platform, mode));
+  handleTrustedAppIpc("replays:video:window-source", () => replayWindowCaptureSource());
+  handleTrustedAppIpc("replays:video:chunk", (_event, sessionId: string, chunk: ArrayBuffer | Uint8Array) => appendReplayVideoChunk(sessionId, chunk));
+  handleTrustedAppIpc("replays:video:finish", (_event, sessionId: string, options: ReplayVideoFinalizeOptions) => finishReplayVideoCaptureFile(sessionId, options));
+  handleTrustedAppIpc("replays:video:merge", (_event, segments: ReplayVideoAsset[], options: ReplayVideoMergeOptions) => mergeReplayVideoSegments(segments, options));
+  handleTrustedAppIpc("replays:video:attach", (_event, matchId: string, video: ReplayVideoAsset) => attachReplayVideo(matchId, video));
+  handleTrustedAppIpc("replays:video:discard", (_event, video: ReplayVideoAsset) => discardReplayVideoAsset(video));
+  handleTrustedAppIpc("replays:video:delete-by-match", (_event, matchId: string) => deleteReplayVideoByMatch(matchId));
+  handleTrustedAppIpc("replays:video:keyframe", (_event, options: ReplayVideoKeyframeOptions) => saveReplayVideoKeyframe(options));
+  handleTrustedAppIpc("replays:video:load", (_event, video: ReplayVideoAsset) => loadReplayVideo(video));
+  handleTrustedAppIpc("legacy:import", async () => {
+    const summary = await store.importLegacyData();
+    if (summary.importedMatches || summary.importedHubs || summary.importedSettings) {
+      queueAccountCloudSync("Legacy data imported");
+    }
+    return summary;
+  });
+  handleTrustedAppIpc("backup:export", (event, options?: Partial<RiftLiteBackupOptions>) => {
+    assertTrustedAppIpcSender(event);
+    return exportRiftLiteBackup(options ?? {});
+  });
+  handleTrustedAppIpc("backup:restore", async (event) => {
+    assertTrustedAppIpcSender(event);
+    const summary = await restoreRiftLiteBackup();
+    if (summary) {
+      queueAccountCloudSync("Local backup restored");
+    }
+    return summary;
+  });
+  handleTrustedAppIpc("community:matches", (_event, forceRefresh = false) => syncService.getCommunityMatches(Boolean(forceRefresh)));
+  handleTrustedAppIpc("hubs:create", async (_event, name: string, password: string) => syncService.createHub(name, password, await store.getSettings()));
+  handleTrustedAppIpc("hubs:join", async (_event, name: string, password: string) => syncService.joinHub(name, password, await store.getSettings()));
+  handleTrustedAppIpc("hubs:refresh-account", () => syncService.refreshAccountHubs());
+  handleTrustedAppIpc("hubs:leave", (_event, hubId: string) => syncService.leaveHub(hubId));
+  handleTrustedAppIpc("hubs:delete", (_event, hubId: string, confirmation: string) => syncService.deleteHub(hubId, confirmation));
+  handleTrustedAppIpc("hubs:matches", (_event, hubId: string, forceRefresh = false) => syncService.getHubMatches(hubId, Boolean(forceRefresh)));
+  handleTrustedAppIpc("hubs:sync-private", () => capture.syncPrivateHubs());
+  handleTrustedAppIpc("hubs:sync-selected", (_event, matchIds: string[], hubIds: string[]) => capture.syncMatchesToHubs(matchIds, hubIds));
+  handleTrustedAppIpc("hubs:delete-match", (_event, hubId: string, matchId: string) => syncService.deleteHubMatch(hubId, matchId));
+  handleTrustedAppIpc("teams:matches", (_event, teamId: string, forceRefresh = false) => syncService.getTeamMatches(teamId, Boolean(forceRefresh)));
+  handleTrustedAppIpc("teams:sync-enabled", () => capture.syncTeams());
+  handleTrustedAppIpc("teams:sync-selected", (_event, matchIds: string[], teamIds: string[]) => capture.syncMatchesToTeams(matchIds, teamIds));
+  handleTrustedAppIpc("teams:delete-match", (_event, teamId: string, matchId: string) => syncService.deleteTeamMatch(teamId, matchId));
+  handleTrustedAppIpc("account:link:start", (event) => {
+    assertTrustedAppIpcSender(event);
+    return syncService.startAccountLink();
+  });
+  handleTrustedAppIpc("account:link:status", async (event, sessionId: string) => {
+    assertTrustedAppIpcSender(event);
     const status = await syncService.getAccountLinkStatus(sessionId);
     if (status.status === "complete") {
       await clearRiftLiteReplayEmbedCookies().catch(() => undefined);
@@ -5116,60 +6059,109 @@ function registerIpc(): void {
     }
     return status;
   });
-  ipcMain.handle("account:profile:get", () => syncService.getAccountProfile());
-  ipcMain.handle("account:connection:status", () => syncService.getAccountConnectionStatus());
-  ipcMain.handle("account:connection:repair", () => syncService.repairAccountConnection());
-  ipcMain.handle("account:profile:save", (_event, profile: Record<string, unknown>) => syncService.saveAccountProfile(profile));
-  ipcMain.handle("account:profile:backfill", () => syncService.refreshAccountProfileMatches());
-  ipcMain.handle("account:export", () => exportAccountData());
-  ipcMain.handle("account:cloud-sync:status", () => syncService.getAccountCloudSyncStatus());
-  ipcMain.handle("account:cloud-sync:set-enabled", (_event, enabled: boolean) => syncService.setAccountCloudSyncEnabled(Boolean(enabled)));
-  ipcMain.handle("account:cloud-sync:upload", () => syncService.uploadAccountCloudSync());
-  ipcMain.handle("account:cloud-sync:restore", () => syncService.restoreAccountCloudSync());
-  ipcMain.handle("account:unlink", async () => {
+  handleTrustedAppIpc("account:profile:get", (event) => {
+    assertTrustedAppIpcSender(event);
+    return syncService.getAccountProfile();
+  });
+  handleTrustedAppIpc("account:connection:status", (event) => {
+    assertTrustedAppIpcSender(event);
+    return syncService.getAccountConnectionStatus();
+  });
+  handleTrustedAppIpc("account:connection:repair", (event) => {
+    assertTrustedAppIpcSender(event);
+    return syncService.repairAccountConnection();
+  });
+  handleTrustedAppIpc("account:profile:save", (event, profile: Record<string, unknown>) => {
+    assertTrustedAppIpcSender(event);
+    return syncService.saveAccountProfile(profile);
+  });
+  handleTrustedAppIpc("account:profile:backfill", (event) => {
+    assertTrustedAppIpcSender(event);
+    return syncService.refreshAccountProfileMatches();
+  });
+  handleTrustedAppIpc("account:export", (event) => {
+    assertTrustedAppIpcSender(event);
+    return exportAccountData();
+  });
+  handleTrustedAppIpc("account:cloud-sync:status", (event) => {
+    assertTrustedAppIpcSender(event);
+    return syncService.getAccountCloudSyncStatus();
+  });
+  handleTrustedAppIpc("account:cloud-sync:set-enabled", (event, enabled: boolean) => {
+    assertTrustedAppIpcSender(event);
+    return syncService.setAccountCloudSyncEnabled(Boolean(enabled));
+  });
+  handleTrustedAppIpc("account:cloud-sync:upload", (event) => {
+    assertTrustedAppIpcSender(event);
+    return syncService.uploadAccountCloudSync();
+  });
+  handleTrustedAppIpc("account:cloud-sync:restore", (event) => {
+    assertTrustedAppIpcSender(event);
+    return runAccountCloudRestore(
+    () => syncService.restoreAccountCloudSync(),
+    deckTrackerService
+    );
+  });
+  handleTrustedAppIpc("account:cloud-sync:conflicts", (event) => {
+    assertTrustedAppIpcSender(event);
+    return syncService.getAccountCloudSyncConflicts();
+  });
+  handleTrustedAppIpc("account:cloud-sync:conflict:keep-current", (event, conflictId: string) => {
+    assertTrustedAppIpcSender(event);
+    return syncService.keepAccountCloudSyncConflictCurrent(conflictId);
+  });
+  handleTrustedAppIpc("account:cloud-sync:conflict:restore-legacy", (event, conflictId: string) => {
+    assertTrustedAppIpcSender(event);
+    return runAccountCloudRestore(
+      () => syncService.restoreAccountCloudSyncConflictLegacy(conflictId),
+      deckTrackerService
+    );
+  });
+  handleTrustedAppIpc("account:unlink", async (event) => {
+    assertTrustedAppIpcSender(event);
     const settings = await syncService.unlinkAccount();
     await clearRiftLiteReplayEmbedCookies().catch(() => undefined);
     return settings;
   });
-  ipcMain.handle("profiles:search", (_event, query: string) => syncService.searchPublicProfiles(query));
-  ipcMain.handle("hubs:claim", (_event, hubId: string, password?: string) => syncService.claimHub(hubId, password));
-  ipcMain.handle("hubs:inbox", () => syncService.getHubInbox());
-  ipcMain.handle("hubs:invite:accept", (_event, inviteId: string) => syncService.acceptHubInvite(inviteId));
-  ipcMain.handle("hubs:invite:decline", (_event, inviteId: string) => syncService.declineHubInvite(inviteId));
-  ipcMain.handle("hubs:members", (_event, hubId: string) => syncService.getHubMembers(hubId));
-  ipcMain.handle("hubs:health", (_event, hubId: string) => syncService.getHubHealth(hubId));
-  ipcMain.handle("hubs:member:update", (_event, hubId: string, uid: string, role: "admin" | "member") => syncService.updateHubMemberRole(hubId, uid, role));
-  ipcMain.handle("hubs:invite", (_event, hubId: string, targetHandle?: string) => syncService.createHubInvite(hubId, targetHandle));
-  ipcMain.handle("hubs:messages", (_event, hubId: string) => syncService.getHubMessages(hubId));
-  ipcMain.handle("hubs:message:post", (_event, hubId: string, text: string) => syncService.postHubMessage(hubId, text));
-  ipcMain.handle("hubs:message:delete", (_event, hubId: string, messageId: string) => syncService.deleteHubMessage(hubId, messageId));
-  ipcMain.handle("lfg:list", (_event, includeMine?: boolean) => syncService.getLfgListings(Boolean(includeMine)));
-  ipcMain.handle("lfg:create", (_event, draft) => syncService.createLfgListing(draft));
-  ipcMain.handle("lfg:accept", (_event, listingId: string) => syncService.acceptLfgListing(listingId));
-  ipcMain.handle("lfg:close", (_event, listingId: string) => syncService.closeLfgListing(listingId));
-  ipcMain.handle("lfg:voice:create", (_event, listingId: string) => syncService.createLfgVoice(listingId));
-  ipcMain.handle("discord:voice:join", (_event, listing) => joinDiscordVoiceFromListing(listing));
-  ipcMain.handle("teams:list", (_event, options) => syncService.getSocialTeams(options));
-  ipcMain.handle("teams:create", (_event, draft) => syncService.createSocialTeam(draft));
-  ipcMain.handle("teams:get", (_event, teamId: string) => syncService.getSocialTeam(teamId));
-  ipcMain.handle("teams:update", (_event, teamId: string, patch) => syncService.updateSocialTeam(teamId, patch));
-  ipcMain.handle("teams:apply", (_event, teamId: string, draft) => syncService.applyToSocialTeam(teamId, draft));
-  ipcMain.handle("teams:applications", (_event, teamId: string) => syncService.getSocialTeamApplications(teamId));
-  ipcMain.handle("teams:application:review", (_event, teamId: string, applicationId: string, status: "accepted" | "declined") => syncService.reviewSocialTeamApplication(teamId, applicationId, status));
-  ipcMain.handle("teams:messages", (_event, teamId: string) => syncService.getSocialTeamMessages(teamId));
-  ipcMain.handle("teams:message:post", (_event, teamId: string, text: string) => syncService.postSocialTeamMessage(teamId, text));
-  ipcMain.handle("teams:message:delete", (_event, teamId: string, messageId: string) => syncService.deleteSocialTeamMessage(teamId, messageId));
-  ipcMain.handle("teams:member:update", (_event, teamId: string, uid: string, role: "admin" | "member") => syncService.updateSocialTeamMember(teamId, uid, role));
-  ipcMain.handle("teams:member:remove", (_event, teamId: string, uid: string) => syncService.removeSocialTeamMember(teamId, uid));
-  ipcMain.handle("teams:report", (_event, payload) => syncService.reportSocialTeam(payload));
-  ipcMain.handle("moderation:teams", (_event, query?: string) => syncService.getModerationTeams(query));
-  ipcMain.handle("moderation:team:update", (_event, teamId: string, action, reason?: string) => syncService.moderateTeam(teamId, action, reason));
-  ipcMain.handle("updates:status", () => updater.getStatus());
-  ipcMain.handle("updates:check", () => updater.check());
-  ipcMain.handle("updates:download", () => updater.download());
-  ipcMain.handle("updates:install", () => updater.install());
-  ipcMain.handle("browsers:detect", () => detectBrowsers());
-  ipcMain.handle("overlay:info", () => ({
+  handleTrustedAppIpc("profiles:search", (_event, query: string) => syncService.searchPublicProfiles(query));
+  handleTrustedAppIpc("hubs:claim", (_event, hubId: string, password?: string) => syncService.claimHub(hubId, password));
+  handleTrustedAppIpc("hubs:inbox", () => syncService.getHubInbox());
+  handleTrustedAppIpc("hubs:invite:accept", (_event, inviteId: string) => syncService.acceptHubInvite(inviteId));
+  handleTrustedAppIpc("hubs:invite:decline", (_event, inviteId: string) => syncService.declineHubInvite(inviteId));
+  handleTrustedAppIpc("hubs:members", (_event, hubId: string) => syncService.getHubMembers(hubId));
+  handleTrustedAppIpc("hubs:health", (_event, hubId: string) => syncService.getHubHealth(hubId));
+  handleTrustedAppIpc("hubs:member:update", (_event, hubId: string, uid: string, role: "admin" | "member") => syncService.updateHubMemberRole(hubId, uid, role));
+  handleTrustedAppIpc("hubs:invite", (_event, hubId: string, targetHandle?: string) => syncService.createHubInvite(hubId, targetHandle));
+  handleTrustedAppIpc("hubs:messages", (_event, hubId: string) => syncService.getHubMessages(hubId));
+  handleTrustedAppIpc("hubs:message:post", (_event, hubId: string, text: string) => syncService.postHubMessage(hubId, text));
+  handleTrustedAppIpc("hubs:message:delete", (_event, hubId: string, messageId: string) => syncService.deleteHubMessage(hubId, messageId));
+  handleTrustedAppIpc("lfg:list", (_event, includeMine?: boolean) => syncService.getLfgListings(Boolean(includeMine)));
+  handleTrustedAppIpc("lfg:create", (_event, draft) => syncService.createLfgListing(draft));
+  handleTrustedAppIpc("lfg:accept", (_event, listingId: string) => syncService.acceptLfgListing(listingId));
+  handleTrustedAppIpc("lfg:close", (_event, listingId: string) => syncService.closeLfgListing(listingId));
+  handleTrustedAppIpc("lfg:voice:create", (_event, listingId: string) => syncService.createLfgVoice(listingId));
+  handleTrustedAppIpc("discord:voice:join", (_event, listing) => joinDiscordVoiceFromListing(listing));
+  handleTrustedAppIpc("teams:list", (_event, options) => syncService.getSocialTeams(options));
+  handleTrustedAppIpc("teams:create", (_event, draft) => syncService.createSocialTeam(draft));
+  handleTrustedAppIpc("teams:get", (_event, teamId: string) => syncService.getSocialTeam(teamId));
+  handleTrustedAppIpc("teams:update", (_event, teamId: string, patch) => syncService.updateSocialTeam(teamId, patch));
+  handleTrustedAppIpc("teams:apply", (_event, teamId: string, draft) => syncService.applyToSocialTeam(teamId, draft));
+  handleTrustedAppIpc("teams:applications", (_event, teamId: string) => syncService.getSocialTeamApplications(teamId));
+  handleTrustedAppIpc("teams:application:review", (_event, teamId: string, applicationId: string, status: "accepted" | "declined") => syncService.reviewSocialTeamApplication(teamId, applicationId, status));
+  handleTrustedAppIpc("teams:messages", (_event, teamId: string) => syncService.getSocialTeamMessages(teamId));
+  handleTrustedAppIpc("teams:message:post", (_event, teamId: string, text: string) => syncService.postSocialTeamMessage(teamId, text));
+  handleTrustedAppIpc("teams:message:delete", (_event, teamId: string, messageId: string) => syncService.deleteSocialTeamMessage(teamId, messageId));
+  handleTrustedAppIpc("teams:member:update", (_event, teamId: string, uid: string, role: "admin" | "member") => syncService.updateSocialTeamMember(teamId, uid, role));
+  handleTrustedAppIpc("teams:member:remove", (_event, teamId: string, uid: string) => syncService.removeSocialTeamMember(teamId, uid));
+  handleTrustedAppIpc("teams:report", (_event, payload) => syncService.reportSocialTeam(payload));
+  handleTrustedAppIpc("moderation:teams", (_event, query?: string) => syncService.getModerationTeams(query));
+  handleTrustedAppIpc("moderation:team:update", (_event, teamId: string, action, reason?: string) => syncService.moderateTeam(teamId, action, reason));
+  handleTrustedAppIpc("updates:status", () => updater.getStatus());
+  handleTrustedAppIpc("updates:check", () => updater.check());
+  handleTrustedAppIpc("updates:download", () => updater.download());
+  handleTrustedAppIpc("updates:install", () => updater.install());
+  handleTrustedAppIpc("browsers:detect", () => detectBrowsers());
+  handleTrustedAppIpc("overlay:info", () => ({
     url: overlayServer.url,
     landscapeUrl: overlayServer.landscapeUrl,
     portraitUrl: overlayServer.portraitUrl,
@@ -5179,26 +6171,64 @@ function registerIpc(): void {
     textDirectory: overlayServer.textOutputDirectory,
     textFiles: overlayServer.textFiles
   }));
-  ipcMain.handle("overlay:open-text-folder", async () => {
+  handleTrustedAppIpc("overlay:open-text-folder", async () => {
     await mkdir(overlayServer.textOutputDirectory, { recursive: true });
     await shell.openPath(overlayServer.textOutputDirectory);
   });
-  ipcMain.handle("diagnostics:path", async () => {
+  handleTrustedAppIpc("diagnostics:path", async (event) => {
+    assertTrustedAppIpcSender(event);
     await diagnostics.ensureFile();
     return diagnostics.getPath();
   });
-  ipcMain.handle("diagnostics:summary", () => diagnostics.summarize());
-  ipcMain.handle("diagnostics:bundle", async () => {
-    const bundlePath = await diagnostics.createBundle();
+  handleTrustedAppIpc("diagnostics:summary", (event) => {
+    assertTrustedAppIpcSender(event);
+    return diagnostics.summarize();
+  });
+  handleTrustedAppIpc("diagnostics:bundle", async (event, options?: unknown) => {
+    assertTrustedAppIpcSender(event);
+    if (options !== undefined && (
+      !options ||
+      typeof options !== "object" ||
+      Array.isArray(options) ||
+      Object.keys(options as Record<string, unknown>).some((key) => key !== "includeSensitiveData") ||
+      (Object.prototype.hasOwnProperty.call(options, "includeSensitiveData") &&
+        typeof (options as Record<string, unknown>).includeSensitiveData !== "boolean")
+    )) {
+      throw new Error("Diagnostics export options are invalid.");
+    }
+    const includeSensitiveData = (options as { includeSensitiveData?: boolean } | undefined)?.includeSensitiveData === true;
+    if (includeSensitiveData) {
+      const messageOptions = {
+        type: "warning" as const,
+        buttons: ["Cancel", "Create sensitive bundle"],
+        defaultId: 0,
+        cancelId: 0,
+        noLink: true,
+        title: "Include sensitive diagnostic data?",
+        message: "This file may contain player names, room codes, page URLs, account tokens, and raw capture payloads.",
+        detail: "Only continue when a trusted RiftLite developer has specifically requested an unredacted bundle. Never post it publicly."
+      };
+      const decision = mainWindow
+        ? await dialog.showMessageBox(mainWindow, messageOptions)
+        : await dialog.showMessageBox(messageOptions);
+      if (decision.response !== 1) {
+        return null;
+      }
+    }
+    const bundlePath = await diagnostics.createBundle({
+      includeSensitiveData,
+      confirmSensitiveDataExport: includeSensitiveData
+    });
     shell.showItemInFolder(bundlePath);
     return bundlePath;
   });
-  ipcMain.handle("diagnostics:open", async () => {
+  handleTrustedAppIpc("diagnostics:open", async (event) => {
+    assertTrustedAppIpcSender(event);
     await diagnostics.ensureFile();
     shell.showItemInFolder(diagnostics.getPath());
   });
-  ipcMain.handle("screenshot:take", () => takeScreenshot("manual"));
-  ipcMain.handle("screenshot:choose-directory", async () => {
+  handleTrustedAppIpc("screenshot:take", () => takeScreenshot("manual"));
+  handleTrustedAppIpc("screenshot:choose-directory", async () => {
     const settings = await store.getSettings();
     const options: OpenDialogOptions = {
       title: "Choose RiftLite screenshot folder",
@@ -5211,74 +6241,113 @@ function registerIpc(): void {
     }
     return store.saveSettings({ screenshotDirectory: result.filePaths[0] });
   });
-  ipcMain.handle("screenshot:open-directory", async () => {
+  handleTrustedAppIpc("screenshot:open-directory", async () => {
     const directory = screenshotDirectory(await store.getSettings());
     await mkdir(directory, { recursive: true });
     await shell.openPath(directory);
   });
-  ipcMain.handle("external:open", (_event, url: string) => openExternalResource(url));
-  ipcMain.handle("window:fullscreen", (_event, enabled: boolean) => {
+  handleTrustedAppIpc("external:open", (event, url: string) => {
+    assertTrustedAppIpcSender(event);
+    if (typeof url !== "string" || !url.trim() || url.length > 4_096) {
+      throw new Error("External URL is invalid.");
+    }
+    return openExternalResource(url);
+  });
+  handleTrustedAppIpc("window:fullscreen", (_event, enabled: boolean) => {
     if (!mainWindow) {
       return false;
     }
     mainWindow.setFullScreen(Boolean(enabled));
     return mainWindow.isFullScreen();
   });
-  ipcMain.handle("analytics:spotlight-click", (_event, payload: SpotlightClickPayload) => trackSpotlightClick(payload));
-  ipcMain.handle("assets:url", (_event, relativePath: string) => assetDataUrl(relativePath));
-  ipcMain.handle("battlefields:get", () => loadBattlefields());
-  ipcMain.handle("atlas-webview:recover", async () => {
-    const capturedAt = new Date().toISOString();
-    try {
-      await clearAtlasWebviewRuntime(electronSession.fromPartition(ATLAS_GAME_PARTITION));
-      await capture.handleEvent({
-        id: `atlas-webview-recovery-complete-${Date.now()}`,
-        platform: "atlas",
-        kind: "debug",
-        capturedAt,
-        url: "https://play.riftatlas.com/",
-        payload: {
-          reason: "atlas-webview-recovery-complete",
-          cleared: ["http-cache", "serviceworkers", "cachestorage"],
-          preserved: ["cookies", "localstorage", "indexdb"]
-        }
-      });
-      return {
-        ok: true,
-        message: "Atlas browser cache repaired. Reloading Atlas now."
-      };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      await logStartupIssue("Atlas webview recovery failed", error);
-      await capture.handleEvent({
-        id: `atlas-webview-recovery-failed-${Date.now()}`,
-        platform: "atlas",
-        kind: "debug",
-        capturedAt,
-        url: "https://play.riftatlas.com/",
-        payload: { reason: "atlas-webview-recovery-failed", message: message.slice(0, 2_000) }
-      }).catch(() => undefined);
-      return {
-        ok: false,
-        message: "RiftLite could not repair the Atlas browser cache. Restart RiftLite and try again."
-      };
+  handleTrustedAppIpc("analytics:spotlight-click", (_event, payload: SpotlightClickPayload) => trackSpotlightClick(payload));
+  handleTrustedAppIpc("assets:url", (_event, relativePath: string) => assetDataUrl(relativePath));
+  handleTrustedAppIpc("battlefields:get", () => loadBattlefields());
+  handleTrustedAppIpc("atlas-webview:recover", async () => {
+    atlasEmptyShellMainRecovery.resetAfterExplicitRepair();
+    if (atlasWebviewRecoveryInFlight) {
+      return atlasWebviewRecoveryInFlight;
     }
+    const capturedAt = new Date().toISOString();
+    atlasWebviewRecoveryInFlight = (async () => {
+      try {
+        await clearAtlasWebviewRuntime(electronSession.fromPartition(ATLAS_GAME_PARTITION));
+        await capture.handleEvent({
+          id: `atlas-webview-recovery-complete-${Date.now()}`,
+          platform: "atlas",
+          kind: "debug",
+          capturedAt,
+          url: "https://play.riftatlas.com/",
+          payload: {
+            reason: "atlas-webview-recovery-complete",
+            cleared: ["http-cache", "code-cache", "serviceworkers", "cachestorage"],
+            preserved: ["cookies", "localstorage", "indexdb", "riftlite-account", "riftlite-local-data"]
+          }
+        });
+        return {
+          ok: true,
+          message: "Atlas runtime cache refreshed. Reloading Atlas now."
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        await logStartupIssue("Atlas webview recovery failed", error);
+        await capture.handleEvent({
+          id: `atlas-webview-recovery-failed-${Date.now()}`,
+          platform: "atlas",
+          kind: "debug",
+          capturedAt,
+          url: "https://play.riftatlas.com/",
+          payload: { reason: "atlas-webview-recovery-failed", message: message.slice(0, 2_000) }
+        }).catch(() => undefined);
+        return {
+          ok: false,
+          message: "RiftLite could not refresh the Atlas runtime cache. Restart RiftLite and try again."
+        };
+      } finally {
+        atlasWebviewRecoveryInFlight = null;
+      }
+    })();
+    return atlasWebviewRecoveryInFlight;
   });
-  ipcMain.handle("game-preload:url", (_event, platform: GamePlatform) => {
-    void platform;
+  handleTrustedAppIpc("game-preload:url", (event, platform: GamePlatform) => {
+    assertTrustedAppIpcSender(event);
+    if (!["tcga", "atlas", "sim"].includes(platform) || (platform === "sim" && !isDev)) {
+      throw new Error("Game platform is invalid.");
+    }
     return preloadPath("gamePreload");
   });
-  ipcMain.handle("notification:match-ready", async (_event, draft: MatchDraft) => {
+  handleTrustedAppIpc("notification:match-ready", async (event, draft: MatchDraft) => {
+    assertTrustedAppIpcSender(event);
     mainWindow?.webContents.send("match:draft", draft);
   });
-  ipcMain.handle("capture:renderer-event", async (_event, event: CaptureEvent) => {
+  handleTrustedAppIpc("capture:renderer-event", async (ipcEvent, value: unknown) => {
+    assertTrustedAppIpcSender(ipcEvent);
+    const event = validatedCaptureEvent(value, undefined, isDev);
+    if (!event) {
+      throw new Error("Capture event is invalid.");
+    }
     await capture.handleEvent(event);
   });
-  ipcMain.on("capture:event", (_event, event: CaptureEvent) => {
+  ipcMain.on("capture:event", (ipcEvent, value: unknown) => {
+    const senderPlatform = trustedGameIpcPlatform(ipcEvent);
+    const event = senderPlatform ? validatedCaptureEvent(value, senderPlatform, isDev) : null;
+    if (!event) {
+      return;
+    }
+    handleAtlasShellStatusEvent(ipcEvent.sender, event);
     void capture.handleEvent(event);
   });
-  ipcMain.on("raw-capture:frame", (event, payload: RawCaptureAppendFramePayload) => {
-    ingestAtlasRawFrame("game-preload", event.sender, payload, "atlas-preload-frame");
+  ipcMain.on("raw-capture:frame", (event, value: unknown) => {
+    if (
+      trustedGameIpcPlatform(event) !== "atlas" ||
+      !rawCaptureIngressLimiter.allow(event.sender.id, value)
+    ) {
+      return;
+    }
+    const payload = validatedRawCaptureFrame(value);
+    if (payload) {
+      ingestAtlasRawFrame("game-preload", event.sender, payload, "atlas-preload-frame");
+    }
   });
 }
 
@@ -5307,8 +6376,17 @@ app.whenReady().then(async () => {
   }
   try {
     Menu.setApplicationMenu(null);
-    await logStartupIssue("startup begin", `RiftLite ${app.getVersion()}`);
-    store = new RiftLiteStore();
+    await logStartupIssue("startup begin", `${RIFTLITE_BUILD_IDENTITY.appName} ${app.getVersion()}`);
+    store = new RiftLiteStore(
+      join(app.getPath("userData"), "riftlite-v06.sqlite"),
+      join(app.getPath("userData"), "riftlite-v06-store.json"),
+      new SecureCredentialVault(join(app.getPath("userData"), "riftlite-secure-credentials.json"), {
+        isAvailable: () => safeStorage.isEncryptionAvailable(),
+        encrypt: (value) => safeStorage.encryptString(value),
+        decrypt: (value) => safeStorage.decryptString(value)
+      }),
+      !IS_PACKAGED_SMOKE_TEST
+    );
     await store.load();
     await clearRiftLiteReplayEmbedCookies().catch((error) => {
       void logStartupIssue("replay embed cookie cleanup failed", error);
@@ -5317,7 +6395,22 @@ app.whenReady().then(async () => {
     syncService = new FirebaseSyncService(store, () => mainWindow);
     deckService = new DeckService(store);
     deckTrackerService = new DeckTrackerService(store, tcgaResolver);
-    rawCaptureService = new RawCaptureService(store);
+    rawCaptureService = new RawCaptureService(
+      store,
+      (expectedAccountUid) => syncService.refreshLinkedAccountIdToken(expectedAccountUid),
+      async (localMatchId, webReplayId) => {
+        await syncService.attachWebReplayToSyncedHubMatches(localMatchId, webReplayId);
+      },
+      (replay) => {
+        const window = mainWindow;
+        if (window && !window.isDestroyed() && !window.webContents.isDestroyed()) {
+          window.webContents.send("replay:updated", replay);
+        }
+      }
+    );
+    void syncService.backfillPrivateHubWebReplayIds().catch((error) => {
+      void logStartupIssue("private hub web replay backfill failed", error);
+    });
     if (RIFTREPLAY_CAPTURE_FEATURE_ENABLED) {
       void rawCaptureService.uploadPendingRawCaptures().catch((error) => {
         void logStartupIssue("raw capture pending upload on startup failed", error);
@@ -5332,7 +6425,10 @@ app.whenReady().then(async () => {
     });
     await overlayServer.start().catch((error) => logStartupIssue("overlay server startup failed", error));
     diagnostics = new CaptureDiagnostics();
-    updater = new UpdaterService(() => mainWindow);
+    updater = new UpdaterService(() => mainWindow, {
+      enabled: RIFTLITE_BUILD_IDENTITY.updatesEnabled,
+      disabledMessage: "Updates are disabled in this build."
+    });
     await diagnostics.ensureFile();
     capture = new CaptureCoordinator(
       store,
@@ -5354,10 +6450,95 @@ app.whenReady().then(async () => {
     }
     registerIpc();
     await createWindow();
+    if (UI_SNAPSHOT_PATH) {
+      setTimeout(() => {
+        void (async () => {
+          if (!mainWindow || mainWindow.isDestroyed()) return;
+          await mainWindow.webContents.executeJavaScript(
+            `document.querySelector('.release-notes-modal .primary')?.click()`
+          ).catch(() => undefined);
+          await new Promise((resolveSnapshot) => setTimeout(resolveSnapshot, 250));
+          if (UI_SNAPSHOT_TOUR_ACTION) {
+            const requestedStep = Number.parseInt(UI_SNAPSHOT_TOUR_ACTION, 10);
+            const clickCount = UI_SNAPSHOT_TOUR_ACTION === "finish"
+              ? 10
+              : Number.isFinite(requestedStep)
+                ? Math.max(0, Math.min(9, requestedStep - 1))
+                : 0;
+            for (let index = 0; index < clickCount; index += 1) {
+              const clicked = await mainWindow.webContents.executeJavaScript(`(() => {
+                const button = document.querySelector('[data-tour-action="next"], [data-tour-action="finish"]');
+                if (!(button instanceof HTMLButtonElement)) return false;
+                button.click();
+                return true;
+              })()`);
+              if (!clicked) break;
+              await new Promise((resolveTourStep) => setTimeout(resolveTourStep, 320));
+            }
+          }
+          if (UI_SNAPSHOT_PLATFORM === "atlas" || UI_SNAPSHOT_PLATFORM === "tcga") {
+            const platformLiteral = JSON.stringify(UI_SNAPSHOT_PLATFORM);
+            await mainWindow.webContents.executeJavaScript(`(() => {
+              const button = document.querySelector('.home-top-actions button[data-platform=' + ${platformLiteral} + ']');
+              if (!(button instanceof HTMLButtonElement)) return false;
+              button.click();
+              return true;
+            })()`);
+            await new Promise((resolvePlatform) => setTimeout(resolvePlatform, 180));
+          }
+          const snapshotViewTitles: Record<string, string> = {
+            home: "Home",
+            play: "Play",
+            matches: "Matches",
+            replays: "Replays",
+            "web-replay": "RiftLite web replay",
+            stats: "Stats",
+            decks: "Deck Library",
+            "matchup-lab": "Matchup Lab",
+            community: "Meta & Matrix",
+            spotlight: "Spotlight",
+            social: "Find Match & Teams",
+            hubs: "Private Hubs",
+            scorepad: "Scorepad",
+            stream: "Overlay",
+            account: "Account & integrations",
+            settings: "Settings"
+          };
+          const snapshotViewTitle = snapshotViewTitles[UI_SNAPSHOT_VIEW];
+          if (snapshotViewTitle) {
+            const snapshotViewTitleLiteral = JSON.stringify(snapshotViewTitle);
+            await mainWindow.webContents.executeJavaScript(`(() => {
+              const button = Array.from(document.querySelectorAll('button[title]')).find((candidate) => candidate.getAttribute('title') === ${snapshotViewTitleLiteral});
+              if (!(button instanceof HTMLButtonElement)) return false;
+              button.click();
+              return true;
+            })()`);
+            await new Promise((resolveView) => setTimeout(resolveView, 650));
+          }
+          if (UI_SNAPSHOT_COLLAPSED) {
+            await mainWindow.webContents.executeJavaScript(`(() => {
+              const button = document.querySelector('.sidebar-float-toggle');
+              if (!(button instanceof HTMLButtonElement)) return false;
+              button.click();
+              return true;
+            })()`);
+            await new Promise((resolveCollapse) => setTimeout(resolveCollapse, 240));
+          }
+          if (UI_SNAPSHOT_VIEW === "play" && UI_SNAPSHOT_PLATFORM === "atlas") {
+            await new Promise((resolveAtlas) => setTimeout(resolveAtlas, UI_SNAPSHOT_ATLAS_WAIT_MS));
+          }
+          const image = await mainWindow.webContents.capturePage();
+          await writeFile(resolve(UI_SNAPSHOT_PATH), image.toPNG());
+          app.quit();
+        })().catch((error) => logStartupIssue("UI snapshot failed", error));
+      }, 3_000);
+    }
     await configureScreenshotHotkey().catch((error) => logStartupIssue("screenshot hotkey startup failed", error));
     await configureReplayHotkeys().catch((error) => logStartupIssue("replay hotkey startup failed", error));
-    scheduleAppUsageHeartbeat(store);
-    await logStartupIssue("startup complete", `RiftLite ${app.getVersion()}`);
+    if (RIFTLITE_BUILD_IDENTITY.usageAnalyticsEnabled) {
+      scheduleAppUsageHeartbeat(store);
+    }
+    await logStartupIssue("startup complete", `${RIFTLITE_BUILD_IDENTITY.appName} ${app.getVersion()}`);
 
     app.on("activate", () => {
       if (BrowserWindow.getAllWindows().length === 0) {

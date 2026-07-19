@@ -893,8 +893,8 @@ function collectBattlefieldReferences(events: CaptureEvent[], match?: MatchDraft
     addBattlefieldRef(refs, "me", match.myBattlefield, "", "");
     addBattlefieldRef(refs, "opponent", match.opponentBattlefield, "", "");
     for (const game of match.games) {
-      addBattlefieldRef(refs, "me", game.myBattlefield ?? "", "", game.myBattlefieldImage ?? "");
-      addBattlefieldRef(refs, "opponent", game.oppBattlefield ?? "", "", game.oppBattlefieldImage ?? "");
+      addBattlefieldRef(refs, "me", game.myBattlefield ?? "", game.myBattlefieldCode ?? "", game.myBattlefieldImage ?? "");
+      addBattlefieldRef(refs, "opponent", game.oppBattlefield ?? "", game.oppBattlefieldCode ?? "", game.oppBattlefieldImage ?? "");
     }
   }
   for (const event of events) {

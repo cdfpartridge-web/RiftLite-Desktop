@@ -1686,6 +1686,70 @@ describe("CaptureCoordinator", () => {
     ]);
   });
 
+  it.each(["tcga", "atlas"] as const)("resolves each code-only %s BO3 battlefield pair code-first", async (platform) => {
+    const { coordinator, saved, resolver } = coordinatorHarness();
+    const battlefieldNames: Record<string, string> = {
+      "VEN-157": "Dragon Roost",
+      "UNL-218": "Valley of Idols",
+      "VEN-158": "Heisho, Shell of the World",
+      "UNL-217": "Trapping Grounds"
+    };
+    resolver.resolveBattlefield.mockImplementation(async (value: unknown) => battlefieldNames[String(value ?? "")] ?? "");
+    const base = {
+      active: true,
+      format: "Bo3",
+      myName: "BMU",
+      opponentName: "Code Rival",
+      myChampion: "Akali",
+      opponentChampion: "Jayce"
+    };
+    const pair = (myBattlefieldCode: string, opponentBattlefieldCode: string) => ({
+      myBattlefieldCode,
+      opponentBattlefieldCode
+    });
+
+    await coordinator.handleEvent(event("match-start", {
+      ...base,
+      score: { me: "0", opp: "0" },
+      ...pair("VEN-157", "UNL-218")
+    }, "2026-07-18T22:00:00.000Z", platform));
+    await coordinator.handleEvent(event("match-snapshot", {
+      ...base,
+      score: { me: "7", opp: "4" },
+      ...pair("VEN-157", "UNL-218")
+    }, "2026-07-18T22:10:00.000Z", platform));
+    await coordinator.handleEvent(event("match-snapshot", {
+      ...base,
+      score: { me: "0", opp: "0" },
+      ...pair("VEN-158", "UNL-217")
+    }, "2026-07-18T22:11:00.000Z", platform));
+    await coordinator.handleEvent(event("match-snapshot", {
+      ...base,
+      score: { me: "4", opp: "7" },
+      ...pair("VEN-158", "UNL-217")
+    }, "2026-07-18T22:21:00.000Z", platform));
+
+    const captured = await coordinator.forceReview(platform);
+
+    expect(captured).not.toBeNull();
+    expect(saved).toHaveLength(1);
+    expect(saved[0].games.map((game) => [
+      game.myBattlefieldCode,
+      game.oppBattlefieldCode,
+      game.myBattlefield,
+      game.oppBattlefield
+    ])).toEqual([
+      ["VEN-157", "UNL-218", "Dragon Roost", "Valley of Idols"],
+      ["VEN-158", "UNL-217", "Heisho, Shell of the World", "Trapping Grounds"]
+    ]);
+    expect(saved[0]).toMatchObject({
+      myBattlefield: "Dragon Roost",
+      opponentBattlefield: "Valley of Idols"
+    });
+    const resolvedValues = resolver.resolveBattlefield.mock.calls.map(([value]) => value);
+    expect(resolvedValues).toEqual(expect.arrayContaining(Object.keys(battlefieldNames)));
+  });
+
   it("suppresses duplicate Atlas Match Complete echoes after terminal BO3 review", async () => {
     const { coordinator, saved, sent, diagnostics } = coordinatorHarness();
     const base = {

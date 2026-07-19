@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
   buildDeckTrackerState,
+  deckTrackerIdentityAliases,
   deckTrackerImageUrlFromId,
   observationCountsForDeck,
   mainDeckTrackerCards,
@@ -577,6 +578,20 @@ export class DeckTrackerService {
     }
   }
 
+  invalidateDeckLibrary(): void {
+    this.deckCache = { deckId: "", deck: null };
+    this.stateByPlatform.clear();
+    this.lastOpponentLegendByPlatform.clear();
+    this.activePlatform = "none";
+    this.visionStatus = emptyVisionDeckTrackerStatus(
+      this.visionStatus.enabled,
+      "none",
+      this.visionStatus.enabled
+        ? "Deck library refreshed. Waiting for the next match."
+        : "Vision deck tracker is off."
+    );
+  }
+
   private async activeDeck(settings: UserSettings): Promise<SavedDeck | null> {
     if (!settings.activeDeckId) {
       this.deckCache = { deckId: "", deck: null };
@@ -1150,13 +1165,7 @@ function visionZonePriority(zone: DeckTrackerZone): number {
 }
 
 function matchedDeckKey(observation: DeckTrackerObservation, aliases: Map<string, string>): string {
-  const observationAliases = [
-    observation.cardKey,
-    observation.cardId,
-    observation.code,
-    observation.name,
-    observation.imageUrl
-  ].map(normalizeDeckTrackerKey).filter(Boolean);
+  const observationAliases = deckTrackerIdentityAliases(observation);
   return observationAliases.map((alias) => aliases.get(alias)).find(Boolean) ?? "";
 }
 

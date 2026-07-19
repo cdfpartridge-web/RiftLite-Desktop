@@ -1,3 +1,5 @@
+import { riftboundCardCodeAliases } from "./cardIdentity.js";
+
 function riftAtlasCardImageUrl(cardCode: string): string {
   return `https://assets.riftatlas-workers.com/cdn-cgi/image/width=192,quality=85,format=auto,fit=scale-down/riftbound/cards/small-v2/${cardCode}.webp`;
 }
@@ -59,16 +61,21 @@ const LEGEND_CARD_CODE_MAP: Record<string, string> = {
   "SFD-181": "Rumble",
   "SFD-240": "Rumble",
   "VEN-139": "Akali",
+  "VEN-189": "Akali",
   "VEN-141": "Renekton",
   "VEN-190": "Renekton",
   "VEN-143": "Zed",
   "VEN-191": "Zed",
   "VEN-145": "Nasus",
+  "VEN-192": "Nasus",
   "VEN-147": "Shen",
   "VEN-193": "Shen",
   "VEN-149": "Jayce",
+  "VEN-194": "Jayce",
   "VEN-151": "Mel",
+  "VEN-195": "Mel",
   "VEN-153": "Ambessa",
+  "VEN-196": "Ambessa",
   "VEN-155": "Kennen",
   "VEN-197": "Kennen"
 };
@@ -83,15 +90,16 @@ export function legendFromImageUrl(value: unknown): string {
     return "";
   }
   const decoded = decodeLoose(raw);
-  const directCode = cardCode(decoded);
-  const mappedLegend = directCode ? LEGEND_CARD_CODE_MAP[directCode] : "";
+  const directCodes = cardCodes(decoded);
+  const mappedLegend = directCodes.map((code) => LEGEND_CARD_CODE_MAP[code]).find(Boolean) ?? "";
   if (mappedLegend) {
     return mappedLegend;
   }
   const directHash = imageHash(decoded);
   for (const [legend, url] of Object.entries(LEGEND_IMAGE_URLS)) {
     const candidate = decodeLoose(url);
-    if (directCode && cardCode(candidate) === directCode) {
+    const candidateCodes = cardCodes(candidate);
+    if (directCodes.some((code) => candidateCodes.includes(code))) {
       return legend;
     }
     if (directHash && imageHash(candidate) === directHash) {
@@ -101,8 +109,8 @@ export function legendFromImageUrl(value: unknown): string {
   return "";
 }
 
-function cardCode(value: string): string {
-  return value.match(/\b((?:OGN|OGS|SFD|UNL|VEN)-\d+[A-Z]?)\b/i)?.[1]?.toUpperCase() ?? "";
+function cardCodes(value: string): string[] {
+  return riftboundCardCodeAliases(value);
 }
 
 function imageHash(value: string): string {

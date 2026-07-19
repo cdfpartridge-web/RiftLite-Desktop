@@ -77,6 +77,35 @@ function snapshot(gameNumber: number, opponentCards: Array<{ id: string; cardCod
 }
 
 describe("DeckTrackerService opponent tracker", () => {
+  it("reloads a restored deck with the same id and clears match observations", async () => {
+    let currentDeck = deck;
+    const mutableStore = {
+      getSettings: async () => settings,
+      getSavedDeck: async (id: string) => id === currentDeck.id ? currentDeck : null,
+      saveSettings: async (patch: Partial<UserSettings>) => ({ ...settings, ...patch })
+    };
+    const service = new DeckTrackerService(mutableStore as never);
+
+    await service.ingestAtlasRawFrame(atlasFrame(snapshot(1, [
+      { id: "opp-flash-1", cardCode: "OGS-011", name: "Flash" }
+    ]), 1));
+    expect((await service.getState("atlas")).opponent.totalKnown).toBe(1);
+
+    currentDeck = {
+      ...deck,
+      title: "Restored Annie deck",
+      snapshotJson: JSON.stringify({
+        mainDeck: [{ qty: 2, name: "Mystic Shot", cardId: "OGN-175" }]
+      })
+    };
+    service.invalidateDeckLibrary();
+
+    const restoredState = await service.getState("atlas");
+    expect(restoredState.cards.map((card) => card.name)).toEqual(["Mystic Shot"]);
+    expect(restoredState.opponent.totalKnown).toBe(0);
+    expect(service.replaySnapshots("atlas")).toEqual([]);
+  });
+
   it("keeps this-game opponent cards separate from capped BO3 deck memory", async () => {
     const service = new DeckTrackerService(store() as never);
 

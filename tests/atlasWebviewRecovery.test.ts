@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   clearAtlasWebviewRuntime,
   initialAtlasReloadStormState,
+  shouldAutoRemountAtlasEmptyShell,
   updateAtlasReloadStormState
 } from "../src/shared/atlasWebviewRecovery.js";
 
@@ -34,22 +35,42 @@ describe("Atlas embedded-browser recovery", () => {
     expect(state).toEqual(initialAtlasReloadStormState());
   });
 
-  it("clears only cache and service-worker storage for the Atlas origin", async () => {
+  it("offers recovery when the Atlas shell loads without its application", () => {
+    const state = updateAtlasReloadStormState(
+      initialAtlasReloadStormState(),
+      { kind: "debug", platform: "atlas", payload: { reason: "atlas-app-shell-empty" } },
+      5
+    );
+    expect(state.suggested).toBe(true);
+  });
+
+  it("automatically remounts the first empty Atlas shell only once", () => {
+    const emptyShell = { kind: "debug" as const, platform: "atlas" as const, payload: { reason: "atlas-app-shell-empty" } };
+    expect(shouldAutoRemountAtlasEmptyShell(emptyShell, false)).toBe(true);
+    expect(shouldAutoRemountAtlasEmptyShell(emptyShell, true)).toBe(false);
+    expect(shouldAutoRemountAtlasEmptyShell(atlasEvent("capture-ready"), false)).toBe(false);
+  });
+
+  it("clears Atlas runtime caches without clearing sign-in or local deck data", async () => {
     const session = {
       clearCache: vi.fn(async () => undefined),
+      clearCodeCaches: vi.fn(async () => undefined),
+      closeAllConnections: vi.fn(async () => undefined),
       clearStorageData: vi.fn(async () => undefined),
       flushStorageData: vi.fn()
     };
     await clearAtlasWebviewRuntime(session);
+    expect(session.clearCodeCaches).toHaveBeenCalledWith({ urls: ["https://play.riftatlas.com"] });
     expect(session.clearCache).toHaveBeenCalledOnce();
     expect(session.clearStorageData).toHaveBeenCalledWith({
       origin: "https://play.riftatlas.com",
       storages: ["serviceworkers", "cachestorage"]
     });
+    expect(session.closeAllConnections).toHaveBeenCalledOnce();
     expect(session.flushStorageData).toHaveBeenCalledOnce();
   });
 });
 
-function atlasEvent(kind: "capture-ready" | "match-snapshot", payload: Record<string, unknown> = {}) {
+function atlasEvent(kind: "capture-ready" | "match-snapshot" | "debug", payload: Record<string, unknown> = {}) {
   return { kind, platform: "atlas" as const, payload };
 }

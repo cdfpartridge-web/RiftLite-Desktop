@@ -1,6 +1,12 @@
 import React, { useMemo, useState } from "react";
 import { ChevronLeft, ChevronRight, Pause, Play, SkipBack, SkipForward } from "lucide-react";
+import cardRegistryData from "../../resources/riftbound_card_registry.json";
 import cardLookupData from "../../resources/tcga_card_lookup.json";
+import {
+  riftboundCardCodeAliases,
+  riftboundCardCodeFromValue,
+  riftboundCanonicalArtCode
+} from "../shared/cardIdentity";
 import type {
   RiftLiteReplayCard,
   RiftLiteReplayFrame,
@@ -15,21 +21,17 @@ type RiftLiteReplayViewerProps = {
   model: RiftLiteReplayModel;
 };
 
-const RIFT_CODEX_CARD_API = "https://api.riftcodex.com/cards/riftbound/";
 const DEFAULT_RUNE_SLOTS = 12;
-const riftCodexImageCache = new Map<string, string>();
-const RiftCodexImageContext = React.createContext<Record<string, string>>({});
-const CARD_CODE_BY_NAME = buildCardCodeByName(cardLookupData);
+const CARD_IMAGE_BY_CODE = buildCardImageByCode(cardRegistryData);
+const CARD_CODE_BY_NAME = buildCardCodeByName(cardLookupData, cardRegistryData);
 
 export function RiftLiteReplayViewer({ model }: RiftLiteReplayViewerProps) {
   const [index, setIndex] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [focusedCard, setFocusedCard] = useState<RiftLiteReplayCard | null>(null);
   const [trashSide, setTrashSide] = useState<"local" | "opponent" | null>(null);
-  const [riftCodexImages, setRiftCodexImages] = useState<Record<string, string>>({});
   const frame = model.frames[Math.min(index, Math.max(0, model.frames.length - 1))] ?? model.frames[0];
   const progress = model.frames.length > 1 ? Math.round((index / (model.frames.length - 1)) * 100) : 0;
-  const modelCodes = useMemo(() => collectModelCards(model), [model]);
 
   React.useEffect(() => {
     if (!playing || model.frames.length <= 1 || !frame) return;
@@ -52,39 +54,6 @@ export function RiftLiteReplayViewer({ model }: RiftLiteReplayViewerProps) {
     setTrashSide(null);
   }, [model.id]);
 
-  React.useEffect(() => {
-    let cancelled = false;
-    const missing = modelCodes.filter((code) => !riftCodexImageCache.has(code));
-    setRiftCodexImages(Object.fromEntries(modelCodes.map((code) => [code, riftCodexImageCache.get(code) || ""])));
-    if (!missing.length) return () => {
-      cancelled = true;
-    };
-    void (async () => {
-      const next: Record<string, string> = {};
-      for (const code of missing) {
-        if (cancelled) return;
-        try {
-          const response = await fetch(`${RIFT_CODEX_CARD_API}${encodeURIComponent(code)}`);
-          if (!response.ok) continue;
-          const data = await response.json() as unknown;
-          const image = imageFromRiftCodexResponse(data);
-          if (image) {
-            riftCodexImageCache.set(code, image);
-            next[code] = image;
-          }
-        } catch {
-          // Keep the bundled/fallback image URL when RiftCodex is offline or CORS blocks a lookup.
-        }
-      }
-      if (!cancelled && Object.keys(next).length) {
-        setRiftCodexImages((current) => ({ ...current, ...next }));
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [modelCodes]);
-
   if (!frame) {
     return (
       <div className="riftlite-replay-stage-empty">
@@ -97,7 +66,6 @@ export function RiftLiteReplayViewer({ model }: RiftLiteReplayViewerProps) {
   const displayCard = focusedCard;
 
   return (
-    <RiftCodexImageContext.Provider value={riftCodexImages}>
     <div className="riftlite-replay-viewer riftlite-replay-v2" data-stage={frame.stage}>
       <div className="riftlite-replay-v2-stage">
         <PlayerRail
@@ -139,7 +107,6 @@ export function RiftLiteReplayViewer({ model }: RiftLiteReplayViewerProps) {
         setPlaying={setPlaying}
       />
     </div>
-    </RiftCodexImageContext.Provider>
   );
 }
 
@@ -925,30 +892,25 @@ function cardVisualIdentity(card: RiftLiteReplayCard): string {
 }
 
 function useResolvedCardImage(card?: RiftLiteReplayCard | null): string {
-  const images = React.useContext(RiftCodexImageContext);
   const code = resolveCardCode(card);
-  return (code && images[code]) || card?.imageUrl || "";
+  const bundledImage = resolveBundledReplayCardImage(code);
+  return bundledImage || card?.imageUrl || "";
 }
 
-function collectModelCards(model: RiftLiteReplayModel): string[] {
-  const codes = new Set<string>();
-  const add = (card?: RiftLiteReplayCard) => {
-    const code = resolveCardCode(card);
-    if (code) codes.add(code);
-  };
-  for (const frame of model.frames) {
-    add(frame.focusedCard);
-    for (const player of [frame.local, frame.opponent]) {
-      add(player.legend);
-      add(player.champion);
-      add(player.selectedBattlefield);
-      for (const zoneValue of Object.values(player.zones)) {
-        for (const card of zoneValue.cards) add(card);
-      }
-    }
-    for (const card of frame.chain) add(card);
+export function resolveBundledReplayCardImage(
+  value: string,
+  imageByCode: ReadonlyMap<string, string> = CARD_IMAGE_BY_CODE
+): string {
+  const code = normalizeRiftCodexCode(value);
+  for (const alias of riftboundCardCodeAliases(code)) {
+    const image = imageByCode.get(alias);
+    if (image) return image;
   }
-  return Array.from(codes).slice(0, 180);
+  // Alternate/set-specific Rune IDs are not always published as standalone
+  // images. Only after checking every exact/signed/base alias do we use the
+  // canonical Rune artwork packaged in the registry.
+  const canonicalArtCode = riftboundCanonicalArtCode(code);
+  return canonicalArtCode ? imageByCode.get(canonicalArtCode) || "" : "";
 }
 
 function resolveCardCode(card?: RiftLiteReplayCard | null): string {
@@ -958,28 +920,39 @@ function resolveCardCode(card?: RiftLiteReplayCard | null): string {
 }
 
 function normalizeRiftCodexCode(value: string): string {
-  const normalized = value.trim().toUpperCase();
-  if (!normalized) return "";
-  const basic = /^([A-Z]{3})-(\d{3}[A-Z]?)/.exec(normalized);
-  if (basic?.[1] && basic?.[2]) return `${basic[1]}-${basic[2]}`;
-  return normalized;
+  return riftboundCardCodeFromValue(value);
 }
 
-function imageFromRiftCodexResponse(data: unknown): string {
-  const record = data && typeof data === "object" && !Array.isArray(data) ? data as Record<string, unknown> : null;
-  const value = Array.isArray(data)
-    ? data[0]
-    : Array.isArray(record?.value)
-      ? record.value[0]
-      : record?.value ?? record;
-  const card = value && typeof value === "object" ? value as Record<string, unknown> : null;
-  const media = card?.media && typeof card.media === "object" ? card.media as Record<string, unknown> : null;
-  return typeof media?.image_url === "string" ? media.image_url : typeof card?.image_url === "string" ? card.image_url : "";
-}
-
-function buildCardCodeByName(data: unknown): Map<string, string> {
+function buildCardImageByCode(data: unknown): Map<string, string> {
   const result = new Map<string, string>();
   const root = data && typeof data === "object" ? data as Record<string, unknown> : {};
+  const cards = Array.isArray(root.cards) ? root.cards : [];
+  for (const value of cards) {
+    const card = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+    const code = riftboundCardCodeFromValue(String(card.printId ?? ""));
+    const image = typeof card.imageUrl === "string" ? card.imageUrl.trim() : "";
+    if (code && image) result.set(code, image);
+  }
+  return result;
+}
+
+function buildCardCodeByName(legacyData: unknown, registryData: unknown): Map<string, string> {
+  const result = new Map<string, string>();
+  const add = (name: unknown, rawCode: unknown) => {
+    if (typeof name !== "string") return;
+    const code = normalizeRiftCodexCode(String(rawCode ?? ""));
+    const key = normalizeCardLookupName(name);
+    if (code && key && !result.has(key)) result.set(key, code);
+  };
+  const registryRoot = registryData && typeof registryData === "object" ? registryData as Record<string, unknown> : {};
+  for (const value of Array.isArray(registryRoot.cards) ? registryRoot.cards : []) {
+    const card = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+    add(card.name, card.printId);
+    if (Array.isArray(card.aliases)) {
+      for (const alias of card.aliases) add(alias, card.printId);
+    }
+  }
+  const root = legacyData && typeof legacyData === "object" ? legacyData as Record<string, unknown> : {};
   const codeMap = root.codeMap && typeof root.codeMap === "object" ? root.codeMap as Record<string, unknown> : {};
   for (const [code, name] of Object.entries(codeMap)) {
     if (typeof name !== "string") continue;

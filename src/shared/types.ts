@@ -67,6 +67,8 @@ export interface MatchGame {
   oppPoints?: number;
   myBattlefield?: string;
   oppBattlefield?: string;
+  myBattlefieldCode?: string;
+  oppBattlefieldCode?: string;
   myBattlefieldImage?: string;
   oppBattlefieldImage?: string;
   extraBattlefields?: string[];
@@ -1030,6 +1032,7 @@ export interface CommunityMatch {
   supersededAt?: string;
   scope: "community" | "hub" | "team";
   hubId?: string;
+  webReplayId?: string;
 }
 
 export interface MatchHistoryCsvExportPayload {
@@ -1101,6 +1104,31 @@ export interface AccountCloudSyncStatus {
   remoteBytes: number;
   remoteCounts: AccountCloudSyncCounts;
   message: string;
+}
+
+export interface AccountCloudSyncBackupSummary {
+  available: boolean;
+  updatedAt: string;
+  deviceName: string;
+  appVersion: string;
+  byteSize: number;
+  counts: AccountCloudSyncCounts;
+}
+
+export interface AccountCloudSyncConflictSummary {
+  id: string;
+  status: "pending";
+  currentFingerprint: string;
+  legacyFingerprint: string;
+  current: AccountCloudSyncBackupSummary;
+  legacy: AccountCloudSyncBackupSummary;
+}
+
+export interface AccountCloudSyncConflictResolutionResult {
+  conflictId: string;
+  status: "resolved";
+  choice: "keep-current" | "restore-legacy";
+  resolvedAt: number;
 }
 
 export interface AccountConnectionStatus {
@@ -1312,6 +1340,7 @@ export interface UserSettings {
   scorepadLinkedAt: string;
   activeDeckId: string;
   activeHubs: PrivateHub[];
+  privateHubWebReplayGrantKeys: string[];
   activeTeams: TeamSyncTarget[];
 }
 
@@ -1819,6 +1848,8 @@ export interface RiftLiteApi {
   createHub(name: string, password: string): Promise<HubActionResult>;
   joinHub(name: string, password: string): Promise<HubActionResult>;
   refreshAccountHubs(): Promise<UserSettings>;
+  leaveHub(hubId: string): Promise<UserSettings>;
+  deleteHub(hubId: string, confirmation: string): Promise<UserSettings>;
   syncPrivateHubs(): Promise<PrivateHubSyncResult>;
   syncMatchesToHubs(matchIds: string[], hubIds: string[]): Promise<PrivateHubSyncResult>;
   deleteHubMatch(hubId: string, matchId: string): Promise<void>;
@@ -1837,6 +1868,9 @@ export interface RiftLiteApi {
   setAccountCloudSyncEnabled(enabled: boolean): Promise<AccountCloudSyncStatus>;
   uploadAccountCloudSync(): Promise<AccountCloudSyncStatus>;
   restoreAccountCloudSync(): Promise<AccountCloudSyncStatus>;
+  getAccountCloudSyncConflicts(): Promise<AccountCloudSyncConflictSummary[]>;
+  keepAccountCloudSyncConflictCurrent(conflictId: string): Promise<AccountCloudSyncConflictResolutionResult>;
+  restoreAccountCloudSyncConflictLegacy(conflictId: string): Promise<AccountCloudSyncConflictResolutionResult>;
   unlinkAccount(): Promise<UserSettings>;
   searchPublicProfiles(query: string): Promise<PublicProfileSearchResult[]>;
   claimHub(hubId: string, password?: string): Promise<void>;
@@ -1886,7 +1920,9 @@ export interface RiftLiteApi {
   openOverlayTextFolder(): Promise<void>;
   getDiagnosticsPath(): Promise<string>;
   getDiagnosticsSummary(): Promise<CaptureDiagnosticsSummary>;
-  createDiagnosticsBundle(): Promise<string>;
+  createDiagnosticsBundle(options?: {
+    includeSensitiveData?: boolean;
+  }): Promise<string | null>;
   openDiagnosticsFolder(): Promise<void>;
   takeScreenshot(): Promise<ScreenshotResult>;
   chooseScreenshotDirectory(): Promise<UserSettings>;
@@ -1899,6 +1935,7 @@ export interface RiftLiteApi {
   onCaptureEvent(callback: (event: CaptureEvent) => void): () => void;
   onCaptureHealth(callback: (health: CaptureHealth) => void): () => void;
   onMatchDraft(callback: (draft: MatchDraft) => void): () => void;
+  onReplayUpdated(callback: (replay: ReplayRecord) => void): () => void;
   onScreenshotSaved(callback: (result: ScreenshotResult) => void): () => void;
   onReplayShadowClipHotkey(callback: () => void): () => void;
   onReplayQuickFlagHotkey(callback: () => void): () => void;

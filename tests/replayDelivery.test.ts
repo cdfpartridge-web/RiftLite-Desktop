@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { replayDeliveryStages } from "../src/shared/replayDelivery.js";
+import { replayDeliveryStages, replayDeliverySummary } from "../src/shared/replayDelivery.js";
 import type { RawCaptureReplayMetadata } from "../src/shared/types.js";
 
 function metadata(patch: Partial<RawCaptureReplayMetadata> = {}): RawCaptureReplayMetadata {
@@ -28,6 +28,18 @@ describe("replayDeliveryStages", () => {
     ]);
   });
 
+  it("describes normal automatic delivery as preparation instead of failure", () => {
+    expect(replayDeliverySummary(metadata({
+      webReplayAutoUploadEligible: true,
+      webReplayDiscordShareEligible: true,
+      discordShareStatus: "pending"
+    }))).toEqual({
+      statusLabel: "preparing replay",
+      uploadLabel: "Waiting for score",
+      discordLabel: "Queued"
+    });
+  });
+
   it("reports every completed automatic delivery stage after a Discord post", () => {
     const stages = replayDeliveryStages(metadata({
       resultStatus: "resolved",
@@ -43,6 +55,18 @@ describe("replayDeliveryStages", () => {
     }));
 
     expect(stages.every((stage) => stage.state === "complete")).toBe(true);
+    expect(replayDeliverySummary(metadata({
+      resultStatus: "resolved",
+      uploadStatus: "uploaded",
+      uploadedAt: "2026-07-13T18:00:08.000Z",
+      processingStatus: "ready",
+      webReplayDiscordShareEligible: true,
+      discordShareStatus: "shared"
+    }))).toEqual({
+      statusLabel: "ready",
+      uploadLabel: "Uploaded",
+      discordLabel: "Shared"
+    });
   });
 
   it("preserves actionable upload and partial Discord failures", () => {

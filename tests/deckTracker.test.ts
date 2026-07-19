@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildDeckTrackerState,
   chanceAtLeastOne,
+  deckTrackerImageUrlFromId,
   effectiveDeckTrackerCards,
   mainDeckTrackerCards,
   observationCountsForDeck,
@@ -81,6 +82,45 @@ describe("deck tracker", () => {
       observation({ code: "UNL-147" })
     ], deckCards);
     expect(counts.get(deckCards[0].cardKey)).toBe(1);
+  });
+
+  it("matches a signed observed card against a base-print deck entry", () => {
+    const baseDeck: SavedDeck = {
+      ...deck,
+      snapshotJson: JSON.stringify({
+        mainDeck: [
+          { qty: 2, name: "Jhin, Meticulous Killer", cardId: "UNL-089", imageUrl: "https://cards.test/UNL-089.webp" }
+        ]
+      })
+    };
+    const deckCards = mainDeckTrackerCards(baseDeck);
+    const { counts } = observationCountsForDeck([
+      observation({ code: "UNL-089A" })
+    ], deckCards);
+    expect(counts.get(deckCards[0].cardKey)).toBe(1);
+  });
+
+  it("extracts and aliases signed set-specific rune identifiers", () => {
+    const runePrintDeck: SavedDeck = {
+      ...deck,
+      snapshotJson: JSON.stringify({
+        mainDeck: [
+          { qty: 2, name: "Order Rune", cardId: "SFD-R06", imageUrl: "https://cards.test/SFD-R06.webp" }
+        ]
+      })
+    };
+    const deckCards = mainDeckTrackerCards(runePrintDeck);
+    const { counts } = observationCountsForDeck([
+      observation({ imageUrl: "https://cards.test/SFD-R06B.webp" })
+    ], deckCards);
+    expect(counts.get(deckCards[0].cardKey)).toBe(1);
+  });
+
+  it("uses base-print artwork when a signed card is observed", () => {
+    expect(deckTrackerImageUrlFromId("UNL-089A"))
+      .toBe("https://cdn.piltoverarchive.com/cards/UNL-089.webp");
+    expect(deckTrackerImageUrlFromId("SFD-R06B"))
+      .toBe("https://cdn.piltoverarchive.com/cards/OGN-214.webp");
   });
 
   it("treats event observations as visible snapshots instead of double-counting zones", () => {

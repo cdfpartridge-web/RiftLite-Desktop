@@ -184,6 +184,29 @@ describe("atlas replay builder", () => {
     expect(replaySnapshotCardCount(model.replay)).toBe(1);
   });
 
+  it("retains code-only per-game battlefield references from the match snapshot", () => {
+    const codeOnlyMatch: MatchDraft = {
+      ...match(),
+      myBattlefield: "",
+      opponentBattlefield: "",
+      games: [{
+        gameNumber: 1,
+        result: "Win",
+        myPoints: 8,
+        oppPoints: 6,
+        myBattlefieldCode: "VEN-157",
+        oppBattlefieldCode: "UNL-218"
+      }]
+    };
+
+    const model = buildAtlasReplay(replay([]), codeOnlyMatch);
+
+    expect(model.battlefields).toEqual([
+      { side: "me", name: "", code: "VEN-157", image: "" },
+      { side: "opponent", name: "", code: "UNL-218", image: "" }
+    ]);
+  });
+
   it("filters battlefield interaction labels from replay metadata", () => {
     const model = buildAtlasReplay(replay([
       event("match-snapshot", "2026-04-26T12:00:00.000Z", {

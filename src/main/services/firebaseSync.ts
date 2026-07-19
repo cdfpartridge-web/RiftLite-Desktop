@@ -5,10 +5,21 @@ import { deflateRawSync, inflateRawSync } from "node:zlib";
 import { normalizeLegendName } from "../../shared/legendNames.js";
 import {
   isGenericAccountDisplayName,
-  resolveCompletedAccountLinkUid
+  linkedAccountAuthUidMatches,
+  resolveCompletedAccountLinkUid,
+  verifiedAccountConnectionUid
 } from "../../shared/accountIdentity.js";
 import { publicCommunitySyncEnabled } from "../../shared/syncPolicy.js";
+import {
+  canDeletePrivateHub,
+  canLeavePrivateHub,
+  normalizePrivateHubWebReplayId,
+  settingsPatchAfterPrivateHubRemoval,
+  webReplayIdForLocalMatch
+} from "../../shared/privateHubs.js";
 import type {
+  AccountCloudSyncConflictResolutionResult,
+  AccountCloudSyncConflictSummary,
   AccountCloudSyncCounts,
   AccountCloudSyncStatus,
   AccountConnectionStatus,
@@ -47,6 +58,8 @@ const FIREBASE_PROJECT_ID = "riftlite-b61a5";
 const COMMUNITY_API_BASE = "https://www.riftlite.com";
 const COMMUNITY_API_BASES = ["https://www.riftlite.com", "https://riftlite.com"];
 const COMMUNITY_FIRESTORE_FALLBACK_LIMIT = 500;
+const COMMUNITY_MATCH_CACHE_TTL_MS = 30_000;
+const PRIVATE_HUB_WEB_REPLAY_GRANT_KEY_LIMIT = 10_000;
 const TOKEN_FRESH_SECONDS = 300;
 const ACCOUNT_CLOUD_SYNC_FORMAT = "riftlite.account-cloud-sync";
 const ACCOUNT_CLOUD_SYNC_LEGACY_VERSION = 1;
@@ -54,6 +67,8 @@ const ACCOUNT_CLOUD_SYNC_VERSION = 2;
 const ACCOUNT_CLOUD_SYNC_CHUNK_SIZE = 450_000;
 const ACCOUNT_CLOUD_SYNC_CHECKSUM_ALGORITHM = "sha256";
 const ACCOUNT_CLOUD_SYNC_MAX_CHUNKS = 10_000;
+const ACCOUNT_CLOUD_SYNC_RECOVERY_MAX_CHUNKS = 64;
+const ACCOUNT_CLOUD_SYNC_RECOVERY_WRITE_CONCURRENCY = 8;
 const EMPTY_ACCOUNT_CLOUD_COUNTS: AccountCloudSyncCounts = {
   matches: 0,
   decks: 0,
@@ -100,6 +115,35 @@ interface AccountCloudSyncManifest {
   updateTime: string;
 }
 
+function privateHubWebReplayGrantKey(hubId: string, matchId: string, replayId: string): string {
+  return JSON.stringify([hubId, matchId, replayId]);
+}
+
+function normalizedPrivateHubWebReplayGrantKeys(settings: UserSettings): string[] {
+  const value = settings.privateHubWebReplayGrantKeys;
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.filter((key) => typeof key === "string" && key.length > 0))]
+    .slice(-PRIVATE_HUB_WEB_REPLAY_GRANT_KEY_LIMIT);
+}
+
+interface AccountCloudSyncChunk {
+  index: number;
+  payload: string;
+  byteSize: number;
+  checksum: string;
+  generationId?: string;
+}
+
+interface AccountCloudSyncUploadResult {
+  status: AccountCloudSyncStatus;
+  manifest: AccountCloudSyncManifest;
+}
+
+interface AccountCloudSyncDecodedBackup {
+  backup: RiftLiteBackupFile;
+  chunks: string[];
+}
+
 interface FirestorePrecondition {
   exists?: boolean;
   updateTime?: string;
@@ -107,7 +151,8 @@ interface FirestorePrecondition {
 
 type FirestoreRequestOptions =
   | { method: "GET" | "DELETE"; body?: never; precondition?: FirestorePrecondition }
-  | { method: "POST" | "PATCH"; body: unknown; precondition?: FirestorePrecondition };
+  | { method: "POST"; body: unknown; precondition?: FirestorePrecondition }
+  | { method: "PATCH"; body: unknown; precondition?: FirestorePrecondition; updateMask?: string[] };
 
 class AccountCloudSyncConflictError extends Error {
   constructor() {
@@ -126,6 +171,13 @@ class LinkedAccountMismatchError extends Error {
 export class FirebaseSyncService {
   private auth: AuthState | null = null;
   private linkedAccountAuthGeneration = 0;
+  private accountConnectionRepairPromise: Promise<AccountConnectionStatus> | null = null;
+  private accountCloudMutationTail: Promise<void> = Promise.resolve();
+  private communityMatchesCache: { key: string; expiresAt: number; matches: CommunityMatch[] } | null = null;
+  private readonly communityMatchesRequests = new Map<string, {
+    forceRefresh: boolean;
+    promise: Promise<CommunityMatch[]>;
+  }>();
 
   constructor(
     private readonly store: RiftLiteStore,
@@ -143,6 +195,20 @@ export class FirebaseSyncService {
   invalidateLinkedAccountAuth(): void {
     this.linkedAccountAuthGeneration += 1;
     this.auth = null;
+  }
+
+  private async withAccountCloudMutation<T>(operation: () => Promise<T>): Promise<T> {
+    const previous = this.accountCloudMutationTail;
+    let release!: () => void;
+    this.accountCloudMutationTail = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await previous.catch(() => undefined);
+    try {
+      return await operation();
+    } finally {
+      release();
+    }
   }
 
   async syncMatch(match: MatchDraft, options: { forceTeamIds?: string[]; quiet?: boolean } = {}): Promise<MatchDraft> {
@@ -287,28 +353,239 @@ export class FirebaseSyncService {
   async refreshAccountHubs(): Promise<UserSettings> {
     const settings = await this.store.getSettings();
     if (!settings.accountUid) return settings;
+    const requestedAccountUid = settings.accountUid;
     const payload = await this.authenticatedWebsiteRequest("/api/hubs", { method: "GET" });
     const rows = Array.isArray(payload.hubs) ? payload.hubs : [];
-    let activeHubs = [...settings.activeHubs];
+    const existingById = new Map((settings.activeHubs ?? []).map((hub) => [hub.id, hub]));
+    const seenIds = new Set<string>();
+    const activeHubs: PrivateHub[] = [];
     for (const row of rows) {
       if (!isRecord(row)) continue;
       const id = readString(row.id);
       const name = readString(row.name) || id;
-      if (!id) continue;
+      if (!id || seenIds.has(id)) continue;
+      seenIds.add(id);
       const role = readString(row.role);
       const fallback = buildHub(name, role === "owner" ? "owner" : role === "admin" ? "admin" : "member");
-      activeHubs = upsertHub(activeHubs, normalizePrivateHubPayload({ ...row, id }, fallback));
+      const normalized = normalizePrivateHubPayload({ ...row, id }, fallback);
+      const existing = existingById.get(id);
+      activeHubs.push({
+        ...normalized,
+        sync: existing?.sync ?? normalized.sync,
+        imageDataUrl: existing?.imageDataUrl ?? normalized.imageDataUrl,
+        imageUpdatedAt: existing?.imageUpdatedAt ?? normalized.imageUpdatedAt
+      });
     }
+    // Hubs from the pre-account desktop may have no server membership document.
+    // v0.8 also normalized some of them to claimed=false, so retain every
+    // unconfirmed entry until a successful claim establishes account ownership.
+    for (const existing of settings.activeHubs ?? []) {
+      if (seenIds.has(existing.id) || existing.claimed === true) continue;
+      seenIds.add(existing.id);
+      activeHubs.push(existing);
+    }
+    const latestSettings = await this.store.getSettings();
+    if (latestSettings.accountUid !== requestedAccountUid) return latestSettings;
     return this.store.saveSettings({ activeHubs });
+  }
+
+  async leaveHub(hubId: string): Promise<UserSettings> {
+    const normalizedHubId = readString(hubId);
+    const settings = await this.store.getSettings();
+    const hub = settings.activeHubs.find((item) => item.id === normalizedHubId);
+    if (!normalizedHubId || !hub) {
+      throw new Error("This private hub is no longer in your memberships.");
+    }
+    if (!canLeavePrivateHub(hub)) {
+      throw new Error(hub.role === "owner"
+        ? "The primary owner cannot leave this hub. Delete it instead."
+        : "Only a member or co-owner can leave this private hub.");
+    }
+    await this.authenticatedWebsiteRequest(`/api/hubs/${encodeURIComponent(normalizedHubId)}/membership`, {
+      method: "DELETE"
+    });
+    return this.removePrivateHubFromLocalState(
+      normalizedHubId,
+      settings.accountUid,
+      settings.firebaseUid
+    );
+  }
+
+  async deleteHub(hubId: string, confirmation: string): Promise<UserSettings> {
+    const normalizedHubId = readString(hubId);
+    const settings = await this.store.getSettings();
+    const hub = settings.activeHubs.find((item) => item.id === normalizedHubId);
+    if (!normalizedHubId || !hub) {
+      throw new Error("This private hub is no longer available to delete.");
+    }
+    if (!canDeletePrivateHub(hub)) {
+      throw new Error("Only the primary owner can delete this private hub.");
+    }
+    if (readString(confirmation) !== normalizedHubId) {
+      throw new Error("The private hub deletion confirmation did not match the hub ID.");
+    }
+    await this.authenticatedWebsiteRequest(`/api/hubs/${encodeURIComponent(normalizedHubId)}`, {
+      method: "DELETE",
+      body: { confirmation: normalizedHubId }
+    });
+    return this.removePrivateHubFromLocalState(
+      normalizedHubId,
+      settings.accountUid,
+      settings.firebaseUid
+    );
+  }
+
+  private async removePrivateHubFromLocalState(
+    hubId: string,
+    expectedAccountUid: string,
+    expectedFirebaseUid: string
+  ): Promise<UserSettings> {
+    const latestSettings = await this.store.getSettings();
+    if (
+      latestSettings.accountUid !== expectedAccountUid ||
+      latestSettings.firebaseUid !== expectedFirebaseUid
+    ) {
+      return latestSettings;
+    }
+    const nextSettings = await this.store.saveSettings(settingsPatchAfterPrivateHubRemoval(latestSettings, hubId));
+    const matches = await this.store.getMatches();
+    for (const match of matches) {
+      if (!match.sync.hubs[hubId]) continue;
+      const hubs = { ...match.sync.hubs };
+      delete hubs[hubId];
+      await this.store.saveMatch({ ...match, sync: { ...match.sync, hubs } });
+    }
+    return nextSettings;
+  }
+
+  async attachWebReplayToSyncedHubMatches(localMatchId: string, webReplayId: string): Promise<number> {
+    const normalizedMatchId = readString(localMatchId);
+    const normalizedReplayId = normalizePrivateHubWebReplayId(webReplayId);
+    if (!normalizedMatchId || !normalizedReplayId) return 0;
+    const settings = await this.store.getSettings();
+    const match = (await this.store.getMatches()).find((item) => item.id === normalizedMatchId);
+    if (!match) return 0;
+    const activeHubIds = new Set(settings.activeHubs.map((hub) => hub.id));
+    const hubIds = Object.entries(match.sync.hubs)
+      .filter(([hubId, state]) => state === "synced" && activeHubIds.has(hubId))
+      .map(([hubId]) => hubId);
+    if (!hubIds.length) return 0;
+    const completedKeys = new Set(normalizedPrivateHubWebReplayGrantKeys(settings));
+    let completedKeysChanged = false;
+    let updated = 0;
+    for (const hubId of hubIds) {
+      const grantKey = privateHubWebReplayGrantKey(hubId, normalizedMatchId, normalizedReplayId);
+      if (completedKeys.has(grantKey)) continue;
+      try {
+        await this.authenticatedWebsiteRequest(
+          `/api/hubs/${encodeURIComponent(hubId)}/matches/${encodeURIComponent(normalizedMatchId)}/web-replay`,
+          { method: "PUT", body: { replayId: normalizedReplayId } }
+        );
+        completedKeys.add(grantKey);
+        completedKeysChanged = true;
+        updated += 1;
+      } catch {
+        // The website verifies replay ownership, match ownership, and current hub access.
+        // A later startup backfill can retry transient failures without recreating deleted rows.
+      }
+    }
+    if (completedKeysChanged) {
+      await this.store.saveSettings({
+        privateHubWebReplayGrantKeys: [...completedKeys].slice(-PRIVATE_HUB_WEB_REPLAY_GRANT_KEY_LIMIT)
+      });
+    }
+    return updated;
+  }
+
+  async backfillPrivateHubWebReplayIds(): Promise<number> {
+    const [settings, matches, replays] = await Promise.all([
+      this.store.getSettings(),
+      this.store.getMatches(),
+      this.store.getReplays()
+    ]);
+    const activeHubIds = new Set(settings.activeHubs.map((hub) => hub.id));
+    const previouslyCompletedKeys = normalizedPrivateHubWebReplayGrantKeys(settings);
+    const completedKeys = new Set(previouslyCompletedKeys);
+    const relevantKeys = new Set<string>();
+    let updated = 0;
+    for (const match of matches) {
+      const replayId = normalizePrivateHubWebReplayId(webReplayIdForLocalMatch(replays, match.id));
+      if (!replayId) continue;
+      const hubIds = Object.entries(match.sync.hubs)
+        .filter(([hubId, state]) => state === "synced" && activeHubIds.has(hubId))
+        .map(([hubId]) => hubId);
+      for (const hubId of hubIds) {
+        const grantKey = privateHubWebReplayGrantKey(hubId, match.id, replayId);
+        relevantKeys.add(grantKey);
+        if (completedKeys.has(grantKey)) continue;
+        try {
+          await this.authenticatedWebsiteRequest(
+            `/api/hubs/${encodeURIComponent(hubId)}/matches/${encodeURIComponent(match.id)}/web-replay`,
+            { method: "PUT", body: { replayId } }
+          );
+          completedKeys.add(grantKey);
+          updated += 1;
+        } catch {
+          // Leave failed pairs unmarked so a later launch retries only those pairs.
+        }
+      }
+    }
+    const nextCompletedKeys = [...relevantKeys]
+      .filter((key) => completedKeys.has(key))
+      .slice(-PRIVATE_HUB_WEB_REPLAY_GRANT_KEY_LIMIT);
+    if (JSON.stringify(nextCompletedKeys) !== JSON.stringify(previouslyCompletedKeys)) {
+      await this.store.saveSettings({ privateHubWebReplayGrantKeys: nextCompletedKeys });
+    }
+    return updated;
   }
 
   async getCommunityMatches(forceRefresh = false, limit = COMMUNITY_FIRESTORE_FALLBACK_LIMIT): Promise<CommunityMatch[]> {
     const settings = await this.store.getSettings();
+    const requestKey = communityMatchesRequestKey(settings, limit);
+    const inFlight = this.communityMatchesRequests.get(requestKey);
+    if (inFlight) {
+      if (!forceRefresh || inFlight.forceRefresh) {
+        return inFlight.promise;
+      }
+      await inFlight.promise.catch(() => undefined);
+      return this.getCommunityMatches(true, limit);
+    }
+    if (
+      !forceRefresh &&
+      this.communityMatchesCache?.key === requestKey &&
+      this.communityMatchesCache.expiresAt > Date.now()
+    ) {
+      return this.communityMatchesCache.matches;
+    }
+    const promise = this.loadCommunityMatches(settings, forceRefresh, limit)
+      .then((matches) => {
+        this.communityMatchesCache = {
+          key: requestKey,
+          expiresAt: Date.now() + COMMUNITY_MATCH_CACHE_TTL_MS,
+          matches
+        };
+        return matches;
+      });
+    this.communityMatchesRequests.set(requestKey, { forceRefresh, promise });
+    try {
+      return await promise;
+    } finally {
+      if (this.communityMatchesRequests.get(requestKey)?.promise === promise) {
+        this.communityMatchesRequests.delete(requestKey);
+      }
+    }
+  }
+
+  private async loadCommunityMatches(
+    settings: UserSettings,
+    forceRefresh: boolean,
+    limit: number
+  ): Promise<CommunityMatch[]> {
     const webMatches = await this.getCommunityMatchesFromWebsite(forceRefresh);
     if (webMatches) {
       return repairCommunityMatchesForSettings(webMatches.filter((match) => !match.superseded), settings);
     }
-    const auth = await this.getAuth(settings);
+    const auth = await this.getCanonicalOrAnonymousAuth(settings);
     const response = await this.firestoreRunQuery("", auth.idToken, {
       structuredQuery: {
         from: [{ collectionId: "matches" }],
@@ -355,7 +632,7 @@ export class FirebaseSyncService {
   async getHubMatches(hubId: string, forceRefresh = false, limit = 1000): Promise<CommunityMatch[]> {
     void forceRefresh;
     const settings = await this.store.getSettings();
-    const auth = await this.getAuth(settings);
+    const auth = await this.getCanonicalOrAnonymousAuth(settings);
     const response = await this.firestoreRunQuery(`hubs/${encodeURIComponent(hubId)}`, auth.idToken, {
       structuredQuery: {
         from: [{ collectionId: "matches" }],
@@ -380,9 +657,12 @@ export class FirebaseSyncService {
 
   async deleteHubMatch(hubId: string, matchId: string): Promise<void> {
     const settings = await this.store.getSettings();
-    const auth = await this.getAuth(settings);
+    const auth = await this.getCanonicalOrAnonymousAuth(settings);
     const safeHubId = encodeURIComponent(hubId);
     const safeMatchId = encodeURIComponent(matchId);
+    await this.authenticatedWebsiteRequest(`/api/hubs/${safeHubId}/matches/${safeMatchId}/web-replay`, {
+      method: "DELETE"
+    }).catch(() => undefined);
     await this.firestoreRequest(`hubs/${safeHubId}/matches/${safeMatchId}`, auth.idToken, { method: "DELETE" });
     await this.updatePrivateHubAggregate("delete", hubId, matchId, auth.idToken, {
       uid: auth.uid
@@ -410,7 +690,7 @@ export class FirebaseSyncService {
     const payload = await this.authenticatedWebsiteRequest("/api/auth/link/start", {
       method: "POST",
       body: { expectedUid: settings.accountUid }
-    }, true);
+    }, "account-link");
     return {
       sessionId: readString(payload.sessionId),
       code: readString(payload.code),
@@ -421,7 +701,7 @@ export class FirebaseSyncService {
 
   async getAccountLinkStatus(sessionId: string): Promise<AccountLinkStatus> {
     const query = new URLSearchParams({ sessionId });
-    const payload = await this.authenticatedWebsiteRequest(`/api/auth/link/status?${query}`, { method: "GET" });
+    const payload = await this.authenticatedWebsiteRequest(`/api/auth/link/status?${query}`, { method: "GET" }, "account-link");
     const status = readString(payload.status) as AccountLinkStatus["status"];
     const customToken = readString(payload.customToken);
     if (status === "complete" && customToken) {
@@ -437,10 +717,16 @@ export class FirebaseSyncService {
       this.auth = linkedAuth;
       const currentSettings = await this.store.getSettings();
       const displayName = bestLocalAccountDisplayName(currentSettings, undefined, readString(payload.displayName));
+      const preserveLocalAccountData = !currentSettings.accountUid || currentSettings.accountUid === linkedUid;
       const settings = await this.store.saveSettings({
         firebaseUid: linkedAuth.uid,
         firebaseRefreshToken: linkedAuth.refreshToken,
         accountUid: linkedUid,
+        accountCloudSyncEnabled: currentSettings.accountUid === linkedUid
+          ? currentSettings.accountCloudSyncEnabled
+          : false,
+        activeHubs: preserveLocalAccountData ? currentSettings.activeHubs : [],
+        activeTeams: preserveLocalAccountData ? currentSettings.activeTeams : [],
         accountEmail: readString(payload.email),
         accountDisplayName: displayName,
         accountLastVerifiedAt: "",
@@ -522,11 +808,32 @@ export class FirebaseSyncService {
   }
 
   async repairAccountConnection(): Promise<AccountConnectionStatus> {
-    return this.loadAccountConnectionStatus(true);
+    return this.coalescedAccountConnectionRepair();
   }
 
-  private async loadAccountConnectionStatus(repair: boolean): Promise<AccountConnectionStatus> {
+  private coalescedAccountConnectionRepair(): Promise<AccountConnectionStatus> {
+    if (this.accountConnectionRepairPromise) {
+      return this.accountConnectionRepairPromise;
+    }
+    const pending = this.loadAccountConnectionStatus(true, true);
+    this.accountConnectionRepairPromise = pending;
+    void pending.then(
+      () => {
+        if (this.accountConnectionRepairPromise === pending) this.accountConnectionRepairPromise = null;
+      },
+      () => {
+        if (this.accountConnectionRepairPromise === pending) this.accountConnectionRepairPromise = null;
+      }
+    );
+    return pending;
+  }
+
+  private async loadAccountConnectionStatus(
+    repair: boolean,
+    credentialRepairAttempted = false
+  ): Promise<AccountConnectionStatus> {
     const settings = await this.store.getSettings();
+    const authGeneration = this.linkedAccountAuthGeneration;
     const autoUploadEnabled = settings.rawCapture.enabled === true &&
       settings.rawCapture.webReplayAutoUploadEnabled === true;
     const autoUploadAccountMatches = !autoUploadEnabled || Boolean(
@@ -561,12 +868,67 @@ export class FirebaseSyncService {
     try {
       const payload = await this.authenticatedWebsiteRequest("/api/account/connection", {
         method: repair ? "POST" : "GET",
-        ...(repair ? { body: {} } : {})
-      } as { method: "GET" } | { method: "POST"; body: Record<string, never> });
+        ...(repair ? { body: { expectedUid: settings.accountUid } } : {})
+      } as { method: "GET" } | { method: "POST"; body: { expectedUid: string } }, "saved-account-credential");
       const connection = isRecord(payload.connection) ? payload.connection : {};
       const uid = readString(connection.uid);
-      const verified = Boolean(uid && uid === settings.accountUid && connection.verified === true);
-      if (!verified) {
+      const authenticatedUid = readString(connection.authenticatedUid) || (
+        uid === settings.accountUid ? settings.firebaseUid || uid : ""
+      );
+      const identityUids = Array.isArray(connection.identityUids)
+        ? connection.identityUids
+        : [uid];
+      const credentialRepair = isRecord(connection.credentialRepair) ? connection.credentialRepair : {};
+      if (credentialRepair.required === true) {
+        if (!repair && !credentialRepairAttempted) {
+          return this.coalescedAccountConnectionRepair();
+        }
+        const targetUid = readString(credentialRepair.targetUid) || uid;
+        const provenTargetUid = verifiedAccountConnectionUid(
+          settings.accountUid,
+          targetUid,
+          authenticatedUid,
+          identityUids
+        );
+        if (!targetUid || targetUid !== provenTargetUid) {
+          throw new Error("The website credential repair did not match the account pinned on this device.");
+        }
+        const customToken = repair ? readString(credentialRepair.customToken) : "";
+        if (!customToken) {
+          throw new Error(readString(credentialRepair.message) || "Reconnect this device to upgrade its RiftLite account sign-in.");
+        }
+        let repairedAuth = await this.signInWithCustomToken(customToken);
+        if (!repairedAuth.uid && repairedAuth.refreshToken) {
+          repairedAuth = await this.refreshToken(repairedAuth.refreshToken);
+        }
+        if (!repairedAuth.uid || repairedAuth.uid !== targetUid || !repairedAuth.refreshToken) {
+          throw new Error("The repaired sign-in did not return the canonical RiftLite account.");
+        }
+        const latestSettings = await this.store.getSettings();
+        if (!this.isLinkedAccountAuthGenerationCurrent(authGeneration) || latestSettings.accountUid !== settings.accountUid) {
+          throw new Error("The linked RiftLite account changed while its sign-in was being repaired.");
+        }
+        this.invalidateLinkedAccountAuth();
+        this.auth = repairedAuth;
+        await this.store.saveSettings({
+          accountUid: targetUid,
+          accountCloudSyncEnabled: latestSettings.accountCloudSyncEnabled,
+          activeHubs: latestSettings.activeHubs,
+          activeTeams: latestSettings.activeTeams,
+          firebaseUid: repairedAuth.uid,
+          firebaseRefreshToken: repairedAuth.refreshToken,
+          accountLastVerifiedAt: "",
+          accountLastVerificationError: "Canonical account sign-in upgraded; final verification is still in progress."
+        });
+        // Only the follow-up request made with the canonical ID token may mark
+        // the account ready. The guard prevents a malformed server response
+        // from starting an unbounded repair loop.
+        return this.loadAccountConnectionStatus(false, true);
+      }
+      const canonicalUid = connection.verified === true && authenticatedUid === uid
+        ? verifiedAccountConnectionUid(settings.accountUid, uid, authenticatedUid, identityUids)
+        : "";
+      if (!canonicalUid) {
         throw new Error("The website account does not match the account stored on this device.");
       }
       const checkedAt = readString(connection.checkedAt) || new Date().toISOString();
@@ -580,7 +942,7 @@ export class FirebaseSyncService {
         ...base,
         connected: true,
         verified: true,
-        uid,
+        uid: canonicalUid,
         email: readString(connection.email) || settings.accountEmail,
         displayName: readString(connection.displayName) || settings.accountDisplayName,
         handle: readString(connection.handle) || settings.accountHandle,
@@ -599,6 +961,11 @@ export class FirebaseSyncService {
               : "The account is verified, but replay upload consent belongs to another account."
       };
       await this.store.saveSettings({
+        accountUid: canonicalUid,
+        accountCloudSyncEnabled: settings.accountCloudSyncEnabled,
+        activeHubs: settings.activeHubs,
+        activeTeams: settings.activeTeams,
+        firebaseUid: authenticatedUid,
         accountEmail: next.email,
         accountHandle: next.handle,
         accountDisplayName: next.displayName,
@@ -609,7 +976,7 @@ export class FirebaseSyncService {
     } catch (error) {
       const message = error instanceof Error ? error.message : "Could not verify the connected RiftLite account.";
       await this.store.saveSettings({ accountLastVerificationError: message });
-      return { ...base, message };
+      return { ...base, connected: false, verified: false, message };
     }
   }
 
@@ -626,6 +993,11 @@ export class FirebaseSyncService {
     const profile = normalizeAccountProfile(payload.profile);
     await this.store.saveSettings({
       accountUid: profile.uid,
+      accountCloudSyncEnabled: currentSettings.accountUid === profile.uid
+        ? currentSettings.accountCloudSyncEnabled
+        : false,
+      activeHubs: currentSettings.accountUid === profile.uid ? currentSettings.activeHubs : [],
+      activeTeams: currentSettings.accountUid === profile.uid ? currentSettings.activeTeams : [],
       accountEmail: profile.email || currentSettings.accountEmail,
       accountHandle: profile.handle,
       accountDisplayName: bestLocalAccountDisplayName(currentSettings, profile),
@@ -655,7 +1027,7 @@ export class FirebaseSyncService {
   }
 
   async getAccountCloudSyncStatus(): Promise<AccountCloudSyncStatus> {
-    const settings = await this.store.getSettings();
+    let settings = await this.store.getSettings();
     if (!settings.accountUid) {
       return {
         enabled: settings.accountCloudSyncEnabled,
@@ -671,12 +1043,18 @@ export class FirebaseSyncService {
         message: "Link a RiftLite account to use device sync."
       };
     }
-    const auth = await this.getAuth(settings);
+    const canonicalAccount = await this.getCanonicalAccountAuth(settings);
+    settings = canonicalAccount.settings;
+    const auth = canonicalAccount.auth;
     const manifest = await this.readAccountCloudManifest(settings.accountUid, auth.idToken);
     return this.accountCloudStatusFromManifest(settings, manifest);
   }
 
   async setAccountCloudSyncEnabled(enabled: boolean): Promise<AccountCloudSyncStatus> {
+    return this.withAccountCloudMutation(() => this.setAccountCloudSyncEnabledUnlocked(enabled));
+  }
+
+  private async setAccountCloudSyncEnabledUnlocked(enabled: boolean): Promise<AccountCloudSyncStatus> {
     let settings = await this.ensureAccountCloudDevice(await this.store.getSettings());
     if (!enabled) {
       settings = await this.store.saveSettings({
@@ -688,7 +1066,9 @@ export class FirebaseSyncService {
     if (!settings.accountUid) {
       throw new Error("Link a RiftLite account before using cloud sync.");
     }
-    const auth = await this.getAuth(settings);
+    const canonicalAccount = await this.getCanonicalAccountAuth(settings);
+    settings = canonicalAccount.settings;
+    const auth = canonicalAccount.auth;
     const manifest = await this.readAccountCloudManifest(settings.accountUid, auth.idToken);
     if (manifest) {
       settings = await this.store.saveSettings({
@@ -707,7 +1087,7 @@ export class FirebaseSyncService {
       accountCloudSyncLastError: ""
     });
     try {
-      return await this.uploadAccountCloudGeneration(settings, auth, null, "Account sync enabled.");
+      return (await this.uploadAccountCloudGeneration(settings, auth, null, "Account sync enabled.")).status;
     } catch (error) {
       const nextSettings = await this.store.saveSettings({
         accountCloudSyncEnabled: false,
@@ -725,28 +1105,73 @@ export class FirebaseSyncService {
     }
   }
 
-  async uploadAccountCloudSync(message = "Account data synced."): Promise<AccountCloudSyncStatus> {
-    const settings = await this.ensureAccountCloudDevice(await this.store.getSettings());
+  async uploadAccountCloudSync(
+    message = "Account data synced.",
+    options: { automatic?: boolean } = {}
+  ): Promise<AccountCloudSyncStatus> {
+    return this.withAccountCloudMutation(() => this.uploadAccountCloudSyncUnlocked(message, options));
+  }
+
+  private async uploadAccountCloudSyncUnlocked(
+    message: string,
+    options: { automatic?: boolean }
+  ): Promise<AccountCloudSyncStatus> {
+    let settings = await this.ensureAccountCloudDevice(await this.store.getSettings());
     if (!settings.accountUid) {
       throw new Error("Link a RiftLite account before using cloud sync.");
     }
-    const auth = await this.getAuth(settings);
+    if (options.automatic === true && !settings.accountCloudSyncEnabled) {
+      return this.accountCloudStatusFromManifest(
+        settings,
+        null,
+        "Account sync is off, so the queued background update was discarded."
+      );
+    }
+    const canonicalAccount = await this.getCanonicalAccountAuth(settings);
+    settings = canonicalAccount.settings;
+    const auth = canonicalAccount.auth;
+    const latestSettings = await this.store.getSettings();
+    if (
+      options.automatic === true &&
+      (!latestSettings.accountCloudSyncEnabled || latestSettings.accountUid !== settings.accountUid)
+    ) {
+      return this.accountCloudStatusFromManifest(
+        latestSettings,
+        null,
+        "Account sync changed while a background update was waiting, so nothing was uploaded."
+      );
+    }
     const oldManifest = await this.readAccountCloudManifest(settings.accountUid, auth.idToken);
-    return this.uploadAccountCloudGeneration(settings, auth, oldManifest, message);
+    const settingsAfterManifestRead = await this.store.getSettings();
+    if (
+      options.automatic === true &&
+      (!settingsAfterManifestRead.accountCloudSyncEnabled || settingsAfterManifestRead.accountUid !== settings.accountUid)
+    ) {
+      return this.accountCloudStatusFromManifest(
+        settingsAfterManifestRead,
+        oldManifest,
+        "Account sync changed while a background update was checking the cloud, so nothing was uploaded."
+      );
+    }
+    return (await this.uploadAccountCloudGeneration(settings, auth, oldManifest, message)).status;
   }
 
   async restoreAccountCloudSync(): Promise<AccountCloudSyncStatus> {
-    const settings = await this.ensureAccountCloudDevice(await this.store.getSettings());
+    return this.withAccountCloudMutation(() => this.restoreAccountCloudSyncUnlocked());
+  }
+
+  private async restoreAccountCloudSyncUnlocked(): Promise<AccountCloudSyncStatus> {
+    let settings = await this.ensureAccountCloudDevice(await this.store.getSettings());
     if (!settings.accountUid) {
       throw new Error("Link a RiftLite account before restoring account data.");
     }
-    const auth = await this.getAuth(settings);
+    const canonicalAccount = await this.getCanonicalAccountAuth(settings);
+    settings = canonicalAccount.settings;
+    const auth = canonicalAccount.auth;
     const manifest = await this.readAccountCloudManifest(settings.accountUid, auth.idToken);
     validateAccountCloudManifestForRestore(manifest);
-
     const safeUid = encodeURIComponent(settings.accountUid);
-    const chunks: string[] = [];
-    for (let index = 0; index < manifest.chunkCount; index += 1) {
+    const decoded = await this.readAccountCloudBackup(manifest, async (index) => {
       const doc = await this.firestoreRequest(
         `accountSync/${safeUid}/chunks/${accountCloudChunkDocumentId(manifest.generationId, index)}`,
         auth.idToken,
@@ -754,25 +1179,346 @@ export class FirebaseSyncService {
       );
       const fields = isRecord(doc.fields) ? doc.fields : {};
       const payload = readFirestoreString(fields.payload);
-      const expectedChecksum = manifest.chunkChecksums[index];
-      if (Math.trunc(readFirestoreNumber(fields.index)) !== index) {
+      return {
+        index: Math.trunc(readFirestoreNumber(fields.index)),
+        payload,
+        byteSize: manifest.version === ACCOUNT_CLOUD_SYNC_VERSION
+          ? Math.trunc(readFirestoreNumber(fields.byte_size))
+          : Buffer.byteLength(payload, "utf8"),
+        checksum: readFirestoreString(fields.checksum),
+        generationId: readFirestoreString(fields.generation_id)
+      };
+    });
+
+    await this.restoreAccountCloudBackupLocally(decoded.backup);
+    const restoredAt = new Date().toISOString();
+    const nextSettings = await this.store.saveSettings({
+      accountCloudSyncEnabled: true,
+      accountCloudSyncLastRestoredAt: restoredAt,
+      accountCloudSyncLastError: ""
+    });
+    return this.accountCloudStatusFromManifest(nextSettings, manifest, "Account data restored on this device.");
+  }
+
+  async getAccountCloudSyncConflicts(): Promise<AccountCloudSyncConflictSummary[]> {
+    const settings = await this.store.getSettings();
+    if (!settings.accountUid) {
+      return [];
+    }
+    const payload = await this.authenticatedWebsiteRequest("/api/account/cloud-sync/conflicts", { method: "GET" });
+    if (payload.ok !== true || !Array.isArray(payload.conflicts)) {
+      throw new Error("RiftLite returned an invalid retained-backup list.");
+    }
+    const conflicts = payload.conflicts.map(normalizeAccountCloudSyncConflictSummary);
+    if (new Set(conflicts.map((conflict) => conflict.id)).size !== conflicts.length) {
+      throw new Error("RiftLite returned duplicate retained-backup conflicts.");
+    }
+    return conflicts;
+  }
+
+  async keepAccountCloudSyncConflictCurrent(
+    conflictId: string
+  ): Promise<AccountCloudSyncConflictResolutionResult> {
+    return this.withAccountCloudMutation(() => this.keepAccountCloudSyncConflictCurrentUnlocked(conflictId));
+  }
+
+  private async keepAccountCloudSyncConflictCurrentUnlocked(
+    conflictId: string
+  ): Promise<AccountCloudSyncConflictResolutionResult> {
+    await this.store.saveSettings({
+      accountCloudSyncEnabled: false,
+      accountCloudSyncLastError: ""
+    });
+    const conflict = await this.pendingAccountCloudSyncConflict(conflictId);
+    const payload = await this.authenticatedWebsiteRequest(
+      `/api/account/cloud-sync/conflicts/${encodeURIComponent(conflict.id)}/resolve`,
+      {
+        method: "POST",
+        body: {
+          choice: "keep-current",
+          legacyFingerprint: conflict.legacyFingerprint,
+          currentFingerprint: conflict.currentFingerprint
+        }
+      }
+    );
+    return normalizeAccountCloudSyncConflictResolution(payload, conflict.id, "keep-current");
+  }
+
+  async restoreAccountCloudSyncConflictLegacy(
+    conflictId: string
+  ): Promise<AccountCloudSyncConflictResolutionResult> {
+    return this.withAccountCloudMutation(() => this.restoreAccountCloudSyncConflictLegacyUnlocked(conflictId));
+  }
+
+  private async restoreAccountCloudSyncConflictLegacyUnlocked(
+    conflictId: string
+  ): Promise<AccountCloudSyncConflictResolutionResult> {
+    let settings = await this.ensureAccountCloudDevice(await this.store.getSettings());
+    if (!settings.accountUid) {
+      throw new Error("Link a RiftLite account before restoring retained account data.");
+    }
+    settings = await this.store.saveSettings({
+      accountCloudSyncEnabled: false,
+      accountCloudSyncLastError: ""
+    });
+    const canonicalAccount = await this.getCanonicalAccountAuth(settings);
+    settings = canonicalAccount.settings;
+    const auth = canonicalAccount.auth;
+    const conflict = await this.pendingAccountCloudSyncConflict(conflictId);
+
+    let stagedManifest: AccountCloudSyncManifest | null = null;
+    let serverResolved = false;
+    let resolutionSubmitted = false;
+    let resolutionDefinitivelyRejected = false;
+    try {
+      const manifestPayload = await this.authenticatedWebsiteRequest(
+        `/api/account/cloud-sync/conflicts/${encodeURIComponent(conflict.id)}/manifest`,
+        { method: "GET" }
+      );
+      const manifest = normalizeAccountCloudSyncConflictManifest(
+        manifestPayload,
+        conflict.id,
+        conflict.legacyFingerprint
+      );
+      const currentManifest = await this.readAccountCloudManifest(settings.accountUid, auth.idToken);
+      validateAccountCloudManifestForRestore(currentManifest);
+      if (accountCloudSyncManifestFingerprint(currentManifest) !== conflict.currentFingerprint) {
+        throw new Error("The current account backup changed. Refresh retained backups before restoring one.");
+      }
+
+      if (manifest.chunkCount > ACCOUNT_CLOUD_SYNC_RECOVERY_MAX_CHUNKS) {
+        throw new Error("This retained backup is too large to validate safely in one recovery. Contact RiftLite support so it can be recovered without risking the current backup.");
+      }
+      const decoded = await this.readAccountCloudBackup(manifest, async (index) => {
+        const query = new URLSearchParams({ legacyFingerprint: conflict.legacyFingerprint });
+        const payload = await this.authenticatedWebsiteRequest(
+          `/api/account/cloud-sync/conflicts/${encodeURIComponent(conflict.id)}/chunks/${index}?${query}`,
+          { method: "GET" }
+        );
+        return normalizeAccountCloudSyncConflictChunk(payload, conflict.id, conflict.legacyFingerprint, index);
+      });
+      stagedManifest = await this.stageAccountCloudRecoveryGeneration(
+        settings,
+        auth,
+        manifest,
+        decoded.chunks,
+        conflict.id,
+        conflict.legacyFingerprint
+      );
+
+      const resolutionBody = {
+        choice: "restore-legacy" as const,
+        legacyFingerprint: conflict.legacyFingerprint,
+        currentFingerprint: conflict.currentFingerprint,
+        stagedManifest: accountCloudSyncManifestApiPayload(stagedManifest)
+      };
+      let resolution: AccountCloudSyncConflictResolutionResult | null = null;
+      let resolutionError: unknown = null;
+      try {
+        resolutionSubmitted = true;
+        const resolutionPayload = await this.authenticatedWebsiteRequest(
+          `/api/account/cloud-sync/conflicts/${encodeURIComponent(conflict.id)}/resolve`,
+          { method: "POST", body: resolutionBody }
+        );
+        resolution = normalizeAccountCloudSyncConflictResolution(
+          resolutionPayload,
+          conflict.id,
+          "restore-legacy"
+        );
+      } catch (error) {
+        resolutionError = error;
+        resolutionDefinitivelyRejected = isDefinitiveWebsiteApiRejection(error);
+      }
+
+      const liveManifest = await this.readAccountCloudManifest(settings.accountUid, auth.idToken)
+        .catch(() => null);
+      if (!liveManifest || !accountCloudSyncManifestMatchesRecovery(liveManifest, stagedManifest)) {
+        if (resolution) {
+          throw new Error("RiftLite reported that the retained backup was restored, but the cloud backup could not be confirmed. Local data was left unchanged; refresh Device Sync before trying again.");
+        }
+        throw resolutionError instanceof Error
+          ? resolutionError
+          : new Error("RiftLite could not confirm the retained-backup resolution. Local data was left unchanged.");
+      }
+      serverResolved = true;
+      if (!resolution) {
+        resolution = {
+          conflictId: conflict.id,
+          status: "resolved",
+          choice: "restore-legacy",
+          resolvedAt: Date.parse(liveManifest.updatedAt) || Date.now()
+        };
+      }
+
+      await this.restoreAccountCloudBackupLocally(decoded.backup);
+      const restoredAt = new Date().toISOString();
+      await this.store.saveSettings({
+        accountCloudSyncEnabled: true,
+        accountCloudSyncLastSyncedAt: stagedManifest.updatedAt,
+        accountCloudSyncLastRestoredAt: restoredAt,
+        accountCloudSyncLastError: ""
+      });
+      return resolution;
+    } catch (error) {
+      if (
+        stagedManifest &&
+        !serverResolved &&
+        (!resolutionSubmitted || resolutionDefinitivelyRejected)
+      ) {
+        const liveManifestResult = await this.readAccountCloudManifest(settings.accountUid, auth.idToken)
+          .then((manifest) => ({ checked: true as const, manifest }))
+          .catch(() => ({ checked: false as const, manifest: null }));
+        if (
+          liveManifestResult.checked &&
+          !accountCloudSyncManifestMatchesRecovery(liveManifestResult.manifest, stagedManifest)
+        ) {
+          await this.cleanupAccountCloudGeneration(
+            settings.accountUid,
+            auth.idToken,
+            stagedManifest
+          ).catch(() => undefined);
+        }
+      }
+      await this.store.saveSettings({
+        accountCloudSyncEnabled: false,
+        accountCloudSyncLastError: error instanceof Error
+          ? error.message
+          : "Retained account backup recovery failed."
+      }).catch(() => undefined);
+      throw error;
+    }
+  }
+
+  private async pendingAccountCloudSyncConflict(
+    conflictId: string
+  ): Promise<AccountCloudSyncConflictSummary> {
+    const safeConflictId = String(conflictId ?? "").trim();
+    if (!isSha256(safeConflictId)) {
+      throw new Error("The retained-backup conflict identifier is invalid.");
+    }
+    const conflicts = await this.getAccountCloudSyncConflicts();
+    const conflict = conflicts.find((entry) => entry.id === safeConflictId);
+    if (!conflict) {
+      throw new Error("That retained account backup is no longer available. Refresh Device Sync.");
+    }
+    return conflict;
+  }
+
+  private async stageAccountCloudRecoveryGeneration(
+    settings: UserSettings,
+    auth: AuthState,
+    sourceManifest: AccountCloudSyncManifest,
+    chunks: string[],
+    conflictId: string,
+    sourceFingerprint: string
+  ): Promise<AccountCloudSyncManifest> {
+    if (
+      chunks.length !== sourceManifest.chunkCount ||
+      chunks.length < 1 ||
+      chunks.length > ACCOUNT_CLOUD_SYNC_RECOVERY_MAX_CHUNKS
+    ) {
+      throw new Error("The retained backup cannot be staged safely because its chunk count changed.");
+    }
+    const compressed = chunks.join("");
+    const byteSize = Buffer.byteLength(compressed, "utf8");
+    if (byteSize !== sourceManifest.byteSize) {
+      throw new Error("The retained backup cannot be staged because its payload size changed.");
+    }
+    const updatedAt = new Date().toISOString();
+    const generationId = randomUUID();
+    const chunkChecksums = chunks.map(sha256);
+    const manifest: AccountCloudSyncManifest = {
+      version: ACCOUNT_CLOUD_SYNC_VERSION,
+      updatedAt,
+      deviceId: settings.accountCloudSyncDeviceId,
+      deviceName: settings.accountCloudSyncDeviceName,
+      appVersion: app.getVersion(),
+      generationId,
+      chunkCount: chunks.length,
+      byteSize,
+      checksumAlgorithm: ACCOUNT_CLOUD_SYNC_CHECKSUM_ALGORITHM,
+      checksum: sha256(compressed),
+      chunkChecksums,
+      counts: sourceManifest.counts,
+      updateTime: ""
+    };
+    const safeUid = encodeURIComponent(settings.accountUid);
+    const writes: Array<PromiseSettledResult<Record<string, unknown>>> = [];
+    for (let start = 0; start < chunks.length; start += ACCOUNT_CLOUD_SYNC_RECOVERY_WRITE_CONCURRENCY) {
+      const batch = await Promise.allSettled(
+        chunks.slice(start, start + ACCOUNT_CLOUD_SYNC_RECOVERY_WRITE_CONCURRENCY).map((chunk, offset) => {
+          const index = start + offset;
+          return this.firestoreRequest(
+            `accountSync/${safeUid}/chunks/${accountCloudChunkDocumentId(generationId, index)}`,
+            auth.idToken,
+            {
+              method: "PATCH",
+              precondition: { exists: false },
+              body: {
+                fields: toFirestoreFields({
+                  format: ACCOUNT_CLOUD_SYNC_FORMAT,
+                  version: ACCOUNT_CLOUD_SYNC_VERSION,
+                  generation_id: generationId,
+                  index,
+                  payload: chunk,
+                  byte_size: Buffer.byteLength(chunk, "utf8"),
+                  checksum: chunkChecksums[index],
+                  created_at: updatedAt,
+                  recovery_conflict_id: conflictId,
+                  recovery_source_fingerprint: sourceFingerprint
+                })
+              }
+            }
+          );
+        })
+      );
+      writes.push(...batch);
+      if (batch.some((result) => result.status === "rejected")) {
+        break;
+      }
+    }
+    const failed = writes.find((result): result is PromiseRejectedResult => result.status === "rejected");
+    if (failed) {
+      await Promise.allSettled(writes.map((result, index) => result.status === "fulfilled"
+        ? this.firestoreRequest(
+          `accountSync/${safeUid}/chunks/${accountCloudChunkDocumentId(generationId, index)}`,
+          auth.idToken,
+          { method: "DELETE" }
+        )
+        : Promise.resolve({})));
+      throw failed.reason;
+    }
+    return manifest;
+  }
+
+  private async readAccountCloudBackup(
+    manifest: AccountCloudSyncManifest,
+    readChunk: (index: number) => Promise<AccountCloudSyncChunk>
+  ): Promise<AccountCloudSyncDecodedBackup> {
+    validateAccountCloudManifestForRestore(manifest);
+    const chunks: string[] = [];
+    for (let index = 0; index < manifest.chunkCount; index += 1) {
+      const chunk = await readChunk(index);
+      const actualByteSize = Buffer.byteLength(chunk.payload, "utf8");
+      if (chunk.index !== index) {
         throw new Error(`Account cloud backup chunk ${index + 1} has an invalid index.`);
       }
-      if (!payload) {
+      if (!chunk.payload) {
         throw new Error(`Account cloud backup is missing chunk ${index + 1}.`);
       }
+      if (chunk.byteSize !== actualByteSize) {
+        throw new Error(`Account cloud backup chunk ${index + 1} has an invalid size.`);
+      }
       if (manifest.version === ACCOUNT_CLOUD_SYNC_VERSION) {
-        if (readFirestoreString(fields.generation_id) !== manifest.generationId) {
+        const expectedChecksum = manifest.chunkChecksums[index];
+        if (chunk.generationId !== undefined && chunk.generationId !== manifest.generationId) {
           throw new Error(`Account cloud backup chunk ${index + 1} belongs to a different generation.`);
         }
-        if (readFirestoreNumber(fields.byte_size) !== Buffer.byteLength(payload, "utf8")) {
-          throw new Error(`Account cloud backup chunk ${index + 1} has an invalid size.`);
-        }
-        if (readFirestoreString(fields.checksum) !== expectedChecksum || sha256(payload) !== expectedChecksum) {
+        if (chunk.checksum !== expectedChecksum || sha256(chunk.payload) !== expectedChecksum) {
           throw new Error(`Account cloud backup chunk ${index + 1} failed its checksum.`);
         }
       }
-      chunks.push(payload);
+      chunks.push(chunk.payload);
     }
 
     const compressed = chunks.join("");
@@ -796,6 +1542,10 @@ export class FirebaseSyncService {
     if (!sameAccountCloudCounts(countAccountCloudBackup(backup), manifest.counts)) {
       throw new Error("Account cloud backup contents do not match its manifest.");
     }
+    return { backup, chunks };
+  }
+
+  private async restoreAccountCloudBackupLocally(backup: RiftLiteBackupFile): Promise<void> {
     const safeBackup: RiftLiteBackupFile = {
       ...backup,
       settings: {
@@ -814,13 +1564,6 @@ export class FirebaseSyncService {
       }
     };
     await this.store.restoreBackupData(safeBackup, { preserveAccount: true, preserveReplays: true });
-    const restoredAt = new Date().toISOString();
-    const nextSettings = await this.store.saveSettings({
-      accountCloudSyncEnabled: true,
-      accountCloudSyncLastRestoredAt: restoredAt,
-      accountCloudSyncLastError: ""
-    });
-    return this.accountCloudStatusFromManifest(nextSettings, manifest, "Account data restored on this device.");
   }
 
   private async uploadAccountCloudGeneration(
@@ -828,7 +1571,7 @@ export class FirebaseSyncService {
     auth: AuthState,
     oldManifest: AccountCloudSyncManifest | null,
     message: string
-  ): Promise<AccountCloudSyncStatus> {
+  ): Promise<AccountCloudSyncUploadResult> {
     if (oldManifest && !oldManifest.updateTime) {
       throw new Error("RiftLite could not verify the current cloud manifest version, so the existing backup was not overwritten. Check cloud status and try again.");
     }
@@ -922,23 +1665,31 @@ export class FirebaseSyncService {
     if (oldManifest) {
       await this.cleanupAccountCloudGeneration(settings.accountUid, auth.idToken, oldManifest).catch(() => undefined);
     }
-    return this.accountCloudStatusFromManifest(nextSettings, manifest, message);
+    return {
+      status: this.accountCloudStatusFromManifest(nextSettings, manifest, message),
+      manifest
+    };
   }
 
-  async refreshLinkedAccountIdToken(): Promise<string | null> {
+  async refreshLinkedAccountIdToken(requiredAccountUid = ""): Promise<string | null> {
     const settings = await this.store.getSettings();
     if (!settings.accountUid || !settings.firebaseRefreshToken) {
       return null;
     }
+    if (requiredAccountUid && settings.accountUid !== requiredAccountUid) {
+      throw new Error("The linked RiftLite account changed while creating the replay session.");
+    }
+    const expectedAccountUid = settings.accountUid;
+    const canonicalAccount = await this.getCanonicalAccountAuth(settings);
     const generation = this.linkedAccountAuthGeneration;
-    const auth = await this.refreshToken(settings.firebaseRefreshToken);
+    const auth = await this.refreshToken(canonicalAccount.settings.firebaseRefreshToken);
     const latestSettings = await this.store.getSettings();
     if (
       !this.isLinkedAccountAuthGenerationCurrent(generation) ||
-      latestSettings.accountUid !== settings.accountUid ||
-      latestSettings.firebaseRefreshToken !== settings.firebaseRefreshToken ||
+      latestSettings.accountUid !== expectedAccountUid ||
+      latestSettings.firebaseRefreshToken !== canonicalAccount.settings.firebaseRefreshToken ||
       !auth.idToken ||
-      auth.uid !== settings.accountUid
+      auth.uid !== latestSettings.accountUid
     ) {
       throw new Error("The linked RiftLite account changed while creating the replay session.");
     }
@@ -963,6 +1714,8 @@ export class FirebaseSyncService {
       accountLastVerifiedAt: "",
       accountLastVerificationError: "",
       accountCloudSyncEnabled: false,
+      activeHubs: [],
+      activeTeams: [],
       rawCapture: {
         ...settings.rawCapture,
         enabled: settings.rawCapture.uploadEnabled === true && settings.rawCapture.enabled === true,
@@ -994,8 +1747,8 @@ export class FirebaseSyncService {
   async claimHub(hubId: string, password?: string): Promise<void> {
     const settings = await this.store.getSettings();
     const hub = settings.activeHubs.find((item) => item.id === hubId);
-    const cleanPassword = String(password ?? "").trim();
-    if (!cleanPassword) {
+    const rawPassword = String(password ?? "");
+    if (!rawPassword.trim()) {
       throw new Error("Enter the hub password to claim ownership.");
     }
     const profile = await this.getAccountProfile().catch(() => null);
@@ -1003,7 +1756,7 @@ export class FirebaseSyncService {
       method: "POST",
       body: {
         hubId,
-        password: cleanPassword,
+        password: rawPassword,
         displayName: bestLocalAccountDisplayName(settings, profile)
       }
     });
@@ -1295,7 +2048,7 @@ export class FirebaseSyncService {
   }
 
   private async uploadPublicMatch(match: MatchDraft, settings: UserSettings): Promise<string> {
-    const auth = await this.getAuth(settings);
+    const auth = await this.getCanonicalOrAnonymousAuth(settings);
     const doc = buildSyncDoc(match, settings, auth.uid, { includeFlags: false });
     const existingDocId = await this.findPublicMatchDocId(match.id, auth.idToken, auth.uid);
     const response = existingDocId
@@ -1342,24 +2095,32 @@ export class FirebaseSyncService {
   }
 
   private async uploadHubMatch(hubId: string, match: MatchDraft, settings: UserSettings): Promise<string> {
-    const auth = await this.getAuth(settings);
+    const auth = await this.getCanonicalOrAnonymousAuth(settings);
+    const webReplayId = webReplayIdForLocalMatch(await this.store.getReplays(), match.id);
     const doc = buildSyncDoc(match, settings, auth.uid, { includeFlags: true });
     const safeHubId = encodeURIComponent(hubId);
     const safeMatchId = encodeURIComponent(match.id);
     const response = await this.firestoreRequest(`hubs/${safeHubId}/matches/${safeMatchId}`, auth.idToken, {
       method: "PATCH",
-      body: { fields: toFirestoreFields(doc) }
+      body: { fields: toFirestoreFields(doc) },
+      updateMask: Object.keys(doc)
     });
     await this.updatePrivateHubAggregate("upsert", hubId, match.id, auth.idToken, {
       uid: auth.uid,
       username: readString(doc.username)
     }).catch(() => undefined);
+    if (webReplayId) {
+      await this.authenticatedWebsiteRequest(
+        `/api/hubs/${safeHubId}/matches/${safeMatchId}/web-replay`,
+        { method: "PUT", body: { replayId: webReplayId } }
+      );
+    }
     const name = typeof response.name === "string" ? response.name : "";
     return name.split("/").pop() ?? "";
   }
 
   private async uploadTeamMatch(teamId: string, match: MatchDraft, settings: UserSettings): Promise<string> {
-    const auth = await this.getAuth(settings);
+    const auth = await this.getCanonicalOrAnonymousAuth(settings);
     const doc = buildSyncDoc(match, settings, auth.uid, { includeFlags: true });
     const payload = await this.authenticatedWebsiteRequest(`/api/teams/${encodeURIComponent(teamId)}/matches/${encodeURIComponent(match.id)}`, {
       method: "PATCH",
@@ -1378,7 +2139,7 @@ export class FirebaseSyncService {
     if (!ids.length || !combinedMatchId) {
       return;
     }
-    const auth = await this.getAuth(settings);
+    const auth = await this.getCanonicalOrAnonymousAuth(settings);
     const originals = (await this.store.getMatches()).filter((match) => ids.includes(match.id));
     const now = new Date().toISOString();
     for (const original of originals) {
@@ -1406,7 +2167,8 @@ export class FirebaseSyncService {
         }
         await this.firestoreRequest(`hubs/${encodeURIComponent(hubId)}/matches/${encodeURIComponent(original.id)}`, auth.idToken, {
           method: "PATCH",
-          body: { fields: toFirestoreFields(doc) }
+          body: { fields: toFirestoreFields(doc) },
+          updateMask: Object.keys(doc)
         });
       }
       for (const [teamId, state] of Object.entries(original.sync.teams ?? {})) {
@@ -1457,7 +2219,9 @@ export class FirebaseSyncService {
       accountCloudSyncLastRestoredAt: "",
       accountCloudSyncDeviceId: settings.accountCloudSyncDeviceId,
       accountCloudSyncDeviceName: settings.accountCloudSyncDeviceName,
-      accountCloudSyncLastError: ""
+      accountCloudSyncLastError: "",
+      // This is a device-local idempotency cache, not user data.
+      privateHubWebReplayGrantKeys: []
     };
     return {
       ...backup,
@@ -1471,8 +2235,8 @@ export class FirebaseSyncService {
     if (!settings.accountUid) {
       return null;
     }
-    const auth = await this.getAuth(settings);
-    return this.readAccountCloudManifest(settings.accountUid, auth.idToken);
+    const canonicalAccount = await this.getCanonicalAccountAuth(settings);
+    return this.readAccountCloudManifest(canonicalAccount.settings.accountUid, canonicalAccount.auth.idToken);
   }
 
   private async cleanupAccountCloudGeneration(uid: string, idToken: string, manifest: AccountCloudSyncManifest): Promise<void> {
@@ -1557,7 +2321,7 @@ export class FirebaseSyncService {
   private async getAuth(settings: UserSettings, allowAccountReconnect = false): Promise<AuthState> {
     const now = Math.floor(Date.now() / 1000);
     if (this.auth && this.auth.expiresAt - TOKEN_FRESH_SECONDS > now) {
-      if (settings.accountUid && this.auth.uid !== settings.accountUid && !allowAccountReconnect) {
+      if (!linkedAccountAuthUidMatches(settings, this.auth.uid) && !allowAccountReconnect) {
         throw new LinkedAccountMismatchError("Your RiftLite account needs to be reconnected on this device.");
       }
       return this.auth;
@@ -1565,7 +2329,7 @@ export class FirebaseSyncService {
     if (settings.firebaseRefreshToken) {
       try {
         const refreshed = await this.refreshToken(settings.firebaseRefreshToken);
-        if (settings.accountUid && refreshed.uid !== settings.accountUid && !allowAccountReconnect) {
+        if (!linkedAccountAuthUidMatches(settings, refreshed.uid) && !allowAccountReconnect) {
           throw new LinkedAccountMismatchError("The saved sign-in belongs to a different RiftLite account.");
         }
         this.auth = refreshed;
@@ -1593,6 +2357,30 @@ export class FirebaseSyncService {
       firebaseRefreshToken: this.auth.refreshToken
     });
     return this.auth;
+  }
+
+  private async getCanonicalAccountAuth(settings: UserSettings): Promise<{ auth: AuthState; settings: UserSettings }> {
+    const auth = await this.getAuth(settings);
+    if (settings.accountUid && auth.uid === settings.accountUid) {
+      return { auth, settings };
+    }
+    const connection = await this.repairAccountConnection();
+    if (!connection.verified) {
+      throw new Error(connection.message || "Reconnect this device before using RiftLite account sync.");
+    }
+    const repairedSettings = await this.store.getSettings();
+    const repairedAuth = await this.getAuth(repairedSettings);
+    if (!repairedSettings.accountUid || repairedAuth.uid !== repairedSettings.accountUid) {
+      throw new Error("Reconnect this device before using RiftLite account sync.");
+    }
+    return { auth: repairedAuth, settings: repairedSettings };
+  }
+
+  private async getCanonicalOrAnonymousAuth(settings: UserSettings): Promise<AuthState> {
+    if (!settings.accountUid) {
+      return this.getAuth(settings);
+    }
+    return (await this.getCanonicalAccountAuth(settings)).auth;
   }
 
   private async signInAnonymously(): Promise<AuthState> {
@@ -1660,18 +2448,22 @@ export class FirebaseSyncService {
 
   private async authenticatedWebsiteRequest(
     path: string,
-    options: { method: "GET" | "DELETE"; body?: never } | { method: "POST" | "PATCH"; body?: unknown },
-    allowAccountReconnect = false
+    options: { method: "GET"; body?: never } | { method: "DELETE" | "POST" | "PUT" | "PATCH"; body?: unknown },
+    authMode: "canonical" | "account-link" | "saved-account-credential" = "canonical"
   ): Promise<Record<string, unknown>> {
     const settings = await this.store.getSettings();
-    const auth = await this.getAuth(settings, allowAccountReconnect);
+    const auth = authMode === "account-link"
+      ? await this.getAuth(settings, true)
+      : authMode === "saved-account-credential"
+        ? await this.getAuth(settings)
+        : await this.getCanonicalOrAnonymousAuth(settings);
     const response = await fetch(`${COMMUNITY_API_BASE}${path}`, {
       method: options.method,
       headers: {
         "Authorization": `Bearer ${auth.idToken}`,
         "Content-Type": "application/json"
       },
-      body: options.method === "GET" || options.method === "DELETE" ? undefined : JSON.stringify(options.body ?? {})
+      body: options.method === "GET" || options.body === undefined ? undefined : JSON.stringify(options.body)
     });
     const text = await response.text();
     let payload: Record<string, unknown> = {};
@@ -1682,13 +2474,20 @@ export class FirebaseSyncService {
         throw new Error("Social Hub is not available on the live RiftLite website yet. Please try again after the website update has finished deploying.");
       }
       const preview = text.replace(/\s+/g, " ").slice(0, 120);
-      throw new Error(`RiftLite website returned ${response.status} ${response.statusText || "non-JSON response"} for ${path}${preview ? `: ${preview}` : ""}`);
+      const message = `RiftLite website returned ${response.status} ${response.statusText || "non-JSON response"} for ${path}${preview ? `: ${preview}` : ""}`;
+      if (!response.ok) {
+        throw new WebsiteApiResponseError(message, response.status);
+      }
+      throw new Error(message);
     }
     if (!response.ok) {
       if (response.status === 404 && isSocialHubApiPath(path)) {
         throw new Error("Social Hub is not available on the live RiftLite website yet. Please try again after the website update has finished deploying.");
       }
-      throw new Error(readString(payload.error) || `RiftLite API ${response.status}`);
+      throw new WebsiteApiResponseError(
+        readString(payload.error) || `RiftLite API ${response.status}`,
+        response.status
+      );
     }
     return payload;
   }
@@ -1700,6 +2499,11 @@ export class FirebaseSyncService {
     }
     if (options.precondition?.updateTime) {
       url.searchParams.set("currentDocument.updateTime", options.precondition.updateTime);
+    }
+    if (options.method === "PATCH") {
+      for (const fieldPath of options.updateMask ?? []) {
+        url.searchParams.append("updateMask.fieldPaths", fieldPath);
+      }
     }
     const response = await fetch(url, {
       method: options.method,
@@ -1847,6 +2651,220 @@ function countAccountCloudBackup(backup: RiftLiteBackupFile): AccountCloudSyncCo
   };
 }
 
+class WebsiteApiResponseError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+    this.name = "WebsiteApiResponseError";
+  }
+}
+
+function normalizeAccountCloudSyncConflictSummary(value: unknown): AccountCloudSyncConflictSummary {
+  if (!isRecord(value)) {
+    throw new Error("RiftLite returned an invalid retained-backup summary.");
+  }
+  const id = readString(value.id);
+  const currentFingerprint = readString(value.currentFingerprint);
+  const legacyFingerprint = readString(value.legacyFingerprint);
+  if (
+    !isSha256(id) ||
+    value.status !== "pending" ||
+    !isSha256(currentFingerprint) ||
+    !isSha256(legacyFingerprint)
+  ) {
+    throw new Error("RiftLite returned an invalid retained-backup identity.");
+  }
+  return {
+    id,
+    status: "pending",
+    currentFingerprint,
+    legacyFingerprint,
+    current: normalizeAccountCloudSyncBackupSummary(value.current, "current"),
+    legacy: normalizeAccountCloudSyncBackupSummary(value.legacy, "retained")
+  };
+}
+
+function normalizeAccountCloudSyncBackupSummary(
+  value: unknown,
+  label: string
+): AccountCloudSyncConflictSummary["current"] {
+  if (!isRecord(value) || value.available !== true) {
+    throw new Error(`RiftLite returned an invalid ${label} backup summary.`);
+  }
+  return {
+    available: true,
+    updatedAt: readString(value.updatedAt),
+    deviceName: readString(value.deviceName),
+    appVersion: readString(value.appVersion),
+    byteSize: readApiNonNegativeInteger(value.byteSize, `${label} backup size`),
+    counts: normalizeAccountCloudSyncApiCounts(value.counts, `${label} backup`)
+  };
+}
+
+function normalizeAccountCloudSyncConflictManifest(
+  payload: Record<string, unknown>,
+  expectedConflictId: string,
+  expectedLegacyFingerprint: string
+): AccountCloudSyncManifest {
+  if (
+    payload.ok !== true ||
+    readString(payload.conflictId) !== expectedConflictId ||
+    readString(payload.legacyFingerprint) !== expectedLegacyFingerprint ||
+    !isRecord(payload.manifest)
+  ) {
+    throw new Error("RiftLite returned a retained-backup manifest for a different recovery request.");
+  }
+  const raw = payload.manifest;
+  if (readString(raw.format) !== ACCOUNT_CLOUD_SYNC_FORMAT) {
+    throw new Error("The retained account backup manifest has an unrecognized format.");
+  }
+  const manifest: AccountCloudSyncManifest = {
+    version: readApiPositiveInteger(raw.version, "backup version"),
+    updatedAt: readString(raw.updatedAt),
+    deviceId: readString(raw.deviceId),
+    deviceName: readString(raw.deviceName),
+    appVersion: readString(raw.appVersion),
+    generationId: readString(raw.generationId),
+    chunkCount: readApiPositiveInteger(raw.chunkCount, "backup chunk count"),
+    byteSize: readApiPositiveInteger(raw.byteSize, "backup byte size"),
+    checksumAlgorithm: readString(raw.checksumAlgorithm).toLowerCase(),
+    checksum: readString(raw.checksum).toLowerCase(),
+    chunkChecksums: Array.isArray(raw.chunkChecksums)
+      ? raw.chunkChecksums.map((entry) => readString(entry).toLowerCase())
+      : [],
+    counts: normalizeAccountCloudSyncApiCounts(raw.counts, "retained backup"),
+    updateTime: readString(raw.updateTime)
+  };
+  validateAccountCloudManifestForRestore(manifest);
+  if (accountCloudSyncManifestFingerprint(manifest) !== expectedLegacyFingerprint) {
+    throw new Error("The retained account backup manifest does not match its summary.");
+  }
+  return manifest;
+}
+
+function normalizeAccountCloudSyncConflictChunk(
+  payload: Record<string, unknown>,
+  expectedConflictId: string,
+  expectedLegacyFingerprint: string,
+  expectedIndex: number
+): AccountCloudSyncChunk {
+  if (
+    payload.ok !== true ||
+    readString(payload.conflictId) !== expectedConflictId ||
+    readString(payload.legacyFingerprint) !== expectedLegacyFingerprint
+  ) {
+    throw new Error(`RiftLite returned retained backup chunk ${expectedIndex + 1} for a different recovery request.`);
+  }
+  const index = readApiNonNegativeInteger(payload.index, "backup chunk index");
+  const chunk: AccountCloudSyncChunk = {
+    index,
+    payload: typeof payload.payload === "string" ? payload.payload : "",
+    byteSize: readApiPositiveInteger(payload.byteSize, "backup chunk size"),
+    checksum: readString(payload.checksum).toLowerCase()
+  };
+  if (index !== expectedIndex) {
+    throw new Error(`RiftLite returned retained backup chunk ${expectedIndex + 1} out of order.`);
+  }
+  return chunk;
+}
+
+function normalizeAccountCloudSyncConflictResolution(
+  payload: Record<string, unknown>,
+  expectedConflictId: string,
+  expectedChoice: AccountCloudSyncConflictResolutionResult["choice"]
+): AccountCloudSyncConflictResolutionResult {
+  const resolvedAt = readApiPositiveInteger(payload.resolvedAt, "backup conflict resolution time");
+  if (
+    payload.ok !== true ||
+    readString(payload.conflictId) !== expectedConflictId ||
+    payload.status !== "resolved" ||
+    payload.choice !== expectedChoice
+  ) {
+    throw new Error("RiftLite did not confirm the requested retained-backup resolution.");
+  }
+  return {
+    conflictId: expectedConflictId,
+    status: "resolved",
+    choice: expectedChoice,
+    resolvedAt
+  };
+}
+
+function normalizeAccountCloudSyncApiCounts(value: unknown, label: string): AccountCloudSyncCounts {
+  if (!isRecord(value)) {
+    throw new Error(`RiftLite returned invalid ${label} counts.`);
+  }
+  return {
+    matches: readApiNonNegativeInteger(value.matches, `${label} match count`),
+    decks: readApiNonNegativeInteger(value.decks, `${label} deck count`),
+    notebooks: readApiNonNegativeInteger(value.notebooks, `${label} notebook count`),
+    replays: readApiNonNegativeInteger(value.replays, `${label} replay count`)
+  };
+}
+
+function readApiPositiveInteger(value: unknown, label: string): number {
+  const result = Number(value);
+  if (!Number.isSafeInteger(result) || result < 1) {
+    throw new Error(`RiftLite returned an invalid ${label}.`);
+  }
+  return result;
+}
+
+function readApiNonNegativeInteger(value: unknown, label: string): number {
+  const result = Number(value);
+  if (!Number.isSafeInteger(result) || result < 0) {
+    throw new Error(`RiftLite returned an invalid ${label}.`);
+  }
+  return result;
+}
+
+function accountCloudSyncManifestFingerprint(manifest: AccountCloudSyncManifest): string {
+  const updateTime = canonicalAccountCloudSyncUpdateTime(manifest.updateTime);
+  return createHash(ACCOUNT_CLOUD_SYNC_CHECKSUM_ALGORITHM).update(JSON.stringify([
+    ACCOUNT_CLOUD_SYNC_FORMAT,
+    manifest.version,
+    manifest.updatedAt,
+    manifest.deviceId,
+    manifest.appVersion,
+    manifest.generationId,
+    manifest.chunkCount,
+    manifest.byteSize,
+    manifest.checksumAlgorithm,
+    manifest.checksum,
+    manifest.chunkChecksums,
+    manifest.counts.matches,
+    manifest.counts.decks,
+    manifest.counts.notebooks,
+    manifest.counts.replays,
+    updateTime
+  ]), "utf8").digest("hex");
+}
+
+function accountCloudSyncManifestApiPayload(manifest: AccountCloudSyncManifest): Record<string, unknown> {
+  return {
+    format: ACCOUNT_CLOUD_SYNC_FORMAT,
+    version: manifest.version,
+    updatedAt: manifest.updatedAt,
+    deviceId: manifest.deviceId,
+    deviceName: manifest.deviceName,
+    appVersion: manifest.appVersion,
+    generationId: manifest.generationId,
+    chunkCount: manifest.chunkCount,
+    byteSize: manifest.byteSize,
+    checksumAlgorithm: manifest.checksumAlgorithm,
+    checksum: manifest.checksum,
+    chunkChecksums: manifest.chunkChecksums,
+    counts: manifest.counts
+  };
+}
+
+function canonicalAccountCloudSyncUpdateTime(value: string): string {
+  const parsed = new Date(value);
+  if (!value || Number.isNaN(parsed.getTime())) {
+    throw new Error("Account cloud backup update time is invalid.");
+  }
+  return parsed.toISOString();
+}
+
 function chunkString(value: string, size: number): string[] {
   if (!value) {
     return [""];
@@ -1919,6 +2937,24 @@ function sameAccountCloudGeneration(left: AccountCloudSyncManifest | null, right
   return !left.generationId && left.version === right.version;
 }
 
+function accountCloudSyncManifestMatchesRecovery(
+  live: AccountCloudSyncManifest | null,
+  staged: AccountCloudSyncManifest
+): boolean {
+  if (!live) {
+    return false;
+  }
+  return live.version === ACCOUNT_CLOUD_SYNC_VERSION
+    && live.generationId === staged.generationId
+    && live.chunkCount === staged.chunkCount
+    && live.byteSize === staged.byteSize
+    && live.checksumAlgorithm === staged.checksumAlgorithm
+    && live.checksum === staged.checksum
+    && live.chunkChecksums.length === staged.chunkChecksums.length
+    && live.chunkChecksums.every((checksum, index) => checksum === staged.chunkChecksums[index])
+    && sameAccountCloudCounts(live.counts, staged.counts);
+}
+
 function sameAccountCloudCounts(left: AccountCloudSyncCounts, right: AccountCloudSyncCounts): boolean {
   return left.matches === right.matches
     && left.decks === right.decks
@@ -1936,6 +2972,13 @@ function isAccountCloudBackupFile(value: unknown): value is RiftLiteBackupFile {
     && Array.isArray(value.notebooks)
     && Array.isArray(value.replays)
     && Array.isArray(value.deletedReplays);
+}
+
+function isDefinitiveWebsiteApiRejection(error: unknown): boolean {
+  return error instanceof WebsiteApiResponseError
+    && error.status >= 400
+    && error.status < 500
+    && ![408, 425, 429].includes(error.status);
 }
 
 function isFirestorePreconditionError(error: unknown): boolean {
@@ -1977,7 +3020,10 @@ function fromWebMatch(match: Record<string, unknown>, scope: CommunityMatch["sco
     superseded: readBoolean(match.superseded),
     supersededAt: readString(match.superseded_at) || readString(match.supersededAt),
     scope,
-    hubId
+    hubId,
+    webReplayId: scope === "hub"
+      ? normalizePrivateHubWebReplayId(readString(match.web_replay_id) || readString(match.webReplayId)) || undefined
+      : undefined
   };
 }
 
@@ -2087,8 +3133,22 @@ function fromFirestoreDoc(doc: Record<string, unknown>, scope: CommunityMatch["s
     superseded: readFirestoreBool(fields.superseded),
     supersededAt: readFirestoreString(fields.superseded_at),
     scope,
-    hubId
+    hubId,
+    webReplayId: scope === "hub"
+      ? normalizePrivateHubWebReplayId(readFirestoreString(fields.web_replay_id)) || undefined
+      : undefined
   };
+}
+
+function communityMatchesRequestKey(settings: UserSettings, limit: number): string {
+  return JSON.stringify([
+    String(limit),
+    readString(settings.accountUid),
+    readString(settings.firebaseUid),
+    readString(settings.username),
+    readString(settings.accountHandle),
+    readString(settings.accountDisplayName)
+  ]);
 }
 
 function readFirestoreBool(value: unknown): boolean {

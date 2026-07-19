@@ -10,6 +10,8 @@ import { deckNotebookWithCurrentVersion, deckSnapshotHash, emptyDeckNotebook, no
 import { normalizeLegendName } from "../../shared/legendNames.js";
 import { buildCombinedBo3Match, buildMatchCombinePreview, markOriginalAsCombined, restoreCombinedOriginal, type MatchCombinePreview, type MatchCombineSavePayload } from "../../shared/matchCombine.js";
 import type { CaptureEvent, DeckNotebook, ImportSummary, MatchDraft, OverlayDisplayOptions, ReplayRecord, RiftLiteBackupFile, RiftLiteBackupOptions, SavedDeck, UserSettings } from "../../shared/types.js";
+import { sanitizeBackupFile } from "./backupSanitizer.js";
+import { redactCorruptSettingsText, redactSensitiveSettings, sensitiveCredentialPatch, stripLegacyHubSecrets, type SecureCredentialVault } from "./secureCredentialVault.js";
 
 interface PersistedState {
   settings?: Partial<UserSettings>;
@@ -95,6 +97,7 @@ const DEFAULT_SETTINGS: UserSettings = {
   scorepadLinkedAt: "",
   activeDeckId: "",
   activeHubs: [],
+  privateHubWebReplayGrantKeys: [],
   activeTeams: []
 };
 
@@ -239,10 +242,14 @@ export class RiftLiteStore {
   private replaysCache: ReplayRecord[] | null = null;
   private replaysLoadPromise: Promise<ReplayRecord[]> | null = null;
   private lastDatabaseBackupAt = 0;
+  private persistQueue: Promise<void> = Promise.resolve();
+  private legacyJsonPendingFinalization = false;
 
   constructor(
     dbPath = join(app.getPath("userData"), "riftlite-v06.sqlite"),
-    legacyJsonPath = join(app.getPath("userData"), "riftlite-v06-store.json")
+    legacyJsonPath = join(app.getPath("userData"), "riftlite-v06-store.json"),
+    private readonly credentialVault?: SecureCredentialVault,
+    private readonly legacyImportEnabled = false
   ) {
     this.dbPath = dbPath;
     this.legacyJsonPath = legacyJsonPath;
@@ -276,14 +283,26 @@ export class RiftLiteStore {
         await this.backupCorruptSettings(row);
       }
     }
-    this.settingsCache = this.normalizeSettings(parsed);
-    if (repairedCorruptSettings) {
+    const legacyHubSecretWasPresent = Array.isArray(parsed.activeHubs) &&
+      parsed.activeHubs.some((hub) => Boolean(hub?.passwordHash));
+    const normalized = this.normalizeSettings(parsed);
+    const protectedSettings = this.credentialVault
+      ? await this.credentialVault.reconcile(normalized)
+      : {
+          runtimeSettings: normalized,
+          persistedSettings: normalized,
+          protected: false,
+          storageChanged: legacyHubSecretWasPresent
+        };
+    protectedSettings.storageChanged = protectedSettings.storageChanged || legacyHubSecretWasPresent;
+    this.settingsCache = protectedSettings.runtimeSettings;
+    if (repairedCorruptSettings || protectedSettings.storageChanged) {
       db.run("INSERT OR REPLACE INTO settings (key, value_json, updated_at) VALUES (?, ?, ?)", [
         "settings",
-        JSON.stringify(this.settingsCache),
+        JSON.stringify(protectedSettings.persistedSettings),
         Date.now()
       ]);
-      await this.persist();
+      await this.persist({ skipPrewriteBackup: protectedSettings.protected && protectedSettings.storageChanged });
     }
     return this.settingsCache;
   }
@@ -302,14 +321,23 @@ export class RiftLiteStore {
       deckTrackerPinnedCards: parsed.deckTrackerPinnedCards && typeof parsed.deckTrackerPinnedCards === "object" && !Array.isArray(parsed.deckTrackerPinnedCards)
         ? parsed.deckTrackerPinnedCards
         : {},
-      activeHubs: Array.isArray(parsed.activeHubs) ? parsed.activeHubs : [],
+      activeHubs: stripLegacyHubSecrets({
+        ...DEFAULT_SETTINGS,
+        ...parsed,
+        rawCapture: normalizeRawCaptureSettings((parsed as { rawCapture?: unknown }).rawCapture),
+        activeHubs: Array.isArray(parsed.activeHubs) ? parsed.activeHubs : [],
+        activeTeams: Array.isArray(parsed.activeTeams) ? parsed.activeTeams : []
+      }).activeHubs,
+      privateHubWebReplayGrantKeys: Array.isArray(parsed.privateHubWebReplayGrantKeys)
+        ? [...new Set(parsed.privateHubWebReplayGrantKeys.filter((value): value is string => typeof value === "string" && value.length > 0))].slice(-10_000)
+        : [],
       activeTeams: Array.isArray(parsed.activeTeams) ? parsed.activeTeams : []
     };
   }
 
   private async backupCorruptSettings(value: string): Promise<void> {
     const backupPath = join(dirname(this.dbPath), `riftlite-settings-corrupt-${Date.now()}.json`);
-    await writeFile(backupPath, value, "utf8").catch(() => undefined);
+    await writeFile(backupPath, redactCorruptSettingsText(value), "utf8").catch(() => undefined);
   }
 
   async saveSettings(patch: Partial<UserSettings>): Promise<UserSettings> {
@@ -332,17 +360,27 @@ export class RiftLiteStore {
         ? normalizeRawCaptureSettings((patch as { rawCapture?: unknown }).rawCapture, current.rawCapture)
         : current.rawCapture,
       activeHubs: patch.activeHubs ? [...patch.activeHubs] : current.activeHubs,
+      privateHubWebReplayGrantKeys: Object.prototype.hasOwnProperty.call(patch, "privateHubWebReplayGrantKeys")
+        ? [...new Set((patch.privateHubWebReplayGrantKeys ?? []).filter((value) => typeof value === "string" && value.length > 0))].slice(-10_000)
+        : current.privateHubWebReplayGrantKeys,
       activeTeams: patch.activeTeams ? [...patch.activeTeams] : current.activeTeams
     };
+    const sanitizedNext = stripLegacyHubSecrets(next);
+    const protectedSettings = this.credentialVault
+      ? await this.credentialVault.protectForSave(sanitizedNext, sensitiveCredentialPatch(patch))
+      : {
+          runtimeSettings: sanitizedNext,
+          persistedSettings: sanitizedNext
+        };
     const db = await this.database();
     db.run("INSERT OR REPLACE INTO settings (key, value_json, updated_at) VALUES (?, ?, ?)", [
       "settings",
-      JSON.stringify(next),
+      JSON.stringify(protectedSettings.persistedSettings),
       Date.now()
     ]);
-    this.settingsCache = next;
+    this.settingsCache = protectedSettings.runtimeSettings;
     await this.persist();
-    return next;
+    return protectedSettings.runtimeSettings;
   }
 
   async getMatches(): Promise<MatchDraft[]> {
@@ -708,10 +746,39 @@ export class RiftLiteStore {
          VALUES (?, ?, ?, ?, ?)`,
         [next.id, next.matchId, next.platform, next.capturedAt, JSON.stringify(next)]
       );
+      this.invalidateReplayCache();
       await this.persist();
     });
-    this.invalidateReplayCache();
     return next;
+  }
+
+  async updateReplay(
+    id: string,
+    update: (current: ReplayRecord) => ReplayRecord
+  ): Promise<ReplayRecord | null> {
+    const db = await this.database();
+    let saved: ReplayRecord | null = null;
+    await this.withDatabaseRepair("update-replay", async () => {
+      const row = db.exec("SELECT data_json FROM replays WHERE id=?", [id])[0]?.values[0]?.[0];
+      const current = this.parseStoredReplay(row);
+      if (!current) {
+        saved = null;
+        return;
+      }
+      const candidate = update(current);
+      const next = compactReplayForStorage({
+        ...candidate,
+        id: current.id,
+        matchId: current.matchId,
+        platform: current.platform,
+        capturedAt: current.capturedAt
+      });
+      db.run("UPDATE replays SET data_json=? WHERE id=?", [JSON.stringify(next), id]);
+      this.invalidateReplayCache();
+      await this.persist();
+      saved = next;
+    });
+    return saved;
   }
 
   async deleteReplay(id: string): Promise<void> {
@@ -800,19 +867,19 @@ export class RiftLiteStore {
 
   async exportBackupData(options: Partial<RiftLiteBackupOptions> = {}): Promise<RiftLiteBackupFile> {
     const includeRecycleBin = options.includeRecycleBin !== false;
-    return {
+    return sanitizeBackupFile({
       format: "riftlite.backup",
       version: 1,
       exportedAt: new Date().toISOString(),
       appVersion: app.getVersion(),
-      settings: await this.getSettings(),
+      settings: redactSensitiveSettings(await this.getSettings()),
       matches: await this.getMatches(),
       deletedMatches: includeRecycleBin ? await this.getDeletedMatches() : [],
       decks: await this.getSavedDecks(),
       notebooks: await this.getDeckNotebooks(),
       replays: await this.getReplays(),
       deletedReplays: includeRecycleBin ? await this.getDeletedReplays() : []
-    };
+    });
   }
 
   async restoreBackupData(backup: RiftLiteBackupFile, options: { preserveAccount?: boolean; preserveReplays?: boolean } = {}): Promise<void> {
@@ -841,7 +908,12 @@ export class RiftLiteStore {
       candidateDb.run("DELETE FROM deck_notebooks");
 
       const restoredSettings = this.normalizeSettings(backup.settings ?? {});
-      const settings = options.preserveAccount
+      // Secure credentials are device-bound and intentionally absent from
+      // backup files. Keep their matching account/Scorepad/config identity on
+      // any secure-vault restore so an imported backup cannot pair the current
+      // token or device secret with another device's public identifiers.
+      const preserveDeviceIdentity = options.preserveAccount || Boolean(this.credentialVault);
+      const settings = preserveDeviceIdentity
         ? this.normalizeSettings({
             ...restoredSettings,
             firebaseUid: currentSettings.firebaseUid,
@@ -869,7 +941,7 @@ export class RiftLiteStore {
         : restoredSettings;
       candidateDb.run("INSERT OR REPLACE INTO settings (key, value_json, updated_at) VALUES (?, ?, ?)", [
         "settings",
-        JSON.stringify(settings),
+        JSON.stringify(redactSensitiveSettings(settings)),
         Date.now()
       ]);
 
@@ -1021,12 +1093,18 @@ export class RiftLiteStore {
     try {
       this.db = bytes?.length ? new this.sql.Database(bytes) : new this.sql.Database();
       await this.repairDatabaseIfNeeded("startup-integrity-check");
-      await this.createLastKnownGoodBackup("startup-ok", true).catch(() => undefined);
       this.migrateSchema();
       await this.migrateLegacyJson();
-      await this.importLegacyData().catch(() => undefined);
+      if (this.legacyImportEnabled) {
+        await this.importLegacyData().catch(() => undefined);
+      }
       await this.repairDatabaseIfNeeded("post-migration-integrity-check");
+      // Hydrate/migrate credentials before taking the startup snapshot so a
+      // newly-created recovery backup does not preserve legacy plaintext.
+      await this.getSettings();
       await this.persist();
+      await this.finalizeLegacyJsonMigration();
+      await this.createLastKnownGoodBackup("startup-ok", true).catch(() => undefined);
     } catch (error) {
       await this.recoverFromStartupOpenFailure(error);
     }
@@ -1043,6 +1121,9 @@ export class RiftLiteStore {
   private migrateSchema(): void {
     const db = this.db;
     if (!db) return;
+    // Ensure replaced settings pages are zeroed instead of leaving deleted
+    // plaintext credential bytes in SQLite free pages.
+    db.run("PRAGMA secure_delete=ON");
     db.run(`
       CREATE TABLE IF NOT EXISTS settings (
         key TEXT PRIMARY KEY,
@@ -1097,7 +1178,18 @@ export class RiftLiteStore {
 
   private async migrateLegacyJson(): Promise<void> {
     const db = this.db;
-    if (!db || !existsSync(this.legacyJsonPath) || existsSync(`${this.legacyJsonPath}.migrated`)) {
+    const migratedPath = `${this.legacyJsonPath}.migrated`;
+    if (!db) {
+      return;
+    }
+    if (existsSync(migratedPath)) {
+      await this.scrubLegacySettingsJson(migratedPath);
+      if (existsSync(this.legacyJsonPath)) {
+        await this.scrubLegacySettingsJson(this.legacyJsonPath);
+      }
+      return;
+    }
+    if (!existsSync(this.legacyJsonPath)) {
       return;
     }
     try {
@@ -1110,12 +1202,9 @@ export class RiftLiteStore {
           JSON.stringify(migratedSettings),
           Date.now()
         ]);
-        this.settingsCache = {
-          ...migratedSettings,
-          overlayDisplay: { ...DEFAULT_SETTINGS.overlayDisplay, ...migratedSettings.overlayDisplay },
-          activeHubs: Array.isArray(migratedSettings.activeHubs) ? migratedSettings.activeHubs : [],
-          activeTeams: Array.isArray(migratedSettings.activeTeams) ? migratedSettings.activeTeams : []
-        };
+        // Force the normal settings loader to migrate any legacy credentials
+        // into the secure vault before these values are exposed or backed up.
+        this.settingsCache = null;
       }
       for (const match of parsed.matches ?? []) {
         db.run(
@@ -1125,10 +1214,39 @@ export class RiftLiteStore {
           [match.id, match.platform, match.status, match.result, match.capturedAt, match.updatedAt, JSON.stringify(match)]
         );
       }
-      await rename(this.legacyJsonPath, `${this.legacyJsonPath}.migrated`);
+      // The source stays intact until the vault and SQLite export are durable.
+      // finalizeLegacyJsonMigration then retains a sanitized archive.
+      this.legacyJsonPendingFinalization = true;
       this.invalidateMatchCache();
     } catch {
       return;
+    }
+  }
+
+  private async finalizeLegacyJsonMigration(): Promise<void> {
+    if (!this.legacyJsonPendingFinalization || !existsSync(this.legacyJsonPath)) {
+      return;
+    }
+    const migratedPath = `${this.legacyJsonPath}.migrated`;
+    await this.scrubLegacySettingsJson(this.legacyJsonPath);
+    await rename(this.legacyJsonPath, migratedPath);
+    this.legacyJsonPendingFinalization = false;
+  }
+
+  private async scrubLegacySettingsJson(path: string): Promise<void> {
+    let raw = "";
+    try {
+      raw = await readFile(path, "utf8");
+      const parsed = JSON.parse(raw) as PersistedState;
+      if (!parsed.settings) {
+        return;
+      }
+      parsed.settings = redactSensitiveSettings(this.normalizeSettings(parsed.settings));
+      await writeFile(path, JSON.stringify(parsed), { encoding: "utf8", mode: 0o600 });
+    } catch {
+      if (raw) {
+        await writeFile(path, redactCorruptSettingsText(raw), { encoding: "utf8", mode: 0o600 }).catch(() => undefined);
+      }
     }
   }
 
@@ -1223,17 +1341,25 @@ export class RiftLiteStore {
     }
   }
 
-  private async persist(): Promise<void> {
-    if (!this.db) {
-      return;
-    }
-    await this.createLastKnownGoodBackup("prewrite").catch(() => undefined);
-    await this.writeDatabaseFile(this.db);
+  private async persist(options: { skipPrewriteBackup?: boolean } = {}): Promise<void> {
+    const persistAfterPrevious = this.persistQueue
+      .catch(() => undefined)
+      .then(async () => {
+        if (!this.db) {
+          return;
+        }
+        if (!options.skipPrewriteBackup) {
+          await this.createLastKnownGoodBackup("prewrite").catch(() => undefined);
+        }
+        await this.writeDatabaseFile(this.db);
+      });
+    this.persistQueue = persistAfterPrevious;
+    await persistAfterPrevious;
   }
 
   private async writeDatabaseFile(database: Database): Promise<void> {
     await mkdir(dirname(this.dbPath), { recursive: true });
-    const tempPath = `${this.dbPath}.tmp-${process.pid}-${Date.now()}`;
+    const tempPath = `${this.dbPath}.tmp-${process.pid}-${Date.now()}-${randomUUID()}`;
     await writeFile(tempPath, Buffer.from(database.export()));
     try {
       await rename(tempPath, this.dbPath);
@@ -1310,8 +1436,12 @@ export class RiftLiteStore {
     this.replaysCache = null;
     this.migrateSchema();
     await this.migrateLegacyJson().catch(() => undefined);
-    await this.importLegacyData().catch(() => undefined);
+    if (this.legacyImportEnabled) {
+      await this.importLegacyData().catch(() => undefined);
+    }
+    await this.getSettings();
     await this.persist();
+    await this.finalizeLegacyJsonMigration().catch(() => undefined);
     await this.createLastKnownGoodBackup("startup-fresh-after-corrupt-db", true).catch(() => undefined);
     await writeFile(
       failurePath,
@@ -1438,8 +1568,10 @@ export class RiftLiteStore {
         this.settingsCache = null;
         this.migrateSchema();
         await this.migrateLegacyJson().catch(() => undefined);
+        await this.getSettings();
         await this.repairDatabaseIfNeeded(`restore-${context}`);
         await this.persist();
+        await this.finalizeLegacyJsonMigration().catch(() => undefined);
         await this.createLastKnownGoodBackup(`restored-${context}`, true).catch(() => undefined);
         return true;
       } catch {
@@ -1613,10 +1745,14 @@ function compactCapturePayload(payload: Record<string, unknown> = {}): Record<st
     "opponentName",
     "myChampion",
     "opponentChampion",
+    "myChampionCode",
+    "opponentChampionCode",
     "myChampionImage",
     "opponentChampionImage",
     "myBattlefield",
     "opponentBattlefield",
+    "myBattlefieldCode",
+    "opponentBattlefieldCode",
     "myBattlefieldImage",
     "opponentBattlefieldImage",
     "roomCode",

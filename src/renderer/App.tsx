@@ -10,9 +10,11 @@ import {
   Calculator,
   Camera,
   Check,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   ClipboardList,
+  Cloud,
   Compass,
   Copy,
   ExternalLink,
@@ -28,7 +30,9 @@ import {
   Images,
   Keyboard,
   Layers,
+  Lightbulb,
   Link2,
+  Mail,
   Maximize2,
   PanelLeftClose,
   PanelLeftOpen,
@@ -47,6 +51,8 @@ import {
   Settings,
   Shield,
   SlidersHorizontal,
+  Square,
+  Sparkles,
   Smartphone,
   Upload,
   Video,
@@ -63,6 +69,7 @@ import type {
   BattlefieldOption,
   AccountConnectionStatus,
   AccountLinkSession,
+  AccountCloudSyncConflictSummary,
   AccountCloudSyncStatus,
   AccountProfile,
   CommunityMatch,
@@ -139,11 +146,20 @@ import type {
 } from "../shared/types";
 import { buildAtlasReplay, replaySnapshotCardCount, type AtlasReplayViewModel, type ReplayTimelineEvent, type ReplayTurnView } from "../shared/atlasReplay";
 import { getRiftLiteAccountState, isGenericAccountDisplayName } from "../shared/accountIdentity";
+import { accountLinkUrlForProvider, type AccountLinkProvider } from "../shared/accountLink";
+import {
+  accountMigrationProgress,
+  activeDeckSyncConfidence,
+  buildAccountSyncChoicePreview,
+  cloudAccountSyncSnapshot,
+  localAccountSyncSnapshot,
+  type AccountSyncChoice
+} from "../shared/accountSyncConfidence";
 import {
   activeDiscordReplayHubIds,
   rawCaptureSettingsForDiscordHubSelection
 } from "../shared/replaySharing";
-import { replayDeliveryStages } from "../shared/replayDelivery";
+import { replayDeliveryStages, replayDeliverySummary } from "../shared/replayDelivery";
 import { buildRiftLiteReplayModel, type RiftLiteReplayModel } from "../shared/riftLiteReplayEngine";
 import { activeDeckOverlayStats, buildDeckPerformance, type DeckBattlefieldPairStat, type DeckBattlefieldStat, type DeckPerformanceStats, type DeckRecordStats } from "../shared/deckPerformance";
 import {
@@ -183,15 +199,78 @@ import {
   type MatchCombineWarning
 } from "../shared/matchCombine";
 import { upsertMatchPreservingOrder } from "../shared/matchList";
+import { upsertReplayPreservingOrder } from "../shared/replayList";
 import { publicCommunitySyncEnabled, syncModePatch } from "../shared/syncPolicy";
 import {
   initialAtlasReloadStormState,
+  shouldAutoRemountAtlasEmptyShell,
   updateAtlasReloadStormState
 } from "../shared/atlasWebviewRecovery";
+import { stopMediaRecorderSafely } from "../shared/mediaRecorderStop";
+import { RIFTLITE_BUILD_IDENTITY } from "../shared/buildIdentity";
+import {
+  PRIVATE_HUB_DELETE_COUNTDOWN_SECONDS,
+  canDeletePrivateHub,
+  canLeavePrivateHub,
+  normalizePrivateHubWebReplayId,
+  privateHubMembershipsEqual,
+  privateHubWebReplayUrl,
+  webReplayIdsByLocalMatch
+} from "../shared/privateHubs";
+import {
+  PrivateHubLifecycleDialog,
+  type PrivateHubLifecycleIntent
+} from "./PrivateHubLifecycleDialog";
+import {
+  GAME_WEBVIEW_PARTITIONS,
+  gameWebviewIsReady,
+  nextMountedGamePlatform
+} from "../shared/gameWebview";
+import { communitySpotlightTheme } from "../shared/communitySpotlightThemes";
+import { communitySpotlightTarget } from "../shared/communitySpotlightNavigation";
+import {
+  invalidateAccountRestoreCommunityCaches,
+  loadAccountRestoreLocalData
+} from "./accountRestoreRefresh";
+import {
+  GUIDED_TOUR_LOCAL_STORAGE_KEY,
+  initialGuidedTourState,
+  parseGuidedTourState,
+  replayGuidedTour,
+  serializeGuidedTourState,
+  type GuidedTourState
+} from "../shared/guidedTour";
+import {
+  FIRST_MATCH_ONBOARDING_LOCAL_STORAGE_KEY,
+  dismissFirstMatchOnboarding,
+  firstMatchOnboardingAfterSavedMatch,
+  firstMatchOnboardingAfterTour,
+  parseFirstMatchOnboardingState,
+  reconcileFirstMatchOnboarding,
+  serializeFirstMatchOnboardingState,
+  type FirstMatchOnboardingState
+} from "../shared/firstMatchOnboarding";
+import {
+  PRIMARY_NAVIGATION,
+  UTILITY_NAVIGATION_ITEMS,
+  navigationOwner,
+  owningNavigationDisclosure,
+  type ActiveView,
+  type NavigationDisclosureId,
+  type NavigationTarget
+} from "../shared/navigationModel";
+import { GuidedTour } from "./GuidedTour";
 import { RiftLiteReplayViewer } from "./RiftLiteReplayViewer";
+import { SettingsAccordionSection } from "./SettingsAccordionSection";
+import {
+  INITIAL_ATLAS_SHELL_VISIBILITY,
+  shouldCoverAtlasShell,
+  updateAtlasShellVisibility
+} from "./atlasShellVisibility";
+import { bindGameWebviewEvents } from "./gameWebviewEvents";
 import "./styles/app.css";
+import "./styles/ui-dev-modern.css";
 
-type ActiveView = "home" | "play" | "scorepad" | "matches" | "stats" | "matchup-lab" | "spotlight" | "community" | "social" | "hubs" | "decks" | "replays" | "web-replay" | "stream" | "account" | "settings";
 type DeckFocusTarget = "library" | "prep" | "notebook" | "performance";
 type MatchFocusTarget = {
   myLegend?: string;
@@ -204,6 +283,7 @@ type NavigationOptions = {
   deckFocus?: DeckFocusTarget;
   communityDeckLegend?: string | null;
   matchFocus?: Omit<MatchFocusTarget, "nonce"> | null;
+  spotlightId?: string;
 };
 
 const GAME_URLS: Record<GamePlatform, string> = {
@@ -227,14 +307,14 @@ const RIFTLITE_WEB_REPLAY_FEATURE_VISIBLE = true;
 
 const DEFAULT_UPDATE_STATUS: UpdateStatus = {
   state: "idle",
-  currentVersion: "0.8.04",
+  currentVersion: RIFTLITE_BUILD_IDENTITY.packageVersion,
   message: "Updater ready"
 };
 
 const FALLBACK_BOOT_SETTINGS: UserSettings = {
   username: "",
   firstRunComplete: true,
-  lastSeenVersion: "0.8.04",
+  lastSeenVersion: RIFTLITE_BUILD_IDENTITY.displayVersion,
   syncMode: "community-and-hubs",
   communitySyncEnabled: true,
   firebaseUid: "",
@@ -320,11 +400,12 @@ const FALLBACK_BOOT_SETTINGS: UserSettings = {
   scorepadDeviceSecret: "",
   scorepadLinkedAt: "",
   activeDeckId: "",
+  privateHubWebReplayGrantKeys: [],
   activeHubs: [],
   activeTeams: []
 };
 
-const APP_VERSION_META = "0.8.04";
+const APP_VERSION_META = RIFTLITE_BUILD_IDENTITY.displayVersion;
 const VENDETTA_PREVIEW_START_MS = Date.UTC(2026, 6, 6);
 const VENDETTA_LAUNCH_START_MS = Date.UTC(2026, 6, 31);
 const COMMUNITY_SEASONS = [
@@ -378,14 +459,15 @@ const DEFAULT_HOME_FEATURED_VIDEOS: HomeFeaturedVideo[] = [
 const HOME_CONFIG_URL = "https://www.riftlite.com/api/app/home";
 const RELEASE_NOTES = {
   version: APP_VERSION_META,
-  title: "RiftLite 0.8.04",
-  intro: "RiftLite 0.8.04 makes private hubs, Discord reporting, and automatic web replay delivery easier to manage and diagnose.",
+  title: "RiftLite v0.9.00",
+  intro: "The modern RiftLite experience is now the main build, with stronger account continuity, replay reliability, privacy, and capture support.",
   items: [
-    "Private hub owners can appoint co-owners to help manage members, invites, testing tools, and authorized Discord commands.",
-    "The new Hub Health panel checks the linked account, exact hub, Discord setup, verification, latest replay, and delivery status in one place.",
-    "Automatic Discord replay posts now bind to the real Atlas match start, wait for the completed result, and retry safely when delivery is delayed.",
-    "Replay details now show clear capture, result, processing, and Discord delivery stages.",
-    "Existing accounts, settings, matches, decks, hubs, and replay data remain unchanged."
+    "A redesigned Home dashboard and modern navigation keep play readiness, recent activity, sponsor opportunities, Riftlab, and community content together.",
+    "The guided tour now continues through your first successfully saved match, while every existing Review, Prepare, Community, Overlay, Account, and Settings tool remains available.",
+    "Google or email sign-in links the desktop to your RiftLite website identity, history, decks, private hubs, and optional device sync.",
+    "Account Sync now shows local and cloud counts, active-deck state, migration progress, last successful sync, and a preview before either copy is selected.",
+    "Current card-print and battlefield mapping improves alternate-art, overnumbered, signed, Rune, and tracker recognition across Atlas, TCGA, and Web Replay.",
+    "Credentials use operating-system protected storage, backups omit secrets, diagnostics are redacted by default, and embedded content uses stricter trust boundaries."
   ]
 };
 const RIOT_LEGAL_NOTICE = `RiftLite was created under Riot Games' "Legal Jibber Jabber" policy using assets owned by Riot Games. Riot Games does not endorse or sponsor this project.`;
@@ -604,6 +686,7 @@ function homeFeaturedStreamsFromConfig(value: unknown): HomeFeaturedStream[] {
 const DIRECT_REPLAY_MODE_MIGRATION_KEY = "riftlite-direct-replay-mode-v2";
 const VIDEO_REPLAY_DEFAULTS_MIGRATION_KEY = "riftlite-video-replay-defaults-v070";
 const GAME_ZOOM_RESET_MIGRATION_KEY = "riftlite-game-zoom-reset-v0760";
+const NATIVE_GAME_ZOOM_MIGRATION_KEY = "riftlite-native-game-zoom-v0805";
 const VISION_TRACKER_DEFAULT_OFF_MIGRATION_KEY = "riftlite-vision-tracker-default-off-v0770";
 const DECK_TRACKER_POSITION_KEY = "riftlite-deck-tracker-position-v1";
 const DECK_TRACKER_SIZE_KEY = "riftlite-deck-tracker-size-v1";
@@ -713,6 +796,46 @@ function writeActiveTestingSessionId(id: string) {
     }
   } catch {
     // Local-only helper; failing to persist should not block match review.
+  }
+}
+
+function readGuidedTourState(): GuidedTourState {
+  try {
+    return parseGuidedTourState(window.localStorage.getItem(GUIDED_TOUR_LOCAL_STORAGE_KEY));
+  } catch {
+    return initialGuidedTourState();
+  }
+}
+
+function writeGuidedTourState(state: GuidedTourState) {
+  try {
+    window.localStorage.setItem(GUIDED_TOUR_LOCAL_STORAGE_KEY, serializeGuidedTourState(state));
+  } catch {
+    // The tour remains usable for this session if local presentation state cannot be persisted.
+  }
+}
+
+function clearGuidedTourState() {
+  try {
+    window.localStorage.removeItem(GUIDED_TOUR_LOCAL_STORAGE_KEY);
+  } catch {
+    // Resetting help should never block the rest of the app.
+  }
+}
+
+function readFirstMatchOnboardingState(): FirstMatchOnboardingState | null {
+  try {
+    return parseFirstMatchOnboardingState(window.localStorage.getItem(FIRST_MATCH_ONBOARDING_LOCAL_STORAGE_KEY));
+  } catch {
+    return null;
+  }
+}
+
+function writeFirstMatchOnboardingState(state: FirstMatchOnboardingState) {
+  try {
+    window.localStorage.setItem(FIRST_MATCH_ONBOARDING_LOCAL_STORAGE_KEY, serializeFirstMatchOnboardingState(state));
+  } catch {
+    // This is presentation-only guidance; capture must continue if storage is unavailable.
   }
 }
 
@@ -1247,6 +1370,7 @@ type AnalyticsMatch = {
   myBattlefield: string;
   opponentBattlefield: string;
   games: MatchGame[];
+  webReplayId: string;
 };
 
 type StatsDrilldownSelection = {
@@ -2774,6 +2898,9 @@ interface CaptureNotice {
 
 function App() {
   const [activePlatform, setActivePlatform] = useState<GamePlatform>("tcga");
+  const [mountedGamePlatform, setMountedGamePlatform] = useState<GamePlatform | null>(null);
+  const [gameWebviewEpoch, setGameWebviewEpoch] = useState(0);
+  const [atlasShellVisibility, setAtlasShellVisibility] = useState(INITIAL_ATLAS_SHELL_VISIBILITY);
   const [preloadUrl, setPreloadUrl] = useState("");
   const [logoUrl, setLogoUrl] = useState("");
   const [settings, setSettings] = useState<UserSettings | null>(null);
@@ -2811,25 +2938,44 @@ function App() {
   const [atlasRecoveryBusy, setAtlasRecoveryBusy] = useState(false);
   const [updatePromptDismissedFor, setUpdatePromptDismissedFor] = useState("");
   const [releaseNotesOpen, setReleaseNotesOpen] = useState(false);
-  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [guidedTourState, setGuidedTourState] = useState<GuidedTourState | null>(null);
+  const [firstMatchOnboarding, setFirstMatchOnboarding] = useState<FirstMatchOnboardingState | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [expandedNavGroup, setExpandedNavGroup] = useState<NavigationDisclosureId | null>(null);
   const [activeView, setActiveView] = useState<ActiveView>("home");
   const [activeCommunityTab, setActiveCommunityTab] = useState<CommunityTab>("community-decks");
   const [communityDeckLegendTarget, setCommunityDeckLegendTarget] = useState("");
+  const [spotlightTargetId, setSpotlightTargetId] = useState("");
   const [deckFocusTarget, setDeckFocusTarget] = useState<DeckFocusTarget>("library");
   const [matchFocusTarget, setMatchFocusTarget] = useState<MatchFocusTarget | null>(null);
   const [focusedReplayId, setFocusedReplayId] = useState("");
+  const guidedTourInitializedRef = useRef(false);
+  const firstMatchOnboardingInitializedRef = useRef(false);
+  const guidedTourReplayRef = useRef(false);
+  const guidedTourRestoreRef = useRef<{
+    view: ActiveView;
+    sidebarCollapsed: boolean;
+    expandedNavGroup: NavigationDisclosureId | null;
+  } | null>(null);
   const gameRef = useRef<Electron.WebviewTag | null>(null);
+  const gamePresentationPulseRef = useRef<{
+    webview: Electron.WebviewTag;
+    token: number;
+    originalDisplay: string;
+  } | null>(null);
   const autoConfirmingRef = useRef<string>("");
   const actionFeedbackTimerRef = useRef<number | undefined>(undefined);
   const captureNoticeTimerRef = useRef<number | undefined>(undefined);
   const capturePromptSignatureRef = useRef("");
   const atlasReloadStormRef = useRef(initialAtlasReloadStormState());
+  const atlasEmptyShellRemountedRef = useRef(false);
+  const atlasRecoveryBusyRef = useRef(false);
   const pendingReviewFallbackTimerRef = useRef<number | undefined>(undefined);
   const diagnosticsRefreshTimerRef = useRef<number | undefined>(undefined);
   const diagnosticsRefreshInFlightRef = useRef(false);
   const communityLoadedRef = useRef(false);
   const communityMatchesLoadedForTrackerRef = useRef(false);
+  const communityAccountUidRef = useRef("");
   const activeViewRef = useRef<ActiveView>(activeView);
   const settingsRef = useRef<UserSettings | null>(settings);
   const healthRef = useRef<CaptureHealth>(health);
@@ -2885,6 +3031,12 @@ function App() {
     if (options && "matchFocus" in options) {
       setMatchFocusTarget(options.matchFocus ? { ...options.matchFocus, nonce: Date.now() } : null);
     }
+    if (nextView === "spotlight") {
+      setSpotlightTargetId(communitySpotlightTarget(
+        options?.spotlightId,
+        COMMUNITY_SPOTLIGHTS.map((item) => item.id)
+      ));
+    }
     setActiveView(nextView);
   }
 
@@ -2895,6 +3047,85 @@ function App() {
   function openDecks(focus: DeckFocusTarget = "library") {
     openView("decks", { deckFocus: focus });
   }
+
+  function openNavigationTarget(target: NavigationTarget) {
+    openView(target.view, {
+      deckFocus: target.deckFocus,
+      communityTab: target.communityTab
+    });
+  }
+
+  function navigateGuidedTour(target: NavigationTarget) {
+    setSidebarCollapsed(false);
+    openNavigationTarget(target);
+  }
+
+  function startGuidedTourReplay() {
+    guidedTourRestoreRef.current = {
+      view: activeView,
+      sidebarCollapsed,
+      expandedNavGroup
+    };
+    guidedTourReplayRef.current = true;
+    setReleaseNotesOpen(false);
+    setSidebarCollapsed(false);
+    setGuidedTourState(replayGuidedTour(readGuidedTourState()));
+  }
+
+  function resetGuidedTourForNextLaunch() {
+    clearGuidedTourState();
+    try {
+      window.localStorage.removeItem(FIRST_MATCH_ONBOARDING_LOCAL_STORAGE_KEY);
+    } catch {
+      // Resetting help should never block the rest of the app.
+    }
+    setFirstMatchOnboarding(null);
+    firstMatchOnboardingInitializedRef.current = false;
+    showActionFeedback("The first-launch tour will open the next time RiftLite starts.");
+  }
+
+  function persistFirstMatchOnboarding(next: FirstMatchOnboardingState) {
+    writeFirstMatchOnboardingState(next);
+    setFirstMatchOnboarding(next);
+  }
+
+  function updateGuidedTour(next: GuidedTourState) {
+    if (!guidedTourReplayRef.current) {
+      writeGuidedTourState(next);
+    }
+    setGuidedTourState(next.status === "active" ? next : null);
+  }
+
+  function finishGuidedTour(next: GuidedTourState) {
+    if (!guidedTourReplayRef.current) {
+      writeGuidedTourState(next);
+      persistFirstMatchOnboarding(firstMatchOnboardingAfterTour(firstMatchOnboarding, next.status, matches));
+    }
+    setGuidedTourState(null);
+    const restore = guidedTourRestoreRef.current;
+    if (guidedTourReplayRef.current && restore) {
+      setActiveView(restore.view);
+      setSidebarCollapsed(restore.sidebarCollapsed);
+      setExpandedNavGroup(restore.expandedNavGroup);
+    } else {
+      openView("home");
+      setExpandedNavGroup(null);
+    }
+    guidedTourReplayRef.current = false;
+    guidedTourRestoreRef.current = null;
+    showActionFeedback(next.status === "completed" ? "Guided tour complete." : "Guided tour skipped. You can replay it from Settings.");
+  }
+
+  useEffect(() => {
+    const disclosure = owningNavigationDisclosure({
+      view: activeView,
+      deckFocus: deckFocusTarget,
+      communityTab: activeCommunityTab
+    });
+    if (disclosure) {
+      setExpandedNavGroup(disclosure.id);
+    }
+  }, [activeCommunityTab, activeView, deckFocusTarget]);
 
   useEffect(() => {
     activeViewRef.current = activeView;
@@ -2927,6 +3158,62 @@ function App() {
   useEffect(() => {
     settingsRef.current = settings;
   }, [settings]);
+
+  useEffect(() => {
+    const accountUid = settings?.accountUid ?? "";
+    if (communityAccountUidRef.current === accountUid) {
+      return;
+    }
+    communityAccountUidRef.current = accountUid;
+    setHubMatches({});
+    setTeamMatches({});
+    communityLoadedRef.current = false;
+    communityMatchesLoadedForTrackerRef.current = false;
+  }, [settings?.accountUid]);
+
+  useEffect(() => {
+    if (!settings || guidedTourInitializedRef.current) {
+      return;
+    }
+    guidedTourInitializedRef.current = true;
+    const stored = readGuidedTourState();
+    if (stored.status !== "active") {
+      return;
+    }
+    guidedTourReplayRef.current = false;
+    guidedTourRestoreRef.current = null;
+    setReleaseNotesOpen(false);
+    setSidebarCollapsed(false);
+    setGuidedTourState(stored);
+  }, [settings]);
+
+  useEffect(() => {
+    if (!settings || firstMatchOnboardingInitializedRef.current) {
+      return;
+    }
+    firstMatchOnboardingInitializedRef.current = true;
+    const next = reconcileFirstMatchOnboarding(
+      readFirstMatchOnboardingState(),
+      readGuidedTourState().status,
+      matches
+    );
+    writeFirstMatchOnboardingState(next);
+    setFirstMatchOnboarding(next);
+  }, [matches, settings]);
+
+  useEffect(() => {
+    if (!firstMatchOnboarding || firstMatchOnboarding.status === "completed") {
+      return;
+    }
+    const saved = matches.find((match) => match.status === "saved" && match.result !== "Incomplete");
+    if (!saved) {
+      return;
+    }
+    const next = firstMatchOnboardingAfterSavedMatch(firstMatchOnboarding, saved);
+    if (next && next !== firstMatchOnboarding) {
+      persistFirstMatchOnboarding(next);
+    }
+  }, [firstMatchOnboarding, matches]);
 
   useEffect(() => {
     healthRef.current = health;
@@ -2992,6 +3279,9 @@ function App() {
       setReviewDraft(repairedDraft);
       void stopReplayVideoForDraft(repairedDraft);
     });
+    const offReplayUpdated = window.riftlite.onReplayUpdated((replay) => {
+      setReplays((current) => upsertReplayPreservingOrder(current, replay));
+    });
     const offScreenshot = window.riftlite.onScreenshotSaved((result) => {
       const message = result.ok ? result.message : `Screenshot failed: ${result.message}`;
       setScreenshotStatus(message);
@@ -3013,6 +3303,7 @@ function App() {
       offEvent();
       offHealth();
       offDraft();
+      offReplayUpdated();
       offScreenshot();
       offShadowClipHotkey();
       offQuickFlagHotkey();
@@ -3041,8 +3332,65 @@ function App() {
   }, []);
 
   useEffect(() => {
-    void window.riftlite.getGamePreloadUrl(activePlatform).then(setPreloadUrl);
+    setMountedGamePlatform((current) => nextMountedGamePlatform(current, activePlatform, activeView === "play"));
+  }, [activePlatform, activeView]);
+
+  useEffect(() => {
+    if (activePlatform === "atlas") {
+      setAtlasShellVisibility((current) => updateAtlasShellVisibility(current, "atlas-entered"));
+    } else {
+      atlasEmptyShellRemountedRef.current = false;
+      setAtlasShellVisibility((current) => updateAtlasShellVisibility(current, "atlas-left"));
+    }
   }, [activePlatform]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!mountedGamePlatform) {
+      setPreloadUrl("");
+      return;
+    }
+    setPreloadUrl("");
+    void window.riftlite.getGamePreloadUrl(mountedGamePlatform).then((url) => {
+      if (!cancelled) {
+        setPreloadUrl(url);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [mountedGamePlatform]);
+
+  useEffect(() => {
+    if (
+      !mountedGamePlatform ||
+      !gameWebviewIsReady(activePlatform, mountedGamePlatform, preloadUrl)
+    ) {
+      return;
+    }
+    const webview = gameRef.current;
+    if (!webview) {
+      return;
+    }
+    const platform = mountedGamePlatform;
+    const presentGame = () => {
+      applyGameZoom();
+      refreshGamePresentation(platform);
+      void primeReplayVideoTarget(platform);
+    };
+    return bindGameWebviewEvents(webview, {
+      onIpcMessage: handleWebviewIpc,
+      onDomReady: presentGame,
+      onDidFinishLoad: presentGame,
+      onDidNavigate: () => applyGameZoom(),
+      onDidNavigateInPage: () => applyGameZoom(),
+      onDidStartLoading: () => {
+        if (platform === "atlas") {
+          setAtlasShellVisibility((current) => updateAtlasShellVisibility(current, "webview-load-started"));
+        }
+      }
+    });
+  }, [activePlatform, mountedGamePlatform, preloadUrl, gameWebviewEpoch, gameZoom]);
 
   useEffect(() => {
     if (!settings) {
@@ -3050,7 +3398,21 @@ function App() {
     }
     const timer = window.setTimeout(() => applyGameZoom(clampGameZoom(settings.gameZoomFactor)), 50);
     return () => window.clearTimeout(timer);
-  }, [activePlatform, preloadUrl, settings?.gameZoomFactor]);
+  }, [mountedGamePlatform, preloadUrl, settings?.gameZoomFactor]);
+
+  useEffect(() => {
+    if (
+      activeView !== "play" ||
+      !mountedGamePlatform ||
+      !gameWebviewIsReady(activePlatform, mountedGamePlatform, preloadUrl)
+    ) {
+      return;
+    }
+    const timers = [50, 280, 900].map((delay) => window.setTimeout(() => {
+      refreshGamePresentation(mountedGamePlatform);
+    }, delay));
+    return () => timers.forEach((timer) => window.clearTimeout(timer));
+  }, [activePlatform, activeView, mountedGamePlatform, preloadUrl, sidebarCollapsed]);
 
   useEffect(() => {
     if (!DECK_TRACKER_FEATURE_ENABLED) {
@@ -3259,6 +3621,12 @@ function App() {
         }
         localStorage.setItem(GAME_ZOOM_RESET_MIGRATION_KEY, "done");
       }
+      if (localStorage.getItem(NATIVE_GAME_ZOOM_MIGRATION_KEY) !== "done") {
+        if (Math.abs(clampGameZoom(bootSettings.gameZoomFactor) - 1) > 0.001) {
+          bootSettings = await window.riftlite.saveSettings({ gameZoomFactor: 1 });
+        }
+        localStorage.setItem(NATIVE_GAME_ZOOM_MIGRATION_KEY, "done");
+      }
       if (localStorage.getItem(VISION_TRACKER_DEFAULT_OFF_MIGRATION_KEY) !== "done") {
         localStorage.setItem(VISION_TRACKER_DEFAULT_OFF_MIGRATION_KEY, "done");
       }
@@ -3296,7 +3664,9 @@ function App() {
     if (shouldShowReleaseNotes) {
       setReleaseNotesOpen(true);
     }
-    window.setTimeout(() => void checkForUpdates(true), 2500);
+    if (RIFTLITE_BUILD_IDENTITY.updatesEnabled) {
+      window.setTimeout(() => void checkForUpdates(true), 2500);
+    }
   }
 
   function handleBootstrapFailure(error: unknown) {
@@ -3512,12 +3882,23 @@ function App() {
     }
   }
 
-  async function createDiagnosticsBundle() {
-    showActionFeedback("Creating diagnostics bundle...");
-    const bundlePath = await window.riftlite.createDiagnosticsBundle();
+  async function createDiagnosticsBundle(includeSensitiveData = false) {
+    if (includeSensitiveData && !window.confirm(
+      "This diagnostic bundle can include player names, room codes, page URLs, account tokens, and raw capture data. Only create it when a trusted RiftLite developer has asked for the unredacted file. Continue?"
+    )) {
+      return;
+    }
+    showActionFeedback(includeSensitiveData ? "Creating sensitive diagnostics bundle..." : "Creating privacy-safe diagnostics bundle...");
+    const bundlePath = await window.riftlite.createDiagnosticsBundle(includeSensitiveData ? {
+      includeSensitiveData: true
+    } : undefined);
+    if (!bundlePath) {
+      showActionFeedback("Sensitive diagnostics export cancelled.");
+      return;
+    }
     setDiagnosticsBundlePath(bundlePath);
     await refreshDiagnostics();
-    showActionFeedback("Diagnostics bundle created.");
+    showActionFeedback(includeSensitiveData ? "Sensitive diagnostics bundle created." : "Privacy-safe diagnostics bundle created.");
   }
 
   async function checkForUpdates(silent = false) {
@@ -3643,7 +4024,12 @@ function App() {
     const saved = await window.riftlite.confirmMatch(normalizeReviewDraft(attachTestingSessionToDraft(draft)));
     setReviewDraft(null);
     setMatches((current) => upsertMatchPreservingOrder(current, saved));
-    showActionFeedback("Match saved.");
+    const completedFirstMatch = firstMatchOnboarding?.status === "pending" && saved.status === "saved" && saved.result !== "Incomplete";
+    const nextFirstMatchOnboarding = firstMatchOnboardingAfterSavedMatch(firstMatchOnboarding, saved);
+    if (nextFirstMatchOnboarding && nextFirstMatchOnboarding !== firstMatchOnboarding) {
+      persistFirstMatchOnboarding(nextFirstMatchOnboarding);
+    }
+    showActionFeedback(completedFirstMatch ? "First match saved - setup complete." : "Match saved.", completedFirstMatch ? 5_000 : 2_600);
     void (async () => {
       if (draft.keepReplay === false) {
         await window.riftlite.deleteReplayVideoByMatch(draft.id).catch(() => undefined);
@@ -4327,7 +4713,11 @@ function App() {
   }
 
   async function refreshTeamMatches(teamId: string, forceRefresh = false): Promise<CommunityMatch[]> {
+    const requestedAccountUid = communityAccountUidRef.current;
     const rows = await window.riftlite.getTeamMatches(teamId, forceRefresh).catch(() => [] as CommunityMatch[]);
+    if (communityAccountUidRef.current !== requestedAccountUid) {
+      return [];
+    }
     setTeamMatches((current) => ({ ...current, [teamId]: rows }));
     return rows;
   }
@@ -4372,6 +4762,7 @@ function App() {
     if (!sourceSettings) {
       return;
     }
+    const requestedAccountUid = sourceSettings.accountUid;
     communityLoadedRef.current = true;
     communityMatchesLoadedForTrackerRef.current = true;
     setCommunityStatus("Refreshing Firebase data...");
@@ -4386,6 +4777,9 @@ function App() {
         await window.riftlite.getTeamMatches(team.id, forceRefresh).catch(() => [] as CommunityMatch[])
       ] as const))
     ]);
+    if (communityAccountUidRef.current !== requestedAccountUid) {
+      return;
+    }
     setCommunityMatches(nextCommunityMatches);
     setHubMatches(Object.fromEntries(hubEntries));
     setTeamMatches(Object.fromEntries(teamEntries));
@@ -4484,9 +4878,8 @@ function App() {
     }
     try {
       webview.setZoomFactor(clampGameZoom(zoom));
-      (webview as Electron.WebviewTag & { setVisualZoomLevelLimits?: (minimumLevel: number, maximumLevel: number) => Promise<void> })
-        .setVisualZoomLevelLimits?.(1, 1)
-        .catch(() => undefined);
+      // Electron already disables pinch zoom. Calling setVisualZoomLevelLimits(0, 0)
+      // corrupts the Atlas guest viewport to 2^31-1 after its current layout update.
     } catch {
       // The webview can be between navigations; the next ready event reapplies the saved zoom.
     }
@@ -4510,12 +4903,35 @@ function App() {
     }
   }
 
+  async function refreshRestoredAccountData() {
+    const restored = await loadAccountRestoreLocalData(window.riftlite, {
+      includeDeckTracker: DECK_TRACKER_FEATURE_ENABLED
+    });
+    setSettings(restored.settings);
+    setMatches(restored.matches);
+    setDeletedMatches(restored.deletedMatches);
+    setReplays(restored.replays);
+    setDeletedReplays(restored.deletedReplays);
+    setDecks(restored.decks);
+    setPrepNotebook(restored.activeDeckNotebook);
+    if (DECK_TRACKER_FEATURE_ENABLED) {
+      setDeckTrackerState(restored.deckTrackerState);
+    }
+    invalidateAccountRestoreCommunityCaches({
+      communityLoadedRef,
+      communityMatchesLoadedForTrackerRef,
+      clearHubMatches: () => setHubMatches({}),
+      clearTeamMatches: () => setTeamMatches({})
+    });
+  }
+
   async function recoverAtlasWebview() {
-    if (atlasRecoveryBusy) {
+    if (atlasRecoveryBusyRef.current) {
       return;
     }
+    atlasRecoveryBusyRef.current = true;
     setAtlasRecoveryBusy(true);
-    showActionFeedback("Repairing the embedded Atlas browser...", 6_000);
+    showActionFeedback("Refreshing the embedded Atlas runtime cache...", 6_000);
     try {
       const result = await window.riftlite.recoverAtlasWebview();
       if (!result.ok) {
@@ -4523,8 +4939,10 @@ function App() {
         return;
       }
       atlasReloadStormRef.current = initialAtlasReloadStormState();
+      atlasEmptyShellRemountedRef.current = false;
+      setAtlasShellVisibility((current) => updateAtlasShellVisibility(current, "empty-shell-recovery-started"));
       setAtlasRecoverySuggested(false);
-      reloadGamePage(true);
+      setGameWebviewEpoch((current) => current + 1);
       showActionFeedback(result.message, 6_000);
     } catch (error) {
       showActionFeedback(
@@ -4532,8 +4950,49 @@ function App() {
         7_000
       );
     } finally {
+      atlasRecoveryBusyRef.current = false;
       setAtlasRecoveryBusy(false);
     }
+  }
+
+  function refreshGamePresentation(platform: GamePlatform) {
+    const webview = gameRef.current;
+    if (!webview || platform !== mountedGamePlatform) {
+      return;
+    }
+    const bounds = webview.getBoundingClientRect();
+    if (bounds.width < 16 || bounds.height < 16) {
+      return;
+    }
+    applyGameZoom();
+    const existingPulse = gamePresentationPulseRef.current;
+    const pulseToken = performance.now() + Math.random();
+    const originalDisplay = existingPulse?.webview === webview
+      ? existingPulse.originalDisplay
+      : webview.style.display;
+    gamePresentationPulseRef.current = { webview, token: pulseToken, originalDisplay };
+    // Electron's <webview> is an OOPIF. Toggling between its two supported flex
+    // display modes invalidates a guest surface that loaded but did not paint.
+    webview.style.display = "inline-flex";
+    void webview.offsetWidth;
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      const pendingPulse = gamePresentationPulseRef.current;
+      if (pendingPulse?.webview !== webview || pendingPulse.token !== pulseToken) {
+        return;
+      }
+      webview.style.display = pendingPulse.originalDisplay;
+      gamePresentationPulseRef.current = null;
+      void webview.offsetWidth;
+    }));
+    try {
+      webview.focus();
+    } catch {
+      // A navigation can replace the guest between the size check and focus.
+    }
+    void webview.executeJavaScript(`(() => {
+      window.dispatchEvent(new Event("resize"));
+      requestAnimationFrame(() => window.dispatchEvent(new Event("resize")));
+    })()`, true).catch(() => undefined);
   }
 
   async function setGameZoom(nextZoom: number) {
@@ -4543,7 +5002,7 @@ function App() {
     showActionFeedback(`Game zoom set to ${Math.round(zoom * 100)}%.`);
   }
 
-  async function handleWebviewIpc(event: { channel?: string; args?: unknown[] }) {
+  function handleWebviewIpc(event: { channel?: string; args?: unknown[] }) {
     if (event.channel !== "capture:event") {
       return;
     }
@@ -4552,13 +5011,35 @@ function App() {
       return;
     }
     const captureEvent = payload as CaptureEvent;
-    const nextRecoveryState = updateAtlasReloadStormState(
-      atlasReloadStormRef.current,
-      captureEvent
+    const atlasShellReadyEvent = captureEvent.platform === "atlas" &&
+      captureEvent.kind === "debug" &&
+      captureEvent.payload.reason === "atlas-app-shell-ready";
+    if (atlasShellReadyEvent) {
+      atlasReloadStormRef.current = initialAtlasReloadStormState();
+      setAtlasShellVisibility((current) => updateAtlasShellVisibility(current, "atlas-shell-ready"));
+      setAtlasRecoverySuggested(false);
+    }
+    const atlasMatchActive = healthRef.current.platform === "atlas" && healthRef.current.state === "match-detected";
+    const autoRemountEmptyShell = !atlasMatchActive && shouldAutoRemountAtlasEmptyShell(
+      captureEvent,
+      atlasEmptyShellRemountedRef.current
     );
-    atlasReloadStormRef.current = nextRecoveryState;
-    setAtlasRecoverySuggested(nextRecoveryState.suggested);
-    await window.riftlite.reportRendererEvent(captureEvent);
+    if (autoRemountEmptyShell) {
+      atlasEmptyShellRemountedRef.current = true;
+    } else if (!atlasShellReadyEvent) {
+      const nextRecoveryState = updateAtlasReloadStormState(
+        atlasReloadStormRef.current,
+        captureEvent
+      );
+      atlasReloadStormRef.current = nextRecoveryState;
+      setAtlasRecoverySuggested(nextRecoveryState.suggested);
+    }
+    void window.riftlite.reportRendererEvent(captureEvent).catch(() => undefined);
+    if (autoRemountEmptyShell) {
+      setAtlasShellVisibility((current) => updateAtlasShellVisibility(current, "empty-shell-recovery-started"));
+      setGameWebviewEpoch((current) => current + 1);
+      showActionFeedback("Atlas loaded without its lobby. Restarting the embedded page once...", 6_000);
+    }
   }
 
   async function primeReplayVideoTarget(platform: GamePlatform = activePlatform): Promise<void> {
@@ -4651,6 +5132,9 @@ function App() {
       source = await prepareDisplayReplaySource(platform, mode, profile);
     }
     if (!source) {
+      source = await prepareSystemWindowReplaySource(platform, profile);
+    }
+    if (!source) {
       if (!quiet) {
         showActionFeedback("Video replay could not arm yet.");
       }
@@ -4705,6 +5189,7 @@ function App() {
     const mode: ReplayVideoCaptureMode = "game-frame";
     let displaySource: SystemWindowReplaySource | null = takeArmedReplaySource(event.platform, mode, quality);
     displaySource = displaySource ?? await prepareDisplayReplaySource(event.platform, mode, profile);
+    displaySource = displaySource ?? await prepareSystemWindowReplaySource(event.platform, profile);
     if (!displaySource) {
       showActionFeedback("Video replay was not armed, so it was skipped to keep gameplay smooth.");
       reportReplayVideoDebug(event.platform, "start-source-missing", { mode, quality });
@@ -5542,20 +6027,21 @@ function App() {
       return;
     }
     let saved = await window.riftlite.attachReplayVideo(draft.id, video);
-    if (saved) {
-      const hotkeyFlags = takePendingReplayHotkeyFlags(video);
-      if (hotkeyFlags.length) {
-        saved = await window.riftlite.saveReplay({
-          ...saved,
-          schemaVersion: 4,
-          flags: mergeReplayFlags(saved.flags, hotkeyFlags)
-        });
-      }
-      setReplays(await window.riftlite.getReplays());
-      showActionFeedback(hotkeyFlags.length
-        ? `Video replay attached (${formatBytes(video.sizeBytes)}), with ${hotkeyFlags.length} review flag${hotkeyFlags.length === 1 ? "" : "s"}.`
-        : `Video replay attached (${formatBytes(video.sizeBytes)}).`);
+    if (!saved) {
+      throw new Error("The replay record was not ready after video finalization.");
     }
+    const hotkeyFlags = takePendingReplayHotkeyFlags(video);
+    if (hotkeyFlags.length) {
+      saved = await window.riftlite.saveReplay({
+        ...saved,
+        schemaVersion: 4,
+        flags: mergeReplayFlags(saved.flags, hotkeyFlags)
+      });
+    }
+    setReplays(await window.riftlite.getReplays());
+    showActionFeedback(hotkeyFlags.length
+      ? `Video replay attached (${formatBytes(video.sizeBytes)}), with ${hotkeyFlags.length} review flag${hotkeyFlags.length === 1 ? "" : "s"}.`
+      : `Video replay attached (${formatBytes(video.sizeBytes)}).`);
   }
 
   async function mergedReplayVideoForDraft(draft: MatchDraft, segments: ReplayVideoAsset[]): Promise<ReplayVideoAsset> {
@@ -5816,16 +6302,16 @@ function App() {
       } else if (runtime.canvas && runtime.sourceVideo) {
         drawDirectGameFrameReplayFrame(runtime);
       }
-      const stopped = new Promise<void>((resolve) => {
-        runtime.recorder.addEventListener("stop", () => resolve(), { once: true });
+      const stopResult = await stopMediaRecorderSafely(runtime.recorder, {
+        requestFinalData: runtime.chunkMs > 0
       });
-      if (runtime.recorder.state !== "inactive") {
-        if (runtime.chunkMs > 0) {
-          runtime.recorder.requestData();
-        }
-        runtime.recorder.stop();
+      if (stopResult !== "stopped") {
+        reportReplayVideoDebug(runtime.platform, "recorder-stop-recovered", {
+          state: stopResult,
+          draftId: draft?.id,
+          reason: options.reason
+        });
       }
-      await stopped;
       await runtime.writeChain.catch(() => undefined);
       await Promise.allSettled(runtime.pendingWrites);
       runtime.sourceStream?.getTracks().forEach((track) => track.stop());
@@ -5897,16 +6383,6 @@ function App() {
     }
   }
 
-  const sessionStats = useMemo(() => {
-    const today = new Date().toISOString().slice(0, 10);
-    const todayMatches = matches.filter((match) => match.capturedAt.startsWith(today));
-    return {
-      total: todayMatches.length,
-      wins: todayMatches.filter((match) => match.result === "Win").length,
-      losses: todayMatches.filter((match) => match.result === "Loss").length
-    };
-  }, [matches]);
-
   const viewTitle = {
     home: "Home",
     play: "Play",
@@ -5954,62 +6430,15 @@ function App() {
   const showUpdatePrompt =
     (updateStatus.state === "available" || updateStatus.state === "downloading" || updateStatus.state === "downloaded") &&
     updatePromptDismissedFor !== updatePromptKey;
-  const navGroups = [
-    {
-      label: "Start",
-      items: [
-        { label: "Home", title: "Home", active: activeView === "home", icon: <Home size={18} />, onClick: () => openView("home") },
-        { label: "Play", title: "Play", active: activeView === "play", icon: <Play size={18} />, onClick: () => openView("play") }
-      ]
-    },
-    {
-      label: "Review",
-      items: [
-        { label: "Matches", title: "Matches", active: activeView === "matches", icon: <ClipboardList size={18} />, onClick: () => openView("matches") },
-        { label: "Replays", title: "Replays", active: activeView === "replays", icon: <Film size={18} />, onClick: () => openView("replays") },
-        ...(RIFTLITE_WEB_REPLAY_FEATURE_VISIBLE ? [
-          { label: "RiftLite web replay", title: "RiftLite web replay", active: activeView === "web-replay", icon: <Globe2 size={18} />, onClick: () => openView("web-replay") }
-        ] : []),
-        { label: "Stats", title: "Stats", active: activeView === "stats", icon: <BarChart3 size={18} />, onClick: () => openView("stats") },
-        { label: "Matchup Lab", title: "Matchup Lab", active: activeView === "matchup-lab", icon: <Activity size={18} />, onClick: () => openView("matchup-lab") }
-      ]
-    },
-    {
-      label: "Decks & Prep",
-      items: [
-        { label: "Deck Library", title: "Deck Library", active: activeView === "decks" && deckFocusTarget !== "prep", icon: <Layers size={18} />, onClick: () => openDecks("library") },
-        { label: "Matchup Prep", title: "Matchup Prep", active: activeView === "decks" && deckFocusTarget === "prep", icon: <BookOpen size={18} />, onClick: () => openDecks("prep") },
-        { label: "Scorepad", title: "Scorepad", active: activeView === "scorepad", icon: <Calculator size={18} />, onClick: () => openView("scorepad") }
-      ]
-    },
-    {
-      label: "Community",
-      items: [
-        { label: "Community Decks", title: "Community Decks", active: activeView === "community" && activeCommunityTab === "community-decks", icon: <Globe2 size={18} />, onClick: () => openCommunity("community-decks") },
-        { label: "Meta & Matrix", title: "Meta & Matrix", active: activeView === "community" && (activeCommunityTab === "legend-meta" || activeCommunityTab === "match-matrix" || activeCommunityTab === "recent-matches"), icon: <Activity size={18} />, onClick: () => openCommunity("legend-meta") },
-        { label: "Spotlight", title: "Spotlight", active: activeView === "spotlight", icon: <Compass size={18} />, onClick: () => openView("spotlight") }
-      ]
-    },
-    {
-      label: "Social",
-      items: [
-        { label: "Find Match & Teams", title: "Find Match & Teams", active: activeView === "social", icon: <Radio size={18} />, onClick: () => openView("social") },
-        { label: "Private Hubs", title: "Private Hubs", active: activeView === "hubs", icon: <Users size={18} />, onClick: () => openView("hubs") }
-      ]
-    },
-    {
-      label: "Tools",
-      items: [
-        { label: "Overlay", title: "Overlay", active: activeView === "stream", icon: <MonitorUp size={18} />, onClick: () => openView("stream") },
-        { label: "Account", title: "Account", active: activeView === "account", icon: <Shield size={18} />, onClick: () => openView("account") },
-        { label: "Settings", title: "Settings", active: activeView === "settings", icon: <Settings size={18} />, onClick: () => openView("settings") }
-      ]
-    }
-  ];
+  const navOwner = navigationOwner({
+    view: activeView,
+    deckFocus: deckFocusTarget,
+    communityTab: activeCommunityTab
+  });
 
   return (
     <main
-      className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}
+      className={`app-shell ui-dev-modern ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}
       onPointerDownCapture={() => {
         if (activeViewRef.current === "play") {
           void armReplayVideoSource(activePlatform, true);
@@ -6025,28 +6454,66 @@ function App() {
       >
         {sidebarCollapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}
       </button>
-      <aside className="sidebar">
+      <aside className="sidebar" data-tour-target="navigation">
         <div className="brand">
           {logoUrl ? <img src={logoUrl} alt="RiftLite" /> : <div className="brand-mark" />}
-          <span className="brand-version">v{APP_VERSION_META}</span>
           <div>
             <strong>RiftLite</strong>
+            <span className="brand-version">v{APP_VERSION_META}</span>
           </div>
         </div>
         <nav className="sidebar-nav" aria-label="RiftLite navigation">
-          {navGroups.map((group) => (
-            <div className="nav-group" key={group.label}>
-              <span className="nav-group-label">{group.label}</span>
-              {group.items.map((item) => (
+          {PRIMARY_NAVIGATION.map((entry) => {
+            if (entry.kind === "route") {
+              return (
                 <NavButton
-                  active={item.active}
-                  title={item.title}
-                  onClick={item.onClick}
-                  icon={item.icon}
-                  key={item.title}
+                  active={navOwner.kind === "primary" && navOwner.itemId === entry.id}
+                  title={entry.label}
+                  onClick={() => openNavigationTarget(entry.target)}
+                  icon={navigationIcon(entry.id)}
+                  key={entry.id}
                 />
-              ))}
-            </div>
+              );
+            }
+            const open = expandedNavGroup === entry.id;
+            const active = navOwner.kind === "disclosure" && navOwner.disclosureId === entry.id;
+            const children = entry.children.filter((item) => RIFTLITE_WEB_REPLAY_FEATURE_VISIBLE || item.target.view !== "web-replay");
+            return (
+              <div className="nav-disclosure" data-open={open} data-active={active} key={entry.id}>
+                <button
+                  type="button"
+                  className={`nav-item nav-disclosure-trigger ${active ? "active" : ""}`}
+                  title={entry.label}
+                  aria-expanded={open}
+                  aria-controls={`nav-submenu-${entry.id}`}
+                  onClick={() => setExpandedNavGroup((current) => current === entry.id ? null : entry.id)}
+                >
+                  {navigationIcon(entry.id)}<span>{entry.label}</span><ChevronDown className="nav-disclosure-chevron" size={16} />
+                </button>
+                <div className="nav-submenu" id={`nav-submenu-${entry.id}`} hidden={!open}>
+                  {children.map((item) => (
+                    <NavButton
+                      active={navOwner.kind === "disclosure" && navOwner.itemId === item.id}
+                      title={item.label}
+                      onClick={() => openNavigationTarget(item.target)}
+                      icon={navigationIcon(item.id)}
+                      key={item.id}
+                    />
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </nav>
+        <nav className="sidebar-utility-nav" aria-label="RiftLite utilities" data-tour-target="utilities">
+          {UTILITY_NAVIGATION_ITEMS.map((item) => (
+            <NavButton
+              active={navOwner.kind === "utility" && navOwner.itemId === item.id}
+              title={item.label}
+              onClick={() => openNavigationTarget(item.target)}
+              icon={navigationIcon(item.id)}
+              key={item.id}
+            />
           ))}
         </nav>
         <div className="sidebar-footer">
@@ -6062,12 +6529,24 @@ function App() {
             <h1>{viewTitle}</h1>
             <p>{viewDescription}</p>
           </div>
-          <div className="top-actions" data-hidden={activeView !== "play"}>
-            <button className="segmented" onClick={() => setActivePlatform("tcga")} data-active={activePlatform === "tcga"}>
-              <Gamepad2 size={16} /> TCGA
+          {activeView === "home" ? (
+            <div className="top-actions home-top-actions">
+              <button className="segmented" data-platform="tcga" onClick={() => setActivePlatform("tcga")} data-active={activePlatform === "tcga"}>
+                <Globe2 size={16} /> TCGA
+              </button>
+              <button className="segmented" data-platform="atlas" onClick={() => setActivePlatform("atlas")} data-active={activePlatform === "atlas"}>
+                <Globe2 size={16} /> Atlas
+              </button>
+              <button className="segmented icon-segment" onClick={() => openView("settings")} title="Settings" aria-label="Settings"><Settings size={17} /></button>
+              <button className="primary home-top-play" onClick={() => openView("play")}><Play size={17} /> Start playing</button>
+            </div>
+          ) : (
+          <div className="top-actions" data-hidden={activeView !== "play"} data-tour-target="play">
+            <button className="segmented" data-platform="tcga" onClick={() => setActivePlatform("tcga")} data-active={activePlatform === "tcga"}>
+              <Gamepad2 size={16} /> <span className="play-action-label">TCGA</span>
             </button>
-            <button className="segmented" onClick={() => setActivePlatform("atlas")} data-active={activePlatform === "atlas"}>
-              <Gamepad2 size={16} /> Atlas
+            <button className="segmented" data-platform="atlas" onClick={() => setActivePlatform("atlas")} data-active={activePlatform === "atlas"}>
+              <Gamepad2 size={16} /> <span className="play-action-label">Atlas</span>
             </button>
             <button
               className="segmented icon-segment"
@@ -6088,8 +6567,8 @@ function App() {
                 className="segmented icon-segment"
                 data-active={atlasRecoverySuggested}
                 disabled={atlasRecoveryBusy}
-                onClick={() => void recoverAtlasWebview()}
-                title="Repair the embedded Atlas browser cache"
+                onClick={() => setAtlasRecoverySuggested(true)}
+                title="Open Atlas site-state repair"
               >
                 <RotateCw size={16} />
               </button>
@@ -6109,10 +6588,17 @@ function App() {
             >
               <Mic size={16} />
             </button>
-            <button className="segmented icon-segment" onClick={() => setDetailsOpen((open) => !open)} data-active={detailsOpen} title="Capture details">
-              {detailsOpen ? <X size={16} /> : <SlidersHorizontal size={16} />}
+            <button
+              type="button"
+              className="segmented force-stop-action"
+              onClick={() => void forceCaptureReview()}
+              title="Force stop the current match and open review"
+              aria-label="Force stop match and open review"
+            >
+              <Square size={14} fill="currentColor" /> <span className="play-action-label">Stop match</span>
             </button>
           </div>
+          )}
         </header>
 
         {!settings.firstRunComplete && activeView === "play" ? (
@@ -6121,38 +6607,34 @@ function App() {
 
         <section className={`play-grid ${activeView === "play" ? "" : "background-play-grid"}`} aria-hidden={activeView !== "play"}>
           <div className="game-frame">
-            {preloadUrl ? (
+            {gameWebviewIsReady(activePlatform, mountedGamePlatform, preloadUrl) ? (
               <Webview
                 ref={gameRef}
-                key={`${activePlatform}:${preloadUrl}`}
+                key={`${mountedGamePlatform}:${preloadUrl}:${gameWebviewEpoch}`}
                 className="game-webview"
-                src={GAME_URLS[activePlatform]}
+                src={GAME_URLS[mountedGamePlatform]}
                 preload={preloadUrl}
                 allowpopups="true"
-                partition={`persist:riftlite-${activePlatform}`}
+                partition={GAME_WEBVIEW_PARTITIONS[mountedGamePlatform]}
                 webpreferences="backgroundThrottling=false"
-                onFocus={() => void armReplayVideoSource(activePlatform, true)}
-                onMouseEnter={() => void primeReplayVideoTarget(activePlatform)}
-                onDomReady={() => {
-                  applyGameZoom();
-                  void primeReplayVideoTarget(activePlatform);
-                }}
-                onDidFinishLoad={() => {
-                  applyGameZoom();
-                  void primeReplayVideoTarget(activePlatform);
-                }}
-                onDidNavigate={() => applyGameZoom()}
-                onDidNavigateInPage={() => applyGameZoom()}
-                onIpcMessage={(event: { channel?: string; args?: unknown[] }) => void handleWebviewIpc(event)}
+                onFocus={() => void armReplayVideoSource(mountedGamePlatform, true)}
+                onMouseEnter={() => void primeReplayVideoTarget(mountedGamePlatform)}
               />
             ) : (
-              <div className="game-placeholder">Preparing capture bridge</div>
+              <div className="game-placeholder">
+                {activePlatform === "atlas" ? "Starting RiftAtlas" : "Preparing capture bridge"}
+              </div>
             )}
+            {activePlatform === "atlas" && shouldCoverAtlasShell(atlasShellVisibility) ? (
+              <div className="atlas-shell-loading" role="status" aria-live="polite">
+                <div className="atlas-shell-loading-card">
+                  <RefreshCw size={22} aria-hidden="true" />
+                  <strong>Starting RiftAtlas</strong>
+                  <span>Waiting for the lobby. RiftLite will restart the embedded page once if Atlas returns an empty shell.</span>
+                </div>
+              </div>
+            ) : null}
           </div>
-          <aside className={`right-rail ${detailsOpen ? "open" : ""}`} aria-hidden={!detailsOpen}>
-            <SessionCard stats={sessionStats} matches={matches} />
-            <SyncCard settings={settings} onSave={saveSettings} onForceReview={forceCaptureReview} />
-          </aside>
           {DECK_TRACKER_FEATURE_ENABLED && settings.deckTrackerEnabled ? (
             <DeckTrackerOverlay
               state={deckTrackerState}
@@ -6191,6 +6673,7 @@ function App() {
         {activeView !== "play" ? (
           <DashboardView
             view={activeView}
+            activePlatform={activePlatform}
             matches={matches}
             replays={replays}
             testingSessions={testingSessions}
@@ -6215,6 +6698,8 @@ function App() {
             screenshotStatus={screenshotStatus}
             onSaveSettings={saveSettings}
             onSettingsChanged={setSettings}
+            onStartGuidedTour={startGuidedTourReplay}
+            onResetGuidedTour={resetGuidedTourForNextLaunch}
             onNavigate={openView}
             onPlayPlatform={(platform) => {
               setActivePlatform(platform);
@@ -6222,6 +6707,7 @@ function App() {
             }}
             communityTab={activeCommunityTab}
             communityDeckLegendTarget={communityDeckLegendTarget}
+            spotlightTargetId={spotlightTargetId}
             matchFocusTarget={matchFocusTarget}
             onCommunityTabChange={(tab) => {
               setActiveCommunityTab(tab);
@@ -6232,6 +6718,7 @@ function App() {
             deckFocusTarget={deckFocusTarget}
             onDeckFocusChange={setDeckFocusTarget}
             onDecksChanged={refreshDecks}
+            onAccountDataRestored={refreshRestoredAccountData}
             onSaveHubResult={saveHubResult}
             onSyncPrivateHubs={syncPrivateHubsNow}
             onSyncMatchesToHubs={syncMatchesToHubs}
@@ -6308,12 +6795,20 @@ function App() {
         />
       ) : null}
       {releaseNotesOpen ? <ReleaseNotesModal onClose={() => void dismissReleaseNotes()} /> : null}
+      {guidedTourState?.status === "active" ? (
+        <GuidedTour
+          state={guidedTourState}
+          onNavigate={navigateGuidedTour}
+          onStateChange={updateGuidedTour}
+          onFinish={finishGuidedTour}
+        />
+      ) : null}
       {atlasRecoverySuggested && activePlatform === "atlas" ? (
         <div className="atlas-recovery-prompt" role="alert" data-atlas-recovery-prompt>
           <AlertTriangle size={20} />
           <div>
-            <strong>Atlas is repeatedly reloading</strong>
-            <span>RiftLite can safely clear Atlas&apos;s embedded cache and service worker without removing your account or local RiftLite data.</span>
+            <strong>Atlas did not start correctly</strong>
+            <span>RiftLite can refresh Atlas&apos;s embedded runtime cache without removing your Atlas sign-in, local decks, or RiftLite data.</span>
           </div>
           <div className="atlas-recovery-actions">
             <button className="primary" disabled={atlasRecoveryBusy} onClick={() => void recoverAtlasWebview()}>
@@ -6331,6 +6826,25 @@ function App() {
             </button>
           </div>
         </div>
+      ) : null}
+      {firstMatchOnboarding?.status === "pending" && guidedTourState?.status !== "active" ? (
+        <aside className="first-match-onboarding" role="status" aria-live="polite" data-view={activeView}>
+          <span className="first-match-onboarding-icon" aria-hidden="true"><Sparkles size={19} /></span>
+          <div>
+            <strong>One last setup step: save your first match</strong>
+            <span>Play normally, review the captured result, then choose Save match. RiftLite will confirm when onboarding is complete.</span>
+          </div>
+          <button type="button" className="primary" onClick={() => openView("play")}><Play size={15} /> Open Play</button>
+          <button
+            type="button"
+            className="icon-button"
+            aria-label="Dismiss first match guidance"
+            title="Dismiss first match guidance"
+            onClick={() => persistFirstMatchOnboarding(dismissFirstMatchOnboarding())}
+          >
+            <X size={15} />
+          </button>
+        </aside>
       ) : null}
       {captureNotice ? (
         <div className="capture-progress-notice" role="status" aria-live="polite">
@@ -6412,6 +6926,33 @@ function UpdatePrompt({ status, onDownload, onInstall, onDismiss }: {
       </div>
     </aside>
   );
+}
+
+function navigationIcon(id: string): React.ReactNode {
+  switch (id) {
+    case "home": return <Home size={19} />;
+    case "play": return <Play size={19} />;
+    case "review":
+    case "match-history": return <ClipboardList size={19} />;
+    case "local-replays": return <Film size={19} />;
+    case "web-replays": return <Globe2 size={19} />;
+    case "my-stats": return <BarChart3 size={19} />;
+    case "prepare":
+    case "matchup-prep": return <BookOpen size={19} />;
+    case "deck-library": return <Layers size={19} />;
+    case "matchup-lab":
+    case "meta-matrix": return <Activity size={19} />;
+    case "community":
+    case "find-match-teams": return <Users size={19} />;
+    case "community-decks": return <Globe2 size={19} />;
+    case "spotlight": return <Compass size={19} />;
+    case "private-hubs": return <Shield size={19} />;
+    case "scorepad": return <Calculator size={19} />;
+    case "overlay": return <MonitorUp size={19} />;
+    case "account-integrations": return <Shield size={19} />;
+    case "settings": return <Settings size={19} />;
+    default: return <Activity size={19} />;
+  }
 }
 
 function NavButton({ active, title, icon, onClick }: { active: boolean; title: string; icon: React.ReactNode; onClick: () => void }) {
@@ -6616,52 +7157,6 @@ function FirstRun({ settings, onSave, browsers }: { settings: UserSettings; onSa
       <button className="primary" onClick={() => void onSave({ username, firstRunComplete: true })}>
         <Check size={16} /> Start tracking
       </button>
-    </section>
-  );
-}
-
-function SessionCard({ stats, matches }: { stats: { total: number; wins: number; losses: number }; matches: MatchDraft[] }) {
-  const latest = matches[0];
-  return (
-    <section className="rail-card">
-      <h2>Session</h2>
-      <div className="session-score">
-        <strong>{stats.wins}-{stats.losses}</strong>
-        <span>{stats.total} today</span>
-      </div>
-      <div className="latest-match">
-        <span>Last capture</span>
-        <strong>{latest ? `${latest.result} vs ${latest.opponentName || "unknown"}` : "None yet"}</strong>
-      </div>
-    </section>
-  );
-}
-
-function SyncCard({
-  settings,
-  onSave,
-  onForceReview
-}: {
-  settings: UserSettings;
-  onSave: (patch: Partial<UserSettings>) => Promise<void>;
-  onForceReview: () => Promise<void>;
-}) {
-  return (
-    <section className="rail-card">
-      <h2>Sync</h2>
-      <SyncModeControl settings={settings} onSave={onSave} compact />
-      <label className="toggle-row">
-        <span><Bell size={16} /> Confirm matches</span>
-        <input
-          type="checkbox"
-          checked={settings.confirmationEnabled}
-          onChange={(event) => void onSave({ confirmationEnabled: event.target.checked })}
-        />
-      </label>
-      <button className="secondary force-review-button" type="button" onClick={() => void onForceReview()}>
-        <FileText size={15} /> Force review popup
-      </button>
-      <p className="muted force-review-copy">Manual backup if a BO3 is abandoned or the automatic popup does not appear.</p>
     </section>
   );
 }
@@ -7573,7 +8068,7 @@ function DeckTrackerPopoutApp() {
   }
 
   return (
-    <main className="deck-tracker-popout-shell">
+    <main className="deck-tracker-popout-shell ui-dev-modern">
       {error ? <div className="deck-tracker-popout-error">{error}</div> : null}
       <DeckTrackerOverlay
         state={state}
@@ -7775,7 +8270,73 @@ function SyncModeControl({ settings, onSave, compact = false }: { settings: User
   );
 }
 
+function HomeActiveDeckArtwork({ deck }: { deck: SavedDeck | null }) {
+  const sources = useMemo(() => {
+    if (!deck) return [];
+    const snapshot = parseCommunityDeckSnapshot(deck.snapshotJson);
+    const legend = normalizeLegendName(deck.legend || snapshot?.legend || "");
+    return Array.from(new Set([
+      legendImageUrl(legend),
+      snapshot?.legendEntry?.imageUrl ?? ""
+    ].filter(Boolean)));
+  }, [deck]);
+  const [sourceIndex, setSourceIndex] = useState(0);
+
+  useEffect(() => {
+    setSourceIndex(0);
+  }, [deck?.id, sources.join("|")]);
+
+  const legend = normalizeLegendName(deck?.legend ?? "") || "Active deck";
+  const initials = deck ? legend.split(/\s+/).map((part) => part[0]).join("").slice(0, 3) : "";
+  const source = sources[sourceIndex] ?? "";
+  if (!source) {
+    return (
+      <div className="modern-deck-art-fallback" aria-label={`${legend} artwork unavailable`}>
+        <Layers size={42} />
+        {initials ? <strong>{initials}</strong> : null}
+      </div>
+    );
+  }
+  return (
+    <div className="modern-deck-art" aria-label={`${legend} official card artwork`}>
+      <img className="modern-deck-art-backdrop" src={source} alt="" aria-hidden="true" />
+      <img
+        className="modern-deck-art-card"
+        src={source}
+        alt={`${legend} card artwork`}
+        onError={() => setSourceIndex((index) => index + 1)}
+      />
+    </div>
+  );
+}
+
+function homeRelativeDate(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Unknown date";
+  const now = new Date();
+  const day = date.toISOString().slice(0, 10);
+  const today = now.toISOString().slice(0, 10);
+  const yesterday = new Date(now.getTime() - 86_400_000).toISOString().slice(0, 10);
+  if (day === today) return "Today";
+  if (day === yesterday) return "Yesterday";
+  return date.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+}
+
+function homeCaptureStatus(health: CaptureHealth): { label: string; tone: "ready" | "attention" | "quiet" } {
+  if (health.state === "error" || health.state === "weaker-mode") {
+    return { label: healthLabel(health), tone: "attention" };
+  }
+  if (health.state === "review-needed") {
+    return { label: "Review waiting", tone: "attention" };
+  }
+  if (health.state === "loading" || health.state === "idle") {
+    return { label: health.state === "loading" ? "Loading" : "Standing by", tone: "quiet" };
+  }
+  return { label: healthLabel(health), tone: "ready" };
+}
+
 function HomeView({
+  activePlatform,
   matches,
   replays,
   decks,
@@ -7787,6 +8348,7 @@ function HomeView({
   onPlayPlatform,
   onOpenReplayForMatch
 }: {
+  activePlatform: GamePlatform;
   matches: MatchDraft[];
   replays: ReplayRecord[];
   decks: SavedDeck[];
@@ -7807,13 +8369,38 @@ function HomeView({
     [replays]
   );
   const activeDeck = settings.activeDeckId ? decks.find((deck) => deck.id === settings.activeDeckId) ?? null : null;
+  const recentMatches = useMemo(
+    () => [...matches].sort((a, b) => b.capturedAt.localeCompare(a.capturedAt)).slice(0, 3),
+    [matches]
+  );
+  const replayByMatch = useMemo(() => new Map(replays.map((replay) => [replay.matchId, replay])), [replays]);
+  const recentReplayActivity = useMemo(
+    () => [...replays].sort((a, b) => b.capturedAt.localeCompare(a.capturedAt)).slice(0, 4),
+    [replays]
+  );
+  const activeDeckPerformance = useMemo(
+    () => activeDeck ? buildDeckPerformance(activeDeck, matches) : null,
+    [activeDeck, matches]
+  );
+  const focusMatchup = useMemo(() => {
+    if (!activeDeckPerformance?.matchups.length) return null;
+    return [...activeDeckPerformance.matchups]
+      .filter((matchup) => matchup.total > 0)
+      .sort((left, right) => left.winRate - right.winRate || right.total - left.total)[0] ?? null;
+  }, [activeDeckPerformance]);
+  const captureStatus = homeCaptureStatus(health);
+  const activeDeckLegend = normalizeLegendName(activeDeck?.legend ?? "") || "Legend pending";
+  const webReplayReady = Boolean(settings.accountUid && settings.firebaseRefreshToken);
   const EmbedWebview = "webview" as unknown as React.ElementType;
   const featuredCreators = COMMUNITY_SPOTLIGHTS;
   const [featuredCreatorIndex, setFeaturedCreatorIndex] = useState(() => {
-    const ritualIndex = COMMUNITY_SPOTLIGHTS.findIndex((item) => item.id === RITUALTCG_SPOTLIGHT.id);
-    return ritualIndex >= 0 ? ritualIndex : 0;
+    const riftlabIndex = COMMUNITY_SPOTLIGHTS.findIndex((item) => item.id === RIFTLAB_SPOTLIGHT.id);
+    return riftlabIndex >= 0 ? riftlabIndex : 0;
   });
-  const featuredCreator = featuredCreators[featuredCreatorIndex % Math.max(1, featuredCreators.length)] ?? RITUALTCG_SPOTLIGHT;
+  const [featuredCreatorPaused, setFeaturedCreatorPaused] = useState(false);
+  const [featuredCreatorInteracting, setFeaturedCreatorInteracting] = useState(false);
+  const [creatorMotionAllowed, setCreatorMotionAllowed] = useState(true);
+  const featuredCreator = featuredCreators[featuredCreatorIndex % Math.max(1, featuredCreators.length)] ?? RIFTLAB_SPOTLIGHT;
   const [featuredVideos, setFeaturedVideos] = useState<HomeFeaturedVideo[]>(DEFAULT_HOME_FEATURED_VIDEOS);
   const [playingHomeVideos, setPlayingHomeVideos] = useState<Record<string, boolean>>({});
   const [featuredPartners, setFeaturedPartners] = useState<HomeFeaturedPartner[]>([]);
@@ -7844,6 +8431,7 @@ function HomeView({
   const [featuredAssets, setFeaturedAssets] = useState<Record<string, { logo?: string; banner?: string }>>({});
   const [metafyLogoUrl, setMetafyLogoUrl] = useState("");
   const featuredAsset = featuredAssets[featuredCreator.id] ?? {};
+  const featuredTheme = communitySpotlightTheme(featuredCreator.id);
   const featuredPartner = featuredPartners[featuredPartnerIndex % Math.max(1, featuredPartners.length)] ?? null;
   const communityDeckSummary = useMemo(() => {
     const deckRows = filterCommunityDeckMatches(communityMatches, "", "", "with", true);
@@ -7865,14 +8453,22 @@ function HomeView({
     : ["Diana", "Vex", "Irelia", "Annie", "Pyke", "LeBlanc", "Kai'Sa", "Ahri"];
 
   useEffect(() => {
-    if (featuredCreators.length <= 1) {
+    const media = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const updatePreference = () => setCreatorMotionAllowed(!media.matches);
+    updatePreference();
+    media.addEventListener?.("change", updatePreference);
+    return () => media.removeEventListener?.("change", updatePreference);
+  }, []);
+
+  useEffect(() => {
+    if (featuredCreators.length <= 1 || featuredCreatorPaused || featuredCreatorInteracting || !creatorMotionAllowed) {
       return;
     }
     const timer = window.setInterval(() => {
       setFeaturedCreatorIndex((index) => (index + 1) % featuredCreators.length);
     }, 10_000);
     return () => window.clearInterval(timer);
-  }, [featuredCreators.length]);
+  }, [creatorMotionAllowed, featuredCreatorIndex, featuredCreatorInteracting, featuredCreatorPaused, featuredCreators.length]);
 
   useEffect(() => {
     if (featuredPartners.length <= 1) {
@@ -7924,11 +8520,14 @@ function HomeView({
   useEffect(() => {
     let mounted = true;
     void Promise.all(COMMUNITY_SPOTLIGHTS.map(async (item) => {
-      const [logo, banner] = await Promise.all([
+      const [logoResult, bannerResult] = await Promise.allSettled([
         window.riftlite.getAssetUrl(item.overviewLogo ?? item.assets.logo),
         window.riftlite.getAssetUrl(item.overviewBanner ?? item.assets.banner)
       ]);
-      return [item.id, { logo, banner }] as const;
+      return [item.id, {
+        logo: logoResult.status === "fulfilled" ? logoResult.value : "",
+        banner: bannerResult.status === "fulfilled" ? bannerResult.value : ""
+      }] as const;
     })).then((entries) => {
       if (mounted) {
         setFeaturedAssets(Object.fromEntries(entries));
@@ -7973,14 +8572,14 @@ function HomeView({
     };
   }, []);
 
-  function openFeaturedCreator(creator: CommunitySpotlight, link: SpotlightLink, source: string) {
+  function openFeaturedCreator(creator: CommunitySpotlight) {
     void window.riftlite.trackSpotlightClick({
       spotlightId: creator.id,
-      linkId: link.id,
+      linkId: "profile-open",
       appVersion: APP_VERSION_META,
-      source
+      source: "home-featured-profile"
     });
-    void window.riftlite.openExternalResource(link.url);
+    onNavigate("spotlight", { spotlightId: creator.id });
   }
 
   function openDiscord() {
@@ -8005,275 +8604,264 @@ function HomeView({
   }
 
   return (
-    <section className="dashboard-page home-page">
-      <section className="home-hero">
-        <div>
-          <span className="eyebrow">RiftLite dashboard</span>
-          <h2>Know your matchups. Improve every game.</h2>
-          <p>Jump into a match, review the last one, check public deck trends, or follow the latest community feature.</p>
+    <section className="dashboard-page home-page modern-home">
+      <section className="modern-readiness-strip" aria-label="RiftLite readiness" data-tour-target="home">
+        <div className="modern-status-item">
+          <span className="modern-status-icon"><Globe2 size={20} /></span>
+          <span><small>Provider</small><strong>{activePlatform === "atlas" ? "RiftAtlas" : activePlatform === "tcga" ? "TCG Arena" : "Simulator"}</strong></span>
         </div>
-        <div className="home-hero-actions">
-          <button className="primary home-play-now" onClick={() => onNavigate("play")}><Play size={18} /> Play now</button>
-          <button className="secondary" onClick={openDiscord}><MessageCircle size={16} /> Join Discord</button>
+        <div className="modern-status-item" data-tone={captureStatus.tone}>
+          <span className="modern-status-icon"><Check size={20} /></span>
+          <span><small>Match tracking</small><strong>{captureStatus.label}</strong></span>
+        </div>
+        <div className="modern-status-item">
+          <span className="modern-status-icon"><Layers size={20} /></span>
+          <span><small>Active deck</small><strong>{activeDeck?.title || "Choose a deck"}</strong></span>
+        </div>
+        <div className="modern-status-item">
+          <span className="modern-status-icon"><Cloud size={20} /></span>
+          <span><small>Replays</small><strong>{webReplayReady ? "Local + Web ready" : latestReplay ? "Local ready" : settings.replayCaptureEnabled ? "Capture ready" : "Capture off"}</strong></span>
         </div>
       </section>
 
-      <section className="home-grid">
-        <article
-          className={`home-card home-sponsor-card home-card-wide ${featuredPartner ? "home-partner-active" : ""}`}
-          style={featuredPartner?.imageUrl ? { backgroundImage: `linear-gradient(135deg, rgb(7 12 22 / 94%), rgb(18 20 32 / 82%)), url(${featuredPartner.imageUrl})` } : undefined}
-        >
-          <div className="home-card-heading">
-            <Shield size={18} />
-            <div>
-              <h3>{featuredPartner?.title ?? "Featured partner"}</h3>
-              {featuredPartner ? <span>{featuredPartner.eyebrow}</span> : null}
+      <section className="modern-home-layout">
+        <div className="modern-home-main">
+          <article className="modern-panel modern-next-action">
+            <div className="modern-panel-copy">
+              <span className="modern-kicker">Next action</span>
+              <h2>{health.state === "review-needed" ? "Review your captured match" : "Ready for your next match"}</h2>
+              <p>{health.state === "review-needed" && latestMatch
+                ? `${normalizeLegendName(latestMatch.myChampion) || "Your match"} is waiting for review before you continue.`
+                : `Tracking, ${activeDeck ? "your active deck" : "local match history"}, replay capture, and ${webReplayReady ? "private Web Replay" : "local review"} are ready.`}</p>
+              <button className="primary modern-primary-action" onClick={() => health.state === "review-needed" ? onNavigate("matches") : onPlayPlatform(activePlatform)}>
+                {health.state === "review-needed" ? <ClipboardList size={17} /> : <Play size={17} />}
+                {health.state === "review-needed" ? "Open review" : "Start playing"}
+              </button>
             </div>
-          </div>
-          <p className="home-sponsor-copy">{featuredPartner?.description || "Interested in sponsoring RiftLite or featuring your product, video or stream here?"}</p>
-          <strong className="home-sponsor-email">BMUCasts@gmail.com</strong>
-          <div className="home-card-actions">
-            <button className="primary" onClick={() => void window.riftlite.openExternalResource(featuredPartner?.url ?? "mailto:BMUCasts@gmail.com?subject=RiftLite%20sponsorship")}>
-              <ExternalLink size={16} /> {featuredPartner?.ctaLabel ?? "Partner with RiftLite"}
-            </button>
-          </div>
-          {featuredPartners.length > 1 ? (
-            <div className="home-carousel-controls" aria-label="Featured partner carousel controls">
-              <button type="button" className="secondary icon-button" onClick={() => setPartnerCarouselOffset(-1)} aria-label="Previous partner"><ChevronLeft size={15} /></button>
-              <span>{featuredPartnerIndex + 1} / {featuredPartners.length}</span>
-              <button type="button" className="secondary icon-button" onClick={() => setPartnerCarouselOffset(1)} aria-label="Next partner"><ChevronRight size={15} /></button>
-            </div>
-          ) : null}
-        </article>
+            <div className="modern-next-art" aria-hidden="true"><Layers size={76} /></div>
+          </article>
 
-        <article className="home-card home-featured-creator home-featured-compact home-card-wide" style={featuredAsset.banner ? { backgroundImage: `linear-gradient(90deg, rgb(5 10 19 / 98%) 0%, rgb(5 10 19 / 94%) 62%, rgb(5 10 19 / 72%) 100%), url(${featuredAsset.banner})` } : undefined}>
-          <div className="home-featured-copy">
-            <div className="home-card-heading">
-              <span className="home-featured-logo">
-                {featuredAsset.logo ? <img src={featuredAsset.logo} alt="" /> : <Compass size={20} />}
-              </span>
-              <div>
-                <h3>Featured creator: {featuredCreator.name}</h3>
-                <span>{featuredCreator.kicker} - {featuredCreator.location}</span>
+          <article className="modern-panel modern-recent-panel">
+            <header className="modern-panel-header">
+              <h2>Recent matches</h2>
+              <button className="modern-text-action" onClick={() => onNavigate("matches")}>View all</button>
+            </header>
+            <div className="modern-match-list">
+              {recentMatches.length ? recentMatches.map((match) => {
+                const replay = replayByMatch.get(match.id);
+                const replayKind = replay ? replayHealthKind(replay) : null;
+                return (
+                  <div className="modern-match-row" key={match.id}>
+                    <span className="modern-result-icon" data-result={match.result}>{match.result === "Win" ? <Check size={18} /> : match.result === "Loss" ? <X size={18} /> : <Activity size={18} />}</span>
+                    <button className="modern-match-copy" onClick={() => onNavigate("matches")}>
+                      <strong>{normalizeLegendName(match.myChampion) || "Unknown"} vs {normalizeLegendName(match.opponentChampion) || "Unknown"}</strong>
+                      <span>{homeRelativeDate(match.capturedAt)} · {match.format} · {match.deckName || "No deck logged"}</span>
+                    </button>
+                    <strong className="modern-match-result" data-result={match.result}>{match.result} {displayMatchRecord(match) || match.score}</strong>
+                    <button
+                      className="modern-media-chip"
+                      data-health={replayKind ?? "none"}
+                      disabled={!replay}
+                      onClick={() => replay ? onOpenReplayForMatch(match.id) : undefined}
+                    >
+                      {replayKind ? replayHealthLabel(replayKind) : "Match only"}
+                    </button>
+                  </div>
+                );
+              }) : (
+                <div className="modern-empty-state">
+                  <ClipboardList size={24} />
+                  <span>Your first captured match will appear here.</span>
+                </div>
+              )}
+            </div>
+          </article>
+
+          <article className="modern-panel modern-insight-panel">
+            <Lightbulb size={20} />
+            <div>
+              <span className="modern-kicker">Insight</span>
+              <h3>{focusMatchup
+                ? `${activeDeckLegend} vs ${focusMatchup.legend}${focusMatchup.total < 5 ? " needs more evidence" : " is your current focus"}`
+                : activeDeck ? "Build matchup evidence for your active deck" : "Choose an active deck to unlock matchup guidance"}</h3>
+              <p>{focusMatchup
+                ? `${focusMatchup.record} across ${focusMatchup.total} recorded match${focusMatchup.total === 1 ? "" : "es"}. Compare community data, then add a sideboard or mulligan note.`
+                : "RiftLite uses your saved matches, deck prep, and community context to surface the next useful matchup."}</p>
+            </div>
+            <button className="modern-text-action" onClick={() => onNavigate("matchup-lab")}>Open lab</button>
+          </article>
+
+          <article className="modern-panel modern-activity-panel">
+            <header className="modern-panel-header">
+              <h2>Replay & integration activity</h2>
+              <button className="modern-text-action" onClick={() => onNavigate("replays")}>Latest outcomes</button>
+            </header>
+            <div className="modern-activity-table" role="table" aria-label="Recent replay activity">
+              <div className="modern-activity-head" role="row"><span>Source</span><span>Event</span><span>Result</span><span>Time</span></div>
+              {recentReplayActivity.length ? recentReplayActivity.map((replay) => {
+                const match = matches.find((item) => item.id === replay.matchId) ?? replay.matchSnapshot;
+                const replayKind = replayHealthKind(replay);
+                return (
+                  <button className="modern-activity-row" role="row" key={replay.id} onClick={() => onOpenReplayForMatch(replay.matchId)}>
+                    <span>{replay.platform === "atlas" ? "RiftAtlas" : replay.platform === "tcga" ? "TCG Arena" : "Simulator"}</span>
+                    <span>{replay.title || "Replay captured"}<small>{replayHealthLabel(replayKind)}</small></span>
+                    <span data-result={match?.result}>{match?.result || "Saved"}</span>
+                    <span>{homeRelativeDate(replay.capturedAt)}</span>
+                  </button>
+                );
+              }) : <div className="modern-empty-state"><Film size={24} /><span>Replay activity will appear after capture.</span></div>}
+            </div>
+          </article>
+        </div>
+
+        <aside className="modern-home-rail" aria-label="RiftLite partners and community">
+          <article
+            className={`modern-panel modern-sponsor ${featuredPartner ? "has-partner" : ""}`}
+            style={featuredPartner?.imageUrl ? { backgroundImage: `linear-gradient(120deg, rgb(5 12 23 / 96%), rgb(15 27 31 / 78%)), url(${featuredPartner.imageUrl})` } : undefined}
+          >
+            <div>
+              <span className="modern-kicker">{featuredPartner?.eyebrow || "Partnerships"}</span>
+              <h2>{featuredPartner?.title || "Partner with RiftLite"}</h2>
+              <p>{featuredPartner?.description || "Have an idea for the Riftbound community? Let's build something great together — bmucasts@gmail.com"}</p>
+              {featuredPartner ? (
+                <button className="secondary" onClick={() => void window.riftlite.openExternalResource(featuredPartner.url)}>
+                  <ExternalLink size={16} /> {featuredPartner.ctaLabel}
+                </button>
+              ) : null}
+            </div>
+            <span className="modern-sponsor-art" aria-hidden="true"><Mail size={38} /></span>
+            {featuredPartners.length > 1 ? (
+              <div className="modern-partner-controls" aria-label="Featured partner carousel controls">
+                <button type="button" onClick={() => setPartnerCarouselOffset(-1)} aria-label="Previous partner"><ChevronLeft size={16} /></button>
+                <span>{featuredPartnerIndex + 1} / {featuredPartners.length}</span>
+                <button type="button" onClick={() => setPartnerCarouselOffset(1)} aria-label="Next partner"><ChevronRight size={16} /></button>
+              </div>
+            ) : null}
+          </article>
+
+          <article className="modern-panel modern-active-deck-card">
+            <div className="modern-deck-copy">
+              <span className="modern-kicker">Active deck</span>
+              <h2>{activeDeck?.title || "No active deck"}</h2>
+              <p>{activeDeck
+                ? `Legend · ${activeDeckLegend} · ${activeDeckPerformance?.overview.total ?? 0} recorded matches`
+                : "Choose a deck from your library to bring official Legend art and prep onto Home."}</p>
+              <div className="home-card-actions">
+                <button className="secondary" onClick={() => onNavigate("decks", { deckFocus: activeDeck ? "prep" : "library" })}><BookOpen size={16} /> {activeDeck ? "Open prep" : "Choose deck"}</button>
+                {activeDeck ? <button className="modern-text-action" onClick={() => onNavigate("decks", { deckFocus: "performance" })}>Performance</button> : null}
               </div>
             </div>
-            <p>{featuredCreator.description}</p>
-            <div className="home-card-actions">
-              <button className="primary" onClick={() => openFeaturedCreator(featuredCreator, featuredCreator.primaryCta, "home-featured-primary")}>
-                <FeaturedCreatorIcon size={16} /> {featuredCreator.primaryCta.label}
-              </button>
-              <button className="secondary" onClick={() => onNavigate("spotlight")}><Compass size={16} /> More spotlights</button>
-            </div>
-            <div className="home-carousel-controls" aria-label="Featured creator carousel controls">
-              <button type="button" className="secondary icon-button" onClick={() => setCreatorCarouselOffset(-1)} aria-label="Previous creator"><ChevronLeft size={15} /></button>
-              <span>{featuredCreatorIndex + 1} / {featuredCreators.length}</span>
-              <button type="button" className="secondary icon-button" onClick={() => setCreatorCarouselOffset(1)} aria-label="Next creator"><ChevronRight size={15} /></button>
-            </div>
-          </div>
-        </article>
+            <HomeActiveDeckArtwork deck={activeDeck} />
+          </article>
 
-        <article className="home-card home-video-card home-card-wide">
-          <div className="home-card-heading">
-            <Video size={18} />
-            <div>
-              <h3>Featured RiftLite Videos</h3>
+          <article
+            className="modern-panel modern-creator-card"
+            role="region"
+            aria-roledescription="carousel"
+            aria-label={`Featured creator ${featuredCreatorIndex + 1} of ${featuredCreators.length}: ${featuredCreator.name}`}
+            style={{
+              "--creator-primary": featuredTheme.primary,
+              "--creator-secondary": featuredTheme.secondary,
+              ...(featuredAsset.banner ? { backgroundImage: `linear-gradient(90deg, rgb(3 9 19 / 98%) 0%, rgb(3 9 19 / 88%) 58%, rgb(3 9 19 / 42%) 100%), url(${featuredAsset.banner})` } : {})
+            } as React.CSSProperties}
+            onMouseEnter={() => setFeaturedCreatorInteracting(true)}
+            onMouseLeave={() => setFeaturedCreatorInteracting(false)}
+            onFocusCapture={() => setFeaturedCreatorInteracting(true)}
+            onBlurCapture={(event) => {
+              if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+                setFeaturedCreatorInteracting(false);
+              }
+            }}
+          >
+            <div className="modern-creator-copy" role="group" aria-roledescription="slide">
+              <span className="modern-kicker">Community spotlight</span>
+              <h2>Featured creator: {featuredCreator.name}</h2>
+              <p>{featuredCreator.description}</p>
+              <div className="modern-creator-actions">
+                <button className="secondary" onClick={() => openFeaturedCreator(featuredCreator)}>
+                  <FeaturedCreatorIcon size={16} /> Open {featuredCreator.name}
+                </button>
+                <button className="modern-text-action" onClick={() => onNavigate("spotlight")}><Compass size={15} /> All creators</button>
+              </div>
             </div>
-          </div>
+            <div className="modern-creator-brand" aria-hidden="true">
+              {featuredAsset.logo ? <img src={featuredAsset.logo} alt="" /> : <Compass size={36} />}
+              <strong>{featuredCreator.name}</strong>
+            </div>
+            <div className="modern-creator-controls" aria-label="Featured creator carousel controls">
+              <button type="button" onClick={() => setCreatorCarouselOffset(-1)} aria-label="Previous creator"><ChevronLeft size={18} /></button>
+              <span>{featuredCreatorIndex + 1} / {featuredCreators.length}</span>
+              <button type="button" onClick={() => setFeaturedCreatorPaused((paused) => !paused)} aria-label={featuredCreatorPaused ? "Resume creator carousel" : "Pause creator carousel"}>
+                {featuredCreatorPaused ? <Play size={16} /> : <Pause size={16} />}
+              </button>
+              <button type="button" onClick={() => setCreatorCarouselOffset(1)} aria-label="Next creator"><ChevronRight size={18} /></button>
+            </div>
+          </article>
+
+          <nav className="modern-marketing-strip" aria-label="RiftLite community links">
+            <button onClick={() => document.getElementById("home-featured-videos")?.scrollIntoView({ behavior: "smooth", block: "start" })}><Video size={18} /><span><strong>Featured videos</strong><small>Watch and learn</small></span></button>
+            <button onClick={() => document.getElementById("home-featured-stream")?.scrollIntoView({ behavior: "smooth", block: "start" })}><Radio size={18} /><span><strong>Live streams</strong><small>Top creators live</small></span></button>
+            <button onClick={openDiscord}><MessageCircle size={18} /><span><strong>Discord</strong><small>Join the community</small></span></button>
+            <button onClick={openMetafySupport}><Shield size={18} /><span><strong>Support RiftLite</strong><small>Help keep us live</small></span></button>
+          </nav>
+        </aside>
+      </section>
+
+      <section className="modern-discover-grid" aria-label="More from RiftLite">
+        <article id="home-featured-videos" className="home-card home-video-card home-card-wide">
+          <div className="home-card-heading"><Video size={18} /><div><h3>Featured RiftLite videos</h3><span>Community guides and matches</span></div></div>
           <div className="home-featured-video-grid">
             {featuredVideos.map((video) => (
               <div className="home-video-cell" key={video.videoId}>
                 <strong className="home-video-title" title={video.title}>{video.title}</strong>
                 {playingHomeVideos[video.videoId] ? (
                   <div className="home-video-frame">
-                    <EmbedWebview
-                      className="home-embed-webview"
-                      src={video.embedUrl}
-                      allow="accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-                      allowpopups="true"
-                      httpreferrer="https://www.riftlite.com/"
-                      partition={`persist:riftlite-home-video-${video.videoId}`}
-                      webpreferences="backgroundThrottling=false"
-                    />
+                    <EmbedWebview className="home-embed-webview" src={video.embedUrl} allow="accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowpopups="true" httpreferrer="https://www.riftlite.com/" partition={`persist:riftlite-home-video-${video.videoId}`} webpreferences="backgroundThrottling=false" />
                   </div>
                 ) : (
-                  <button
-                    type="button"
-                    className="home-video-frame home-video-preview"
-                    onClick={() => setPlayingHomeVideos((current) => ({ ...current, [video.videoId]: true }))}
-                    aria-label={`Play ${video.title}`}
-                  >
-                    {video.thumbnailUrl ? <img src={video.thumbnailUrl} alt="" draggable={false} /> : null}
-                    <span><Play size={15} /> Play</span>
+                  <button type="button" className="home-video-frame home-video-preview" onClick={() => setPlayingHomeVideos((current) => ({ ...current, [video.videoId]: true }))} aria-label={`Play ${video.title}`}>
+                    {video.thumbnailUrl ? <img src={video.thumbnailUrl} alt="" draggable={false} /> : null}<span><Play size={15} /> Play</span>
                   </button>
                 )}
               </div>
             ))}
           </div>
           <button type="button" className="home-metafy-support" onClick={openMetafySupport} aria-label="Support RiftLite on Metafy">
-            <span className="home-metafy-logo">
-              {metafyLogoUrl ? <img src={metafyLogoUrl} alt="" /> : "M"}
-            </span>
-            <span className="home-metafy-copy">
-              <strong>Support RiftLite on Metafy</strong>
-              <span>Tips help cover servers, development time, and community tools.</span>
-            </span>
+            <span className="home-metafy-logo">{metafyLogoUrl ? <img src={metafyLogoUrl} alt="" /> : "M"}</span>
+            <span className="home-metafy-copy"><strong>Support RiftLite on Metafy</strong><span>Tips help cover servers, development time, and community tools.</span></span>
             <span className="home-metafy-cta"><ExternalLink size={14} /> Support</span>
           </button>
         </article>
 
-        <article className="home-card home-stream-card home-card-wide">
-          <div className="home-card-heading">
-            <Radio size={18} />
-            <div>
-              <h3>{featuredStream?.title ?? "Featured stream"}</h3>
-              <span>{featuredStream ? `${featuredStream.isLive ? "Live now - " : ""}twitch.tv/${featuredStream.channel}` : "Community streams"}</span>
-            </div>
-          </div>
-          {featuredStream ? (
-            featuredStreamPlaying ? (
-              <div className="home-video-frame">
-              <EmbedWebview
-                key={featuredStream.playerUrl}
-                className="home-embed-webview"
-                src={featuredStream.playerUrl}
-                allowpopups="true"
-                partition={`persist:riftlite-twitch-${featuredStream.channel}`}
-                webpreferences="backgroundThrottling=false"
-              />
-              </div>
-            ) : (
-              <button
-                type="button"
-                className="home-video-frame home-video-preview home-stream-preview"
-                onClick={() => setFeaturedStreamPlaying(true)}
-                aria-label={`Play ${featuredStream.title}`}
-              >
-                {featuredStream.thumbnailUrl ? <img src={featuredStreamThumbs[featuredStream.thumbnailUrl] ?? featuredStream.thumbnailUrl} alt="" draggable={false} /> : null}
-                <strong className="home-stream-status">{featuredStream.isLive ? "Live now" : "Featured stream"}</strong>
-                <em>{featuredStream.title}</em>
-                <span><Play size={15} /> {featuredStream.isLive ? "Watch live" : "Play"}</span>
-              </button>
-            )
+        <article id="home-featured-stream" className="home-card home-stream-card home-card-wide">
+          <div className="home-card-heading"><Radio size={18} /><div><h3>{featuredStream?.title ?? "Featured stream"}</h3><span>{featuredStream ? `${featuredStream.isLive ? "Live now · " : ""}twitch.tv/${featuredStream.channel}` : "Community streams"}</span></div></div>
+          {featuredStream ? featuredStreamPlaying ? (
+            <div className="home-video-frame"><EmbedWebview key={featuredStream.playerUrl} className="home-embed-webview" src={featuredStream.playerUrl} allowpopups="true" partition={`persist:riftlite-twitch-${featuredStream.channel}`} webpreferences="backgroundThrottling=false" /></div>
           ) : (
-            <div className="home-video-frame">
-              <div className="home-stream-empty">No featured streams configured.</div>
-            </div>
-          )}
-          {visibleFeaturedStreams.length > 1 ? (
-            <div className="home-carousel-controls" aria-label="Featured streamer carousel controls">
-              <button type="button" className="secondary icon-button" onClick={() => setStreamCarouselOffset(-1)} aria-label="Previous stream"><ChevronLeft size={15} /></button>
-              <span>{featuredStreamIndex + 1} / {visibleFeaturedStreams.length}</span>
-              <button type="button" className="secondary icon-button" onClick={() => setStreamCarouselOffset(1)} aria-label="Next stream"><ChevronRight size={15} /></button>
-            </div>
-          ) : null}
+            <button type="button" className="home-video-frame home-video-preview home-stream-preview" onClick={() => setFeaturedStreamPlaying(true)} aria-label={`Play ${featuredStream.title}`}>
+              {featuredStream.thumbnailUrl ? <img src={featuredStreamThumbs[featuredStream.thumbnailUrl] ?? featuredStream.thumbnailUrl} alt="" draggable={false} /> : null}
+              <strong className="home-stream-status">{featuredStream.isLive ? "Live now" : "Featured stream"}</strong><em>{featuredStream.title}</em><span><Play size={15} /> {featuredStream.isLive ? "Watch live" : "Play"}</span>
+            </button>
+          ) : <div className="home-video-frame"><div className="home-stream-empty">No featured streams configured.</div></div>}
+          {visibleFeaturedStreams.length > 1 ? <div className="home-carousel-controls" aria-label="Featured streamer carousel controls"><button type="button" className="secondary icon-button" onClick={() => setStreamCarouselOffset(-1)} aria-label="Previous stream"><ChevronLeft size={15} /></button><span>{featuredStreamIndex + 1} / {visibleFeaturedStreams.length}</span><button type="button" className="secondary icon-button" onClick={() => setStreamCarouselOffset(1)} aria-label="Next stream"><ChevronRight size={15} /></button></div> : null}
         </article>
 
         <article className="home-card">
-          <div className="home-card-heading">
-            <Globe2 size={18} />
-            <div>
-              <h3>Community Decks</h3>
-              <span>{communityDeckSummary.label}</span>
-            </div>
-          </div>
-          <div className="home-legend-strip" aria-label="Community deck legend preview">
-            {communityDeckVisualLegends.map((legend) => (
-              <button
-                type="button"
-                key={legend}
-                className="home-legend-token"
-                title={`Open ${legend} decks`}
-                onClick={() => onNavigate("community", { communityTab: "community-decks", communityDeckLegend: legend })}
-              >
-                <img src={legendImageUrl(legend)} alt="" />
-              </button>
-            ))}
-          </div>
-          <div className="home-card-actions">
-            <button className="primary" onClick={() => onNavigate("community", { communityTab: "community-decks" })}><Globe2 size={16} /> Explore deck meta</button>
-            <button className="secondary" onClick={() => onNavigate("community", { communityTab: "legend-meta" })}>Meta</button>
-          </div>
+          <div className="home-card-heading"><Globe2 size={18} /><div><h3>Community decks</h3><span>{communityDeckSummary.label}</span></div></div>
+          <div className="home-legend-strip" aria-label="Community deck legend preview">{communityDeckVisualLegends.map((legend) => <button type="button" key={legend} className="home-legend-token" title={`Open ${legend} decks`} onClick={() => onNavigate("community", { communityTab: "community-decks", communityDeckLegend: legend })}><img src={legendImageUrl(legend)} alt="" /></button>)}</div>
+          <div className="home-card-actions"><button className="primary" onClick={() => onNavigate("community", { communityTab: "community-decks" })}><Globe2 size={16} /> Explore deck meta</button><button className="secondary" onClick={() => onNavigate("community", { communityTab: "legend-meta" })}>Meta</button></div>
         </article>
 
         <article className="home-card home-discord-card">
-          <div className="home-card-heading">
-            <MessageCircle size={18} />
-            <div>
-              <h3>RiftLite Discord</h3>
-              <span>Support, setup help, tester feedback, and community chat</span>
-            </div>
-          </div>
-          <p className="muted">The fastest place to get help, report bugs, find updates, and talk through new features with other players.</p>
-          <div className="home-card-actions">
-            <button className="primary" onClick={openDiscord}><MessageCircle size={16} /> Join Discord</button>
-          </div>
+          <div className="home-card-heading"><MessageCircle size={18} /><div><h3>RiftLite Discord</h3><span>Support, tester feedback, and community chat</span></div></div>
+          <p className="muted">The fastest place to get help, report bugs, find updates, and talk through new features.</p>
+          <div className="home-card-actions"><button className="primary" onClick={openDiscord}><MessageCircle size={16} /> Join Discord</button></div>
         </article>
 
         <article className="home-card">
-          <div className="home-card-heading">
-            <ClipboardList size={18} />
-            <div>
-              <h3>Recent capture</h3>
-              <span>{latestMatch ? new Date(latestMatch.capturedAt).toLocaleString() : "No local match yet"}</span>
-            </div>
-          </div>
-          {latestMatch ? (
-            <div className="home-match-summary">
-              <strong>{normalizeLegendName(latestMatch.myChampion) || "Unknown"} vs {normalizeLegendName(latestMatch.opponentChampion) || "Unknown"}</strong>
-              <span>{latestMatch.result} {displayMatchRecord(latestMatch)} - {latestMatch.format}</span>
-              <em>{latestMatch.deckName || "No deck logged"}</em>
-            </div>
-          ) : (
-            <p className="muted">Captured matches and pending reviews will show up here.</p>
-          )}
-          <div className="home-card-actions">
-            <button className="secondary" onClick={() => onNavigate("matches")}><ClipboardList size={16} /> Matches</button>
-            <button className="secondary" disabled={!latestMatch} onClick={() => latestMatch ? onOpenReplayForMatch(latestMatch.id) : undefined}><Film size={16} /> Replay</button>
-          </div>
-        </article>
-
-        <article className="home-card">
-          <div className="home-card-heading">
-            <BookOpen size={18} />
-            <div>
-              <h3>Active deck & prep</h3>
-              <span>{activeDeck ? activeDeck.title : "No active deck selected"}</span>
-            </div>
-          </div>
-          <p className="muted">Prepare your sideboard, mulligan options, battlefield plan, and matchup notes before the game starts.</p>
-          <div className="home-card-actions">
-            <button className="primary" onClick={() => onNavigate("decks", { deckFocus: activeDeck ? "prep" : "library" })}><BookOpen size={16} /> {activeDeck ? "Open prep" : "Import deck"}</button>
-            <button className="secondary" onClick={() => onNavigate("decks", { deckFocus: "performance" })}>Performance</button>
-          </div>
-        </article>
-
-        <article className="home-card">
-          <div className="home-card-heading">
-            <Calculator size={18} />
-            <div>
-              <h3>Scorepad</h3>
-              <span>Table games and event logging</span>
-            </div>
-          </div>
-          <p className="muted">Use your phone or desktop to score local matches, then review before saving.</p>
-          <div className="home-card-actions">
-            <button className="primary" onClick={() => onNavigate("scorepad")}><Calculator size={16} /> Open Scorepad</button>
-          </div>
-        </article>
-
-        <article className="home-card">
-          <div className="home-card-heading">
-            <Radio size={18} />
-            <div>
-              <h3>Social</h3>
-              <span>{activeTestingSession ? `Testing: ${activeTestingSession.label}` : "Find matches and teams"}</span>
-            </div>
-          </div>
-          <p className="muted">Post an LFG room, manage teams, or sync matches to private groups.</p>
-          <div className="home-card-actions">
-            <button className="primary" onClick={() => onNavigate("social")}><Radio size={16} /> Find Match</button>
-            <button className="secondary" onClick={() => onNavigate("hubs")}><Users size={16} /> Private Hubs</button>
-          </div>
+          <div className="home-card-heading"><Radio size={18} /><div><h3>Find matches & teams</h3><span>{activeTestingSession ? `Testing: ${activeTestingSession.label}` : "Social and private play"}</span></div></div>
+          <p className="muted">Post an LFG room, manage teams, or sync selected matches to private groups.</p>
+          <div className="home-card-actions"><button className="primary" onClick={() => onNavigate("social")}><Radio size={16} /> Find Match</button><button className="secondary" onClick={() => onNavigate("hubs")}><Users size={16} /> Private Hubs</button></div>
         </article>
       </section>
     </section>
@@ -9109,6 +9697,7 @@ function MatchupLabView({
 
 function DashboardView({
   view,
+  activePlatform,
   matches,
   replays,
   testingSessions,
@@ -9133,15 +9722,19 @@ function DashboardView({
   screenshotStatus,
   onSaveSettings,
   onSettingsChanged,
+  onStartGuidedTour,
+  onResetGuidedTour,
   onNavigate,
   onPlayPlatform,
   communityTab,
   communityDeckLegendTarget,
+  spotlightTargetId,
   matchFocusTarget,
   onCommunityTabChange,
   deckFocusTarget,
   onDeckFocusChange,
   onDecksChanged,
+  onAccountDataRestored,
   onSaveHubResult,
   onSyncPrivateHubs,
   onSyncMatchesToHubs,
@@ -9181,6 +9774,7 @@ function DashboardView({
   onDelete
 }: {
   view: ActiveView;
+  activePlatform: GamePlatform;
   matches: MatchDraft[];
   replays: ReplayRecord[];
   testingSessions: TestingSession[];
@@ -9205,15 +9799,19 @@ function DashboardView({
   screenshotStatus: string;
   onSaveSettings: (patch: Partial<UserSettings>) => Promise<void>;
   onSettingsChanged: (settings: UserSettings) => void;
+  onStartGuidedTour: () => void;
+  onResetGuidedTour: () => void;
   onNavigate: (view: ActiveView, options?: NavigationOptions) => void;
   onPlayPlatform: (platform: GamePlatform) => void;
   communityTab: CommunityTab;
   communityDeckLegendTarget: string;
+  spotlightTargetId: string;
   matchFocusTarget: MatchFocusTarget | null;
   onCommunityTabChange: (tab: CommunityTab) => void;
   deckFocusTarget: DeckFocusTarget;
   onDeckFocusChange: (focus: DeckFocusTarget) => void;
   onDecksChanged: () => Promise<void>;
+  onAccountDataRestored: () => Promise<void>;
   onSaveHubResult: (result: HubActionResult) => Promise<void>;
   onSyncPrivateHubs: () => Promise<PrivateHubSyncResult>;
   onSyncMatchesToHubs: (matchIds: string[], hubIds: string[]) => Promise<PrivateHubSyncResult>;
@@ -9235,7 +9833,7 @@ function DashboardView({
   onChooseReplayDirectory: () => Promise<void>;
   onOpenReplayDirectory: () => Promise<void>;
   onRefreshDiagnostics: () => Promise<void>;
-  onCreateDiagnosticsBundle: () => Promise<void>;
+  onCreateDiagnosticsBundle: (includeSensitiveData?: boolean) => Promise<void>;
   onCheckUpdates: () => Promise<void>;
   onDownloadUpdate: () => Promise<void>;
   onInstallUpdate: () => Promise<void>;
@@ -9256,6 +9854,7 @@ function DashboardView({
   if (view === "home") {
     return (
       <HomeView
+        activePlatform={activePlatform}
         matches={visibleMatches}
         replays={replays}
         decks={decks}
@@ -9302,7 +9901,7 @@ function DashboardView({
     return <MatchupLabView matches={visibleMatches} communityMatches={communityMatches} decks={decks} replays={replays} settings={settings} onNavigate={onNavigate} onRefreshCommunity={onRefreshCommunity} />;
   }
   if (view === "spotlight") {
-    return <SpotlightView />;
+    return <SpotlightView initialSpotlightId={spotlightTargetId} />;
   }
   if (view === "stream") {
     return <StreamView overlayInfo={overlayInfo} matches={visibleMatches} decks={decks} settings={settings} onSaveSettings={onSaveSettings} />;
@@ -9339,7 +9938,7 @@ function DashboardView({
     );
   }
   if (view === "account") {
-    return <AccountView settings={settings} onSettingsChanged={onSettingsChanged} />;
+    return <AccountView settings={settings} matches={visibleMatches} decks={decks} onSettingsChanged={onSettingsChanged} onAccountDataRestored={onAccountDataRestored} />;
   }
   if (view === "settings") {
     return (
@@ -9354,6 +9953,8 @@ function DashboardView({
         deletedMatches={deletedMatches}
         deletedReplays={deletedReplays}
         onSave={onSaveSettings}
+        onStartGuidedTour={onStartGuidedTour}
+        onResetGuidedTour={onResetGuidedTour}
         importSummary={importSummary}
         onImportLegacy={onImportLegacy}
         onTakeScreenshot={onTakeScreenshot}
@@ -9374,7 +9975,7 @@ function DashboardView({
     );
   }
   if (view === "hubs") {
-    return <HubsView settings={settings} matches={visibleMatches} hubMatches={hubMatches} onSave={onSaveSettings} onHubResult={onSaveHubResult} onSyncPrivateHubs={onSyncPrivateHubs} onSyncMatchesToHubs={onSyncMatchesToHubs} onDeleteHubMatch={onDeleteHubMatch} onRefresh={onRefreshCommunity} />;
+    return <HubsView settings={settings} matches={visibleMatches} replays={replays} hubMatches={hubMatches} onSave={onSaveSettings} onHubResult={onSaveHubResult} onSyncPrivateHubs={onSyncPrivateHubs} onSyncMatchesToHubs={onSyncMatchesToHubs} onDeleteHubMatch={onDeleteHubMatch} onRefresh={onRefreshCommunity} />;
   }
   if (view === "social") {
     return (
@@ -10046,10 +10647,15 @@ function FindMatchPanel({ settings }: { settings: UserSettings }) {
 
   useEffect(() => {
     void refresh(false);
-    const interval = window.setInterval(() => {
-      void refresh(false, false);
-    }, 60_000);
-    return () => window.clearInterval(interval);
+    const refreshWhileActive = () => {
+      if (document.hasFocus()) void refresh(false, false);
+    };
+    const interval = window.setInterval(refreshWhileActive, 60_000);
+    window.addEventListener("focus", refreshWhileActive);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener("focus", refreshWhileActive);
+    };
   }, [ownUid]);
 
   async function postListing() {
@@ -11340,14 +11946,30 @@ function TeamModerationPanel() {
   );
 }
 
-function AccountView({ settings, onSettingsChanged }: { settings: UserSettings; onSettingsChanged: (settings: UserSettings) => void }) {
+function AccountView({ settings, matches, decks, onSettingsChanged, onAccountDataRestored }: {
+  settings: UserSettings;
+  matches: MatchDraft[];
+  decks: SavedDeck[];
+  onSettingsChanged: (settings: UserSettings) => void;
+  onAccountDataRestored: () => Promise<void>;
+}) {
   const [profile, setProfile] = useState<AccountProfile | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<AccountConnectionStatus | null>(null);
   const [connectionBusy, setConnectionBusy] = useState(false);
   const [cloudStatus, setCloudStatus] = useState<AccountCloudSyncStatus | null>(null);
+  const [cloudConflicts, setCloudConflicts] = useState<AccountCloudSyncConflictSummary[]>([]);
+  const [cloudConflictError, setCloudConflictError] = useState("");
   const [cloudBusy, setCloudBusy] = useState(false);
   const [linkSession, setLinkSession] = useState<AccountLinkSession | null>(null);
+  const [linkProvider, setLinkProvider] = useState<AccountLinkProvider | null>(null);
+  const [linkBusy, setLinkBusy] = useState(false);
   const [linkQr, setLinkQr] = useState("");
+  const [showPostLinkSyncChoice, setShowPostLinkSyncChoice] = useState(false);
+  const [pendingSyncChoice, setPendingSyncChoice] = useState<{
+    choice: AccountSyncChoice;
+    dismissPostLinkChoice: boolean;
+  } | null>(null);
+  const linkStartedAsFirstConnection = useRef(false);
   const [status, setStatus] = useState("");
   const [handleDraft, setHandleDraft] = useState(settings.accountHandle);
   const [displayNameDraft, setDisplayNameDraft] = useState(settings.accountDisplayName || settings.username);
@@ -11384,6 +12006,31 @@ function AccountView({ settings, onSettingsChanged }: { settings: UserSettings; 
   const cloudEnabled = Boolean(cloudStatus?.enabled ?? settings.accountCloudSyncEnabled);
   const cloudNeedsChoice = accountLinked && Boolean(cloudStatus?.hasRemoteBackup) && !cloudEnabled;
   const cloudCounts = cloudStatus?.remoteCounts ?? { matches: 0, decks: 0, notebooks: 0, replays: 0 };
+  const localSyncSnapshot = useMemo(
+    () => localAccountSyncSnapshot(matches, decks, settings),
+    [decks, matches, settings]
+  );
+  const cloudSyncSnapshot = useMemo(() => cloudAccountSyncSnapshot(cloudStatus), [cloudStatus]);
+  const syncChoicePreview = useMemo(
+    () => pendingSyncChoice
+      ? buildAccountSyncChoicePreview(pendingSyncChoice.choice, localSyncSnapshot, cloudSyncSnapshot)
+      : null,
+    [cloudSyncSnapshot, localSyncSnapshot, pendingSyncChoice]
+  );
+  const activeDeckConfidence = useMemo(
+    () => activeDeckSyncConfidence(settings, decks, cloudStatus),
+    [cloudStatus, decks, settings]
+  );
+  const migrationProgress = useMemo(
+    () => accountMigrationProgress(connectionStatus, accountLinked),
+    [accountLinked, connectionStatus]
+  );
+  const showAccountSignInActions = !accountReady && !linkSession && (
+    !accountLinked ||
+    !signedIn ||
+    accountState === "reconnect" ||
+    (connectionStatus !== null && !connectionStatus.connected)
+  );
 
   function formatCloudDate(value?: string) {
     return value ? new Date(value).toLocaleString() : "Never";
@@ -11397,6 +12044,13 @@ function AccountView({ settings, onSettingsChanged }: { settings: UserSettings; 
   async function loadCloudStatus() {
     const next = await window.riftlite.getAccountCloudSyncStatus();
     setCloudStatus(next);
+    try {
+      const conflicts = await window.riftlite.getAccountCloudSyncConflicts();
+      setCloudConflicts(conflicts);
+      setCloudConflictError("");
+    } catch (error) {
+      setCloudConflictError(error instanceof Error ? error.message : "Could not check retained account backups.");
+    }
     return next;
   }
 
@@ -11442,7 +12096,7 @@ function AccountView({ settings, onSettingsChanged }: { settings: UserSettings; 
     applyProfile(nextProfile);
     setCloudStatus(nextCloudStatus);
     setConnectionStatus(nextConnectionStatus);
-    return nextSettings;
+    return { settings: nextSettings, cloudStatus: nextCloudStatus };
   }
 
   useEffect(() => {
@@ -11485,6 +12139,10 @@ function AccountView({ settings, onSettingsChanged }: { settings: UserSettings; 
   useEffect(() => {
     let cancelled = false;
     async function refreshCloud() {
+      if (!accountLinked) {
+        setCloudConflicts([]);
+        setCloudConflictError("");
+      }
       try {
         const next = await window.riftlite.getAccountCloudSyncStatus();
         if (!cancelled) {
@@ -11507,6 +12165,20 @@ function AccountView({ settings, onSettingsChanged }: { settings: UserSettings; 
           });
         }
       }
+      if (accountLinked) {
+        try {
+          const conflicts = await window.riftlite.getAccountCloudSyncConflicts();
+          if (!cancelled) {
+            setCloudConflicts(conflicts);
+            setCloudConflictError("");
+          }
+        } catch (error) {
+          if (!cancelled) {
+            setCloudConflicts([]);
+            setCloudConflictError(error instanceof Error ? error.message : "Could not check retained account backups.");
+          }
+        }
+      }
     }
     void refreshCloud();
     return () => {
@@ -11527,6 +12199,10 @@ function AccountView({ settings, onSettingsChanged }: { settings: UserSettings; 
     let checking = false;
     const checkStatus = async () => {
       if (checking || cancelled) return;
+      // OAuth completes in the user's browser. Polling while RiftLite is in
+      // the background cannot improve what they see, so resume immediately
+      // when the app regains focus instead of spending Firestore reads there.
+      if (!document.hasFocus()) return;
       checking = true;
       try {
         const result = await window.riftlite.getAccountLinkStatus(linkSession.sessionId);
@@ -11534,18 +12210,34 @@ function AccountView({ settings, onSettingsChanged }: { settings: UserSettings; 
         if (result.status === "complete") {
           setStatus(result.message || "Account linked and verified.");
           setLinkSession(null);
+          setLinkProvider(null);
           setLinkQr("");
-          await refreshSettingsAndProfile();
+          const linkedForFirstTime = linkStartedAsFirstConnection.current;
+          linkStartedAsFirstConnection.current = false;
+          const refreshed = await refreshSettingsAndProfile();
+          if (linkedForFirstTime && refreshed.settings.accountUid) {
+            setShowPostLinkSyncChoice(true);
+          }
         } else if (result.status === "expired" || result.status === "error") {
           setStatus(result.message || "Account link expired. Start a new link when ready.");
           setLinkSession(null);
+          setLinkProvider(null);
           setLinkQr("");
+          linkStartedAsFirstConnection.current = false;
         } else {
           setStatus("Waiting for website sign-in...");
         }
       } catch (error) {
         if (!cancelled) {
-          setStatus(error instanceof Error ? error.message : "Could not check account link.");
+          if (Date.now() >= linkSession.expiresAt) {
+            setStatus("Account link expired. Start a new link when ready.");
+            setLinkSession(null);
+            setLinkProvider(null);
+            setLinkQr("");
+            linkStartedAsFirstConnection.current = false;
+          } else {
+            setStatus(error instanceof Error ? error.message : "Could not check account link.");
+          }
         }
       } finally {
         checking = false;
@@ -11553,21 +12245,41 @@ function AccountView({ settings, onSettingsChanged }: { settings: UserSettings; 
     };
     void checkStatus();
     const timer = window.setInterval(() => void checkStatus(), 2500);
+    const onFocus = () => void checkStatus();
+    window.addEventListener("focus", onFocus);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
+      window.removeEventListener("focus", onFocus);
     };
   }, [linkSession]);
 
-  async function startLink() {
-    setStatus("Creating secure link...");
+  async function startLink(provider: AccountLinkProvider) {
+    if (linkBusy || linkSession) return;
+    setLinkBusy(true);
+    setStatus(`Preparing ${provider === "google" ? "Google" : "email"} sign-in...`);
     try {
       const session = await window.riftlite.startAccountLink();
-      setLinkSession(session);
-      setLinkQr(await QRCode.toDataURL(session.loginUrl, { margin: 1, width: 180 }));
-      setStatus("Scan the QR code or open the link to sign in.");
+      const loginUrl = accountLinkUrlForProvider(session.loginUrl, provider);
+      const providerSession = { ...session, loginUrl };
+      linkStartedAsFirstConnection.current = !accountLinked;
+      setLinkProvider(provider);
+      setLinkSession(providerSession);
+      setLinkQr("");
+      QRCode.toDataURL(loginUrl, { margin: 1, width: 180 })
+        .then(setLinkQr)
+        .catch(() => undefined);
+      try {
+        await window.riftlite.openExternalResource(loginUrl);
+        setStatus(`Your browser is open. Finish ${provider === "google" ? "Google" : "email"} sign-in there; RiftLite will continue automatically.`);
+      } catch {
+        setStatus("RiftLite could not open your browser. Expand Having trouble? to open or copy the secure sign-in link.");
+      }
     } catch (error) {
+      linkStartedAsFirstConnection.current = false;
       setStatus(error instanceof Error ? error.message : "Could not start account link.");
+    } finally {
+      setLinkBusy(false);
     }
   }
 
@@ -11727,7 +12439,7 @@ function AccountView({ settings, onSettingsChanged }: { settings: UserSettings; 
         : "Automatic Discord replay sharing is off.");
   }
 
-  async function setAccountCloudSync(enabled: boolean) {
+  async function setAccountCloudSync(enabled: boolean, dismissPostLinkChoice = false) {
     if (!accountLinked) {
       setStatus("Link a RiftLite account before enabling device sync.");
       return;
@@ -11739,6 +12451,9 @@ function AccountView({ settings, onSettingsChanged }: { settings: UserSettings; 
       setCloudStatus(next);
       onSettingsChanged(await window.riftlite.getSettings());
       setStatus(next.message || (enabled ? "Account sync enabled." : "Account sync disabled."));
+      if (dismissPostLinkChoice && next.enabled) {
+        setShowPostLinkSyncChoice(false);
+      }
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Could not update account sync.");
     } finally {
@@ -11746,14 +12461,24 @@ function AccountView({ settings, onSettingsChanged }: { settings: UserSettings; 
     }
   }
 
-  async function uploadAccountCloudSync() {
-    if (!accountLinked) {
-      setStatus("Link a RiftLite account before syncing this device.");
+  function requestAccountSyncChoice(choice: AccountSyncChoice, dismissPostLinkChoice = false) {
+    setPendingSyncChoice({ choice, dismissPostLinkChoice });
+  }
+
+  async function confirmAccountSyncChoice() {
+    const pending = pendingSyncChoice;
+    if (!pending) return;
+    setPendingSyncChoice(null);
+    if (pending.choice === "keep-local") {
+      await uploadAccountCloudSync(pending.dismissPostLinkChoice);
       return;
     }
-    if (cloudNeedsChoice && !window.confirm(
-      "A cloud backup already exists. Keep this device's local data and replace that cloud backup? Choose Cancel if you want to restore the cloud copy instead."
-    )) {
+    await restoreAccountCloudSync(pending.dismissPostLinkChoice);
+  }
+
+  async function uploadAccountCloudSync(dismissPostLinkChoice = false) {
+    if (!accountLinked) {
+      setStatus("Link a RiftLite account before syncing this device.");
       return;
     }
     setCloudBusy(true);
@@ -11763,6 +12488,9 @@ function AccountView({ settings, onSettingsChanged }: { settings: UserSettings; 
       setCloudStatus(next);
       onSettingsChanged(await window.riftlite.getSettings());
       setStatus(next.message || "Account data synced.");
+      if (dismissPostLinkChoice) {
+        setShowPostLinkSyncChoice(false);
+      }
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Account sync failed.");
     } finally {
@@ -11770,15 +12498,9 @@ function AccountView({ settings, onSettingsChanged }: { settings: UserSettings; 
     }
   }
 
-  async function restoreAccountCloudSync() {
+  async function restoreAccountCloudSync(dismissPostLinkChoice = false) {
     if (!accountLinked) {
       setStatus("Link a RiftLite account before restoring account data.");
-      return;
-    }
-    const confirmed = window.confirm(
-      "Restore match history, decks, notebooks, and settings from your RiftLite account backup? This keeps your current login and local replay video files, but replaces local match/deck data with the cloud copy."
-    );
-    if (!confirmed) {
       return;
     }
     setCloudBusy(true);
@@ -11786,10 +12508,79 @@ function AccountView({ settings, onSettingsChanged }: { settings: UserSettings; 
     try {
       const next = await window.riftlite.restoreAccountCloudSync();
       setCloudStatus(next);
+      await onAccountDataRestored();
       await refreshSettingsAndProfile();
       setStatus(next.message || "Account data restored.");
+      if (dismissPostLinkChoice) {
+        setShowPostLinkSyncChoice(false);
+      }
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Account restore failed.");
+    } finally {
+      setCloudBusy(false);
+    }
+  }
+
+  async function refreshAfterCloudConflictResolution() {
+    const [settingsResult, profileResult, cloudResult, connectionResult, conflictsResult] = await Promise.allSettled([
+      window.riftlite.getSettings(),
+      window.riftlite.getAccountProfile(),
+      window.riftlite.getAccountCloudSyncStatus(),
+      window.riftlite.getAccountConnectionStatus(),
+      window.riftlite.getAccountCloudSyncConflicts()
+    ]);
+    if (settingsResult.status === "fulfilled") onSettingsChanged(settingsResult.value);
+    if (profileResult.status === "fulfilled") applyProfile(profileResult.value);
+    if (cloudResult.status === "fulfilled") setCloudStatus(cloudResult.value);
+    if (connectionResult.status === "fulfilled") setConnectionStatus(connectionResult.value);
+    if (conflictsResult.status === "fulfilled") {
+      setCloudConflicts(conflictsResult.value);
+      setCloudConflictError("");
+    } else {
+      setCloudConflictError(
+        conflictsResult.reason instanceof Error
+          ? conflictsResult.reason.message
+          : "Could not refresh retained account backups."
+      );
+    }
+  }
+
+  async function keepCurrentAccountCloudBackup(conflict: AccountCloudSyncConflictSummary) {
+    if (!window.confirm(
+      "Keep the current account backup and dismiss the older retained backup? Your local data and current cloud backup will not be changed."
+    )) {
+      return;
+    }
+    setCloudBusy(true);
+    setStatus("Keeping the current account backup...");
+    try {
+      await window.riftlite.keepAccountCloudSyncConflictCurrent(conflict.id);
+      await refreshAfterCloudConflictResolution();
+      setStatus("Current account backup kept. The older retained backup was dismissed safely.");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not resolve the retained account backup.");
+      await refreshAfterCloudConflictResolution();
+    } finally {
+      setCloudBusy(false);
+    }
+  }
+
+  async function restoreOlderAccountCloudBackup(conflict: AccountCloudSyncConflictSummary) {
+    if (!window.confirm(
+      "Restore the older retained backup? RiftLite will create a local safety backup, replace local match/deck data, then upload the restored copy as the current account backup. Your login and local replay files are kept."
+    )) {
+      return;
+    }
+    setCloudBusy(true);
+    setStatus("Validating and restoring the older account backup...");
+    try {
+      await window.riftlite.restoreAccountCloudSyncConflictLegacy(conflict.id);
+      await onAccountDataRestored();
+      await refreshAfterCloudConflictResolution();
+      setStatus("Older account backup restored locally and promoted to the current account backup.");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not restore the older account backup.");
+      await refreshAfterCloudConflictResolution();
     } finally {
       setCloudBusy(false);
     }
@@ -11805,6 +12596,7 @@ function AccountView({ settings, onSettingsChanged }: { settings: UserSettings; 
       onSettingsChanged(nextSettings);
       applyProfile(null);
       setConnectionStatus(null);
+      setShowPostLinkSyncChoice(false);
       setStatus("Device unlinked. Local matches and settings remain on this machine.");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Could not unlink account.");
@@ -11821,10 +12613,12 @@ function AccountView({ settings, onSettingsChanged }: { settings: UserSettings; 
       onSettingsChanged(nextSettings);
       applyProfile(null);
       setConnectionStatus(null);
-      const session = await window.riftlite.startAccountLink();
-      setLinkSession(session);
-      setLinkQr(await QRCode.toDataURL(session.loginUrl, { margin: 1, width: 180 }));
-      setStatus("Choose and explicitly confirm the new account on RiftLite.com.");
+      setLinkSession(null);
+      setLinkProvider(null);
+      setLinkQr("");
+      setShowPostLinkSyncChoice(false);
+      linkStartedAsFirstConnection.current = false;
+      setStatus("The previous account is safely unlinked. Choose Google or email above, then explicitly confirm the new account on RiftLite.com.");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Could not start the account switch.");
     }
@@ -11854,7 +12648,14 @@ function AccountView({ settings, onSettingsChanged }: { settings: UserSettings; 
           <Metric label="Web replays" value={accountVerified && connectionStatus?.replayLibraryReady ? `${connectionStatus.replayCount} found` : "Not verified"} />
         </div>
         <div className="row-actions">
-          {!accountReady ? <button className="primary" onClick={() => void startLink()}><Shield size={16} /> {accountState === "reconnect" || accountLinked ? "Reconnect account" : "Create or sign in"}</button> : null}
+          {showAccountSignInActions ? <>
+            <button type="button" className="primary account-provider-button" disabled={linkBusy} onClick={() => void startLink("google")}>
+              <span className="account-google-mark" aria-hidden="true">G</span> Continue with Google
+            </button>
+            <button type="button" className="secondary account-provider-button" disabled={linkBusy} onClick={() => void startLink("email")}>
+              <Mail size={16} /> Continue with email
+            </button>
+          </> : null}
           {accountLinked ? <button className="secondary" disabled={connectionBusy} onClick={() => void checkAccountConnection()}><RefreshCw size={16} /> Check connection</button> : null}
           {profileLink ? <button className="secondary" onClick={() => void window.riftlite.openExternalResource(profileLink)}><ExternalLink size={16} /> Open profile</button> : null}
           <button className="secondary" disabled={!signedIn || !publicDraft || !handleDraft.trim()} onClick={() => void refreshProfileMatches()}>
@@ -11862,21 +12663,75 @@ function AccountView({ settings, onSettingsChanged }: { settings: UserSettings; 
           </button>
         </div>
         {linkSession ? (
-          <div className="account-link-box">
-            {linkQr ? <img src={linkQr} alt="RiftLite account QR" /> : <Shield size={44} />}
+          <div className="account-link-box account-link-waiting">
+            <span className="account-link-status-icon" aria-hidden="true"><RefreshCw size={24} /></span>
             <div>
-              <h3>Finish on RiftLite.com</h3>
-              <p className="muted">Scan this QR code or open the link, sign in with Google or email, then confirm the exact account shown on the website. This device verifies the same account before finishing.</p>
-              <div className="row-actions">
-                <button className="secondary" onClick={() => void window.riftlite.openExternalResource(linkSession.loginUrl)}><ExternalLink size={16} /> Open link</button>
-                <button className="secondary" onClick={() => void navigator.clipboard?.writeText(linkSession.loginUrl)}>Copy link</button>
-              </div>
-              <p className="muted">Code: <strong>{linkSession.code}</strong></p>
+              <h3>Finish {linkProvider === "google" ? "Google" : "email"} sign-in in your browser</h3>
+              <p className="muted">Confirm the exact RiftLite account shown on the website. This device will verify the same account and continue automatically.</p>
+              <details className="account-link-help">
+                <summary>Having trouble?</summary>
+                <div className="account-link-help-content">
+                  {linkQr ? <img src={linkQr} alt="QR code for this secure RiftLite account sign-in" /> : <Shield size={44} />}
+                  <div>
+                    <p className="muted">Open or copy this short-lived link. You can also scan the QR code with another device.</p>
+                    <div className="row-actions">
+                      <button className="secondary" onClick={() => void window.riftlite.openExternalResource(linkSession.loginUrl)}><ExternalLink size={16} /> Open secure link</button>
+                      <button className="secondary" onClick={() => void navigator.clipboard?.writeText(linkSession.loginUrl)}>Copy link</button>
+                    </div>
+                    <p className="muted">Link code: <strong>{linkSession.code}</strong></p>
+                  </div>
+                </div>
+              </details>
             </div>
           </div>
         ) : null}
         {status ? <p className="muted">{status}</p> : null}
       </div>
+      {showPostLinkSyncChoice && accountLinked && !cloudEnabled ? (
+        <div className="rail-card account-post-link-sync-choice">
+          <div className="account-sync-choice-heading">
+            <span className="account-link-status-icon" aria-hidden="true"><Cloud size={24} /></span>
+            <div>
+              <h2>Keep history and decks synced across devices?</h2>
+              <p className="muted">This optional account backup includes match history, decks, notebooks, and settings. Replay videos and raw replay files stay on this computer.</p>
+            </div>
+          </div>
+          {cloudStatus?.hasRemoteBackup ? (
+            <>
+              <div className="account-sync-confidence compact" aria-label="Data available after sign in">
+                <section data-source="local">
+                  <span className="modern-kicker">This device</span>
+                  <strong>{localSyncSnapshot.matches} matches · {localSyncSnapshot.decks} decks</strong>
+                </section>
+                <section data-source="cloud" data-available="true">
+                  <span className="modern-kicker">Cloud backup</span>
+                  <strong>{cloudSyncSnapshot.matches} matches · {cloudSyncSnapshot.decks} decks</strong>
+                  <small>{cloudSyncSnapshot.deviceName} · {formatCloudDate(cloudSyncSnapshot.updatedAt)}</small>
+                </section>
+              </div>
+              <div className="settings-note warning">
+                This account already has a cloud backup. Nothing will be overwritten until you choose which copy to keep.
+              </div>
+              <div className="row-actions account-sync-choice-actions">
+                <button type="button" className="primary" disabled={cloudBusy} onClick={() => requestAccountSyncChoice("restore-cloud", true)}>
+                  <RotateCcw size={16} /> Restore cloud and enable
+                </button>
+                <button type="button" className="secondary" disabled={cloudBusy} onClick={() => requestAccountSyncChoice("keep-local", true)}>
+                  <Upload size={16} /> Keep local and replace cloud
+                </button>
+                <button type="button" className="secondary" disabled={cloudBusy} onClick={() => setShowPostLinkSyncChoice(false)}>Not now</button>
+              </div>
+            </>
+          ) : (
+            <div className="row-actions account-sync-choice-actions">
+              <button type="button" className="primary" disabled={cloudBusy} onClick={() => void setAccountCloudSync(true, true)}>
+                <Cloud size={16} /> Keep them synced
+              </button>
+              <button type="button" className="secondary" disabled={cloudBusy} onClick={() => setShowPostLinkSyncChoice(false)}>Not now</button>
+            </div>
+          )}
+        </div>
+      ) : null}
       <div className="rail-card">
         <h2>Replay and account connection</h2>
         <p className="muted">One verified identity owns your private hubs, Discord link, device backup, and every new Atlas web replay.</p>
@@ -11888,6 +12743,14 @@ function AccountView({ settings, onSettingsChanged }: { settings: UserSettings; 
           <Metric label="Last verified" value={formatCloudDate(connectionStatus?.checkedAt || settings.accountLastVerifiedAt)} />
           <Metric label="Auto upload" value={replayAutoUploadEnabled ? "On" : "Off"} />
           <Metric label="Discord reports" value={discordReplayShareEnabled ? `${selectedDiscordShareHubIds.length} hub${selectedDiscordShareHubIds.length === 1 ? "" : "s"}` : "Off"} />
+        </div>
+        <div className="account-migration-progress" data-tone={migrationProgress.tone}>
+          <div>
+            <strong>{migrationProgress.label}</strong>
+            <span>Account linking step {migrationProgress.current} of {migrationProgress.total}</span>
+          </div>
+          <progress value={migrationProgress.percent} max={100} aria-label={`Account migration ${migrationProgress.percent}% complete`} />
+          <small>{migrationProgress.detail}</small>
         </div>
         {connectionStatus?.message ? <div className={`settings-note ${connectionStatus.verified ? "" : "warning"}`}>{connectionStatus.message}</div> : null}
         {connectionStatus?.migrationMessage ? <div className="settings-note warning">{connectionStatus.migrationMessage}</div> : null}
@@ -12006,19 +12869,94 @@ function AccountView({ settings, onSettingsChanged }: { settings: UserSettings; 
             A backup already exists for this account. Choose Restore cloud to use it on this device, or Keep local and replace cloud to make this device authoritative. Sync stays off until you choose; leaving it unchanged cancels safely.
           </div>
         ) : null}
+        <div className="account-sync-confidence" aria-label="Local and cloud account data comparison">
+          <section data-source="local">
+            <span className="modern-kicker">This device</span>
+            <strong>{localSyncSnapshot.deviceName}</strong>
+            <div><b>{localSyncSnapshot.matches}</b><span>matches</span></div>
+            <div><b>{localSyncSnapshot.decks}</b><span>decks</span></div>
+          </section>
+          <section data-source="cloud" data-available={cloudSyncSnapshot.available}>
+            <span className="modern-kicker">Cloud backup</span>
+            <strong>{cloudSyncSnapshot.available ? cloudSyncSnapshot.deviceName : "No backup yet"}</strong>
+            <div><b>{cloudSyncSnapshot.matches}</b><span>matches</span></div>
+            <div><b>{cloudSyncSnapshot.decks}</b><span>decks</span></div>
+            <small>{cloudSyncSnapshot.available ? formatCloudDate(cloudSyncSnapshot.updatedAt) : "Sync this device to create one"}</small>
+          </section>
+        </div>
+        <div className="account-active-deck-sync" data-state={activeDeckConfidence.state}>
+          <span><Layers size={17} /></span>
+          <div>
+            <small>Active deck</small>
+            <strong>{activeDeckConfidence.title}</strong>
+            <p>{activeDeckConfidence.detail}</p>
+          </div>
+          <b>{activeDeckConfidence.label}</b>
+        </div>
+        {cloudConflictError ? <div className="settings-note warning">{cloudConflictError}</div> : null}
+        {cloudConflicts.length ? (
+          <div className="account-cloud-conflicts">
+            <div className="settings-note warning">
+              RiftLite found an older backup retained while this account was linked. Compare both copies and choose explicitly; neither is discarded automatically.
+            </div>
+            {cloudConflicts.map((conflict) => (
+              <article className="account-cloud-conflict" key={conflict.id}>
+                <div className="account-cloud-conflict-comparison">
+                  <section>
+                    <strong>Current account backup</strong>
+                    <span>{formatCloudDate(conflict.current.updatedAt)}</span>
+                    <span>{conflict.current.deviceName || "Unknown device"} · RiftLite {conflict.current.appVersion || "unknown"}</span>
+                    <span>{conflict.current.counts.matches} matches · {conflict.current.counts.decks} decks · {conflict.current.counts.notebooks} notebooks</span>
+                    <span>{formatBytes(conflict.current.byteSize)}</span>
+                  </section>
+                  <section>
+                    <strong>Older retained backup</strong>
+                    <span>{formatCloudDate(conflict.legacy.updatedAt)}</span>
+                    <span>{conflict.legacy.deviceName || "Unknown device"} · RiftLite {conflict.legacy.appVersion || "unknown"}</span>
+                    <span>{conflict.legacy.counts.matches} matches · {conflict.legacy.counts.decks} decks · {conflict.legacy.counts.notebooks} notebooks</span>
+                    <span>{formatBytes(conflict.legacy.byteSize)}</span>
+                  </section>
+                </div>
+                <div className="row-actions">
+                  <button
+                    type="button"
+                    className="secondary"
+                    disabled={cloudBusy}
+                    onClick={() => void keepCurrentAccountCloudBackup(conflict)}
+                  >
+                    <Shield size={16} /> Keep current backup
+                  </button>
+                  <button
+                    type="button"
+                    className="primary"
+                    disabled={cloudBusy}
+                    onClick={() => void restoreOlderAccountCloudBackup(conflict)}
+                  >
+                    <RotateCcw size={16} /> Restore older backup
+                  </button>
+                </div>
+              </article>
+            ))}
+          </div>
+        ) : null}
         <div className="drilldown-grid">
           <Metric label="Remote backup" value={cloudStatus?.hasRemoteBackup ? "Available" : "None yet"} />
+          <Metric label="Last successful sync" value={formatCloudDate(cloudStatus?.lastSyncedAt || settings.accountCloudSyncLastSyncedAt)} />
+          <Metric label="Local / cloud matches" value={`${localSyncSnapshot.matches} / ${cloudCounts.matches}`} />
+          <Metric label="Local / cloud decks" value={`${localSyncSnapshot.decks} / ${cloudCounts.decks}`} />
+          <Metric label="Active deck status" value={activeDeckConfidence.label} />
           <Metric label="Last cloud update" value={formatCloudDate(cloudStatus?.remoteUpdatedAt)} />
-          <Metric label="Matches" value={String(cloudCounts.matches)} />
-          <Metric label="Decks / notebooks" value={`${cloudCounts.decks} / ${cloudCounts.notebooks}`} />
           <Metric label="Replay files" value="Local only" />
           <Metric label="Backup size" value={cloudStatus?.remoteBytes ? formatBytes(cloudStatus.remoteBytes) : "-"} />
         </div>
         <div className="row-actions">
-          <button className="primary" disabled={!accountLinked || cloudBusy} onClick={() => void uploadAccountCloudSync()}>
+          <button className="primary" disabled={!accountLinked || cloudBusy} onClick={() => {
+            if (cloudNeedsChoice) requestAccountSyncChoice("keep-local");
+            else void uploadAccountCloudSync();
+          }}>
             <Upload size={16} /> {cloudNeedsChoice ? "Keep local and replace cloud" : "Sync now"}
           </button>
-          <button className="secondary" disabled={!accountLinked || cloudBusy || !cloudStatus?.hasRemoteBackup} onClick={() => void restoreAccountCloudSync()}>
+          <button className="secondary" disabled={!accountLinked || cloudBusy || !cloudStatus?.hasRemoteBackup} onClick={() => requestAccountSyncChoice("restore-cloud")}>
             <RotateCcw size={16} /> {cloudNeedsChoice ? "Restore cloud and enable" : "Restore on this device"}
           </button>
           <button className="secondary" disabled={cloudBusy} onClick={() => void loadCloudStatus()}>
@@ -12029,7 +12967,7 @@ function AccountView({ settings, onSettingsChanged }: { settings: UserSettings; 
           {cloudStatus?.message || settings.accountCloudSyncLastError || "Auto-sync waits briefly after changes so it does not upload after every click."}
         </p>
         <p className="muted">
-          Last local sync: {formatCloudDate(cloudStatus?.lastSyncedAt || settings.accountCloudSyncLastSyncedAt)} · Last restore: {formatCloudDate(cloudStatus?.lastRestoredAt || settings.accountCloudSyncLastRestoredAt)}
+          Last restore: {formatCloudDate(cloudStatus?.lastRestoredAt || settings.accountCloudSyncLastRestoredAt)}
         </p>
       </div>
       <div className="rail-card">
@@ -12060,12 +12998,59 @@ function AccountView({ settings, onSettingsChanged }: { settings: UserSettings; 
           <button className="secondary danger" disabled={!signedIn} onClick={() => void unlinkAccount()}>Unlink this device</button>
         </div>
       </div>
+      {syncChoicePreview ? (
+        <div className="modal-backdrop account-sync-preview-backdrop" onMouseDown={(event) => {
+          if (event.target === event.currentTarget && !cloudBusy) setPendingSyncChoice(null);
+        }}>
+          <section className="account-sync-preview-modal" role="dialog" aria-modal="true" aria-labelledby="account-sync-preview-title">
+            <header>
+              <div>
+                <span className="eyebrow">Review before continuing</span>
+                <h2 id="account-sync-preview-title">{syncChoicePreview.title}</h2>
+                <p>{syncChoicePreview.consequence}</p>
+              </div>
+              <button className="icon-button" disabled={cloudBusy} onClick={() => setPendingSyncChoice(null)} aria-label="Close sync preview"><X size={16} /></button>
+            </header>
+            <div className="account-sync-preview-comparison">
+              <section data-selected={syncChoicePreview.choice === "keep-local"}>
+                <span className="modern-kicker">This device</span>
+                <strong>{syncChoicePreview.local.deviceName}</strong>
+                <dl>
+                  <div><dt>Matches</dt><dd>{syncChoicePreview.local.matches}</dd></div>
+                  <div><dt>Decks</dt><dd>{syncChoicePreview.local.decks}</dd></div>
+                  <div><dt>Active deck</dt><dd>{syncChoicePreview.local.activeDeckTitle || "None selected"}</dd></div>
+                </dl>
+              </section>
+              <section data-selected={syncChoicePreview.choice === "restore-cloud"}>
+                <span className="modern-kicker">Cloud backup</span>
+                <strong>{syncChoicePreview.cloud.deviceName}</strong>
+                <dl>
+                  <div><dt>Matches</dt><dd>{syncChoicePreview.cloud.matches}</dd></div>
+                  <div><dt>Decks</dt><dd>{syncChoicePreview.cloud.decks}</dd></div>
+                  <div><dt>Updated</dt><dd>{formatCloudDate(syncChoicePreview.cloud.updatedAt)}</dd></div>
+                </dl>
+              </section>
+            </div>
+            <div className="settings-note warning">
+              Only account data changes. Your sign-in and local replay video files are preserved, and RiftLite creates a safety backup before a cloud restore.
+            </div>
+            <footer>
+              <button type="button" className="secondary" disabled={cloudBusy} onClick={() => setPendingSyncChoice(null)}>Cancel</button>
+              <button type="button" className="primary" disabled={cloudBusy} onClick={() => void confirmAccountSyncChoice()}>
+                {syncChoicePreview.choice === "keep-local" ? <Upload size={16} /> : <RotateCcw size={16} />}
+                {syncChoicePreview.actionLabel}
+              </button>
+            </footer>
+          </section>
+        </div>
+      ) : null}
     </section>
   );
 }
 
-function SpotlightView() {
-  const [selectedId, setSelectedId] = useState("");
+function SpotlightView({ initialSpotlightId = "" }: { initialSpotlightId?: string }) {
+  const spotlightIds = COMMUNITY_SPOTLIGHTS.map((item) => item.id);
+  const [selectedId, setSelectedId] = useState(() => communitySpotlightTarget(initialSpotlightId, spotlightIds));
   const selectedSpotlight = COMMUNITY_SPOTLIGHTS.find((item) => item.id === selectedId) ?? null;
   const spotlight = selectedSpotlight ?? RIFTLAB_SPOTLIGHT;
   const [assetMap, setAssetMap] = useState<Record<string, Partial<Record<SpotlightAssetMapKey, string>>>>({});
@@ -12083,6 +13068,10 @@ function SpotlightView() {
   }));
   const PrimaryIcon = spotlight.primaryCta.icon;
   const allLinksLink = spotlight.links.find((link) => ["linktree", "website", "metafy"].includes(link.id)) ?? spotlight.primaryCta;
+
+  useEffect(() => {
+    setSelectedId(communitySpotlightTarget(initialSpotlightId, spotlightIds));
+  }, [initialSpotlightId]);
 
   useEffect(() => {
     let mounted = true;
@@ -12306,7 +13295,7 @@ function CaptureLabView({ summary, bundlePath, settings, embedded = false, onSav
   embedded?: boolean;
   onSave: (patch: Partial<UserSettings>) => Promise<void>;
   onRefresh: () => Promise<void>;
-  onBundle: () => Promise<void>;
+  onBundle: (includeSensitiveData?: boolean) => Promise<void>;
   onOpenFolder: () => Promise<void>;
 }) {
   const tcga = summary?.latest.find((item) => item.platform === "tcga");
@@ -12329,7 +13318,15 @@ function CaptureLabView({ summary, bundlePath, settings, embedded = false, onSav
           </label>
           <button className="secondary" onClick={() => void onRefresh()}>Refresh</button>
           <button className="secondary" onClick={() => void onOpenFolder()}><FolderOpen size={16} /> Folder</button>
-          <button className="primary" onClick={() => void onBundle()}>Create bundle</button>
+          <button className="primary" onClick={() => void onBundle()}>Create redacted bundle</button>
+          <button
+            className="secondary"
+            type="button"
+            title="Requires confirmation and may include personal or account data"
+            onClick={() => void onBundle(true)}
+          >
+            Include sensitive data...
+          </button>
         </div>
       </div>
 
@@ -12346,6 +13343,11 @@ function CaptureLabView({ summary, bundlePath, settings, embedded = false, onSav
           <p className="muted">Leave this enabled while testing TCGA, Atlas, replay capture, or match review. After a missed match or capture issue, use Create bundle and send the generated JSON file.</p>
         </section>
       ) : null}
+
+      <section className="rail-card">
+        <h2>Privacy-safe by default</h2>
+        <p className="muted">Redacted bundles remove player names, room codes, account secrets, local paths, URL queries, and raw page or network payloads. Only use the sensitive export when a trusted RiftLite developer specifically requests it.</p>
+      </section>
 
       <section className="two-column capture-evidence-grid">
         <CaptureEvidenceCard title="TCGA" evidence={tcga} />
@@ -12989,7 +13991,7 @@ function MatchesView({
   }, [selectedMatchId]);
 
   return (
-    <section className="dashboard-page matches-page">
+    <section className="dashboard-page matches-page" data-tour-target="review">
       <div className="panel-header">
         <div>
           <h2>Local match history</h2>
@@ -14724,7 +15726,7 @@ function DecksView({
 
   return (
     <section className="dashboard-page decks-page">
-      <section className="deck-workspace-tabs" aria-label="Deck workspace sections">
+      <section className="deck-workspace-tabs" aria-label="Deck workspace sections" data-tour-target="prepare">
         <button className="secondary" data-active={focusTarget === "library"} onClick={() => focusDeckSection("library")}>Library</button>
         <button className="secondary" data-active={focusTarget === "prep"} onClick={() => focusDeckSection("prep")}><BookOpen size={15} /> Prep Guides</button>
         <button className="secondary" data-active={focusTarget === "notebook"} onClick={() => focusDeckSection("notebook")}><FileText size={15} /> Notebook</button>
@@ -16528,7 +17530,7 @@ function ReplayView({
     try {
       const imported = await window.riftlite.importReplayFolder();
       if (!imported.length) {
-        setStatus("");
+        setStatus("No new .riftreplay, WebM, or MP4 replay files were found in that folder.");
         return;
       }
       await onReplaysChanged(imported[0]?.id);
@@ -16592,7 +17594,7 @@ function ReplayView({
           <h2>No replays captured yet</h2>
           <p>{settings.replayCaptureEnabled ? "Replay evidence will appear here after captured matches." : "Replay capture is currently off in Settings."}</p>
           <div className="row-actions centered-actions">
-            <button className="secondary" onClick={() => void importReplay()}><FolderOpen size={16} /> Import replay</button>
+            <button className="secondary" onClick={() => void importReplay()}><FolderOpen size={16} /> Import replay or recording</button>
             <button className="secondary" onClick={() => void window.riftlite.openReplayFolder()}><FolderOpen size={16} /> Replay folder</button>
           </div>
           {status ? <p className="muted">{status}</p> : null}
@@ -16638,6 +17640,7 @@ function ReplayView({
                 <option value="video">Video</option>
                 <option value="frames">Frames</option>
                 <option value="partial">Partial</option>
+                <option value="web">Web replay</option>
                 <option value="missing">Missing media</option>
               </select>
             </label>
@@ -17203,12 +18206,23 @@ type ReplayListItem = {
   searchText: string;
 };
 
-function replayHealthKind(replay: ReplayRecord): "video" | "frames" | "partial" | "missing" {
+function hasReadyRiftLiteWebReplay(replay: ReplayRecord): boolean {
+  return Boolean(
+    replay.rawCapture?.uploadStatus === "uploaded" &&
+    replay.rawCapture.processingStatus === "ready" &&
+    replay.rawCapture.uploadUrl?.includes("riftlite.com/replays/")
+  );
+}
+
+function replayHealthKind(replay: ReplayRecord): "video" | "frames" | "partial" | "web" | "missing" {
   if (replay.video?.path) {
     return replay.video.containerFinalized === false ? "partial" : "video";
   }
   if (replay.visualFrames?.length) {
     return "frames";
+  }
+  if (hasReadyRiftLiteWebReplay(replay)) {
+    return "web";
   }
   return "missing";
 }
@@ -17217,6 +18231,7 @@ function replayHealthLabel(kind: ReturnType<typeof replayHealthKind>): string {
   if (kind === "video") return "Video";
   if (kind === "frames") return "Frames";
   if (kind === "partial") return "Partial";
+  if (kind === "web") return "Web replay";
   return "Missing media";
 }
 
@@ -18297,9 +19312,12 @@ function ReplayHealthPanel({
   voiceNotes: ReplayVoiceNote[];
 }) {
   const video = model.replay.video;
+  const webReplayReady = hasReadyRiftLiteWebReplay(model.replay);
   const warnings: string[] = [];
   if (!video && !screenshots.length) {
-    warnings.push("No visual replay media attached");
+    warnings.push(webReplayReady
+      ? "Web replay is ready; local video or frame capture was unavailable"
+      : "No visual replay media attached");
   }
   if (video && !video.containerFinalized && video.mimeType === "video/mp4") {
     warnings.push("MP4 may still need repair for external players");
@@ -18355,9 +19373,7 @@ function ReplayRawCapturePanel({
   if (!settings.rawCapture.enabled && !rawCapture) {
     return null;
   }
-  const statusLabel = rawCapture?.uploadStatus
-    ? rawCapture.uploadStatus.replace(/-/g, " ")
-    : settings.rawCapture.enabled ? "waiting for next Atlas replay" : "disabled";
+  const deliverySummary = replayDeliverySummary(rawCapture, settings.rawCapture.enabled);
   const hasRiftLiteReplay = Boolean(rawCapture?.uploadUrl?.includes("riftlite.com/replays/"));
   const canUpload = Boolean(
     settings.rawCapture.enabled &&
@@ -18378,14 +19394,14 @@ function ReplayRawCapturePanel({
           <h2>RiftLite web replay capture</h2>
           <span>{rawCapture ? `${rawCapture.messageCount} Atlas WebSocket frame${rawCapture.messageCount === 1 ? "" : "s"} captured.` : "No raw Atlas sidecar is attached to this replay."}</span>
         </div>
-        <strong>{statusLabel}</strong>
+        <strong>{deliverySummary.statusLabel}</strong>
       </div>
       <div className="replay-health-grid">
         <StatRow label="Provider" value="RiftLite Web Replay" />
         <StatRow label="Room" value={rawCapture?.roomCode || "Not captured"} />
         <StatRow label="Visibility" value={rawCapture?.visibility || settings.rawCapture.visibility} />
-        <StatRow label="Uploaded" value={rawCapture?.uploadedAt ? new Date(rawCapture.uploadedAt).toLocaleString() : "No"} />
-        <StatRow label="Discord reports" value={rawCapture?.discordShareStatus?.replace(/-/g, " ") || "Not shared"} />
+        <StatRow label="Uploaded" value={rawCapture?.uploadedAt ? new Date(rawCapture.uploadedAt).toLocaleString() : deliverySummary.uploadLabel} />
+        <StatRow label="Discord reports" value={deliverySummary.discordLabel} />
       </div>
       <div className="replay-delivery-stages" aria-label="Replay delivery progress">
         {deliveryStages.map((stage) => (
@@ -20781,6 +21797,8 @@ function SettingsView({
   deletedReplays,
   importSummary,
   onSave,
+  onStartGuidedTour,
+  onResetGuidedTour,
   onImportLegacy,
   onTakeScreenshot,
   onChooseScreenshotDirectory,
@@ -20808,6 +21826,8 @@ function SettingsView({
   deletedReplays: ReplayRecord[];
   importSummary: ImportSummary | null;
   onSave: (patch: Partial<UserSettings>) => Promise<void>;
+  onStartGuidedTour: () => void;
+  onResetGuidedTour: () => void;
   onImportLegacy: () => Promise<void>;
   onTakeScreenshot: () => Promise<void>;
   onChooseScreenshotDirectory: () => Promise<void>;
@@ -20815,7 +21835,7 @@ function SettingsView({
   onChooseReplayDirectory: () => Promise<void>;
   onOpenReplayDirectory: () => Promise<void>;
   onRefreshDiagnostics: () => Promise<void>;
-  onCreateDiagnosticsBundle: () => Promise<void>;
+  onCreateDiagnosticsBundle: (includeSensitiveData?: boolean) => Promise<void>;
   onCheckUpdates: () => Promise<void>;
   onDownloadUpdate: () => Promise<void>;
   onInstallUpdate: () => Promise<void>;
@@ -20930,7 +21950,27 @@ function SettingsView({
 
   return (
     <section className="dashboard-page settings-page">
-      <div className="settings-grid">
+      <div className="settings-accordion-list">
+        <SettingsAccordionSection
+          id="settings-getting-started"
+          title="Getting started"
+          description="Guided help, profile, and default sync behaviour"
+          icon={<Compass size={18} />}
+          contentClassName="settings-grid"
+          defaultOpen
+        >
+        <div className="rail-card onboarding-settings-card">
+          <div className="onboarding-settings-icon"><Compass size={22} /></div>
+          <div>
+            <span className="modern-kicker">Help &amp; onboarding</span>
+            <h2>Guided tour</h2>
+            <p className="muted">Walk through Home, Play, Review, Prepare, Community, and the utility tools in the new interface.</p>
+          </div>
+          <div className="row-actions">
+            <button className="primary" type="button" onClick={onStartGuidedTour}><Sparkles size={16} /> Replay tour</button>
+            <button className="secondary" type="button" onClick={onResetGuidedTour}>Show next launch</button>
+          </div>
+        </div>
         <div className="rail-card">
           <h2>Profile</h2>
           <label>Username<input value={settings.username} onChange={(event) => void onSave({ username: event.target.value })} /></label>
@@ -20953,6 +21993,14 @@ function SettingsView({
           </label>
           <p className="muted">Helps measure daily active users, versions, platform, and replay settings. No usernames, emails, match notes, deck lists, or replay files are sent.</p>
         </div>
+        </SettingsAccordionSection>
+        <SettingsAccordionSection
+          id="settings-capture-replays"
+          title="Capture & replays"
+          description="Replay recording, Web Replay, deck tracking, and voice notes"
+          icon={<Film size={18} />}
+          contentClassName="settings-grid"
+        >
         <div className="rail-card">
           <h2>Replays</h2>
           <p className="muted">Visual frames stay lightweight. Video replay is optional and attaches shareable video to the .riftreplay teaching bundle.</p>
@@ -21228,6 +22276,14 @@ function SettingsView({
           </div>
           {audioStatus ? <p className="muted">{audioStatus}</p> : null}
         </div>
+        </SettingsAccordionSection>
+        <SettingsAccordionSection
+          id="settings-app-data"
+          title="App & data"
+          description="Browser support, imports, backups, toolkit, and recycle bin"
+          icon={<FolderOpen size={18} />}
+          contentClassName="settings-grid"
+        >
         <div className="rail-card">
           <h2>Browser support</h2>
           {browsers.map((browser) => (
@@ -21280,6 +22336,14 @@ function SettingsView({
           onRestoreReplay={onRestoreDeletedReplay}
           onPurgeReplay={onPurgeDeletedReplay}
         />
+        </SettingsAccordionSection>
+        <SettingsAccordionSection
+          id="settings-privacy-support"
+          title="Privacy, support & updates"
+          description="Data controls, diagnostics, repair tools, and app updates"
+          icon={<Shield size={18} />}
+          contentClassName="settings-grid"
+        >
         <LegalNoticePanel />
         <div className="rail-card">
           <h2>Diagnostics</h2>
@@ -21335,19 +22399,20 @@ function SettingsView({
             </button>
           </div>
         </div>
+        {showAdvancedDiagnostics ? (
+          <CaptureLabView
+            embedded
+            summary={diagnosticsSummary}
+            bundlePath={diagnosticsBundlePath}
+            settings={settings}
+            onSave={onSave}
+            onRefresh={onRefreshDiagnostics}
+            onBundle={onCreateDiagnosticsBundle}
+            onOpenFolder={() => window.riftlite.openDiagnosticsFolder()}
+          />
+        ) : null}
+        </SettingsAccordionSection>
       </div>
-      {showAdvancedDiagnostics ? (
-        <CaptureLabView
-          embedded
-          summary={diagnosticsSummary}
-          bundlePath={diagnosticsBundlePath}
-          settings={settings}
-          onSave={onSave}
-          onRefresh={onRefreshDiagnostics}
-          onBundle={onCreateDiagnosticsBundle}
-          onOpenFolder={() => window.riftlite.openDiagnosticsFolder()}
-        />
-      ) : null}
     </section>
   );
 }
@@ -21544,9 +22609,10 @@ function resizeHubImage(file: File): Promise<string> {
   });
 }
 
-function HubsView({ settings, matches, hubMatches, onSave, onHubResult, onSyncPrivateHubs, onSyncMatchesToHubs, onDeleteHubMatch, onRefresh }: {
+function HubsView({ settings, matches, replays, hubMatches, onSave, onHubResult, onSyncPrivateHubs, onSyncMatchesToHubs, onDeleteHubMatch, onRefresh }: {
   settings: UserSettings;
   matches: MatchDraft[];
+  replays: ReplayRecord[];
   hubMatches: Record<string, CommunityMatch[]>;
   onSave: (patch: Partial<UserSettings>) => Promise<void>;
   onHubResult: (result: HubActionResult) => Promise<void>;
@@ -21575,13 +22641,23 @@ function HubsView({ settings, matches, hubMatches, onSave, onHubResult, onSyncPr
   const [hubHealthStatus, setHubHealthStatus] = useState("");
   const [inboxStatus, setInboxStatus] = useState("");
   const [copiedHubId, setCopiedHubId] = useState("");
+  const [hubLifecycleIntent, setHubLifecycleIntent] = useState<PrivateHubLifecycleIntent | null>(null);
+  const [hubLifecycleCountdown, setHubLifecycleCountdown] = useState(0);
+  const [hubLifecycleBusy, setHubLifecycleBusy] = useState(false);
+  const [hubLifecycleError, setHubLifecycleError] = useState("");
+  const [currentHubReplays, setCurrentHubReplays] = useState(replays);
+  const activeHubsRef = useRef(settings.activeHubs);
+  const localWebReplayIds = useMemo(() => webReplayIdsByLocalMatch(currentHubReplays), [currentHubReplays]);
   const filteredHubs = useMemo(
     () => selectedHubId ? settings.activeHubs.filter((hub) => hub.id === selectedHubId) : settings.activeHubs,
     [selectedHubId, settings.activeHubs]
   );
   const hubAnalytics = useMemo(
-    () => validAnalytics(filteredHubs.flatMap((hub) => (hubMatches[hub.id] ?? []).map((match) => communityToAnalytics(match)))),
-    [filteredHubs, hubMatches]
+    () => validAnalytics(filteredHubs.flatMap((hub) => (hubMatches[hub.id] ?? []).map((match) => communityToAnalytics({
+      ...match,
+      webReplayId: match.webReplayId || localWebReplayIds.get(match.id)
+    })))),
+    [filteredHubs, hubMatches, localWebReplayIds]
   );
   const hubFeedRows = useMemo(
     () => filteredHubs.flatMap((hub) => (hubMatches[hub.id] ?? []).slice(0, 12).map((match) => ({ hub, match }))),
@@ -21590,6 +22666,10 @@ function HubsView({ settings, matches, hubMatches, onSave, onHubResult, onSyncPr
   const savedMatchCount = useMemo(() => matches.filter((match) => match.status === "saved" && match.result !== "Incomplete").length, [matches]);
   const enabledHubCount = useMemo(() => settings.activeHubs.filter((hub) => hub.sync).length, [settings.activeHubs]);
   const syncableMatches = useMemo(() => matches.filter((match) => match.status === "saved" && match.result !== "Incomplete").slice(0, 80), [matches]);
+
+  useEffect(() => {
+    activeHubsRef.current = settings.activeHubs;
+  }, [settings.activeHubs]);
 
   useEffect(() => {
     const firstEnabled = settings.activeHubs.find((hub) => hub.sync)?.id || settings.activeHubs[0]?.id || "";
@@ -21620,9 +22700,33 @@ function HubsView({ settings, matches, hubMatches, onSave, onHubResult, onSyncPr
   }, [settings.accountUid]);
 
   useEffect(() => {
+    let current = true;
+    setCurrentHubReplays(replays);
+    void window.riftlite.getReplays()
+      .then((latest) => {
+        if (current) setCurrentHubReplays(latest);
+      })
+      .catch(() => undefined);
+    return () => {
+      current = false;
+    };
+  }, [replays]);
+
+  useEffect(() => {
+    if (hubLifecycleIntent?.action !== "delete" || hubLifecycleCountdown <= 0) return;
+    const timer = window.setTimeout(() => {
+      setHubLifecycleCountdown((current) => Math.max(0, current - 1));
+    }, 1_000);
+    return () => window.clearTimeout(timer);
+  }, [hubLifecycleIntent, hubLifecycleCountdown]);
+
+  useEffect(() => {
     if (!settings.accountUid) return;
     void window.riftlite.refreshAccountHubs()
-      .then((nextSettings) => onSave({ activeHubs: nextSettings.activeHubs }))
+      .then((nextSettings) => {
+        if (privateHubMembershipsEqual(activeHubsRef.current, nextSettings.activeHubs)) return;
+        return onSave({ activeHubs: nextSettings.activeHubs });
+      })
       .catch(() => undefined);
   }, [settings.accountUid]);
 
@@ -21704,6 +22808,53 @@ function HubsView({ settings, matches, hubMatches, onSave, onHubResult, onSyncPr
     }
   }
 
+  async function refreshPrivateHubData() {
+    const [, latestReplays] = await Promise.all([
+      onRefresh(),
+      window.riftlite.getReplays().catch(() => currentHubReplays)
+    ]);
+    setCurrentHubReplays(latestReplays);
+  }
+
+  function requestHubLifecycle(action: PrivateHubLifecycleIntent["action"], hub: PrivateHub) {
+    if (action === "leave" && !canLeavePrivateHub(hub)) return;
+    if (action === "delete" && !canDeletePrivateHub(hub)) return;
+    setHubLifecycleError("");
+    setHubLifecycleCountdown(action === "delete" ? PRIVATE_HUB_DELETE_COUNTDOWN_SECONDS : 0);
+    setHubLifecycleIntent({ action, hub: { id: hub.id, name: hub.name } });
+  }
+
+  function cancelHubLifecycle() {
+    if (hubLifecycleBusy) return;
+    setHubLifecycleIntent(null);
+    setHubLifecycleCountdown(0);
+    setHubLifecycleError("");
+  }
+
+  async function confirmHubLifecycle() {
+    const intent = hubLifecycleIntent;
+    if (!intent || hubLifecycleBusy || (intent.action === "delete" && hubLifecycleCountdown > 0)) return;
+    setHubLifecycleBusy(true);
+    setHubLifecycleError("");
+    try {
+      const nextSettings = intent.action === "delete"
+        ? await window.riftlite.deleteHub(intent.hub.id, intent.hub.id)
+        : await window.riftlite.leaveHub(intent.hub.id);
+      await onSave({ activeHubs: nextSettings.activeHubs, rawCapture: nextSettings.rawCapture });
+      setSelectedHubId("");
+      setTargetHubId("");
+      setHubLifecycleIntent(null);
+      setHubLifecycleCountdown(0);
+      setSyncStatus(intent.action === "delete"
+        ? `${intent.hub.name} was permanently deleted.`
+        : `You left ${intent.hub.name}.`);
+    } catch (error) {
+      setHubLifecycleError(error instanceof Error ? error.message : `Could not ${intent.action} this private hub.`);
+    } finally {
+      setHubLifecycleBusy(false);
+    }
+  }
+
   async function claimSelectedHub() {
     const hubId = selectedHubId || targetHubId || settings.activeHubs[0]?.id || "";
     if (!hubId) {
@@ -21718,8 +22869,13 @@ function HubsView({ settings, matches, hubMatches, onSave, onHubResult, onSyncPr
     setSyncStatus("Claiming hub for your RiftLite account...");
     try {
       await window.riftlite.claimHub(hubId, claimPassword);
+      await onSave({
+        activeHubs: settings.activeHubs.map((hub) => hub.id === hubId
+          ? { ...hub, role: "owner", claimed: true }
+          : hub)
+      });
       setSyncStatus("Hub claimed. Account roles are now available.");
-      await onRefresh();
+      await refreshPrivateHubData();
       await refreshHubSocial(hubId);
       await refreshHubHealth(hubId);
     } catch (error) {
@@ -21870,8 +23026,11 @@ function HubsView({ settings, matches, hubMatches, onSave, onHubResult, onSyncPr
   const visibleHubInvites = pendingHubInvites.length ? pendingHubInvites : hubInbox.slice(0, 5);
   const selectedHubRows = useMemo(() => selectedHub ? hubMatches[selectedHub.id] ?? [] : [], [hubMatches, selectedHub]);
   const selectedHubAnalytics = useMemo(
-    () => selectedHub ? validAnalytics(selectedHubRows.map((match) => communityToAnalytics(match))) : [],
-    [selectedHub, selectedHubRows]
+    () => selectedHub ? validAnalytics(selectedHubRows.map((match) => communityToAnalytics({
+      ...match,
+      webReplayId: match.webReplayId || localWebReplayIds.get(match.id)
+    }))) : [],
+    [selectedHub, selectedHubRows, localWebReplayIds]
   );
   const selectedHubCompleted = selectedHubAnalytics.filter((match) => match.result !== "Incomplete");
   const selectedHubWins = selectedHubCompleted.filter((match) => match.result === "Win").length;
@@ -22000,7 +23159,7 @@ function HubsView({ settings, matches, hubMatches, onSave, onHubResult, onSyncPr
             <p>Your private testing groups, team rooms, and event circles. Open a hub to view its stats, matches, members, and sync tools.</p>
           </div>
           <div className="hubs-hero-actions">
-            <button className="secondary" onClick={() => void onRefresh()}><RefreshCw size={16} /> Refresh hubs</button>
+            <button className="secondary" onClick={() => void refreshPrivateHubData()}><RefreshCw size={16} /> Refresh hubs</button>
             <button className="primary" disabled={!savedMatchCount || !enabledHubCount} onClick={() => void manualPrivateSync()}>
               Sync enabled hubs
             </button>
@@ -22102,8 +23261,16 @@ function HubsView({ settings, matches, hubMatches, onSave, onHubResult, onSyncPr
     <section className="dashboard-page two-column">
       <div className="wide-panel hub-detail-banner" style={{ backgroundImage: selectedHub.imageDataUrl ? `linear-gradient(90deg, rgba(4,8,18,0.12), rgba(4,8,18,0.9)), url(${selectedHub.imageDataUrl})` : hubGradient(selectedHub.id) }}>
         <div>
-          <button className="secondary" onClick={() => setSelectedHubId("")}><ChevronLeft size={16} /> Hub home</button>
-          <button className="secondary" disabled={!selectedHubRows.length} onClick={() => void exportSelectedHubCsv()}><FileText size={16} /> Export CSV</button>
+          <div className="row-actions hub-detail-actions">
+            <button className="secondary" onClick={() => setSelectedHubId("")}><ChevronLeft size={16} /> Hub home</button>
+            <button className="secondary" disabled={!selectedHubRows.length} onClick={() => void exportSelectedHubCsv()}><FileText size={16} /> Export CSV</button>
+            {canLeavePrivateHub(selectedHub) ? (
+              <button className="secondary danger" onClick={() => requestHubLifecycle("leave", selectedHub)}>Leave hub</button>
+            ) : null}
+            {canDeletePrivateHub(selectedHub) ? (
+              <button className="secondary danger" onClick={() => requestHubLifecycle("delete", selectedHub)}><Trash2 size={16} /> Delete hub</button>
+            ) : null}
+          </div>
           <h2>{selectedHub.name}</h2>
           <div className="hub-id-display">
             <span>Hub ID</span>
@@ -22174,13 +23341,20 @@ function HubsView({ settings, matches, hubMatches, onSave, onHubResult, onSyncPr
       </div>
       <div className="rail-card hub-social-card">
         <h2>Hub tools</h2>
-        <p className="muted">Claim this hub, invite linked profiles, and leave low-read message-board notes for members.</p>
-        {!hubAccountReady ? (
-          <p className="muted">Finish your RiftLite account on the Account page to unlock roles, invites, and hub messages.</p>
+        <p className="muted">{selectedHub.claimed
+          ? "Invite linked profiles and leave low-read message-board notes for members."
+          : "This hub uses the older password-only system. Claim it once to move ownership and member tools to your RiftLite account."}</p>
+        {!settings.accountUid ? (
+          <p className="muted">Create or sign in to a recoverable RiftLite account before claiming this hub.</p>
+        ) : !selectedHub.claimed ? (
+          <div className="row-actions">
+            <button className="primary" onClick={() => void claimSelectedHub()}><Shield size={16} /> Claim with hub password</button>
+          </div>
+        ) : !hubAccountReady ? (
+          <p className="muted">Finish your RiftLite profile on the Account page to unlock invites and hub messages.</p>
         ) : (
           <>
             <div className="row-actions">
-              <button className="secondary" onClick={() => void claimSelectedHub()}><Shield size={16} /> Claim hub</button>
               <button className="secondary" onClick={() => void refreshHubSocial(selectedHub.id)}>
                 <RefreshCw size={16} /> Refresh social
               </button>
@@ -22306,6 +23480,16 @@ function HubsView({ settings, matches, hubMatches, onSave, onHubResult, onSyncPr
           Sync {selectedMatchIds.length || "selected"} to hub
         </button>
       </div>
+      {hubLifecycleIntent ? (
+        <PrivateHubLifecycleDialog
+          intent={hubLifecycleIntent}
+          countdown={hubLifecycleCountdown}
+          busy={hubLifecycleBusy}
+          error={hubLifecycleError}
+          onCancel={cancelHubLifecycle}
+          onConfirm={() => void confirmHubLifecycle()}
+        />
+      ) : null}
     </section>
   );
 }
@@ -22382,7 +23566,7 @@ function CommunityView({ matches, communityMatches, hubMatches, settings, status
           <button className="secondary" onClick={() => void onRefresh()}>Refresh</button>
         </div>
       </div>
-      <nav className="community-tabs" aria-label="Community sections">
+      <nav className="community-tabs" aria-label="Community sections" data-tour-target="community">
         {tabs.map((tab) => (
           <button className="community-tab" data-active={activeTab === tab.id} key={tab.id} onClick={() => chooseTab(tab.id)}>
             {tab.label}
@@ -23613,6 +24797,7 @@ function MatchDetailPopup({ match, showFlags = true, onClose }: { match: Analyti
 }
 
 function MatchDetailPanel({ match, showFlags = true, matchTimerLabel = "" }: { match: AnalyticsMatch; showFlags?: boolean; matchTimerLabel?: string }) {
+  const webReplayUrl = privateHubWebReplayUrl(match.source, match.webReplayId);
   return (
     <section className="match-detail-panel">
       <header>
@@ -23633,6 +24818,13 @@ function MatchDetailPanel({ match, showFlags = true, matchTimerLabel = "" }: { m
         {matchTimerLabel ? <Metric label="Match timer" value={matchTimerLabel} /> : null}
         {showFlags ? <Metric label="Flags" value={match.flags || "None"} /> : null}
       </div>
+      {webReplayUrl ? (
+        <div className="match-detail-actions">
+          <button className="secondary" type="button" onClick={() => void window.riftlite.openExternalResource(webReplayUrl)}>
+            <ExternalLink size={15} /> Open Web Replay
+          </button>
+        </div>
+      ) : null}
       {match.notes ? (
         <section className="match-notes-panel">
           <h5>Notes</h5>
@@ -23949,7 +25141,8 @@ function localToAnalytics(match: MatchDraft): AnalyticsMatch {
     wentFirst: primaryGame?.wentFirst ?? "",
     myBattlefield: match.myBattlefield || primaryGame?.myBattlefield || "",
     opponentBattlefield: match.opponentBattlefield || primaryGame?.oppBattlefield || "",
-    games
+    games,
+    webReplayId: ""
   };
 }
 
@@ -23977,7 +25170,10 @@ function communityToAnalytics(match: CommunityMatch): AnalyticsMatch {
     wentFirst: match.wentFirst || primaryGame?.wentFirst || "",
     myBattlefield: match.myBattlefield || primaryGame?.myBattlefield || "",
     opponentBattlefield: match.opponentBattlefield || primaryGame?.oppBattlefield || "",
-    games
+    games,
+    webReplayId: match.scope === "hub"
+      ? normalizePrivateHubWebReplayId(match.webReplayId)
+      : ""
   };
 }
 

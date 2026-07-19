@@ -8,14 +8,32 @@ const WINDOWS_RELEASES_URL = "https://github.com/cdfpartridge-web/RiftLite-Deskt
 const WINDOWS_LATEST_YML_URL = "https://github.com/cdfpartridge-web/RiftLite-Desktop/releases/latest/download/latest.yml";
 const isMac = process.platform === "darwin";
 
+interface UpdaterServiceOptions {
+  enabled?: boolean;
+  disabledMessage?: string;
+}
+
 export class UpdaterService {
+  private readonly enabled: boolean;
   private status: UpdateStatus = {
     state: "idle",
     currentVersion: app.getVersion(),
     message: "Updater ready"
   };
 
-  constructor(private readonly getWindow: () => BrowserWindow | null) {
+  constructor(
+    private readonly getWindow: () => BrowserWindow | null,
+    options: UpdaterServiceOptions = {}
+  ) {
+    this.enabled = options.enabled ?? true;
+    if (!this.enabled) {
+      this.status = {
+        state: "not-available",
+        currentVersion: app.getVersion(),
+        message: options.disabledMessage ?? "Updates are disabled in this build."
+      };
+      return;
+    }
     if (isMac) {
       autoUpdater.setFeedURL({
         provider: "github",
@@ -73,6 +91,9 @@ export class UpdaterService {
   }
 
   async check(): Promise<UpdateStatus> {
+    if (!this.enabled) {
+      return this.getStatus();
+    }
     if (!app.isPackaged) {
       this.setStatus({ state: "not-available", message: "Updater is active in packaged builds" });
       return this.getStatus();
@@ -108,6 +129,9 @@ export class UpdaterService {
   }
 
   async download(): Promise<UpdateStatus> {
+    if (!this.enabled) {
+      return this.getStatus();
+    }
     if (!app.isPackaged) {
       this.setStatus({ state: "not-available", message: "Updater downloads are active in packaged builds" });
       return this.getStatus();
@@ -132,6 +156,9 @@ export class UpdaterService {
   }
 
   async install(): Promise<void> {
+    if (!this.enabled) {
+      return;
+    }
     if (isMac) {
       await shell.openExternal(MAC_RELEASES_URL);
       this.setStatus({

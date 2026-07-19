@@ -1,4 +1,5 @@
 import type { CaptureEvent, GamePlatform, MatchDraft, MatchGame, ReplayStructuredEvent, RiftboundSimEvent, UserSettings } from "../../shared/types.js";
+import { riftboundCardCodeFromValue } from "../../shared/cardIdentity.js";
 import { legendFromImageUrl } from "../../shared/legendImages.js";
 import { isCanonicalLegendName, normalizeLegendName } from "../../shared/legendNames.js";
 import { privateHubSyncEnabled, publicCommunitySyncEnabled, teamSyncEnabled } from "../../shared/syncPolicy.js";
@@ -18,6 +19,8 @@ interface GameDraftState {
   result?: MatchGame["result"];
   myBattlefield: string;
   opponentBattlefield: string;
+  myBattlefieldCode: string;
+  opponentBattlefieldCode: string;
   myBattlefieldImage: string;
   opponentBattlefieldImage: string;
   wentFirst: "1st" | "2nd" | "undecided" | "";
@@ -525,10 +528,14 @@ function mergeSticky(target: Record<string, unknown>, source: Record<string, unk
     "opponentName",
     "myChampion",
     "opponentChampion",
+    "myChampionCode",
+    "opponentChampionCode",
     "myChampionImage",
     "opponentChampionImage",
     "myBattlefield",
     "opponentBattlefield",
+    "myBattlefieldCode",
+    "opponentBattlefieldCode",
     "myBattlefieldImage",
     "opponentBattlefieldImage",
     "battlefieldCandidates",
@@ -571,6 +578,9 @@ function mergeSticky(target: Record<string, unknown>, source: Record<string, unk
       continue;
     }
     if ((key === "myBattlefield" || key === "opponentBattlefield") && isGeneratedBattlefieldName(readString(value))) {
+      continue;
+    }
+    if ((key === "myBattlefieldCode" || key === "opponentBattlefieldCode") && isGeneratedBattlefieldCode(readString(value))) {
       continue;
     }
     if ((key === "myBattlefieldImage" || key === "opponentBattlefieldImage") && isGeneratedBattlefieldImage(readString(value))) {
@@ -624,6 +634,8 @@ function updateCurrentGame(session: SessionState, event: CaptureEvent): void {
   }
   const myBattlefield = readString(payload.myBattlefield);
   const opponentBattlefield = readString(payload.opponentBattlefield);
+  const myBattlefieldCode = readBattlefieldCode(payload, "me");
+  const opponentBattlefieldCode = readBattlefieldCode(payload, "opponent");
   const myBattlefieldImage = readBattlefieldImage(payload, "me");
   const opponentBattlefieldImage = readBattlefieldImage(payload, "opponent");
   if (myBattlefield && !isGeneratedBattlefieldName(myBattlefield)) {
@@ -631,6 +643,12 @@ function updateCurrentGame(session: SessionState, event: CaptureEvent): void {
   }
   if (opponentBattlefield && !isGeneratedBattlefieldName(opponentBattlefield)) {
     session.currentGame.opponentBattlefield = opponentBattlefield;
+  }
+  if (myBattlefieldCode) {
+    session.currentGame.myBattlefieldCode = myBattlefieldCode;
+  }
+  if (opponentBattlefieldCode) {
+    session.currentGame.opponentBattlefieldCode = opponentBattlefieldCode;
   }
   if (myBattlefieldImage && !isGeneratedBattlefieldImage(myBattlefieldImage)) {
     session.currentGame.myBattlefieldImage = myBattlefieldImage;
@@ -1089,8 +1107,7 @@ function isTcgaInteractionLabel(value: string): boolean {
 }
 
 function cardCodeFromValue(value: string): string {
-  const match = value.match(/\b([A-Z]{2,5}-\d{1,4})\b/i);
-  return match?.[1]?.toUpperCase() ?? "";
+  return riftboundCardCodeFromValue(value);
 }
 
 function replayBattlefieldCandidates(payload: Record<string, unknown>): NonNullable<ReplayStructuredEvent["battlefields"]> {
@@ -1115,6 +1132,8 @@ function hasBattlefieldEvidence(payload: Record<string, unknown>): boolean {
   return Boolean(
     readString(payload.myBattlefield) ||
       readString(payload.opponentBattlefield) ||
+      riftboundCardCodeFromValue(readString(payload.myBattlefieldCode)) ||
+      riftboundCardCodeFromValue(readString(payload.opponentBattlefieldCode)) ||
       readBattlefieldImage(payload, "me") ||
       readBattlefieldImage(payload, "opponent") ||
       replayBattlefieldCandidates(payload).length
@@ -1508,6 +1527,8 @@ function createGameState(gameNumber: number): GameDraftState {
     gameNumber,
     myBattlefield: "",
     opponentBattlefield: "",
+    myBattlefieldCode: "",
+    opponentBattlefieldCode: "",
     myBattlefieldImage: "",
     opponentBattlefieldImage: "",
     wentFirst: ""
@@ -1530,6 +1551,8 @@ function shouldStartNextGame(session: SessionState, score: { me?: number; opp?: 
     return currentHasNonZeroScore && looksMultiGame && (
       battlefieldChanged(current.myBattlefield, payload.myBattlefield) ||
       battlefieldChanged(current.opponentBattlefield, payload.opponentBattlefield) ||
+      battlefieldCodeChanged(current.myBattlefieldCode, readBattlefieldCode(payload, "me")) ||
+      battlefieldCodeChanged(current.opponentBattlefieldCode, readBattlefieldCode(payload, "opponent")) ||
       battlefieldImageChanged(current.myBattlefieldImage, readBattlefieldImage(payload, "me")) ||
       battlefieldImageChanged(current.opponentBattlefieldImage, readBattlefieldImage(payload, "opponent"))
     ) && isWorthKeeping(finishCurrentGame(current));
@@ -1559,6 +1582,8 @@ function shouldStartNextGame(session: SessionState, score: { me?: number; opp?: 
   return currentHasNonZeroScore && (nextHasNonZeroScore || looksMultiGame) && (
     battlefieldChanged(current.myBattlefield, payload.myBattlefield) ||
     battlefieldChanged(current.opponentBattlefield, payload.opponentBattlefield) ||
+    battlefieldCodeChanged(current.myBattlefieldCode, readBattlefieldCode(payload, "me")) ||
+    battlefieldCodeChanged(current.opponentBattlefieldCode, readBattlefieldCode(payload, "opponent")) ||
     battlefieldImageChanged(current.myBattlefieldImage, readBattlefieldImage(payload, "me")) ||
     battlefieldImageChanged(current.opponentBattlefieldImage, readBattlefieldImage(payload, "opponent"))
   ) && isWorthKeeping(finishCurrentGame(current));
@@ -1571,7 +1596,15 @@ function isWorthKeeping(game: MatchGame): boolean {
   }
   return gameHasNonZeroScore(game) ||
     game.result !== "Incomplete" ||
-    Boolean(game.myBattlefield || game.oppBattlefield || game.myBattlefieldImage || game.oppBattlefieldImage || game.wentFirst);
+    Boolean(
+      game.myBattlefield ||
+      game.oppBattlefield ||
+      game.myBattlefieldCode ||
+      game.oppBattlefieldCode ||
+      game.myBattlefieldImage ||
+      game.oppBattlefieldImage ||
+      game.wentFirst
+    );
 }
 
 function gameHasNonZeroScore(game: MatchGame): boolean {
@@ -1638,6 +1671,8 @@ function finishCurrentGame(game: GameDraftState): MatchGame {
     oppPoints: game.oppPoints,
     myBattlefield: game.myBattlefield,
     oppBattlefield: game.opponentBattlefield,
+    myBattlefieldCode: game.myBattlefieldCode,
+    oppBattlefieldCode: game.opponentBattlefieldCode,
     myBattlefieldImage: game.myBattlefieldImage,
     oppBattlefieldImage: game.opponentBattlefieldImage,
     wentFirst: game.wentFirst
@@ -1676,6 +1711,8 @@ function applyBo3BattlefieldConfidenceGuard(games: MatchGame[]): MatchGame[] {
       ...game,
       myBattlefield: "",
       oppBattlefield: "",
+      myBattlefieldCode: "",
+      oppBattlefieldCode: "",
       myBattlefieldImage: "",
       oppBattlefieldImage: ""
     };
@@ -1741,6 +1778,8 @@ function atlasConfirmedPayloadToGame(payload: Record<string, unknown>, gameNumbe
     oppPoints: score.opp,
     myBattlefield: readString(payload.myBattlefield),
     oppBattlefield: readString(payload.opponentBattlefield),
+    myBattlefieldCode: readBattlefieldCode(payload, "me"),
+    oppBattlefieldCode: readBattlefieldCode(payload, "opponent"),
     myBattlefieldImage: readBattlefieldImage(payload, "me"),
     oppBattlefieldImage: readBattlefieldImage(payload, "opponent"),
     wentFirst: readWentFirst(payload.wentFirst)
@@ -1759,6 +1798,8 @@ function mergeAtlasGameDetails(primary: MatchGame, fallback?: MatchGame): MatchG
     oppPoints: typeof primary.oppPoints === "number" ? primary.oppPoints : fallback.oppPoints,
     myBattlefield: primary.myBattlefield || fallback.myBattlefield,
     oppBattlefield: primary.oppBattlefield || fallback.oppBattlefield,
+    myBattlefieldCode: primary.myBattlefieldCode || fallback.myBattlefieldCode,
+    oppBattlefieldCode: primary.oppBattlefieldCode || fallback.oppBattlefieldCode,
     myBattlefieldImage: primary.myBattlefieldImage || fallback.myBattlefieldImage,
     oppBattlefieldImage: primary.oppBattlefieldImage || fallback.oppBattlefieldImage,
     wentFirst: primary.wentFirst || fallback.wentFirst
@@ -1835,9 +1876,10 @@ function compatibleBattlefieldIdentity(a: MatchGame, b: MatchGame, side: "me" | 
 }
 
 function battlefieldIdentity(game: MatchGame, side: "me" | "opponent"): string {
+  const code = side === "me" ? game.myBattlefieldCode : game.oppBattlefieldCode;
   const name = side === "me" ? game.myBattlefield : game.oppBattlefield;
   const image = side === "me" ? game.myBattlefieldImage : game.oppBattlefieldImage;
-  return normalizeNameKey(readString(name)) || normalizeAssetKey(readString(image));
+  return riftboundCardCodeFromValue(readString(code)) || normalizeNameKey(readString(name)) || normalizeAssetKey(readString(image));
 }
 
 function differentGameOutcome(a: MatchGame, b: MatchGame): boolean {
@@ -2370,6 +2412,8 @@ function shouldClearAtlasHeldResultSignature(payload: Record<string, unknown>): 
     Boolean(
       readString(payload.myBattlefield) ||
       readString(payload.opponentBattlefield) ||
+      readBattlefieldCode(payload, "me") ||
+      readBattlefieldCode(payload, "opponent") ||
       readBattlefieldImage(payload, "me") ||
       readBattlefieldImage(payload, "opponent") ||
       readString(payload.myChampion) ||
@@ -2443,6 +2487,8 @@ function shouldCommitAtlasResultBeforeEvent(session: SessionState, event: Captur
     Boolean(
       readString(event.payload.myBattlefield) ||
       readString(event.payload.opponentBattlefield) ||
+      readBattlefieldCode(event.payload, "me") ||
+      readBattlefieldCode(event.payload, "opponent") ||
       readBattlefieldImage(event.payload, "me") ||
       readBattlefieldImage(event.payload, "opponent")
     );
@@ -2512,6 +2558,8 @@ function atlasPayloadMatchesCompletedGameEcho(payload: Record<string, unknown>, 
     oppPoints: score.opp,
     myBattlefield: readString(payload.myBattlefield),
     oppBattlefield: readString(payload.opponentBattlefield),
+    myBattlefieldCode: readBattlefieldCode(payload, "me"),
+    oppBattlefieldCode: readBattlefieldCode(payload, "opponent"),
     myBattlefieldImage: readBattlefieldImage(payload, "me"),
     oppBattlefieldImage: readBattlefieldImage(payload, "opponent")
   };
@@ -2533,6 +2581,8 @@ function atlasPayloadResultSignature(payload: Record<string, unknown>): string {
     normalizeNameKey(readString(payload.endText)),
     score.me ?? "",
     score.opp ?? "",
+    readBattlefieldCode(payload, "me"),
+    readBattlefieldCode(payload, "opponent"),
     normalizeNameKey(readString(payload.myBattlefield)),
     normalizeNameKey(readString(payload.opponentBattlefield)),
     normalizeAssetKey(readBattlefieldImage(payload, "me")),
@@ -2546,6 +2596,8 @@ function atlasGameResultSignature(game: MatchGame): string {
     "",
     game.myPoints ?? "",
     game.oppPoints ?? "",
+    riftboundCardCodeFromValue(game.myBattlefieldCode ?? ""),
+    riftboundCardCodeFromValue(game.oppBattlefieldCode ?? ""),
     normalizeNameKey(game.myBattlefield ?? ""),
     normalizeNameKey(game.oppBattlefield ?? ""),
     normalizeAssetKey(game.myBattlefieldImage ?? ""),
@@ -2600,12 +2652,48 @@ function battlefieldChanged(current: string, nextValue: unknown): boolean {
   return Boolean(current && next && normalizeNameKey(current) !== normalizeNameKey(next));
 }
 
+function battlefieldCodeChanged(current: string, nextValue: unknown): boolean {
+  const currentCode = riftboundCardCodeFromValue(current);
+  const nextCode = riftboundCardCodeFromValue(readString(nextValue));
+  if (isGeneratedBattlefieldCode(currentCode) || isGeneratedBattlefieldCode(nextCode)) {
+    return false;
+  }
+  return Boolean(currentCode && nextCode && currentCode !== nextCode);
+}
+
 function battlefieldImageChanged(current: string, nextValue: unknown): boolean {
   const next = normalizeAssetKey(readString(nextValue));
   if (isGeneratedBattlefieldImage(current) || isGeneratedBattlefieldImage(next)) {
     return false;
   }
   return Boolean(current && next && normalizeAssetKey(current) !== next);
+}
+
+function readBattlefieldCode(payload: Record<string, unknown>, side: "me" | "opponent"): string {
+  const direct = riftboundCardCodeFromValue(readString(side === "me" ? payload.myBattlefieldCode : payload.opponentBattlefieldCode));
+  if (direct && !isGeneratedBattlefieldCode(direct)) {
+    return direct;
+  }
+  const candidates = Array.isArray(payload.battlefieldCandidates) ? payload.battlefieldCandidates : [];
+  const usable: string[] = [];
+  for (const candidate of candidates) {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+      continue;
+    }
+    const record = candidate as Record<string, unknown>;
+    const code = riftboundCardCodeFromValue(readString(record.code) || readString(record.image));
+    if (
+      readString(record.side) === side &&
+      record.hidden !== true &&
+      code &&
+      !isGeneratedBattlefieldCode(code) &&
+      !isGeneratedBattlefieldCandidate(record)
+    ) {
+      usable.push(code);
+    }
+  }
+  const unique = [...new Set(usable)];
+  return unique.length === 1 ? unique[0] : "";
 }
 
 function readBattlefieldImage(payload: Record<string, unknown>, side: "me" | "opponent"): string {
@@ -2647,11 +2735,16 @@ function readBattlefieldImage(payload: Record<string, unknown>, side: "me" | "op
 
 function isGeneratedBattlefieldCandidate(candidate: Record<string, unknown>): boolean {
   return isGeneratedBattlefieldName(readString(candidate.text) || readString(candidate.name) || readString(candidate.code)) ||
+    isGeneratedBattlefieldCode(readString(candidate.code)) ||
     isGeneratedBattlefieldImage(readString(candidate.image));
 }
 
 function isGeneratedBattlefieldName(value: string): boolean {
   return /\bbaron\s+pit\b/i.test(value);
+}
+
+function isGeneratedBattlefieldCode(value: string): boolean {
+  return riftboundCardCodeFromValue(value) === "UNL-T01";
 }
 
 function isGeneratedBattlefieldImage(value: string): boolean {

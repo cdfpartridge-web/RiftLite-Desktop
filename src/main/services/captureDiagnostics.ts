@@ -2,6 +2,7 @@ import { app } from "electron";
 import { appendFile, mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { CaptureDiagnosticsSummary, CaptureEvent, CapturePlatformEvidence, GamePlatform } from "../../shared/types.js";
+import { diagnosticBundleDocument } from "../../shared/diagnosticPrivacy.js";
 
 const MAX_LOG_BYTES = 5 * 1024 * 1024;
 const ROTATE_CHECK_BYTES = 512 * 1024;
@@ -70,12 +71,21 @@ export class CaptureDiagnostics {
     };
   }
 
-  async createBundle(): Promise<string> {
+  async createBundle(options: {
+    includeSensitiveData?: boolean;
+    confirmSensitiveDataExport?: boolean;
+  } = {}): Promise<string> {
+    const includeSensitiveData = options.includeSensitiveData === true;
+    if (includeSensitiveData && options.confirmSensitiveDataExport !== true) {
+      throw new Error("Sensitive diagnostics require explicit confirmation.");
+    }
     const events = await this.readEvents();
     const summary = await this.summarize();
     const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-    const bundlePath = join(dirname(this.filePath), `riftlite-capture-diagnostics-${stamp}.json`);
-    await writeFile(bundlePath, `${JSON.stringify({ summary, events }, null, 2)}\n`, "utf8");
+    const privacyLabel = includeSensitiveData ? "SENSITIVE" : "redacted";
+    const bundlePath = join(dirname(this.filePath), `riftlite-capture-diagnostics-${privacyLabel}-${stamp}.json`);
+    const document = diagnosticBundleDocument(summary, events, includeSensitiveData);
+    await writeFile(bundlePath, `${JSON.stringify(document, null, 2)}\n`, "utf8");
     return bundlePath;
   }
 
