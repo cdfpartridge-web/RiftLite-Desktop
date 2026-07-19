@@ -7,6 +7,7 @@ type PackageManifest = {
 
 describe("release safety gate", () => {
   const manifest = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as PackageManifest;
+  const macWorkflow = readFileSync(new URL("../.github/workflows/build-mac.yml", import.meta.url), "utf8");
   const scripts = manifest.scripts ?? {};
 
   it("makes account identity and two-device cloud conflict coverage mandatory", () => {
@@ -21,5 +22,17 @@ describe("release safety gate", () => {
   it("blocks both Windows and macOS packaging behind the release gate", () => {
     expect(scripts["electron:build"]).toMatch(/^npm run release:gate && /);
     expect(scripts["electron:build:mac"]).toMatch(/^npm run release:gate && /);
+  });
+
+  it("validates the committed updater identity before CI switches to the Mac feed", () => {
+    const gateIndex = macWorkflow.indexOf("run: npm run release:gate");
+    const buildIndex = macWorkflow.indexOf("run: npm run build");
+    const feedIndex = macWorkflow.indexOf("- name: Use Mac update feed");
+    const packageIndex = macWorkflow.indexOf("run: npx electron-builder --mac dmg zip --x64 --arm64 --publish never");
+
+    expect(gateIndex).toBeGreaterThan(-1);
+    expect(buildIndex).toBeGreaterThan(gateIndex);
+    expect(feedIndex).toBeGreaterThan(buildIndex);
+    expect(packageIndex).toBeGreaterThan(feedIndex);
   });
 });

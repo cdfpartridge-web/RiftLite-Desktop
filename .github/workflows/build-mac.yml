@@ -49,11 +49,11 @@ jobs:
           sips -z 1024 1024 "$source_png" --out build/icon.iconset/icon_512x512@2x.png
           iconutil -c icns build/icon.iconset -o build/icon.icns
 
-      - name: Lint
-        run: npm run lint
+      - name: Release gate
+        run: npm run release:gate
 
-      - name: Test
-        run: npm test -- --run
+      - name: Build desktop source
+        run: npm run build
 
       - name: Use Mac update feed
         run: |
@@ -64,8 +64,8 @@ jobs:
           fs.writeFileSync("package.json", `${JSON.stringify(pkg, null, 2)}\n`);
           NODE
 
-      - name: Build macOS installers
-        run: npm run electron:build:mac
+      - name: Package macOS installers
+        run: npx electron-builder --mac dmg zip --x64 --arm64 --publish never
 
       - name: Upload macOS installers
         uses: actions/upload-artifact@v4
