@@ -24,6 +24,12 @@ describe("release safety gate", () => {
     expect(scripts["electron:build:mac"]).toMatch(/^npm run release:gate && /);
   });
 
+  it("uses the Node 24 generation of the official GitHub actions", () => {
+    expect(macWorkflow).toContain("uses: actions/checkout@v7");
+    expect(macWorkflow).toContain("uses: actions/setup-node@v7");
+    expect(macWorkflow).not.toMatch(/uses: actions\/(?:checkout|setup-node)@v[1-6]\b/);
+  });
+
   it("validates the committed updater identity before CI switches to the Mac feed", () => {
     const gateIndex = macWorkflow.indexOf("run: npm run release:gate");
     const buildIndex = macWorkflow.indexOf("run: npm run build");
