@@ -94,7 +94,7 @@ describe("UpdaterService", () => {
 
   it("finishes app-owned shutdown work before handing quit to the installer", async () => {
     const beforeInstall = vi.fn(async () => undefined);
-    const service = new UpdaterService(() => null, { beforeInstall });
+    const service = new UpdaterService(() => null, { beforeInstall, platform: "win32" });
     const downloadedListener = updaterListener(
       "update-downloaded"
     ) as
@@ -113,7 +113,7 @@ describe("UpdaterService", () => {
 
   it("does not quit when an update has not finished downloading", async () => {
     const beforeInstall = vi.fn(async () => undefined);
-    const service = new UpdaterService(() => null, { beforeInstall });
+    const service = new UpdaterService(() => null, { beforeInstall, platform: "win32" });
 
     await expect(service.install()).rejects.toThrow("not finished downloading");
     expect(beforeInstall).not.toHaveBeenCalled();
@@ -123,7 +123,7 @@ describe("UpdaterService", () => {
   it("coalesces repeated Install clicks while local shutdown work is finishing", async () => {
     const preparation = deferred<void>();
     const beforeInstall = vi.fn(() => preparation.promise);
-    const service = new UpdaterService(() => null, { beforeInstall });
+    const service = new UpdaterService(() => null, { beforeInstall, platform: "win32" });
     updaterListener<(info: { version: string }) => void>("update-downloaded")?.({ version: "0.9.10" });
 
     const firstInstall = service.install();
@@ -146,7 +146,8 @@ describe("UpdaterService", () => {
       beforeInstall: vi.fn(async () => {
         throw new Error("capture finalizer unavailable");
       }),
-      onInstallHandoffFailed
+      onInstallHandoffFailed,
+      platform: "win32"
     });
     updaterListener<(info: { version: string }) => void>("update-downloaded")?.({ version: "0.9.10" });
 
@@ -163,7 +164,7 @@ describe("UpdaterService", () => {
 
   it("restores app-owned quit guards when the installer handoff fails", async () => {
     const onInstallHandoffFailed = vi.fn();
-    const service = new UpdaterService(() => null, { onInstallHandoffFailed });
+    const service = new UpdaterService(() => null, { onInstallHandoffFailed, platform: "win32" });
     updaterListener<(info: { version: string }) => void>("update-downloaded")?.({ version: "0.9.10" });
     const errorListener = updaterListener<(error: Error) => void>("error");
     mocks.quitAndInstall.mockImplementation(() => {
@@ -183,7 +184,7 @@ describe("UpdaterService", () => {
   it("coalesces repeated downloads and ignores stale check events once a payload is ready", async () => {
     const download = deferred<string[]>();
     mocks.downloadUpdate.mockReturnValue(download.promise);
-    const service = new UpdaterService(() => null);
+    const service = new UpdaterService(() => null, { platform: "win32" });
     updaterListener<(info: { version: string }) => void>("update-available")?.({ version: "0.9.10" });
 
     const firstDownload = service.download();
@@ -206,7 +207,7 @@ describe("UpdaterService", () => {
 
   it("falls back to the Windows release page when an automatic download fails", async () => {
     mocks.downloadUpdate.mockRejectedValue(new Error("cache write failed"));
-    const service = new UpdaterService(() => null);
+    const service = new UpdaterService(() => null, { platform: "win32" });
     updaterListener<(info: { version: string }) => void>("update-available")?.({ version: "0.9.10" });
 
     const status = await service.download();
@@ -227,7 +228,7 @@ describe("UpdaterService", () => {
       ok: true,
       text: async () => "version: 0.9.10\n"
     });
-    const service = new UpdaterService(() => null);
+    const service = new UpdaterService(() => null, { platform: "win32" });
 
     const firstCheck = service.check();
     const secondCheck = service.check();
@@ -277,7 +278,7 @@ describe("UpdaterService", () => {
         send
       }
     };
-    new UpdaterService(() => destroyedWindow as never);
+    new UpdaterService(() => destroyedWindow as never, { platform: "win32" });
 
     expect(() => {
       updaterListener<(info: { version: string }) => void>("update-available")?.({ version: "0.9.10" });
@@ -286,7 +287,7 @@ describe("UpdaterService", () => {
   });
 
   it("clamps updater progress before sending it to the renderer", () => {
-    const service = new UpdaterService(() => null);
+    const service = new UpdaterService(() => null, { platform: "win32" });
     const progress = updaterListener<(value: { percent: number }) => void>("download-progress");
 
     progress?.({ percent: 148.7 });
