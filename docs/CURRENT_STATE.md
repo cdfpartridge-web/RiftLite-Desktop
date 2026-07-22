@@ -10,12 +10,12 @@ This is the durable handoff for continuing RiftLite work in a fresh Codex task. 
 
 - Active cross-platform release source repo:
   `C:\Users\cdfpa\OneDrive\Documents\Claude\Projects\Riftlite Beta 0.6\desktop-v06`
-- Current local package version: `0.9.11` (customer-facing build `v0.9.11`); fully built and validated locally before publication
+- Current local package version: `0.9.11` (customer-facing build `v0.9.11`); fully built, validated, and published
 - Current branch: `windows-release-v0.8.03` (the branch name is older than the local build)
 - Windows GitHub release repository (`windows` remote): `cdfpartridge-web/RiftLite-Desktop`
 - macOS GitHub release repository (`origin` remote): `cdfpartridge-web/RiftLite-Desktop-mac`
-- Current published Windows release: `v0.9.00` (2026-07-19)
-- Current published macOS release: `mac-v0.9.00` (2026-07-19)
+- Current published Windows release: `v0.9.11` (2026-07-22)
+- Current published macOS release: `mac-v0.9.11` (2026-07-22)
 - Windows installer output:
   `C:\Users\cdfpa\OneDrive\Documents\Claude\Projects\Riftlite Beta 0.6\desktop-v06\release\RiftLiteBetaInstall.exe`
 
@@ -927,8 +927,13 @@ The old task remains useful as an archive, but day-to-day engineering context sh
 
 - The accumulated v0.9.10 release candidate plus the final TCGA owner-relative battlefield correction is promoted as v0.9.11; v0.9.10 remains unpublished.
 - Desktop release validation passed TypeScript, the mandatory 76-test account-sync gate, all 92 test files / 798 tests, Electron and renderer production builds, Windows NSIS packaging, updater metadata checks, regenerated differential blockmap validation, executable/archive identity checks, and the isolated packaged-app smoke test.
-- Windows installer: `release/RiftLiteBetaInstall.exe`, 199,416,522 bytes, SHA-256 `D6FFDC1721CDCFFA635FA00B6DEC8D34BB162EAB6143FC990C019948FD58B415`.
-- Windows blockmap: `release/RiftLiteBetaInstall.exe.blockmap`, 185,053 bytes, SHA-256 `B4E54E3447422FC27832F3221509054F93505B9A9E8F51CA44B540FD763FCCD2`.
-- Windows updater manifest: `release/latest.yml`, 344 bytes, SHA-256 `B476E93F7E1A711969049AEEC7919E51AF14A43A8F89AECEADDBCAA9A8C656A9`.
+- Windows installer: `release/RiftLiteBetaInstall.exe`, 199,416,624 bytes, SHA-256 `09524F288F33A63D3CAE7231D196888F1A36C670E7915C07E7E2F8E5999D0FB3`.
+- Windows blockmap: `release/RiftLiteBetaInstall.exe.blockmap`, 185,109 bytes, SHA-256 `2549E28DC4B132A1C4824C8FDE35D0F6F3AAEBACD4D7D25BF90D302CFA952417`.
+- Windows updater manifest: `release/latest.yml`, 344 bytes, SHA-256 `02728F8D23C4E50C3E50D7F3B1ECF669F2DF5C8FD834FABD123674FB84B7BCD8`.
 - The matching website source passed 72 files / 489 tests, lint with zero errors and 14 existing warnings, and the Next production build. It was pushed to the website release branch after the already-live Vercel deployment.
-- macOS publication uses the hardened native GitHub Actions workflow from the same desktop commit. The workflow builds and verifies x64 and arm64 DMG/ZIP artifacts and publishes them under tag `mac-v0.9.11`; it does not reuse older v0.9.00 artifacts.
+- Windows tag `v0.9.11` and macOS tag `mac-v0.9.11` both resolve to source commit `fba8624510080e4f69fdc923f98e765ac3f7857d`.
+- Windows release: `https://github.com/cdfpartridge-web/RiftLite-Desktop/releases/tag/v0.9.11`.
+- macOS release: `https://github.com/cdfpartridge-web/RiftLite-Desktop-mac/releases/tag/mac-v0.9.11`. Native workflow run `29941909909` passed the release gate, x64/arm64 FFmpeg and executable architecture checks, updater/bundle identity checks, strict code-signature and DMG verification, packaged smoke, and asset upload.
+- macOS arm64 DMG: 172,403,167 bytes, SHA-256 `C692AA9F4C36475B2BBCDFBD14806CC5835BF490237658A52AA4892713FADDE9`; arm64 ZIP: 165,031,100 bytes, SHA-256 `0DA1AFC046C2819A276E2129AF4F4D2ED19090B037A02F53073FE67390FEEB63`.
+- macOS x64 DMG: 187,561,677 bytes, SHA-256 `764F803758FE0E4E58F4AD4FE592E3E06B163936D05FDB5BCB182FA1389C7957`; x64 ZIP: 179,931,426 bytes, SHA-256 `2673F3D6B8C5C3396D5B2D376020D7FB9BFDEEA3D92B6B3F75F8EFCF8A6F7BF5`.
+- macOS updater manifest: 830 bytes, SHA-256 `81B182054C679F2356D3F5627DC0E292226F09C0AE0C69B162C6BD292FB3D060`.
