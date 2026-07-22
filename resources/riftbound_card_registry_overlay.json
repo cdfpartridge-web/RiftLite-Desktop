@@ -1,5 +1,10 @@
 {
   "schemaVersion": 1,
+  "imageHashAliasesByPrintId": {
+    "VEN-163": [
+      "e41bc5d29f91f652d553bef56e2c84e95010ef1a"
+    ]
+  },
   "cards": [
     {
       "printId": "UNL-T01",

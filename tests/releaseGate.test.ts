@@ -34,15 +34,18 @@ describe("release safety gate", () => {
     expect(macWorkflow).not.toMatch(/uses: softprops\/action-gh-release@v[1-2]\b/);
   });
 
-  it("validates the committed updater identity before CI switches to the Mac feed", () => {
+  it("validates source before the central Mac packager and artifact verifiers run", () => {
     const gateIndex = macWorkflow.indexOf("run: npm run release:gate");
     const buildIndex = macWorkflow.indexOf("run: npm run build");
-    const feedIndex = macWorkflow.indexOf("- name: Use Mac update feed");
-    const packageIndex = macWorkflow.indexOf("run: npx electron-builder --mac dmg zip --x64 --arm64 --publish never");
+    const prepareIndex = macWorkflow.indexOf("run: npm run package:prepare-mac-ffmpeg");
+    const packageIndex = macWorkflow.indexOf("run: npm run package:mac");
+    const verifyIndex = macWorkflow.indexOf("run: npm run release:verify:mac");
 
     expect(gateIndex).toBeGreaterThan(-1);
     expect(buildIndex).toBeGreaterThan(gateIndex);
-    expect(feedIndex).toBeGreaterThan(buildIndex);
-    expect(packageIndex).toBeGreaterThan(feedIndex);
+    expect(prepareIndex).toBeGreaterThan(buildIndex);
+    expect(packageIndex).toBeGreaterThan(prepareIndex);
+    expect(verifyIndex).toBeGreaterThan(packageIndex);
+    expect(macWorkflow).not.toContain("Use Mac update feed");
   });
 });

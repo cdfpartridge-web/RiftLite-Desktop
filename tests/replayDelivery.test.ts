@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { replayDeliveryStages, replayDeliverySummary } from "../src/shared/replayDelivery.js";
+import { replayDeliveryErrorMessage, replayDeliveryStages, replayDeliverySummary } from "../src/shared/replayDelivery.js";
 import type { RawCaptureReplayMetadata } from "../src/shared/types.js";
 
 function metadata(patch: Partial<RawCaptureReplayMetadata> = {}): RawCaptureReplayMetadata {
@@ -92,5 +92,16 @@ describe("replayDeliveryStages", () => {
       state: "failed",
       detail: "One hub is missing reports_channel",
     });
+  });
+
+  it("turns saved authentication JSON into a safe reconnect instruction", () => {
+    const raw = 'RiftLite replay init 401: {"error":"A linked RiftLite account token is required.","code":"authentication_required"}';
+    expect(replayDeliveryErrorMessage(raw)).toContain("Open Account");
+    expect(replayDeliveryErrorMessage(raw)).toContain("local replay capture is safe");
+    expect(replayDeliveryStages(metadata({
+      uploadStatus: "failed",
+      processingStatus: "failed",
+      error: raw
+    })).find((stage) => stage.id === "upload")?.detail).not.toContain("authentication_required");
   });
 });

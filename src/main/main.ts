@@ -1,13 +1,13 @@
-import { app, BrowserWindow, clipboard, desktopCapturer, dialog, globalShortcut, ipcMain, Menu, nativeImage, safeStorage, screen, session as electronSession, shell } from "electron";
+import { app, BrowserWindow, clipboard, desktopCapturer, dialog, globalShortcut, ipcMain, Menu, nativeImage, safeStorage, screen, session as electronSession, shell, webContents as electronWebContents } from "electron";
 import type { NativeImage, OpenDialogOptions, SaveDialogOptions, WebContents } from "electron";
 import { execFile } from "node:child_process";
 import { once } from "node:events";
-import { createReadStream, createWriteStream } from "node:fs";
+import { createReadStream, createWriteStream, mkdirSync } from "node:fs";
 import { access, appendFile, copyFile, mkdir, open, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createInterface } from "node:readline";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { promisify } from "node:util";
 import { deflateRawSync, inflateRawSync } from "node:zlib";
 import ffmpegStaticPath from "ffmpeg-static";
@@ -63,10 +63,16 @@ import type {
   VisionDeckTrackerStatus
 } from "../shared/types.js";
 import { emptyDeckMatchupGuide, resolveDeckMatchupGuide, sanitizeDeckNotebookForDeck } from "../shared/deckNotebook.js";
-import { atlasSeatCaptureEvent } from "../shared/atlasSeatTracker.js";
+import {
+  ATLAS_BATTLEFIELD_SEAT_IPC_CHANNEL,
+  AtlasBattlefieldSeatSocketTracker,
+  atlasBattlefieldSeatSignalFromFrame,
+  atlasSeatCaptureEvent
+} from "../shared/atlasSeatTracker.js";
 import { atlasCardRenderingCssForUrl } from "../shared/atlasCardRendering.js";
 import { clearAtlasWebviewRuntime } from "../shared/atlasWebviewRecovery.js";
 import { RIFTLITE_BUILD_IDENTITY } from "../shared/buildIdentity.js";
+import { hasVerifiedRiftLiteAccount } from "../shared/accountIdentity.js";
 import {
   embeddedWebviewPolicy,
   gamePlatformForTrustedUrl,
@@ -77,7 +83,21 @@ import {
   type EmbeddedWebviewPolicy
 } from "../shared/embeddedContentSecurity.js";
 import { GAME_WEBVIEW_PARTITIONS } from "../shared/gameWebview.js";
-import { RawCaptureIngressLimiter, validatedCaptureEvent, validatedRawCaptureFrame } from "../shared/ipcPayloadSecurity.js";
+import { gameWebviewPlatformArgument } from "../shared/gameWebviewIdentity.js";
+import {
+  activeDiscordReplayHubIds,
+  rawCaptureSettingsForDiscordHubSelection
+} from "../shared/replaySharing.js";
+import {
+  RawCaptureIngressLimiter,
+  validatedCaptureEvent,
+  validatedRawCaptureFrame,
+  validatedTcgaResearchEvent
+} from "../shared/ipcPayloadSecurity.js";
+import {
+  TCGA_REPLAY_RESEARCH_BINDING,
+  tcgaReplayResearchPageHookSource
+} from "../shared/tcgaResearchPageHook.js";
 import {
   clearAtlasClerkAuthCookies,
   gamePopupBrowserWindowOptions,
@@ -100,13 +120,32 @@ import { AccountCloudSyncQueue } from "./services/accountCloudSyncQueue.js";
 import { runAccountCloudRestore } from "./services/accountCloudRestoreCoordinator.js";
 import { CaptureCoordinator } from "./services/captureCoordinator.js";
 import { CaptureDiagnostics } from "./services/captureDiagnostics.js";
+import { startEventLoopWatchdog, type EventLoopWatchdog } from "./services/eventLoopWatchdog.js";
+import {
+  confirmedMatchSupportsBackgroundDelivery,
+  confirmMatchLocalFirst,
+  deliverConfirmedMatchInBackground,
+  selectConfirmedMatchReportRetries
+} from "./services/localFirstMatchConfirmation.js";
+import {
+  createSingleUseDisplayMediaResponder,
+  displayMediaRequestIsTrusted,
+  isTrustedRiftLiteAppOrigin,
+  preparedDisplayMediaTargetForRequester,
+  type ReplayVideoDisplayTarget
+} from "./services/displayMediaRequest.js";
 import { AtlasFrameDeduper, type AtlasFrameSource } from "./services/atlasFrameDeduper.js";
 import { DeckService } from "./services/deckService.js";
 import { DeckTrackerService } from "./services/deckTrackerService.js";
 import { joinDiscordVoiceChannel } from "./services/discordRpc.js";
-import { FirebaseSyncService } from "./services/firebaseSync.js";
+import { FirebaseSyncService, type AccountCloudRestoreFence } from "./services/firebaseSync.js";
 import { OverlayServer } from "./services/overlayServer.js";
-import { RawCaptureService } from "./services/rawCaptureService.js";
+import {
+  RawCaptureService,
+  rawCaptureMatchSummaryFromDraft,
+  riftLiteTcgaWebReplayAutoUploadAccountUid,
+  type RawCaptureFinishIdentity
+} from "./services/rawCaptureService.js";
 import { attachReplayVideoToStore } from "./services/replayVideoAttachment.js";
 import {
   clearReplayEmbedCookies,
@@ -120,7 +159,13 @@ import {
 import { RiftLiteStore } from "./services/store.js";
 import { SecureCredentialVault } from "./services/secureCredentialVault.js";
 import { SimEventReceiver } from "./services/simEventReceiver.js";
+import {
+  resolveRiftLiteSmokePaths,
+  riftLiteSmokeNetworkRequestAllowed
+} from "./services/smokeIsolation.js";
 import { TcgaResolver } from "./services/tcgaResolver.js";
+import { TcgaReplayResearchCapture } from "./services/tcgaReplayResearchCapture.js";
+import { TcgaWebReplayCaptureService } from "./services/tcgaWebReplayCaptureService.js";
 import { UpdaterService } from "./services/updaterService.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -136,7 +181,8 @@ const REPLAY_STREAM_VIDEO_END = "END_VIDEO_DATA";
 const RIFTREPLAY_CAPTURE_FEATURE_ENABLED = true;
 const ATLAS_GAME_PARTITION = GAME_WEBVIEW_PARTITIONS.atlas;
 const IS_PACKAGED_SMOKE_TEST = process.argv.includes("--riftlite-smoke-test");
-const UI_SNAPSHOT_PATH = process.env.RIFTLITE_UI_SNAPSHOT_PATH?.trim() ?? "";
+const SMOKE_PATHS = resolveRiftLiteSmokePaths(IS_PACKAGED_SMOKE_TEST, process.env);
+const UI_SNAPSHOT_PATH = SMOKE_PATHS?.snapshotPath ?? "";
 const UI_SNAPSHOT_TOUR_ACTION = IS_PACKAGED_SMOKE_TEST
   ? process.env.RIFTLITE_UI_SNAPSHOT_TOUR_ACTION?.trim().toLowerCase() ?? ""
   : "";
@@ -150,20 +196,32 @@ const UI_SNAPSHOT_COLLAPSED = IS_PACKAGED_SMOKE_TEST && process.env.RIFTLITE_UI_
 const UI_SNAPSHOT_ATLAS_WAIT_MS = IS_PACKAGED_SMOKE_TEST
   ? Math.max(1_000, Math.min(30_000, Number.parseInt(process.env.RIFTLITE_UI_SNAPSHOT_ATLAS_WAIT_MS ?? "14000", 10) || 14_000))
   : 0;
-const SMOKE_USER_DATA_PATH = IS_PACKAGED_SMOKE_TEST
-  ? process.env.RIFTLITE_SMOKE_USER_DATA_PATH?.trim()
-    ?? process.env.RIFTLITE_UI_DEV_USER_DATA_PATH?.trim()
-    ?? ""
-  : "";
 let atlasSmokeDiagnosticsTaken = false;
 
 app.setName(RIFTLITE_BUILD_IDENTITY.appName);
-app.setPath(
-  "userData",
-  SMOKE_USER_DATA_PATH
-    ? resolve(SMOKE_USER_DATA_PATH)
-    : join(app.getPath("appData"), RIFTLITE_BUILD_IDENTITY.userDataDirectory)
-);
+if (SMOKE_PATHS) {
+  for (const path of [
+    SMOKE_PATHS.userData,
+    SMOKE_PATHS.documents,
+    SMOKE_PATHS.downloads,
+    SMOKE_PATHS.pictures,
+    SMOKE_PATHS.videos,
+    SMOKE_PATHS.temp,
+    SMOKE_PATHS.crashDumps,
+    ...(SMOKE_PATHS.snapshotPath ? [dirname(SMOKE_PATHS.snapshotPath)] : [])
+  ]) {
+    mkdirSync(path, { recursive: true });
+  }
+  app.setPath("userData", SMOKE_PATHS.userData);
+  app.setPath("documents", SMOKE_PATHS.documents);
+  app.setPath("downloads", SMOKE_PATHS.downloads);
+  app.setPath("pictures", SMOKE_PATHS.pictures);
+  app.setPath("videos", SMOKE_PATHS.videos);
+  app.setPath("temp", SMOKE_PATHS.temp);
+  app.setPath("crashDumps", SMOKE_PATHS.crashDumps);
+} else {
+  app.setPath("userData", join(app.getPath("appData"), RIFTLITE_BUILD_IDENTITY.userDataDirectory));
+}
 app.setAppUserModelId(RIFTLITE_BUILD_IDENTITY.appId);
 if (!IS_PACKAGED_SMOKE_TEST) {
   if (process.defaultApp && process.argv[1]) {
@@ -190,6 +248,15 @@ let rawCaptureService: RawCaptureService;
 let overlayServer: OverlayServer;
 let simEventReceiver: SimEventReceiver | null = null;
 let diagnostics: CaptureDiagnostics;
+let eventLoopWatchdog: EventLoopWatchdog | null = null;
+let tcgaReplayResearchCapture: TcgaReplayResearchCapture;
+let tcgaWebReplayCaptureService: TcgaWebReplayCaptureService<
+  RawCaptureFinishIdentity,
+  ReplayRecord,
+  ReplayRecord | null
+> | null = null;
+let tcgaWebReplayProductAccountUid = "";
+let tcgaWebReplayConfigurationTail: Promise<void> = Promise.resolve();
 let updater: UpdaterService;
 let registeredScreenshotHotkey = "";
 let registeredShadowClipHotkey = "";
@@ -197,6 +264,21 @@ let registeredReplayFlagHotkey = "";
 const gameWebContentsByPlatform = new Map<GamePlatform, WebContents>();
 const embeddedWebviewPolicyBySession = new WeakMap<object, EmbeddedWebviewPolicy>();
 const rawCaptureDebuggerContents = new WeakSet<WebContents>();
+type TcgaReplayResearchRequest = {
+  url: string;
+  resourceType: string;
+  mimeType: string;
+};
+type TcgaReplayResearchTap = {
+  webContents: WebContents;
+  listener: (_event: unknown, method: string, params: unknown) => void;
+  requests: Map<string, TcgaReplayResearchRequest>;
+  socketUrls: Map<string, string>;
+  scriptIdentifier: string;
+  networkEnabled: boolean;
+  ready: Promise<void>;
+};
+const tcgaReplayResearchTaps = new Map<number, TcgaReplayResearchTap>();
 const atlasDeckTrackerFrameDebugCounts = new Map<string, number>();
 const atlasFrameDeduper = new AtlasFrameDeduper();
 const rawCaptureIngressLimiter = new RawCaptureIngressLimiter();
@@ -204,8 +286,29 @@ const replayFrameHashByPlatform = new Map<GamePlatform, { hash: string; captured
 const ensuredReplayFrameDirectories = new Set<string>();
 let replayFrameDirectoryCache: { path: string; expiresAt: number } | null = null;
 const replayVideoSessions = new Map<string, ReplayVideoSession>();
-let replayVideoDisplayTarget: { platform: GamePlatform; mode: ReplayVideoCaptureMode; expiresAt: number } | null = null;
+type ConfirmedMatchDeliveryJob = {
+  saved: MatchDraft;
+  pending: Promise<void> | null;
+};
+const confirmedMatchDeliveryByMatchId = new Map<string, ConfirmedMatchDeliveryJob>();
+
+function installSmokeNetworkIsolation(): void {
+  if (!IS_PACKAGED_SMOKE_TEST) return;
+  const smokeSessions = new Set([
+    electronSession.defaultSession,
+    electronSession.fromPartition(RIFTLITE_REPLAY_PARTITION),
+    ...Object.values(GAME_WEBVIEW_PARTITIONS).map((partition) => electronSession.fromPartition(partition))
+  ]);
+  for (const targetSession of smokeSessions) {
+    targetSession.webRequest.onBeforeRequest({ urls: ["<all_urls>"] }, (details, callback) => {
+      callback({ cancel: !riftLiteSmokeNetworkRequestAllowed(details.url) });
+    });
+  }
+}
+let replayVideoDisplayTarget: ReplayVideoDisplayTarget | null = null;
 let rawCaptureUploadRetryTimer: ReturnType<typeof setInterval> | null = null;
+let tcgaResearchQuitFinalizationStarted = false;
+let tcgaResearchQuitAllowed = false;
 let atlasWebviewRecoveryInFlight: Promise<{ ok: boolean; message: string }> | null = null;
 const atlasEmptyShellMainRecovery = new AtlasEmptyShellMainRecoveryGuard();
 const ATLAS_EMPTY_SHELL_MAIN_RELOAD_DELAY_MS = 500;
@@ -216,12 +319,19 @@ const accountCloudSyncQueue = new AccountCloudSyncQueue(
     if (!settings.accountCloudSyncEnabled || !settings.accountUid) {
       return;
     }
-    await syncService.uploadAccountCloudSync(`${reason}. Account sync updated.`, { automatic: true });
+    try {
+      await syncService.uploadAccountCloudSync(`${reason}. Account sync updated.`, { automatic: true });
+    } catch (error) {
+      await store.updateSettings((current) => (
+        current.accountUid === settings.accountUid && current.accountCloudSyncEnabled
+          ? { accountCloudSyncLastError: error instanceof Error ? error.message : "Account cloud sync failed." }
+          : {}
+      )).catch(() => undefined);
+      throw error;
+    }
   },
   async (error) => {
-    await store.saveSettings({
-      accountCloudSyncLastError: error instanceof Error ? error.message : "Account cloud sync failed."
-    }).catch(() => undefined);
+    await logStartupIssue("queued account cloud sync failed", error);
   }
 );
 
@@ -252,11 +362,65 @@ function startRawCaptureUploadRetry(): void {
     clearInterval(rawCaptureUploadRetryTimer);
   }
   rawCaptureUploadRetryTimer = setInterval(() => {
-    void rawCaptureService.uploadPendingRawCaptures().catch((error) => {
+    void retryPendingRawCapturesAndMatchReports().catch((error) => {
       void logStartupIssue("raw capture pending upload retry failed", error);
     });
   }, 120_000);
   rawCaptureUploadRetryTimer.unref();
+}
+
+async function uploadPendingRawCapturesWithAccountRefresh(): Promise<number> {
+  const settings = await store.getSettings();
+  const accountBoundUploadEnabled = settings.rawCapture.enabled && Boolean(
+    (settings.rawCapture.webReplayAutoUploadEnabled &&
+      settings.rawCapture.webReplayAutoUploadAccountUid === settings.accountUid) ||
+    (settings.rawCapture.tcgaWebReplayAutoUploadEnabled &&
+      settings.rawCapture.tcgaWebReplayAutoUploadAccountUid === settings.accountUid)
+  );
+  if (
+    accountBoundUploadEnabled &&
+    settings.accountUid &&
+    settings.firebaseRefreshToken &&
+    !hasVerifiedRiftLiteAccount(settings)
+  ) {
+    await syncService.getAccountConnectionStatus();
+  }
+  return rawCaptureService.uploadPendingRawCaptures();
+}
+
+async function syncSettledMatchReports(): Promise<number> {
+  const candidates = selectConfirmedMatchReportRetries(await store.getMatches(), 10).matches;
+  let syncedCount = 0;
+  for (const match of candidates) {
+    try {
+      const synced = await syncService.syncMatch(match, { quiet: true });
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send("match:draft", synced);
+      }
+      syncedCount += 1;
+    } catch (error) {
+      await logStartupIssue(`Pending match report retry failed (${match.id})`, error);
+    }
+  }
+  if (syncedCount) {
+    queueAccountCloudSync("Pending match reports retried");
+  }
+  return syncedCount;
+}
+
+async function retryPendingRawCapturesAndMatchReports(): Promise<number> {
+  const uploaded = await uploadPendingRawCapturesWithAccountRefresh();
+  await syncSettledMatchReports();
+  retryDeferredConfirmedMatchDeliveries();
+  return uploaded;
+}
+
+function retryDeferredConfirmedMatchDeliveries(): void {
+  for (const job of confirmedMatchDeliveryByMatchId.values()) {
+    if (!job.pending) {
+      queueConfirmedMatchDelivery(job.saved);
+    }
+  }
 }
 
 process.on("uncaughtException", (error) => {
@@ -858,15 +1022,7 @@ function diagnosticPageUrl(value: string): string {
 }
 
 function isTrustedAppOrigin(origin: string): boolean {
-  if (origin.toLowerCase() === "file://") {
-    return true;
-  }
-  try {
-    const parsed = new URL(origin);
-    return parsed.origin === "http://127.0.0.1:5173" || parsed.origin === "http://localhost:5173";
-  } catch {
-    return false;
-  }
+  return isTrustedRiftLiteAppOrigin(origin, isDev);
 }
 
 function isTrustedAppPageUrl(value: string): boolean {
@@ -1198,27 +1354,39 @@ function secureRiftLiteReplayWebContents(webContents: WebContents): void {
     );
   });
   replaySession.setDisplayMediaRequestHandler((request, callback) => {
-    const mainFrame = webContents.isDestroyed() ? null : webContents.mainFrame;
-    const requestingFrame = request.frame;
-    const exactFrame = Boolean(
-      mainFrame &&
-      requestingFrame &&
-      requestingFrame.processId === mainFrame.processId &&
-      requestingFrame.routingId === mainFrame.routingId
-    );
-    if (
-      !mainFrame ||
-      !exactFrame ||
-      !request.userGesture ||
-      !request.videoRequested ||
-      request.audioRequested ||
-      !isRiftLiteReplayOrigin(request.securityOrigin) ||
-      !isAllowedRiftLiteReplayNavigation(mainFrame.url)
-    ) {
-      callback({});
-      return;
+    const respond = createSingleUseDisplayMediaResponder(callback, (error) => {
+      void logStartupIssue("replay embed display-media response failed", error);
+    });
+    let streams: Electron.Streams | null = null;
+    try {
+      const mainFrame = webContents.isDestroyed() ? null : webContents.mainFrame;
+      const requestingFrame = request.frame;
+      const requestingContents = requestingFrame
+        ? electronWebContents.fromFrame(requestingFrame)
+        : undefined;
+      const exactFrame = Boolean(
+        mainFrame &&
+        requestingFrame &&
+        requestingContents?.id === webContents.id &&
+        requestingFrame.processId === mainFrame.processId &&
+        requestingFrame.routingId === mainFrame.routingId
+      );
+      const denied = (
+        !mainFrame ||
+        !exactFrame ||
+        !request.userGesture ||
+        !request.videoRequested ||
+        request.audioRequested ||
+        !isRiftLiteReplayOrigin(request.securityOrigin) ||
+        !isAllowedRiftLiteReplayNavigation(mainFrame.url)
+      );
+      if (!denied && mainFrame) {
+        streams = { video: mainFrame };
+      }
+    } catch (error) {
+      void logStartupIssue("replay embed display-media resolution failed", error);
     }
-    callback({ video: mainFrame });
+    respond(streams);
   });
   webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:\/\//i.test(url)) {
@@ -1309,6 +1477,7 @@ function installRawCaptureWebSocketTap(webContents: WebContents): void {
   }
   rawCaptureDebuggerContents.add(webContents);
   const socketUrls = new Map<string, string>();
+  const battlefieldSeatSockets = new AtlasBattlefieldSeatSocketTracker();
   try {
     if (!webContents.debugger.isAttached()) {
       webContents.debugger.attach("1.3");
@@ -1341,7 +1510,14 @@ function installRawCaptureWebSocketTap(webContents: WebContents): void {
       const url = readDebugString(payload.url);
       if (requestId && isRiftAtlasRealtimeSocket(url)) {
         socketUrls.set(requestId, url);
+        battlefieldSeatSockets.observeOpened(requestId, url);
       }
+      return;
+    }
+    if (method === "Network.webSocketClosed") {
+      const requestId = readDebugString(payload.requestId);
+      battlefieldSeatSockets.observeClosed(requestId);
+      socketUrls.delete(requestId);
       return;
     }
     if (method !== "Network.webSocketFrameReceived" && method !== "Network.webSocketFrameSent") {
@@ -1370,7 +1546,13 @@ function installRawCaptureWebSocketTap(webContents: WebContents): void {
         raw
       }
     };
-    ingestAtlasRawFrame("main-debugger", webContents, frame, "atlas-ws-frame");
+    ingestAtlasRawFrame(
+      "main-debugger",
+      webContents,
+      frame,
+      "atlas-ws-frame",
+      battlefieldSeatSockets.isCurrent(requestId)
+    );
   });
 
   webContents.once("destroyed", () => {
@@ -1405,8 +1587,36 @@ function ingestAtlasRawFrame(
   source: AtlasFrameSource,
   webContents: WebContents,
   frame: RawCaptureAppendFramePayload,
-  reason: string
+  reason: string,
+  bridgeBattlefieldSeat = false
 ): void {
+  const battlefieldSeatSignal = bridgeBattlefieldSeat
+    ? atlasBattlefieldSeatSignalFromFrame(frame)
+    : null;
+  if (battlefieldSeatSignal && !webContents.isDestroyed()) {
+    try {
+      webContents.send(ATLAS_BATTLEFIELD_SEAT_IPC_CHANNEL, battlefieldSeatSignal);
+      if (typeof diagnostics !== "undefined") {
+        const capturedAt = new Date().toISOString();
+        void diagnostics.record({
+          id: `atlas-battlefield-seat-bridged:${webContents.id}:${capturedAt}`,
+          platform: "atlas",
+          kind: "debug",
+          capturedAt,
+          url: "https://play.riftatlas.com/game",
+          payload: {
+            reason: "atlas-battlefield-seat-bridged",
+            source,
+            frameType: battlefieldSeatSignal.frameType,
+            roomCode: battlefieldSeatSignal.roomCode,
+            atlasLocalPlayerSeat: battlefieldSeatSignal.localSeat
+          }
+        }).catch(() => undefined);
+      }
+    } catch (error) {
+      void logStartupIssue("atlas battlefield seat bridge failed", error);
+    }
+  }
   if (!atlasFrameDeduper.shouldIngest(source, String(webContents.id), frame)) {
     return;
   }
@@ -1467,6 +1677,585 @@ function readAtlasFrameType(raw: string): string {
   } catch {
     return "";
   }
+}
+
+const TCGA_RESEARCH_MAX_CDP_TEXT = 1_200_000;
+const TCGA_RESEARCH_MAX_BINDING_BYTES = 2 * 1024 * 1024;
+
+function recordTcgaReplayResearch(
+  kind: string,
+  payload: Record<string, unknown>,
+  recordedAt?: string | number,
+  source = "tcga-main"
+): void {
+  if (!tcgaReplayResearchCapture?.getStatus().active) return;
+  void tcgaReplayResearchCapture.record(kind, payload, recordedAt, source)
+    .then(() => {
+      if (!tcgaReplayResearchCapture.getStatus().active) {
+        void setTcgaReplayResearchTapActive(false).catch(() => undefined);
+      }
+    })
+    .catch((error) => {
+      void logStartupIssue("TCGA replay monitor write failed", error);
+    });
+}
+
+function tcgaResearchRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function tcgaResearchText(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+function boundedTcgaResearchText(value: string): Record<string, unknown> {
+  return {
+    encoding: "utf8",
+    data: value.slice(0, TCGA_RESEARCH_MAX_CDP_TEXT),
+    charLength: value.length,
+    truncated: value.length > TCGA_RESEARCH_MAX_CDP_TEXT
+  };
+}
+
+function tcgaResearchResponseBody(body: string, base64Encoded: boolean, mimeType: string): Record<string, unknown> {
+  const textual = /(?:json|text|javascript|xml|x-www-form-urlencoded|webchannel|event-stream)/i.test(mimeType);
+  if (!base64Encoded) {
+    return boundedTcgaResearchText(body);
+  }
+  let decoded: Buffer;
+  try {
+    decoded = Buffer.from(body, "base64");
+  } catch {
+    return { encoding: "base64", byteLength: body.length, unavailable: true };
+  }
+  if (textual) {
+    return {
+      ...boundedTcgaResearchText(decoded.toString("utf8")),
+      transportEncoding: "base64",
+      byteLength: decoded.byteLength
+    };
+  }
+  return {
+    encoding: "binary-metadata",
+    byteLength: decoded.byteLength,
+    sha256: createHash("sha256").update(decoded).digest("hex")
+  };
+}
+
+function tcgaResearchDynamicResource(resourceType: string, url: string): boolean {
+  return ["XHR", "Fetch", "WebSocket", "EventSource"].includes(resourceType) ||
+    /(?:peer|firebase|game|match|api|socket|signal|webchannel|myapp)/i.test(url);
+}
+
+function trustedTcgaResearchContents(webContents: WebContents): boolean {
+  return !webContents.isDestroyed() &&
+    gameWebContentsByPlatform.get("tcga")?.id === webContents.id &&
+    platformFromUrl(webContents.getURL()) === "tcga";
+}
+
+async function configureTcgaResearchPageHook(
+  tap: TcgaReplayResearchTap,
+  active: boolean,
+  sessionId = ""
+): Promise<void> {
+  const debuggerApi = tap.webContents.debugger;
+  if (tap.scriptIdentifier) {
+    await debuggerApi.sendCommand("Page.removeScriptToEvaluateOnNewDocument", {
+      identifier: tap.scriptIdentifier
+    }).catch(() => undefined);
+    tap.scriptIdentifier = "";
+  }
+  const source = tcgaReplayResearchPageHookSource(active, sessionId);
+  const installed = await debuggerApi.sendCommand("Page.addScriptToEvaluateOnNewDocument", { source }) as { identifier?: string };
+  tap.scriptIdentifier = tcgaResearchText(installed?.identifier);
+  const evaluated = await debuggerApi.sendCommand("Runtime.evaluate", {
+    expression: source,
+    includeCommandLineAPI: false,
+    returnByValue: true,
+    awaitPromise: false
+  }) as {
+    result?: { value?: unknown };
+    exceptionDetails?: { text?: string };
+  };
+  if (evaluated.exceptionDetails || evaluated.result?.value !== true) {
+    throw new Error(evaluated.exceptionDetails?.text || "TCGA monitor page hook did not initialise.");
+  }
+}
+
+function installTcgaReplayResearchTap(webContents: WebContents): TcgaReplayResearchTap | null {
+  const existing = tcgaReplayResearchTaps.get(webContents.id);
+  if (existing) return existing;
+  const policy = embeddedWebviewPolicyBySession.get(webContents.session);
+  if (!policy || policy.kind !== "game" || policy.platform !== "tcga" || webContents.isDestroyed()) {
+    return null;
+  }
+
+  const requests = new Map<string, TcgaReplayResearchRequest>();
+  const socketUrls = new Map<string, string>();
+  const listener = (_event: unknown, method: string, params: unknown) => {
+    const researchStatus = tcgaReplayResearchCapture?.getStatus();
+    const researchActive = researchStatus?.active === true;
+    const productActive = Boolean(tcgaWebReplayProductAccountUid && tcgaWebReplayCaptureService);
+    if ((!researchActive && !productActive) || !trustedTcgaResearchContents(webContents)) return;
+    const payload = tcgaResearchRecord(params);
+    const requestId = tcgaResearchText(payload.requestId);
+
+    if (method === "Runtime.bindingCalled") {
+      if (tcgaResearchText(payload.name) !== TCGA_REPLAY_RESEARCH_BINDING) return;
+      const raw = tcgaResearchText(payload.payload);
+      if (!raw || Buffer.byteLength(raw, "utf8") > TCGA_RESEARCH_MAX_BINDING_BYTES) return;
+      try {
+        const decoded = JSON.parse(raw) as Record<string, unknown>;
+        if (
+          decoded.schema !== "riftlite-tcga-page-research" ||
+          decoded.version !== 1
+        ) {
+          return;
+        }
+        const kind = tcgaResearchText(decoded.kind);
+        const capturedAt = tcgaResearchText(decoded.capturedAt);
+        const documentId = tcgaResearchText(decoded.documentId);
+        const decodedPayload = tcgaResearchRecord(decoded.payload);
+        if (productActive && (
+          kind === "hook-ready" ||
+          kind === "hook-resumed" ||
+          kind === "rtc-channel" ||
+          kind === "rtc-data"
+        )) {
+          tcgaWebReplayCaptureService?.ingestBindingEvent(webContents.id, {
+            kind,
+            capturedAt,
+            documentId,
+            payload: decodedPayload
+          });
+        }
+        if (researchActive && tcgaResearchText(decoded.sessionId) === researchStatus?.sessionId) {
+          recordTcgaReplayResearch(
+            `page-${kind || "unknown"}`,
+            {
+              hookSequence: decoded.hookSequence,
+              documentId,
+              monotonicMs: decoded.monotonicMs,
+              payload: decodedPayload
+            },
+            capturedAt,
+            "tcga-rtc"
+          );
+        }
+      } catch {
+        // Ignore malformed data from the embedded page binding.
+      }
+      return;
+    }
+
+    // Product Web Replay consent covers only the narrow WebRTC game-channel
+    // binding above. Ignore every broader CDP network event unless the user
+    // separately started the local Research Monitor.
+    if (!researchActive) return;
+
+    if (method === "Network.requestWillBeSent") {
+      const request = tcgaResearchRecord(payload.request);
+      const url = tcgaResearchText(request.url);
+      const resourceType = tcgaResearchText(payload.type);
+      if (!requestId || !tcgaResearchDynamicResource(resourceType, url)) return;
+      requests.set(requestId, { url, resourceType, mimeType: "" });
+      recordTcgaReplayResearch("network-request", {
+        requestId,
+        resourceType,
+        url,
+        method: tcgaResearchText(request.method),
+        cdpTimestamp: payload.timestamp,
+        wallTime: payload.wallTime,
+        hasPostData: request.hasPostData === true,
+        ...(typeof request.postData === "string" ? { postData: boundedTcgaResearchText(request.postData) } : {})
+      }, undefined, "tcga-cdp");
+      return;
+    }
+
+    if (method === "Network.responseReceived") {
+      const response = tcgaResearchRecord(payload.response);
+      const url = tcgaResearchText(response.url) || requests.get(requestId)?.url || "";
+      const resourceType = tcgaResearchText(payload.type) || requests.get(requestId)?.resourceType || "";
+      if (!requestId || !tcgaResearchDynamicResource(resourceType, url)) return;
+      const mimeType = tcgaResearchText(response.mimeType);
+      requests.set(requestId, { url, resourceType, mimeType });
+      recordTcgaReplayResearch("network-response", {
+        requestId,
+        resourceType,
+        url,
+        status: response.status,
+        statusText: response.statusText,
+        mimeType,
+        protocol: response.protocol,
+        fromDiskCache: response.fromDiskCache === true,
+        fromServiceWorker: response.fromServiceWorker === true,
+        cdpTimestamp: payload.timestamp
+      }, undefined, "tcga-cdp");
+      return;
+    }
+
+    if (method === "Network.loadingFinished") {
+      const request = requests.get(requestId);
+      if (!request) return;
+      requests.delete(requestId);
+      void webContents.debugger.sendCommand("Network.getResponseBody", { requestId })
+        .then((result) => {
+          const bodyResult = tcgaResearchRecord(result);
+          const body = tcgaResearchText(bodyResult.body);
+          recordTcgaReplayResearch("network-response-body", {
+            requestId,
+            resourceType: request.resourceType,
+            url: request.url,
+            mimeType: request.mimeType,
+            encodedDataLength: payload.encodedDataLength,
+            body: tcgaResearchResponseBody(body, bodyResult.base64Encoded === true, request.mimeType)
+          }, undefined, "tcga-cdp");
+        })
+        .catch(() => undefined);
+      return;
+    }
+
+    if (method === "Network.loadingFailed") {
+      const request = requests.get(requestId);
+      if (!request) return;
+      requests.delete(requestId);
+      recordTcgaReplayResearch("network-failed", {
+        requestId,
+        resourceType: request.resourceType,
+        url: request.url,
+        errorText: payload.errorText,
+        canceled: payload.canceled === true
+      }, undefined, "tcga-cdp");
+      return;
+    }
+
+    if (method === "Network.webSocketCreated") {
+      const url = tcgaResearchText(payload.url);
+      socketUrls.set(requestId, url);
+      recordTcgaReplayResearch("websocket-open", { requestId, url }, undefined, "tcga-cdp");
+      return;
+    }
+
+    if (method === "Network.webSocketFrameReceived" || method === "Network.webSocketFrameSent") {
+      const frame = tcgaResearchRecord(payload.response);
+      const raw = tcgaResearchText(frame.payloadData);
+      recordTcgaReplayResearch("websocket-frame", {
+        requestId,
+        url: socketUrls.get(requestId) || "",
+        direction: method.endsWith("Sent") ? "out" : "in",
+        opcode: frame.opcode,
+        mask: frame.mask,
+        data: boundedTcgaResearchText(raw),
+        cdpTimestamp: payload.timestamp
+      }, undefined, "tcga-cdp");
+      return;
+    }
+
+    if (method === "Network.webSocketClosed") {
+      recordTcgaReplayResearch("websocket-close", {
+        requestId,
+        url: socketUrls.get(requestId) || "",
+        cdpTimestamp: payload.timestamp
+      }, undefined, "tcga-cdp");
+      socketUrls.delete(requestId);
+      return;
+    }
+
+    if (method === "Network.eventSourceMessageReceived") {
+      recordTcgaReplayResearch("event-source-message", {
+        requestId,
+        url: requests.get(requestId)?.url || "",
+        eventName: payload.eventName,
+        eventId: payload.eventId,
+        data: boundedTcgaResearchText(tcgaResearchText(payload.data)),
+        cdpTimestamp: payload.timestamp
+      }, undefined, "tcga-cdp");
+    }
+  };
+
+  const tap: TcgaReplayResearchTap = {
+    webContents,
+    listener,
+    requests,
+    socketUrls,
+    scriptIdentifier: "",
+    networkEnabled: false,
+    ready: Promise.resolve()
+  };
+  tcgaReplayResearchTaps.set(webContents.id, tap);
+  webContents.debugger.on("message", listener);
+  tap.ready = (async () => {
+    if (!webContents.debugger.isAttached()) {
+      webContents.debugger.attach("1.3");
+    }
+    await Promise.all([
+      webContents.debugger.sendCommand("Runtime.enable"),
+      webContents.debugger.sendCommand("Page.enable")
+    ]);
+    await webContents.debugger.sendCommand("Runtime.addBinding", { name: TCGA_REPLAY_RESEARCH_BINDING });
+    const captureStatus = tcgaReplayResearchCapture?.getStatus();
+    await configureTcgaResearchPageHook(
+      tap,
+      captureStatus?.active === true || Boolean(tcgaWebReplayProductAccountUid),
+      captureStatus?.active === true ? captureStatus.sessionId : ""
+    );
+    if (captureStatus?.active) {
+      await webContents.debugger.sendCommand("Network.enable", {
+        maxTotalBufferSize: 10 * 1024 * 1024,
+        maxResourceBufferSize: 2 * 1024 * 1024,
+        maxPostDataSize: TCGA_RESEARCH_MAX_CDP_TEXT
+      });
+      tap.networkEnabled = true;
+    }
+  })();
+  void tap.ready.then(() => {
+    if (tcgaReplayResearchCapture?.getStatus().active && trustedTcgaResearchContents(webContents)) {
+      tcgaReplayResearchCapture.setTransportState("ready");
+    }
+  }).catch((error) => {
+    const message = error instanceof Error ? error.message : String(error);
+    if (tcgaReplayResearchCapture?.getStatus().active) {
+      tcgaReplayResearchCapture.setTransportState("error", message);
+      recordTcgaReplayResearch("monitor-hook-error", { phase: "install", message });
+    }
+  });
+  webContents.once("destroyed", () => {
+    tcgaReplayResearchTaps.delete(webContents.id);
+    tcgaWebReplayCaptureService?.discardWebContents(webContents.id);
+    requests.clear();
+    socketUrls.clear();
+  });
+  return tap;
+}
+
+async function setTcgaReplayResearchTapActive(active: boolean, sessionId = ""): Promise<boolean> {
+  const contents = gameWebContentsByPlatform.get("tcga");
+  if (!contents || contents.isDestroyed()) return false;
+  const tap = installTcgaReplayResearchTap(contents);
+  if (!tap) return false;
+  await tap.ready;
+  if (!contents.debugger.isAttached()) {
+    throw new Error("Chromium monitor connection is not attached.");
+  }
+  await configureTcgaResearchPageHook(
+    tap,
+    active || Boolean(tcgaWebReplayProductAccountUid),
+    active ? sessionId : ""
+  );
+  if (active && !tap.networkEnabled) {
+    await contents.debugger.sendCommand("Network.enable", {
+      maxTotalBufferSize: 10 * 1024 * 1024,
+      maxResourceBufferSize: 2 * 1024 * 1024,
+      maxPostDataSize: TCGA_RESEARCH_MAX_CDP_TEXT
+    });
+    tap.networkEnabled = true;
+  } else if (!active && tap.networkEnabled) {
+    await contents.debugger.sendCommand("Network.disable").catch(() => undefined);
+    tap.networkEnabled = false;
+    tap.requests.clear();
+    tap.socketUrls.clear();
+  }
+  if (active) {
+    tcgaReplayResearchCapture.setTransportState("ready");
+  }
+  return true;
+}
+
+function configureTcgaWebReplayProductCapture(): Promise<void> {
+  const operation = tcgaWebReplayConfigurationTail.then(() => configureTcgaWebReplayProductCaptureNow());
+  tcgaWebReplayConfigurationTail = operation.then(
+    () => undefined,
+    () => undefined
+  );
+  return operation;
+}
+
+async function configureTcgaWebReplayProductCaptureNow(): Promise<void> {
+  const settings = await store.getSettings();
+  const outputDirectory = await rawCaptureService.captureDirectory();
+  const nextAccountUid = riftLiteTcgaWebReplayAutoUploadAccountUid(settings);
+  const activeHubIds = new Set(settings.activeHubs.map((hub) => hub.id));
+  const discordShareHubIds = activeDiscordReplayHubIds(settings)
+    .filter((hubId) => activeHubIds.has(hubId));
+  await tcgaWebReplayCaptureService?.configure(outputDirectory, nextAccountUid, discordShareHubIds);
+  tcgaWebReplayProductAccountUid = nextAccountUid;
+  const contents = gameWebContentsByPlatform.get("tcga");
+  if (nextAccountUid && contents && !contents.isDestroyed()) {
+    tcgaWebReplayCaptureService?.beginDocument(contents.id);
+    installTcgaReplayResearchTap(contents);
+  }
+  const researchStatus = tcgaReplayResearchCapture?.getStatus();
+  if (
+    !nextAccountUid &&
+    researchStatus?.active !== true &&
+    (!contents || !tcgaReplayResearchTaps.has(contents.id))
+  ) {
+    return;
+  }
+  await setTcgaReplayResearchTapActive(
+    researchStatus?.active === true,
+    researchStatus?.active === true ? researchStatus.sessionId : ""
+  ).catch(() => false);
+}
+
+async function finalizeTcgaWebReplayCapture(
+  identity: RawCaptureFinishIdentity,
+  replay?: ReplayRecord
+): Promise<ReplayRecord | null> {
+  const result = await tcgaWebReplayCaptureService?.finalize(identity, replay);
+  if (result?.status === "awaiting-result") {
+    await diagnostics.record({
+      id: randomUUID(),
+      platform: "tcga",
+      kind: "debug",
+      capturedAt: new Date().toISOString(),
+      url: "",
+      payload: {
+        reason: "tcga-web-replay-awaiting-result",
+        consideredCandidates: result.consideredCandidates,
+        readyCandidates: result.readyCandidates,
+        expiresAt: result.capture.expiresAt
+      }
+    }).catch(() => undefined);
+    return replay ?? null;
+  }
+  if (!result || result.status === "skipped") {
+    if (result?.status === "skipped") {
+      await diagnostics.record({
+        id: randomUUID(),
+        platform: "tcga",
+        kind: "debug",
+        capturedAt: new Date().toISOString(),
+        url: "",
+        payload: {
+          reason: "tcga-web-replay-capture-skipped",
+          captureReason: result.reason,
+          consideredCandidates: result.consideredCandidates,
+          readyCandidates: result.readyCandidates,
+          rejectionCounts: result.rejectionCounts
+        }
+      }).catch(() => undefined);
+    }
+    return replay ?? null;
+  }
+  return result.registration;
+}
+
+function tcgaMatchCaptureCompletedAt(match: MatchDraft, replay?: ReplayRecord): string {
+  const candidates = [
+    ...match.rawEvidence.map((event) => event.capturedAt),
+    ...(replay?.events.map((event) => event.capturedAt) ?? [])
+  ]
+    .map((value) => ({ value, at: Date.parse(value) }))
+    .filter((entry) => Number.isFinite(entry.at))
+    .sort((left, right) => right.at - left.at);
+  return candidates[0]?.value || match.updatedAt || match.capturedAt;
+}
+
+async function commitConfirmedTcgaReplayLocally(saved: MatchDraft): Promise<MatchDraft> {
+  await capture.waitForReplayFinalization(saved.id);
+  const latest = (await store.getMatches()).find((candidate) => candidate.id === saved.id) ?? saved;
+  const replay = (await store.getReplays()).find((candidate) => candidate.matchId === saved.id);
+  try {
+    await finalizeTcgaWebReplayCapture({
+      platform: "tcga",
+      localMatchId: latest.id,
+      localReplayId: replay?.id || `replay-${latest.id}`,
+      title: `${latest.myChampion || "Unknown"} vs ${latest.opponentChampion || "Unknown"}`,
+      capturedAt: latest.capturedAt,
+      completedAt: tcgaMatchCaptureCompletedAt(latest, replay),
+      match: rawCaptureMatchSummaryFromDraft(latest)
+    }, replay);
+    capture.markConfirmedReplayFinalizationComplete(latest.id);
+    return (await store.getMatches()).find((candidate) => candidate.id === latest.id) ?? latest;
+  } catch (error) {
+    capture.markConfirmedReplayFinalizationPending(latest.id, error);
+    await logStartupIssue("TCGA Web Replay local confirmation commit failed", error);
+    throw error;
+  }
+}
+
+async function deliverConfirmedMatch(saved: MatchDraft): Promise<void> {
+  await deliverConfirmedMatchInBackground(saved, {
+    finalizeReplay: async (candidate) => {
+      if (candidate.platform === "tcga") {
+        // TCGA confirmation has already committed the product artifact,
+        // manifest, and replay association. Publication performs its ordered
+        // match/hub sync callback, so do not report the same match twice.
+        const deliveryState = await rawCaptureService.tcgaDeliveryStateForMatch(candidate.id);
+        if (deliveryState === "pending") {
+          await rawCaptureService.deliverRegisteredTcgaCapture(candidate.id);
+          return "sync-complete";
+        }
+      } else {
+        // Atlas finalization may still be persisting or uploading when the
+        // local confirmation returns. Keep replay-before-report ordering in
+        // this background lane without holding the review popup open.
+        await capture.waitForReplayFinalization(candidate.id);
+        // If the initial finalizer stopped because the match logger was still
+        // awaiting review, confirmation is now the trigger to upload the
+        // corrected result and post it to Discord immediately.
+        await uploadPendingRawCapturesWithAccountRefresh();
+      }
+      return "sync-required";
+    },
+    loadLatest: async (candidate) => (
+      (await store.getMatches()).find((current) => current.id === candidate.id) ?? candidate
+    ),
+    syncMatch: async (latest) => {
+      const synced = await capture.syncConfirmedMatch(latest);
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send("match:draft", synced);
+      }
+      queueAccountCloudSync("Match saved");
+    }
+  });
+}
+
+function queueConfirmedMatchDelivery(saved: MatchDraft): void {
+  const existing = confirmedMatchDeliveryByMatchId.get(saved.id);
+  if (existing?.pending) {
+    return;
+  }
+  const job: ConfirmedMatchDeliveryJob = existing ?? { saved, pending: null };
+  job.saved = saved;
+  confirmedMatchDeliveryByMatchId.set(saved.id, job);
+  capture.markConfirmedReplayFinalizationQueued(saved.id);
+
+  // Let Electron resolve the confirmation IPC before starting disk/network
+  // delivery. The match itself is already durable at this point.
+  const pending = new Promise<void>((resolvePending) => setImmediate(resolvePending))
+    .then(() => deliverConfirmedMatch(job.saved));
+  job.pending = pending;
+  void pending.then(
+    () => {
+      if (confirmedMatchDeliveryByMatchId.get(saved.id) === job) {
+        confirmedMatchDeliveryByMatchId.delete(saved.id);
+      }
+      capture.markConfirmedReplayFinalizationComplete(saved.id);
+    },
+    async (error) => {
+      if (confirmedMatchDeliveryByMatchId.get(saved.id) === job) {
+        job.pending = null;
+      }
+      // Durable local match/replay state remains retryable through the normal
+      // startup/two-minute upload and report recovery lanes.
+      capture.markConfirmedReplayDeliveryDeferred(saved.id);
+      await logStartupIssue(`${saved.platform} confirmed replay/report background delivery failed`, error);
+      try {
+        const latest = (await store.getMatches()).find((candidate) => candidate.id === saved.id) ?? saved;
+        const synced = await capture.syncConfirmedMatch(latest);
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send("match:draft", synced);
+        }
+        queueAccountCloudSync("Match saved; Web Replay delivery pending");
+      } catch (syncError) {
+        await logStartupIssue("Match report fallback after replay delivery failure failed", syncError);
+      }
+    }
+  );
 }
 
 async function takeScreenshot(source: ScreenshotResult["source"] = "manual", options: ScreenshotOptions = {}): Promise<ScreenshotResult> {
@@ -1996,11 +2785,24 @@ function actualReplayBitrateKbps(sizeBytes: number, durationMs: number): number 
   return Math.max(1, Math.round((sizeBytes * 8) / durationMs));
 }
 
-function prepareReplayVideoDisplayTarget(platform: GamePlatform, mode: ReplayVideoCaptureMode): void {
+function prepareReplayVideoDisplayTarget(
+  requesterWebContentsId: number,
+  platform: GamePlatform,
+  mode: ReplayVideoCaptureMode
+): void {
+  if (
+    !Number.isInteger(requesterWebContentsId) ||
+    requesterWebContentsId <= 0 ||
+    (platform !== "atlas" && platform !== "tcga" && !(isDev && platform === "sim")) ||
+    (mode !== "game-frame" && mode !== "system-window")
+  ) {
+    throw new Error("Replay video display target is invalid.");
+  }
   replayVideoDisplayTarget = {
     platform,
     mode,
-    expiresAt: Date.now() + REPLAY_VIDEO_DISPLAY_TARGET_MS
+    expiresAt: Date.now() + REPLAY_VIDEO_DISPLAY_TARGET_MS,
+    requesterWebContentsId
   };
 }
 
@@ -2030,55 +2832,55 @@ function configureDisplayMediaCapture(): void {
     callback(false);
   });
   electronSession.defaultSession.setDisplayMediaRequestHandler(async (request, callback) => {
-    const requestingContents = [mainWindow?.webContents, deckTrackerWindow?.webContents]
-      .find((candidate): candidate is WebContents => Boolean(
-        candidate &&
-        !candidate.isDestroyed() &&
-        sameWebFrameIdentity(request.frame, candidate.mainFrame)
-      ));
-    const trustedOrigin = Boolean(
-      requestingContents &&
-      isTrustedAppWebContents(requestingContents) &&
-      sameWebFrameIdentity(request.frame, requestingContents.mainFrame) &&
-      isTrustedAppOrigin(request.securityOrigin)
-    );
-
-    if (!trustedOrigin || !request.videoRequested || request.audioRequested) {
-      callback({});
-      return;
-    }
-
+    const respond = createSingleUseDisplayMediaResponder(callback, (error) => {
+      void logStartupIssue("replay video display-media response failed", error);
+    });
+    let streams: Electron.Streams | null = null;
     try {
-      const target = replayVideoDisplayTarget && replayVideoDisplayTarget.expiresAt > Date.now()
-        ? replayVideoDisplayTarget
-        : null;
-      replayVideoDisplayTarget = null;
+      const knownAppContents = [mainWindow?.webContents, deckTrackerWindow?.webContents]
+        .filter((candidate): candidate is WebContents => Boolean(candidate && !candidate.isDestroyed()));
+      const resolvedContents = request.frame
+        ? electronWebContents.fromFrame(request.frame)
+        : undefined;
+      const requestingContents = resolvedContents
+        ? knownAppContents.find((candidate) => candidate.id === resolvedContents.id)
+        : undefined;
+      const trustedRequest = displayMediaRequestIsTrusted({
+        requesterWebContentsId: resolvedContents?.id ?? null,
+        trustedAppWebContentsIds: knownAppContents.map((candidate) => candidate.id),
+        requesterIsTrustedApp: Boolean(requestingContents && isTrustedAppWebContents(requestingContents)),
+        requesterIsMainFrame: Boolean(
+          requestingContents && sameWebFrameIdentity(request.frame, requestingContents.mainFrame)
+        ),
+        originIsTrusted: isTrustedAppOrigin(request.securityOrigin),
+        videoRequested: request.videoRequested,
+        audioRequested: request.audioRequested
+      });
 
-      if (!target) {
-        callback({});
-        return;
-      }
+      if (trustedRequest && requestingContents) {
+        const pendingTarget = replayVideoDisplayTarget;
+        replayVideoDisplayTarget = null;
+        const target = preparedDisplayMediaTargetForRequester(
+          pendingTarget,
+          requestingContents.id
+        );
 
-      if (target?.mode === "game-frame") {
-        const contents = gameWebContentsByPlatform.get(target.platform);
-        if (contents && !contents.isDestroyed() && platformFromUrl(contents.getURL()) === target.platform) {
-          callback({ video: contents.mainFrame });
-          return;
+        if (target?.mode === "game-frame") {
+          const contents = gameWebContentsByPlatform.get(target.platform);
+          if (contents && !contents.isDestroyed() && platformFromUrl(contents.getURL()) === target.platform) {
+            streams = { video: contents.mainFrame };
+          }
+        } else if (target?.mode === "system-window") {
+          const source = await replayWindowCaptureSource();
+          if (source) {
+            streams = { video: { id: source.id, name: source.name } };
+          }
         }
-        callback({});
-        return;
       }
-
-      const source = await replayWindowCaptureSource();
-
-      if (!source) {
-        callback({});
-        return;
-      }
-      callback({ video: { id: source.id, name: source.name } });
-    } catch {
-      callback({});
+    } catch (error) {
+      void logStartupIssue("replay video display-media resolution failed", error);
     }
+    respond(streams);
   }, { useSystemPicker: false });
 }
 
@@ -4769,6 +5571,51 @@ async function exportRiftLiteBackup(options: Partial<RiftLiteBackupOptions> = {}
   return backupSummary(backup, result.filePath);
 }
 
+async function runRiftLiteDataRestore<T>(
+  restore: (restoreFence: AccountCloudRestoreFence) => Promise<T>
+): Promise<T> {
+  // Do not discard scheduled work until the service-level fence is actually
+  // acquired. If an active upload makes this restore refuse, resume the exact
+  // pending automatic sync instead of silently losing it.
+  const resumeAccountCloudSync = accountCloudSyncQueue.suspend();
+  let releaseCaptureMaintenance: (() => void) | null = null;
+  let discardedPendingSyncReason = "";
+  let restoreCompleted = false;
+  try {
+    const result = await syncService.runWithAccountCloudRestoreFence((restoreFence) => {
+      discardedPendingSyncReason = accountCloudSyncQueue.takePendingReason();
+      return runAccountCloudRestore(() => restore(restoreFence), {
+        prepareForRestore: async () => {
+          releaseCaptureMaintenance = await capture.beginDataMaintenance();
+        },
+        invalidateDeckLibrary: () => {
+          deckTrackerService.invalidateDeckLibrary();
+        },
+        refreshAfterRestore: async () => {
+          replayFrameDirectoryCache = null;
+          await configureTcgaWebReplayProductCapture().catch((error) => logStartupIssue("TCGA Web Replay restore reconfiguration failed", error));
+          await configureScreenshotHotkey().catch((error) => logStartupIssue("screenshot hotkey restore reconfiguration failed", error));
+          await configureReplayHotkeys().catch((error) => logStartupIssue("replay hotkey restore reconfiguration failed", error));
+        },
+        finishRestore: () => {
+          releaseCaptureMaintenance?.();
+          releaseCaptureMaintenance = null;
+        }
+      });
+    });
+    restoreCompleted = true;
+    return result;
+  } finally {
+    // The service releases its cloud-restore fence before control reaches this
+    // block. If the atomic restore failed, restore the pre-existing upload
+    // intent without replacing any newer mutation queued during the attempt.
+    if (!restoreCompleted && discardedPendingSyncReason) {
+      accountCloudSyncQueue.restorePendingReason(discardedPendingSyncReason);
+    }
+    resumeAccountCloudSync();
+  }
+}
+
 async function restoreRiftLiteBackup(): Promise<RiftLiteBackupSummary | null> {
   const dialogOptions: OpenDialogOptions = {
     title: "Restore RiftLite backup",
@@ -4796,10 +5643,16 @@ async function restoreRiftLiteBackup(): Promise<RiftLiteBackupSummary | null> {
     return null;
   }
 
-  const safetyBackup = await store.exportBackupData({ includeRecycleBin: true });
-  const safetyPath = join(backupDirectory(), `RiftLite Pre-Restore Backup ${backupTimestamp()}.${RIFTLITE_BACKUP_EXTENSION}`);
-  await writeBackupFile(safetyPath, safetyBackup);
-  await store.restoreBackupData(backup);
+  let safetyPath = "";
+  await runRiftLiteDataRestore(async () => {
+    // Capture/data maintenance and the account-cloud restore fence are both
+    // held before this safety snapshot is taken. The snapshot therefore
+    // cannot omit a just-finalized match which the following restore replaces.
+    const safetyBackup = await store.exportBackupData({ includeRecycleBin: true });
+    safetyPath = join(backupDirectory(), `RiftLite Pre-Restore Backup ${backupTimestamp()}.${RIFTLITE_BACKUP_EXTENSION}`);
+    await writeBackupFile(safetyPath, safetyBackup);
+    await store.restoreBackupData(backup);
+  });
   return backupSummary(backup, filePath, safetyPath);
 }
 
@@ -5374,6 +6227,12 @@ async function createWindow(): Promise<void> {
       backgroundThrottling: false
     }
   });
+  const createdMainWindow = mainWindow;
+  createdMainWindow.once("closed", () => {
+    if (mainWindow === createdMainWindow) {
+      mainWindow = null;
+    }
+  });
   mainWindow.setMenu(null);
   mainWindow.setMenuBarVisibility(false);
   installFullscreenShortcut(mainWindow.webContents);
@@ -5421,6 +6280,9 @@ async function createWindow(): Promise<void> {
       return;
     }
     webPreferences.preload = policy.kind === "game" ? preloadPath("gamePreload") : undefined;
+    webPreferences.additionalArguments = policy.kind === "game"
+      ? [gameWebviewPlatformArgument(policy.platform)]
+      : [];
     webPreferences.nodeIntegration = false;
     webPreferences.nodeIntegrationInSubFrames = false;
     webPreferences.contextIsolation = true;
@@ -5463,6 +6325,12 @@ async function createWindow(): Promise<void> {
     secureGameWebContents(webContents, policy);
     atlasEmptyShellMainRecovery.beginNavigation(webContents.id, webContents.getURL());
     maybeInstallRawCaptureWebSocketTap(webContents);
+    if (policy.platform === "tcga" && tcgaWebReplayProductAccountUid) {
+      tcgaWebReplayCaptureService?.beginDocument(webContents.id);
+    }
+    if (tcgaReplayResearchCapture?.getStatus().active || tcgaWebReplayProductAccountUid) {
+      installTcgaReplayResearchTap(webContents);
+    }
     installFullscreenShortcut(webContents);
     let atlasCardRenderingGeneration = 0;
     let atlasCardRenderingCssKey = "";
@@ -5521,12 +6389,31 @@ async function createWindow(): Promise<void> {
         payload: { reason, ...payload, url }
       });
     };
+    const notifyGuestFailure = (
+      reason: "load-failed" | "render-process-gone" | "unresponsive",
+      message: string,
+      canAutoRemount: boolean,
+      candidateUrl = webContents.getURL()
+    ) => {
+      const platform = platformFromUrl(candidateUrl || webContents.getURL()) ?? policy.platform;
+      const window = mainWindow;
+      if (!window || window.isDestroyed() || window.webContents.isDestroyed()) {
+        return;
+      }
+      window.webContents.send("game-webview:failure", { platform, reason, message, canAutoRemount });
+    };
     const refreshGuestContext = () => {
       rememberGameWebContents(webContents);
       maybeInstallRawCaptureWebSocketTap(webContents);
+      if (tcgaReplayResearchCapture?.getStatus().active || tcgaWebReplayProductAccountUid) {
+        installTcgaReplayResearchTap(webContents);
+      }
     };
     webContents.on("did-start-navigation", (_navigationEvent, url, isInPlace, isMainFrame) => {
       if (isMainFrame && !isInPlace) {
+        if (policy.platform === "tcga" && tcgaWebReplayProductAccountUid) {
+          tcgaWebReplayCaptureService?.beginDocument(webContents.id);
+        }
         invalidateAtlasCardRendering();
         atlasEmptyShellMainRecovery.beginNavigation(webContents.id, url);
         reportGuestLifecycle("guest-main-navigation-start", {}, url);
@@ -5556,6 +6443,9 @@ async function createWindow(): Promise<void> {
       const payload = { errorCode, errorDescription };
       reportGuestLifecycle("guest-main-load-failed", payload, validatedURL);
       void logStartupIssue("guest main load failed", JSON.stringify({ ...payload, url: diagnosticPageUrl(validatedURL) }));
+      if (errorCode !== -3) {
+        notifyGuestFailure("load-failed", `The embedded game page failed to load (${errorDescription || errorCode}).`, true, validatedURL);
+      }
     });
     webContents.on("did-navigate", refreshGuestContext);
     webContents.on("did-navigate-in-page", refreshGuestContext);
@@ -5574,6 +6464,7 @@ async function createWindow(): Promise<void> {
         url: webContents.getURL()
       };
       void logStartupIssue("guest render process gone", JSON.stringify(payload));
+      notifyGuestFailure("render-process-gone", "The embedded game page stopped unexpectedly.", true);
       if (platform) {
         void capture.handleEvent({
           id: `guest-render-process-gone-${Date.now()}`,
@@ -5592,6 +6483,7 @@ async function createWindow(): Promise<void> {
         url: webContents.getURL()
       };
       void logStartupIssue("guest webview unresponsive", JSON.stringify(payload));
+      notifyGuestFailure("unresponsive", "The embedded game page is not responding.", false);
       if (platform) {
         void capture.handleEvent({
           id: `guest-webview-unresponsive-${Date.now()}`,
@@ -5757,43 +6649,91 @@ function registerIpc(): void {
     if (!patch || typeof patch !== "object" || Array.isArray(patch)) {
       throw new Error("Settings patch is invalid.");
     }
-    const accountIdentityChanged =
-      Object.prototype.hasOwnProperty.call(patch, "accountUid") ||
-      Object.prototype.hasOwnProperty.call(patch, "firebaseUid") ||
-      Object.prototype.hasOwnProperty.call(patch, "firebaseRefreshToken");
-    if (accountIdentityChanged) {
-      syncService.invalidateLinkedAccountAuth();
-      await clearRiftLiteReplayEmbedCookies().catch(() => undefined);
+    const replayDirectoryChanged = Object.prototype.hasOwnProperty.call(patch, "replayDirectory");
+    const releaseCaptureMaintenance = replayDirectoryChanged
+      ? await capture.beginDataMaintenance()
+      : null;
+    try {
+      const accountIdentityChanged =
+        Object.prototype.hasOwnProperty.call(patch, "accountUid") ||
+        Object.prototype.hasOwnProperty.call(patch, "firebaseUid") ||
+        Object.prototype.hasOwnProperty.call(patch, "firebaseRefreshToken");
+      if (accountIdentityChanged) {
+        syncService.invalidateLinkedAccountAuth();
+        await clearRiftLiteReplayEmbedCookies().catch(() => undefined);
+      }
+      const saved = await store.saveSettings(patch);
+      if (
+        accountIdentityChanged ||
+        Object.prototype.hasOwnProperty.call(patch, "rawCapture") ||
+        replayDirectoryChanged
+      ) {
+        await configureTcgaWebReplayProductCapture();
+      }
+      if (accountIdentityChanged) {
+        await clearRiftLiteReplayEmbedCookies().catch(() => undefined);
+      }
+      if (
+        Object.prototype.hasOwnProperty.call(patch, "screenshotHotkey") ||
+        Object.prototype.hasOwnProperty.call(patch, "screenshotHotkeyEnabled")
+      ) {
+        await configureScreenshotHotkey();
+      }
+      if (
+        Object.prototype.hasOwnProperty.call(patch, "replayVideoEnabled") ||
+        Object.prototype.hasOwnProperty.call(patch, "replayShadowClipEnabled") ||
+        Object.prototype.hasOwnProperty.call(patch, "replayShadowClipHotkey") ||
+        Object.prototype.hasOwnProperty.call(patch, "replayShadowClipHotkeyEnabled") ||
+        Object.prototype.hasOwnProperty.call(patch, "replayQuickFlagHotkey") ||
+        Object.prototype.hasOwnProperty.call(patch, "replayQuickFlagHotkeyEnabled")
+      ) {
+        await configureReplayHotkeys();
+      }
+      if (replayDirectoryChanged) {
+        replayFrameDirectoryCache = null;
+      }
+      if (RIFTREPLAY_CAPTURE_FEATURE_ENABLED && Object.prototype.hasOwnProperty.call(patch, "rawCapture")) {
+        void uploadPendingRawCapturesWithAccountRefresh().catch((error) => {
+          void logStartupIssue("raw capture pending upload after settings save failed", error);
+        });
+      }
+      queueAccountCloudSync("Settings changed");
+      return saved;
+    } finally {
+      releaseCaptureMaintenance?.();
     }
-    const saved = await store.saveSettings(patch);
-    if (accountIdentityChanged) {
-      await clearRiftLiteReplayEmbedCookies().catch(() => undefined);
+  });
+  handleTrustedAppIpc("settings:raw-capture:update", async (_event, patch: Partial<UserSettings["rawCapture"]>) => {
+    if (!patch || typeof patch !== "object" || Array.isArray(patch)) {
+      throw new Error("Web Replay settings patch is invalid.");
     }
-    if (
-      Object.prototype.hasOwnProperty.call(patch, "screenshotHotkey") ||
-      Object.prototype.hasOwnProperty.call(patch, "screenshotHotkeyEnabled")
-    ) {
-      await configureScreenshotHotkey();
-    }
-    if (
-      Object.prototype.hasOwnProperty.call(patch, "replayVideoEnabled") ||
-      Object.prototype.hasOwnProperty.call(patch, "replayShadowClipEnabled") ||
-      Object.prototype.hasOwnProperty.call(patch, "replayShadowClipHotkey") ||
-      Object.prototype.hasOwnProperty.call(patch, "replayShadowClipHotkeyEnabled") ||
-      Object.prototype.hasOwnProperty.call(patch, "replayQuickFlagHotkey") ||
-      Object.prototype.hasOwnProperty.call(patch, "replayQuickFlagHotkeyEnabled")
-    ) {
-      await configureReplayHotkeys();
-    }
-    if (Object.prototype.hasOwnProperty.call(patch, "replayDirectory")) {
-      replayFrameDirectoryCache = null;
-    }
-    if (RIFTREPLAY_CAPTURE_FEATURE_ENABLED && Object.prototype.hasOwnProperty.call(patch, "rawCapture")) {
-      void rawCaptureService.uploadPendingRawCaptures().catch((error) => {
-        void logStartupIssue("raw capture pending upload after settings save failed", error);
+    const saved = await store.updateSettings((current) => ({
+      rawCapture: { ...current.rawCapture, ...patch }
+    }));
+    await configureTcgaWebReplayProductCapture();
+    if (RIFTREPLAY_CAPTURE_FEATURE_ENABLED) {
+      void uploadPendingRawCapturesWithAccountRefresh().catch((error) => {
+        void logStartupIssue("raw capture pending upload after atomic settings update failed", error);
       });
     }
-    queueAccountCloudSync("Settings changed");
+    queueAccountCloudSync("Web Replay settings changed");
+    return saved;
+  });
+  handleTrustedAppIpc("settings:web-replay-discord-hub:set", async (_event, hubId: string, selected: boolean) => {
+    const normalizedHubId = typeof hubId === "string" ? hubId.trim() : "";
+    if (!normalizedHubId || normalizedHubId.length > 256) {
+      throw new Error("Private hub ID is invalid.");
+    }
+    const saved = await store.updateSettings((current) => ({
+      rawCapture: rawCaptureSettingsForDiscordHubSelection(current, normalizedHubId, Boolean(selected))
+    }));
+    await configureTcgaWebReplayProductCapture();
+    if (RIFTREPLAY_CAPTURE_FEATURE_ENABLED) {
+      void uploadPendingRawCapturesWithAccountRefresh().catch((error) => {
+        void logStartupIssue("raw capture pending upload after Discord destination update failed", error);
+      });
+    }
+    queueAccountCloudSync("Web Replay Discord settings changed");
     return saved;
   });
   ipcMain.handle("capture:debug-enabled", async (event) => {
@@ -5802,8 +6742,16 @@ function registerIpc(): void {
     }
     return (await store.getSettings()).debugMode;
   });
+  ipcMain.handle("capture:tcga-replay-research-active", (event) => {
+    if (trustedGameIpcPlatform(event) !== "tcga") {
+      throw new Error("IPC request rejected: untrusted TCGA sender.");
+    }
+    return tcgaReplayResearchCapture.getStatus().active;
+  });
   handleTrustedAppIpc("capture:health:get", () => capture.getHealth());
+  handleTrustedAppIpc("capture:platform-switch-status", () => capture.getGamePlatformSwitchStatus());
   handleTrustedAppIpc("capture:force-review", (_event, platform: GamePlatform) => capture.forceReview(platform));
+  handleTrustedAppIpc("capture:dismiss-review", () => capture.dismissMatchReview());
   handleTrustedAppIpc("matches:get", () => store.getMatches());
   handleTrustedAppIpc("matches:deleted", () => store.getDeletedMatches());
   handleTrustedAppIpc("matches:save-draft", async (_event, draft: MatchDraft) => {
@@ -5812,25 +6760,41 @@ function registerIpc(): void {
     return saved;
   });
   handleTrustedAppIpc("matches:confirm", async (_event, draft: MatchDraft) => {
-    const saved = await capture.confirmMatch(draft);
-    queueAccountCloudSync("Match saved");
-    return saved;
+    return confirmMatchLocalFirst(draft, {
+      saveLocally: async (candidate) => {
+        const saved = await capture.confirmMatch(candidate, {
+          deferReplayFinalization: confirmedMatchSupportsBackgroundDelivery(candidate)
+        });
+        return saved.platform === "tcga"
+          ? commitConfirmedTcgaReplayLocally(saved)
+          : saved;
+      },
+      shouldDeliverInBackground: confirmedMatchSupportsBackgroundDelivery,
+      queueBackgroundDelivery: queueConfirmedMatchDelivery,
+      deliverBeforeResponse: async (saved) => {
+        await capture.waitForReplayFinalization(saved.id);
+        const latest = (await store.getMatches()).find((candidate) => candidate.id === saved.id) ?? saved;
+        const synced = await capture.syncConfirmedMatch(latest);
+        queueAccountCloudSync("Match saved");
+        return synced;
+      }
+    });
   });
   handleTrustedAppIpc("matches:combine-preview", (_event, matchIds: string[]) => store.previewCombinedMatches(matchIds));
   handleTrustedAppIpc("matches:combine-save", async (_event, payload) => {
     const combined = await store.combineMatches(payload);
     const synced = await syncService.syncMatch(combined, { quiet: true }).catch(() => combined);
-    const saved = await store.saveMatch(synced);
     queueAccountCloudSync("Match repair saved");
-    return saved;
+    return synced;
   });
   handleTrustedAppIpc("matches:combine-undo", async (_event, combinedMatchId: string) => {
-    const restored = await store.undoCombinedMatch(combinedMatchId);
+    const restored = await syncService.undoCombinedMatch(combinedMatchId);
     queueAccountCloudSync("Match combination undone");
     return restored;
   });
   handleTrustedAppIpc("matches:delete", async (_event, id: string) => {
     await store.deleteMatch(id);
+    capture.dismissMatchReview(id);
     queueAccountCloudSync("Match deleted");
   });
   handleTrustedAppIpc("matches:restore", async (_event, id: string) => {
@@ -5840,6 +6804,7 @@ function registerIpc(): void {
   });
   handleTrustedAppIpc("matches:purge", async (_event, id: string) => {
     await store.purgeMatch(id);
+    capture.dismissMatchReview(id);
     queueAccountCloudSync("Deleted match removed");
   });
   handleTrustedAppIpc("matches:export-csv", (_event, payload: MatchHistoryCsvExportPayload) => exportMatchHistoryCsv(payload));
@@ -5990,8 +6955,15 @@ function registerIpc(): void {
     if (result.canceled || !result.filePaths[0]) {
       return settings;
     }
-    replayFrameDirectoryCache = null;
-    return store.saveSettings({ replayDirectory: result.filePaths[0] });
+    const releaseCaptureMaintenance = await capture.beginDataMaintenance();
+    try {
+      replayFrameDirectoryCache = null;
+      const saved = await store.saveSettings({ replayDirectory: result.filePaths[0] });
+      await configureTcgaWebReplayProductCapture();
+      return saved;
+    } finally {
+      releaseCaptureMaintenance();
+    }
   });
   handleTrustedAppIpc("replays:open-directory", async () => {
     const directory = replayBundleDirectory(await store.getSettings());
@@ -5999,7 +6971,9 @@ function registerIpc(): void {
     await shell.openPath(directory);
   });
   handleTrustedAppIpc("replays:video:start", (_event, options: ReplayVideoStartOptions) => startReplayVideoCaptureFile(options));
-  handleTrustedAppIpc("replays:video:prepare-target", (_event, platform: GamePlatform, mode: ReplayVideoCaptureMode) => prepareReplayVideoDisplayTarget(platform, mode));
+  handleTrustedAppIpc("replays:video:prepare-target", (event, platform: GamePlatform, mode: ReplayVideoCaptureMode) => {
+    prepareReplayVideoDisplayTarget(event.sender.id, platform, mode);
+  });
   handleTrustedAppIpc("replays:video:window-source", () => replayWindowCaptureSource());
   handleTrustedAppIpc("replays:video:chunk", (_event, sessionId: string, chunk: ArrayBuffer | Uint8Array) => appendReplayVideoChunk(sessionId, chunk));
   handleTrustedAppIpc("replays:video:finish", (_event, sessionId: string, options: ReplayVideoFinalizeOptions) => finishReplayVideoCaptureFile(sessionId, options));
@@ -6051,8 +7025,9 @@ function registerIpc(): void {
     const status = await syncService.getAccountLinkStatus(sessionId);
     if (status.status === "complete") {
       await clearRiftLiteReplayEmbedCookies().catch(() => undefined);
+      await configureTcgaWebReplayProductCapture();
       if (RIFTREPLAY_CAPTURE_FEATURE_ENABLED) {
-        void rawCaptureService.uploadPendingRawCaptures().catch((error) => {
+        void uploadPendingRawCapturesWithAccountRefresh().catch((error) => {
           void logStartupIssue("raw capture pending upload after account link failed", error);
         });
       }
@@ -6091,16 +7066,16 @@ function registerIpc(): void {
     assertTrustedAppIpcSender(event);
     return syncService.setAccountCloudSyncEnabled(Boolean(enabled));
   });
-  handleTrustedAppIpc("account:cloud-sync:upload", (event) => {
+  handleTrustedAppIpc("account:cloud-sync:upload", (event, allowRemoteReplacement?: boolean) => {
     assertTrustedAppIpcSender(event);
-    return syncService.uploadAccountCloudSync();
-  });
-  handleTrustedAppIpc("account:cloud-sync:restore", (event) => {
-    assertTrustedAppIpcSender(event);
-    return runAccountCloudRestore(
-    () => syncService.restoreAccountCloudSync(),
-    deckTrackerService
+    return syncService.uploadAccountCloudSync(
+      "Account data synced.",
+      { allowRemoteReplacement: allowRemoteReplacement === true }
     );
+  });
+  handleTrustedAppIpc("account:cloud-sync:restore", async (event) => {
+    assertTrustedAppIpcSender(event);
+    return runRiftLiteDataRestore((restoreFence) => syncService.restoreAccountCloudSync(restoreFence));
   });
   handleTrustedAppIpc("account:cloud-sync:conflicts", (event) => {
     assertTrustedAppIpcSender(event);
@@ -6110,16 +7085,16 @@ function registerIpc(): void {
     assertTrustedAppIpcSender(event);
     return syncService.keepAccountCloudSyncConflictCurrent(conflictId);
   });
-  handleTrustedAppIpc("account:cloud-sync:conflict:restore-legacy", (event, conflictId: string) => {
+  handleTrustedAppIpc("account:cloud-sync:conflict:restore-legacy", async (event, conflictId: string) => {
     assertTrustedAppIpcSender(event);
-    return runAccountCloudRestore(
-      () => syncService.restoreAccountCloudSyncConflictLegacy(conflictId),
-      deckTrackerService
-    );
+    return runRiftLiteDataRestore((restoreFence) => (
+      syncService.restoreAccountCloudSyncConflictLegacy(conflictId, restoreFence)
+    ));
   });
   handleTrustedAppIpc("account:unlink", async (event) => {
     assertTrustedAppIpcSender(event);
     const settings = await syncService.unlinkAccount();
+    await configureTcgaWebReplayProductCapture();
     await clearRiftLiteReplayEmbedCookies().catch(() => undefined);
     return settings;
   });
@@ -6227,6 +7202,84 @@ function registerIpc(): void {
     await diagnostics.ensureFile();
     shell.showItemInFolder(diagnostics.getPath());
   });
+  handleTrustedAppIpc("tcga-research:status", () => tcgaReplayResearchCapture.getStatus());
+  handleTrustedAppIpc("tcga-research:start", async () => {
+    if (tcgaReplayResearchCapture.getStatus().active) {
+      return tcgaReplayResearchCapture.getStatus();
+    }
+    const messageOptions = {
+      type: "info" as const,
+      buttons: ["Cancel", "Start monitor"],
+      defaultId: 1,
+      cancelId: 0,
+      noLink: true,
+      title: "Start TCGA replay monitor?",
+      message: "RiftLite will record TCGA game messages and matching board-state checkpoints locally.",
+      detail: "Start this before joining a match, play a few representative games, then stop the monitor and share the generated file with the RiftLite developer working on TCGA Web Replay. Nothing is uploaded automatically."
+    };
+    const decision = mainWindow
+      ? await dialog.showMessageBox(mainWindow, messageOptions)
+      : await dialog.showMessageBox(messageOptions);
+    if (decision.response !== 1) {
+      return tcgaReplayResearchCapture.getStatus();
+    }
+    const status = await tcgaReplayResearchCapture.start();
+    try {
+      const attached = await setTcgaReplayResearchTapActive(true, status.sessionId);
+      if (!attached) {
+        tcgaReplayResearchCapture.setTransportState("waiting");
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      tcgaReplayResearchCapture.setTransportState("error", message);
+      recordTcgaReplayResearch("monitor-hook-error", {
+        phase: "start",
+        message
+      });
+    }
+    recordTcgaReplayResearch("monitor-started", {
+      tcgaAttached: Boolean(gameWebContentsByPlatform.get("tcga")),
+      transportState: tcgaReplayResearchCapture.getStatus().transportState,
+      note: "TCGA PeerJS/WebRTC and DOM correlation monitor active"
+    });
+    return tcgaReplayResearchCapture.getStatus();
+  });
+  handleTrustedAppIpc("tcga-research:stop", async () => {
+    if (!tcgaReplayResearchCapture.getStatus().active) {
+      return tcgaReplayResearchCapture.getStatus();
+    }
+    await setTcgaReplayResearchTapActive(false).catch(() => undefined);
+    const status = await tcgaReplayResearchCapture.stop("user");
+    if (status.exportPath) {
+      shell.showItemInFolder(status.exportPath);
+    }
+    return status;
+  });
+  handleTrustedAppIpc("tcga-research:open", async () => {
+    const directory = tcgaReplayResearchCapture.getStatus().directory;
+    await mkdir(directory, { recursive: true });
+    await shell.openPath(directory);
+  });
+  handleTrustedAppIpc("tcga-research:delete", async () => {
+    const messageOptions = {
+      type: "warning" as const,
+      buttons: ["Cancel", "Delete monitor files"],
+      defaultId: 0,
+      cancelId: 0,
+      noLink: true,
+      title: "Delete TCGA replay monitor files?",
+      message: "This removes the locally captured TCGA research sessions and exports.",
+      detail: "This does not affect normal matches, video replays, decks, accounts, or Atlas Web Replays."
+    };
+    const decision = mainWindow
+      ? await dialog.showMessageBox(mainWindow, messageOptions)
+      : await dialog.showMessageBox(messageOptions);
+    if (decision.response !== 1) {
+      return tcgaReplayResearchCapture.getStatus();
+    }
+    await setTcgaReplayResearchTapActive(false).catch(() => undefined);
+    return tcgaReplayResearchCapture.deleteAll();
+  });
   handleTrustedAppIpc("screenshot:take", () => takeScreenshot("manual"));
   handleTrustedAppIpc("screenshot:choose-directory", async () => {
     const settings = await store.getSettings();
@@ -6263,7 +7316,48 @@ function registerIpc(): void {
   handleTrustedAppIpc("analytics:spotlight-click", (_event, payload: SpotlightClickPayload) => trackSpotlightClick(payload));
   handleTrustedAppIpc("assets:url", (_event, relativePath: string) => assetDataUrl(relativePath));
   handleTrustedAppIpc("battlefields:get", () => loadBattlefields());
+  handleTrustedAppIpc("game-webview:focus", (_event, platform: GamePlatform) => {
+    if (platform !== "atlas" && platform !== "tcga" && platform !== "sim") {
+      throw new Error("Game webview focus request has an invalid platform.");
+    }
+    const contents = gameWebContentsByPlatform.get(platform);
+    const policy = contents && !contents.isDestroyed()
+      ? embeddedWebviewPolicyBySession.get(contents.session)
+      : null;
+    if (
+      !mainWindow ||
+      mainWindow.isDestroyed() ||
+      !mainWindow.isFocused() ||
+      !contents ||
+      contents.isDestroyed() ||
+      contents.session !== electronSession.fromPartition(GAME_WEBVIEW_PARTITIONS[platform]) ||
+      !policy ||
+      policy.kind !== "game" ||
+      policy.platform !== platform ||
+      !isAllowedEmbeddedNavigation(policy, contents.getURL())
+    ) {
+      return false;
+    }
+    mainWindow.webContents.focus();
+    contents.focus();
+    setTimeout(() => {
+      if (
+        mainWindow &&
+        !mainWindow.isDestroyed() &&
+        mainWindow.isFocused() &&
+        !contents.isDestroyed()
+      ) {
+        mainWindow.webContents.focus();
+        contents.focus();
+      }
+    }, 80);
+    return true;
+  });
   handleTrustedAppIpc("atlas-webview:recover", async () => {
+    const switchStatus = capture.getGamePlatformSwitchStatus();
+    if (!switchStatus.allowed) {
+      return { ok: false, message: switchStatus.message };
+    }
     atlasEmptyShellMainRecovery.resetAfterExplicitRepair();
     if (atlasWebviewRecoveryInFlight) {
       return atlasWebviewRecoveryInFlight;
@@ -6328,11 +7422,37 @@ function registerIpc(): void {
     }
     await capture.handleEvent(event);
   });
+  ipcMain.on("capture:tcga-research-event", (ipcEvent, value: unknown) => {
+    if (
+      trustedGameIpcPlatform(ipcEvent) !== "tcga" ||
+      !tcgaReplayResearchCapture.getStatus().active
+    ) {
+      return;
+    }
+    const event = validatedTcgaResearchEvent(value);
+    if (!event) return;
+    recordTcgaReplayResearch(`preload-${event.kind}`, {
+      eventId: event.id,
+      url: event.url,
+      payload: event.payload
+    }, event.capturedAt, "tcga-preload");
+  });
   ipcMain.on("capture:event", (ipcEvent, value: unknown) => {
     const senderPlatform = trustedGameIpcPlatform(ipcEvent);
     const event = senderPlatform ? validatedCaptureEvent(value, senderPlatform, isDev) : null;
     if (!event) {
       return;
+    }
+    if (
+      event.platform === "tcga" &&
+      tcgaReplayResearchCapture.getStatus().active &&
+      !["network-fetch", "network-xhr", "network-websocket"].includes(event.kind)
+    ) {
+      recordTcgaReplayResearch(`capture-${event.kind}`, {
+        eventId: event.id,
+        url: event.url,
+        payload: event.payload
+      }, event.capturedAt, "tcga-preload");
     }
     handleAtlasShellStatusEvent(ipcEvent.sender, event);
     void capture.handleEvent(event);
@@ -6377,6 +7497,7 @@ app.whenReady().then(async () => {
   try {
     Menu.setApplicationMenu(null);
     await logStartupIssue("startup begin", `${RIFTLITE_BUILD_IDENTITY.appName} ${app.getVersion()}`);
+    installSmokeNetworkIsolation();
     store = new RiftLiteStore(
       join(app.getPath("userData"), "riftlite-v06.sqlite"),
       join(app.getPath("userData"), "riftlite-v06-store.json"),
@@ -6398,8 +7519,21 @@ app.whenReady().then(async () => {
     rawCaptureService = new RawCaptureService(
       store,
       (expectedAccountUid) => syncService.refreshLinkedAccountIdToken(expectedAccountUid),
-      async (localMatchId, webReplayId) => {
-        await syncService.attachWebReplayToSyncedHubMatches(localMatchId, webReplayId);
+      async (localMatchId, webReplayId, expectedAccountUid) => {
+        const match = (await store.getMatches()).find((candidate) => candidate.id === localMatchId);
+        if (match?.platform === "tcga") {
+          const synced = await syncService.syncMatch(match, { quiet: true });
+          await syncService.attachWebReplayToSyncedHubMatches(localMatchId, webReplayId, expectedAccountUid);
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send("match:draft", synced);
+          }
+          if (typeof capture !== "undefined") {
+            capture.markConfirmedReplayFinalizationComplete(localMatchId);
+          }
+          queueAccountCloudSync("TCGA Web Replay delivered");
+          return;
+        }
+        await syncService.attachWebReplayToSyncedHubMatches(localMatchId, webReplayId, expectedAccountUid);
       },
       (replay) => {
         const window = mainWindow;
@@ -6408,11 +7542,13 @@ app.whenReady().then(async () => {
         }
       }
     );
-    void syncService.backfillPrivateHubWebReplayIds().catch((error) => {
-      void logStartupIssue("private hub web replay backfill failed", error);
-    });
-    if (RIFTREPLAY_CAPTURE_FEATURE_ENABLED) {
-      void rawCaptureService.uploadPendingRawCaptures().catch((error) => {
+    if (!IS_PACKAGED_SMOKE_TEST) {
+      void syncService.backfillPrivateHubWebReplayIds().catch((error) => {
+        void logStartupIssue("private hub web replay backfill failed", error);
+      });
+    }
+    if (RIFTREPLAY_CAPTURE_FEATURE_ENABLED && !IS_PACKAGED_SMOKE_TEST) {
+      void retryPendingRawCapturesAndMatchReports().catch((error) => {
         void logStartupIssue("raw capture pending upload on startup failed", error);
       });
       startRawCaptureUploadRetry();
@@ -6423,11 +7559,74 @@ app.whenReady().then(async () => {
       }
       return capture.getLiveOverlayMatch();
     });
-    await overlayServer.start().catch((error) => logStartupIssue("overlay server startup failed", error));
+    if (!IS_PACKAGED_SMOKE_TEST) {
+      await overlayServer.start().catch((error) => logStartupIssue("overlay server startup failed", error));
+    }
     diagnostics = new CaptureDiagnostics();
+    store.setPerformanceReporter((event) => {
+      const capturedAt = new Date().toISOString();
+      void diagnostics.record({
+        id: `performance-database-${Date.now()}-${randomUUID()}`,
+        platform: "sim",
+        kind: "debug",
+        capturedAt,
+        url: "",
+        payload: { diagnosticType: "performance", source: "database", ...event }
+      }).catch(() => undefined);
+    });
+    eventLoopWatchdog = startEventLoopWatchdog((event) => {
+      const capturedAt = new Date().toISOString();
+      void diagnostics.record({
+        id: `performance-event-loop-${Date.now()}-${randomUUID()}`,
+        platform: "sim",
+        kind: "debug",
+        capturedAt,
+        url: "",
+        payload: { diagnosticType: "performance", source: "main-event-loop", ...event }
+      }).catch(() => undefined);
+    });
+    tcgaReplayResearchCapture = new TcgaReplayResearchCapture(
+      join(app.getPath("userData"), "TCGA Replay Monitor"),
+      app.getVersion(),
+      {
+        maxBytes: 128 * 1024 * 1024,
+        maxRecords: 50_000
+      }
+    );
+    tcgaWebReplayCaptureService = new TcgaWebReplayCaptureService(
+      await rawCaptureService.captureDirectory(),
+      (prepared, identity, replay) => rawCaptureService.registerPreparedTcgaCapture(
+        prepared,
+        identity,
+        replay,
+        { deferDelivery: true }
+      )
+    );
+    await configureTcgaWebReplayProductCapture();
     updater = new UpdaterService(() => mainWindow, {
-      enabled: RIFTLITE_BUILD_IDENTITY.updatesEnabled,
-      disabledMessage: "Updates are disabled in this build."
+      enabled: RIFTLITE_BUILD_IDENTITY.updatesEnabled && !IS_PACKAGED_SMOKE_TEST,
+      disabledMessage: IS_PACKAGED_SMOKE_TEST
+        ? "Updates are disabled during an isolated smoke test."
+        : "Updates are disabled in this build.",
+      beforeInstall: async () => {
+        // electron-updater must own the quit that launches the downloaded
+        // installer. Finalize the research capture first and then allow that
+        // quit through the global before-quit guard.
+        try {
+          if (tcgaReplayResearchCapture.getStatus().active) {
+            await tcgaReplayResearchCapture.stop("update-install");
+          }
+        } catch (error) {
+          await logStartupIssue("TCGA replay monitor update finalization failed", error);
+        } finally {
+          tcgaResearchQuitAllowed = true;
+        }
+      },
+      onInstallHandoffFailed: () => {
+        // If the installer could not start, RiftLite remains open. Restore the
+        // normal capture-aware quit guard for any later research session.
+        tcgaResearchQuitAllowed = false;
+      }
     });
     await diagnostics.ensureFile();
     capture = new CaptureCoordinator(
@@ -6438,10 +7637,15 @@ app.whenReady().then(async () => {
       diagnostics,
       captureTimedReplayFrame,
       deckTrackerService,
-      (identity, replay) => rawCaptureService.finishCapture(identity, replay)
+      async (identity, replay) => {
+        if (identity.platform !== "tcga") {
+          return rawCaptureService.finishCapture(identity, replay);
+        }
+        return finalizeTcgaWebReplayCapture(identity, replay);
+      }
     );
     capture.recordBuildMarker(app.getVersion());
-    if (simEventReceiverEnabled()) {
+    if (!IS_PACKAGED_SMOKE_TEST && simEventReceiverEnabled()) {
       simEventReceiver = new SimEventReceiver((event) => capture.handleEvent(event));
       await simEventReceiver.start().catch(async (error) => {
         await logStartupIssue("sim event receiver startup failed", error);
@@ -6527,15 +7731,65 @@ app.whenReady().then(async () => {
           if (UI_SNAPSHOT_VIEW === "play" && UI_SNAPSHOT_PLATFORM === "atlas") {
             await new Promise((resolveAtlas) => setTimeout(resolveAtlas, UI_SNAPSHOT_ATLAS_WAIT_MS));
           }
+          const rendererReadiness = await mainWindow.webContents.executeJavaScript(`(() => {
+            const shell = document.querySelector('.app-shell.ui-dev-modern');
+            const sidebar = document.querySelector('.sidebar');
+            const homeButton = document.querySelector('button[title="Home"]');
+            const bounds = shell instanceof HTMLElement ? shell.getBoundingClientRect() : null;
+            const bodyText = String(document.body?.innerText || '').replace(/\\s+/g, ' ').trim();
+            return {
+              readyState: document.readyState,
+              shellFound: shell instanceof HTMLElement,
+              sidebarFound: sidebar instanceof HTMLElement,
+              homeButtonFound: homeButton instanceof HTMLButtonElement,
+              bridgeAvailable: typeof window.riftlite?.getSettings === 'function',
+              width: bounds?.width || 0,
+              height: bounds?.height || 0,
+              bodyTextLength: bodyText.length,
+              hasRiftLiteText: bodyText.includes('RiftLite')
+            };
+          })()`, true) as {
+            readyState: string;
+            shellFound: boolean;
+            sidebarFound: boolean;
+            homeButtonFound: boolean;
+            bridgeAvailable: boolean;
+            width: number;
+            height: number;
+            bodyTextLength: number;
+            hasRiftLiteText: boolean;
+          };
+          const rendererReady = rendererReadiness.readyState === "complete" &&
+            rendererReadiness.shellFound &&
+            rendererReadiness.sidebarFound &&
+            rendererReadiness.homeButtonFound &&
+            rendererReadiness.bridgeAvailable &&
+            rendererReadiness.width >= 700 &&
+            rendererReadiness.height >= 500 &&
+            rendererReadiness.bodyTextLength >= 200 &&
+            rendererReadiness.hasRiftLiteText;
+          if (!rendererReady) {
+            throw new Error(`Renderer readiness check failed: ${JSON.stringify(rendererReadiness)}`);
+          }
           const image = await mainWindow.webContents.capturePage();
           await writeFile(resolve(UI_SNAPSHOT_PATH), image.toPNG());
+          await writeFile(`${resolve(UI_SNAPSHOT_PATH)}.json`, JSON.stringify({
+            version: 1,
+            rendererReady,
+            ...rendererReadiness
+          }, null, 2), "utf8");
           app.quit();
-        })().catch((error) => logStartupIssue("UI snapshot failed", error));
+        })().catch(async (error) => {
+          await logStartupIssue("UI snapshot failed", error);
+          app.exit(1);
+        });
       }, 3_000);
     }
-    await configureScreenshotHotkey().catch((error) => logStartupIssue("screenshot hotkey startup failed", error));
-    await configureReplayHotkeys().catch((error) => logStartupIssue("replay hotkey startup failed", error));
-    if (RIFTLITE_BUILD_IDENTITY.usageAnalyticsEnabled) {
+    if (!IS_PACKAGED_SMOKE_TEST) {
+      await configureScreenshotHotkey().catch((error) => logStartupIssue("screenshot hotkey startup failed", error));
+      await configureReplayHotkeys().catch((error) => logStartupIssue("replay hotkey startup failed", error));
+    }
+    if (RIFTLITE_BUILD_IDENTITY.usageAnalyticsEnabled && !IS_PACKAGED_SMOKE_TEST) {
       scheduleAppUsageHeartbeat(store);
     }
     await logStartupIssue("startup complete", `${RIFTLITE_BUILD_IDENTITY.appName} ${app.getVersion()}`);
@@ -6555,14 +7809,39 @@ app.whenReady().then(async () => {
 });
 
 app.on("window-all-closed", () => {
-  overlayServer?.stop();
-  simEventReceiver?.stop();
   if (process.platform !== "darwin") {
     app.quit();
   }
 });
 
+app.on("before-quit", (event) => {
+  if (
+    tcgaResearchQuitAllowed ||
+    typeof tcgaReplayResearchCapture === "undefined" ||
+    !tcgaReplayResearchCapture.getStatus().active
+  ) {
+    return;
+  }
+  event.preventDefault();
+  if (tcgaResearchQuitFinalizationStarted) return;
+  tcgaResearchQuitFinalizationStarted = true;
+  void (async () => {
+    try {
+      await tcgaReplayResearchCapture.stop("app-quit");
+    } catch (error) {
+      await logStartupIssue("TCGA replay monitor quit finalization failed", error);
+    } finally {
+      tcgaResearchQuitAllowed = true;
+      app.quit();
+    }
+  })();
+});
+
 app.on("will-quit", () => {
+  eventLoopWatchdog?.stop();
+  eventLoopWatchdog = null;
+  overlayServer?.stop();
+  void simEventReceiver?.stop();
   if (rawCaptureUploadRetryTimer) {
     clearInterval(rawCaptureUploadRetryTimer);
     rawCaptureUploadRetryTimer = null;

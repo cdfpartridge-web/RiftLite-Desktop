@@ -9,7 +9,7 @@ import {
 describe("community spotlight themes", () => {
   it("defines a theme for every spotlight and no unknown entries", () => {
     expect(Object.keys(COMMUNITY_SPOTLIGHT_THEMES).sort()).toEqual([...COMMUNITY_SPOTLIGHT_IDS].sort());
-    expect(COMMUNITY_SPOTLIGHT_IDS).toHaveLength(10);
+    expect(COMMUNITY_SPOTLIGHT_IDS).toHaveLength(12);
   });
 
   it("uses valid six-digit CSS hex colors", () => {
@@ -25,6 +25,14 @@ describe("community spotlight themes", () => {
     expect(communitySpotlightTheme("  RIFTLAB ")).toEqual({
       primary: "#0F7AF2",
       secondary: "#DB2629"
+    });
+    expect(communitySpotlightTheme("  MASKEDSWAN ")).toEqual({
+      primary: "#D65A2E",
+      secondary: "#315B73"
+    });
+    expect(communitySpotlightTheme("  ARG0NTCG ")).toEqual({
+      primary: "#3D8FB8",
+      secondary: "#D2DEE8"
     });
   });
 

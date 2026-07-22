@@ -1,5 +1,8 @@
 export interface AccountCloudRestoreDeckTracker {
   invalidateDeckLibrary(): void;
+  prepareForRestore?(): Promise<void> | void;
+  refreshAfterRestore?(): Promise<void> | void;
+  finishRestore?(): Promise<void> | void;
 }
 
 /**
@@ -10,7 +13,13 @@ export async function runAccountCloudRestore<T>(
   restore: () => Promise<T>,
   deckTracker: AccountCloudRestoreDeckTracker
 ): Promise<T> {
-  const result = await restore();
-  deckTracker.invalidateDeckLibrary();
-  return result;
+  try {
+    await deckTracker.prepareForRestore?.();
+    const result = await restore();
+    deckTracker.invalidateDeckLibrary();
+    await deckTracker.refreshAfterRestore?.();
+    return result;
+  } finally {
+    await deckTracker.finishRestore?.();
+  }
 }

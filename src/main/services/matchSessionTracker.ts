@@ -171,7 +171,11 @@ export class MatchSessionTracker {
 
   shouldFinalizeBeforeNewSession(event: CaptureEvent): boolean {
     const session = this.sessions.get(event.platform);
-    return Boolean(session && shouldStartFreshSession(session, event) && previewGames(session).length);
+    return Boolean(
+      session &&
+      shouldStartFreshSession(session, event) &&
+      sessionHasMeaningfulGameplay(session)
+    );
   }
 
   holdCurrentGame(platform: GamePlatform, endEvent?: CaptureEvent): void {
@@ -384,7 +388,11 @@ function shouldStartFreshSession(session: SessionState, event: CaptureEvent): bo
   const previousLooksPlayed = currentScoreTotal >= 6 || previousGameTotals.some((total) => total >= 6);
   const nextLooksFresh = event.kind === "match-start" || nextScoreTotal <= 1 || nextScoreTotal <= currentScoreTotal - 4;
   if (!previousLooksPlayed) {
-    return false;
+    // A reliable opponent change still starts a new identity boundary even
+    // when the abandoned lobby never accumulated a meaningful score. The
+    // coordinator separately decides whether the old session is worth a
+    // review, so a quick disconnect cannot contaminate the next match.
+    return nextLooksFresh;
   }
   if (session.completedGames.length > 0) {
     return true;
@@ -1607,6 +1615,26 @@ function isWorthKeeping(game: MatchGame): boolean {
     );
 }
 
+function sessionHasMeaningfulGameplay(session: SessionState): boolean {
+  if (previewGames(session).some((game) => (
+    game.result !== "Incomplete" ||
+    (game.myPoints ?? 0) > 0 ||
+    (game.oppPoints ?? 0) > 0
+  ))) {
+    return true;
+  }
+  return session.evidence.some((event) => {
+    if (resultFromText(readString(event.payload.endText))) return true;
+    const rows = Array.isArray(event.payload.rows) ? event.payload.rows : [];
+    return rows.some((row) => {
+      const text = row && typeof row === "object" && !Array.isArray(row)
+        ? readString((row as Record<string, unknown>).text)
+        : readString(row);
+      return /starting turn|mulligan|played|combat|attack|block|wins!|opponent.*left|left the game/i.test(text);
+    });
+  });
+}
+
 function gameHasNonZeroScore(game: MatchGame): boolean {
   return (game.myPoints ?? 0) > 0 || (game.oppPoints ?? 0) > 0;
 }
@@ -2191,7 +2219,7 @@ function isBo3Complete(games: MatchGame[]): boolean {
 }
 
 function unfinishedBo3Result(format: MatchDraft["format"], games: MatchGame[]): MatchDraft["result"] | null {
-  return format === "Bo3" && games.length >= 2 && !isBo3Complete(games) ? "Incomplete" : null;
+  return format === "Bo3" && games.length > 0 && !isBo3Complete(games) ? "Incomplete" : null;
 }
 
 function shouldHoldAtlasGameResult(session: SessionState, payload: Record<string, unknown>, games: MatchGame[]): boolean {
@@ -2626,12 +2654,14 @@ function cleanPlayerName(value: string): string {
 }
 
 function isLikelyAtlasActionText(value: string): boolean {
-  const normalized = normalizeNameKey(value).replace(/^[\d\s:.-]+/, "");
-  if (!normalized) {
+  const normalized = normalizeNameKey(value);
+  const withoutClockPrefix = normalized.replace(/^[\d\s:.-]+/, "");
+  if (!withoutClockPrefix) {
     return false;
   }
-  return /^(locked|chose|auto[-\s]?selected|selected|must choose|both players|finalized|rolled|played|moved|drew|ended|conquered|scored|set your score)\b/.test(normalized) ||
-    /\b(take the first|locked in|locked a battlefield|mulligan|sideboarding|sideboard|their turn|your turn)\b/.test(normalized);
+  return /^(locked|chose|auto[-\s]?selected|selected|must choose|both players|finalized|rolled|(?:wins?|won) initiative|played|moved|drew|ended|conquered|scored|set your score)\b/.test(withoutClockPrefix) ||
+    (/^\d/.test(normalized) && /^must\b/.test(withoutClockPrefix)) ||
+    /\b(take the first|decides who plays first|locked in|locked a battlefield|mulligan|sideboarding|sideboard|their turn|your turn)\b/.test(withoutClockPrefix);
 }
 
 function isLikelyAtlasPlayerNameNoise(value: string): boolean {
@@ -2641,6 +2671,7 @@ function isLikelyAtlasPlayerNameNoise(value: string): boolean {
   }
   return /^\d+\s*\/\s*\d+$/.test(normalized) ||
     /^\d+\s*locked\b/.test(normalized) ||
+    /^\d+\s*must\b/.test(normalized) ||
     /^\d+\s*(?:cards?|runes?|energy|power)\b/.test(normalized);
 }
 

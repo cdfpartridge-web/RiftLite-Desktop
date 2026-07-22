@@ -1,4 +1,4 @@
-import React, { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import QRCode from "qrcode";
 import {
@@ -86,7 +86,6 @@ import type {
   DeckSnapshot,
   DeckTestingGoalStatus,
   DeckTrackerCardState,
-  DeckTrackerObservation,
   DeckTrackerPerformanceMode,
   DeckTrackerSideboardCardOption,
   DeckTrackerSideboardChange,
@@ -136,16 +135,14 @@ import type {
   TeamModerationAction,
   TeamModerationRecord,
   TeamSyncTarget,
+  TcgaReplayResearchStatus,
   TestingSession,
   UpdateStatus,
   UserSettings,
-  VisionDeckTrackerStatus,
-  VisionFrameCandidate,
-  VisionFrameSample,
-  VisionRenderedCardObservation
+  VisionDeckTrackerStatus
 } from "../shared/types";
 import { buildAtlasReplay, replaySnapshotCardCount, type AtlasReplayViewModel, type ReplayTimelineEvent, type ReplayTurnView } from "../shared/atlasReplay";
-import { getRiftLiteAccountState, isGenericAccountDisplayName } from "../shared/accountIdentity";
+import { getRiftLiteAccountState, hasVerifiedRiftLiteAccount, isGenericAccountDisplayName } from "../shared/accountIdentity";
 import { accountLinkUrlForProvider, type AccountLinkProvider } from "../shared/accountLink";
 import {
   accountMigrationProgress,
@@ -156,10 +153,9 @@ import {
   type AccountSyncChoice
 } from "../shared/accountSyncConfidence";
 import {
-  activeDiscordReplayHubIds,
-  rawCaptureSettingsForDiscordHubSelection
+  activeDiscordReplayHubIds
 } from "../shared/replaySharing";
-import { replayDeliveryStages, replayDeliverySummary } from "../shared/replayDelivery";
+import { replayDeliveryErrorMessage, replayDeliveryStages, replayDeliverySummary } from "../shared/replayDelivery";
 import { buildRiftLiteReplayModel, type RiftLiteReplayModel } from "../shared/riftLiteReplayEngine";
 import { activeDeckOverlayStats, buildDeckPerformance, type DeckBattlefieldPairStat, type DeckBattlefieldStat, type DeckPerformanceStats, type DeckRecordStats } from "../shared/deckPerformance";
 import {
@@ -188,7 +184,6 @@ import {
   type CommunityDeckGroup,
   type CommunityDeckLegendSummary
 } from "../shared/communityDecks";
-import type { VisionDeckTrackerMatchResult } from "../shared/visionDeckTracker";
 import { CANONICAL_LEGEND_NAMES, canonicalLegendName, legendAliasesFor, normalizeLegendName } from "../shared/legendNames";
 import { legendFromImageUrl, legendImageUrl } from "../shared/legendImages";
 import {
@@ -208,6 +203,7 @@ import {
 } from "../shared/atlasWebviewRecovery";
 import { stopMediaRecorderSafely } from "../shared/mediaRecorderStop";
 import { RIFTLITE_BUILD_IDENTITY } from "../shared/buildIdentity";
+import { enqueueReviewDraft, shiftReviewDraft } from "../shared/reviewQueue";
 import {
   PRIVATE_HUB_DELETE_COUNTDOWN_SECONDS,
   canDeletePrivateHub,
@@ -224,7 +220,8 @@ import {
 import {
   GAME_WEBVIEW_PARTITIONS,
   gameWebviewIsReady,
-  nextMountedGamePlatform
+  nextMountedGamePlatform,
+  shouldRestoreGameWebviewFocus
 } from "../shared/gameWebview";
 import { communitySpotlightTheme } from "../shared/communitySpotlightThemes";
 import { communitySpotlightTarget } from "../shared/communitySpotlightNavigation";
@@ -263,6 +260,7 @@ import { GuidedTour } from "./GuidedTour";
 import { RiftLiteReplayViewer } from "./RiftLiteReplayViewer";
 import { SettingsAccordionSection } from "./SettingsAccordionSection";
 import {
+  ATLAS_SHELL_COVER_TIMEOUT_MS,
   INITIAL_ATLAS_SHELL_VISIBILITY,
   shouldCoverAtlasShell,
   updateAtlasShellVisibility
@@ -302,7 +300,6 @@ const DEFAULT_HEALTH: CaptureHealth = {
 };
 
 const DECK_TRACKER_FEATURE_ENABLED = true;
-const VISION_DECK_TRACKER_FRAME_SCAN_ENABLED = false;
 const RIFTLITE_WEB_REPLAY_FEATURE_VISIBLE = true;
 
 const DEFAULT_UPDATE_STATUS: UpdateStatus = {
@@ -319,6 +316,7 @@ const FALLBACK_BOOT_SETTINGS: UserSettings = {
   communitySyncEnabled: true,
   firebaseUid: "",
   firebaseRefreshToken: "",
+  firebaseCredentialGeneration: "",
   accountUid: "",
   accountEmail: "",
   accountHandle: "",
@@ -331,6 +329,7 @@ const FALLBACK_BOOT_SETTINGS: UserSettings = {
   accountCloudSyncLastRestoredAt: "",
   accountCloudSyncDeviceId: "",
   accountCloudSyncDeviceName: "",
+  accountCloudSyncRemoteGenerationId: "",
   accountCloudSyncLastError: "",
   anonymousDiagnosticsEnabled: true,
   anonymousInstallId: "",
@@ -357,6 +356,8 @@ const FALLBACK_BOOT_SETTINGS: UserSettings = {
     enabled: false,
     webReplayAutoUploadEnabled: false,
     webReplayAutoUploadAccountUid: "",
+    tcgaWebReplayAutoUploadEnabled: false,
+    tcgaWebReplayAutoUploadAccountUid: "",
     webReplayDiscordShareEnabled: false,
     webReplayDiscordShareAccountUid: "",
     webReplayDiscordShareHubIds: [],
@@ -450,24 +451,24 @@ const DEFAULT_HOME_FEATURED_VIDEOS: HomeFeaturedVideo[] = [
   },
   {
     title: "Featured RiftLite video",
-    embedUrl: youtubeEmbedUrlFromId("XPvo24lfN9A"),
-    url: "https://www.youtube.com/watch?v=XPvo24lfN9A",
-    thumbnailUrl: "https://img.youtube.com/vi/XPvo24lfN9A/hqdefault.jpg",
-    videoId: "XPvo24lfN9A"
+    embedUrl: youtubeEmbedUrlFromId("gUHFg8zSnSY"),
+    url: "https://www.youtube.com/watch?v=gUHFg8zSnSY",
+    thumbnailUrl: "https://img.youtube.com/vi/gUHFg8zSnSY/hqdefault.jpg",
+    videoId: "gUHFg8zSnSY"
   }
 ];
 const HOME_CONFIG_URL = "https://www.riftlite.com/api/app/home";
 const RELEASE_NOTES = {
   version: APP_VERSION_META,
-  title: "RiftLite v0.9.00",
-  intro: "The modern RiftLite experience is now the main build, with stronger account continuity, replay reliability, privacy, and capture support.",
+  title: `RiftLite v${APP_VERSION_META}`,
+  intro: "This release hardens the systems that connect accounts, capture matches, and publish Web Replays so they behave as one reliable workflow.",
   items: [
-    "A redesigned Home dashboard and modern navigation keep play readiness, recent activity, sponsor opportunities, Riftlab, and community content together.",
-    "The guided tour now continues through your first successfully saved match, while every existing Review, Prepare, Community, Overlay, Account, and Settings tool remains available.",
-    "Google or email sign-in links the desktop to your RiftLite website identity, history, decks, private hubs, and optional device sync.",
-    "Account Sync now shows local and cloud counts, active-deck state, migration progress, last successful sync, and a preview before either copy is selected.",
-    "Current card-print and battlefield mapping improves alternate-art, overnumbered, signed, Rune, and tracker recognition across Atlas, TCGA, and Web Replay.",
-    "Credentials use operating-system protected storage, backups omit secrets, diagnostics are redacted by default, and embedded content uses stricter trust boundaries."
+    "Account linking now recovers verified Google, email, and Discord identities consistently, while account switches cannot finish an upload or cloud restore under the wrong user.",
+    "Web Replay capture now finalizes and persists before match reporting, retries temporary processing conflicts, and keeps replay sharing and private-hub access aligned with the linked account.",
+    "Atlas and TCGA match reporting now rejects stale sessions, preserves queued reviews, and keeps battlefield ownership, grouped cards, counters, and scores attached to the correct side.",
+    "Deleting or restoring data now coordinates with active capture and replay work, preventing delayed writes from recreating removed matches or overwriting newer local changes.",
+    "The updater now completes installation reliably, including when TCGA capture is active, and the macOS app keeps its services alive when its last window closes.",
+    "Game-page recovery is bounded and capture-aware, so a failed embedded page can recover without silently interrupting an active match."
   ]
 };
 const RIOT_LEGAL_NOTICE = `RiftLite was created under Riot Games' "Legal Jibber Jabber" policy using assets owned by Riot Games. Riot Games does not endorse or sponsor this project.`;
@@ -692,11 +693,9 @@ const DECK_TRACKER_POSITION_KEY = "riftlite-deck-tracker-position-v1";
 const DECK_TRACKER_SIZE_KEY = "riftlite-deck-tracker-size-v1";
 const DECK_TRACKER_OPACITY_KEY = "riftlite-deck-tracker-opacity-v1";
 const DECK_TRACKER_COMPACT_MIGRATION_KEY = "riftlite-deck-tracker-compact-size-v1";
-const DECK_TRACKER_DEBUG_PANEL_VISIBLE = false;
 const MATCHUP_PREP_POSITION_KEY = "riftlite-matchup-prep-position-v1";
 const MATCHUP_PREP_SIZE_KEY = "riftlite-matchup-prep-size-v1";
 const MATCHUP_PREP_HIDDEN_KEY = "riftlite-matchup-prep-hidden-v1";
-const VISION_DEBUG_POSITION_KEY = "riftlite-vision-debug-position-v1";
 const TESTING_SESSIONS_KEY = "riftlite-testing-sessions-v1";
 const ACTIVE_TESTING_SESSION_KEY = "riftlite-active-testing-session-v1";
 const STARTUP_VALUE_TIMEOUT_MS = 6_000;
@@ -726,36 +725,6 @@ const KNOWN_HIDDEN_CARD_NAMES = new Set([
 const BANNED_CARD_NAMES = new Set([
   "Fight or Flight"
 ].map(normalizeDeckTrackerKey));
-
-type VisionDebugItem = {
-  name: string;
-  code: string;
-  zone: string;
-  confidenceScore: number;
-};
-
-type VisionDebugMatchItem = VisionDebugItem & {
-  source: string;
-  rect: string;
-};
-
-type VisionTrackerDebugPanelState = {
-  frameId: string;
-  capturedAt: string;
-  platform: GamePlatform;
-  healthState: CaptureHealth["state"];
-  renderedCount: number;
-  frameCandidateCount: number;
-  observationCount: number;
-  suggestionCount: number;
-  confidenceScore: number;
-  frameCaptured: boolean;
-  message: string;
-  observations: VisionDebugItem[];
-  suggestions: VisionDebugItem[];
-  bestMatches: VisionDebugMatchItem[];
-  ignoredMatches: string[];
-};
 
 function readTestingSessions(): TestingSession[] {
   try {
@@ -890,398 +859,6 @@ function clampGameZoom(value: unknown): number {
   const parsed = typeof value === "number" && Number.isFinite(value) ? value : 1;
   const rounded = Math.round(parsed * 100) / 100;
   return Math.min(GAME_ZOOM_MAX, Math.max(GAME_ZOOM_MIN, rounded));
-}
-
-function visionDeckTrackerIntervalMs(mode: DeckTrackerPerformanceMode | undefined): number {
-  if (mode === "responsive") {
-    return 4500;
-  }
-  if (mode === "light") {
-    return 12000;
-  }
-  return 8000;
-}
-
-function visionDeckTrackerShouldScan(state: CaptureHealth["state"]): boolean {
-  return state === "match-detected" || state === "watching";
-}
-
-function visionDeckTrackerUrlLooksPlayable(platform: GamePlatform, url: string): boolean {
-  try {
-    const parsed = new URL(url);
-    const host = parsed.hostname.toLowerCase();
-    const path = parsed.pathname.toLowerCase();
-    if (platform === "tcga") {
-      return host.includes("tcg-arena") && path.startsWith("/play");
-    }
-    if (platform === "atlas") {
-      return true;
-    }
-    return true;
-  } catch {
-    return true;
-  }
-}
-
-function collectVisionRenderedCardsScript(platform: GamePlatform): string {
-  return `(() => {
-    const platform = ${JSON.stringify(platform)};
-    const viewportWidth = Math.max(1, window.innerWidth || document.documentElement.clientWidth || 1);
-    const viewportHeight = Math.max(1, window.innerHeight || document.documentElement.clientHeight || 1);
-    const selectorCounts = {};
-    const codeFrom = (value) => {
-      const text = String(value || "");
-      const match = text.match(/\\b([A-Z]{2,5}-\\d{1,4}[A-Z]?)\\b/i);
-      return match ? match[1].toUpperCase() : "";
-    };
-    const textFrom = (node) => {
-      const source = [
-        node?.getAttribute?.("aria-label"),
-        node?.getAttribute?.("title"),
-        node?.getAttribute?.("alt"),
-        node?.dataset?.cardName,
-        node?.dataset?.name,
-        node?.textContent
-      ].filter(Boolean).join(" ");
-      return String(source || "").replace(/\\s+/g, " ").trim().slice(0, 120);
-    };
-    const backgroundImage = (node) => {
-      const style = window.getComputedStyle(node);
-      const value = style.backgroundImage || "";
-      const match = value.match(/url\\(["']?([^"')]+)["']?\\)/i);
-      return match ? match[1] : "";
-    };
-    const imageUrlsFrom = (node) => {
-      const urls = [];
-      const push = (value) => {
-        const text = String(value || "");
-        if (text && !urls.includes(text)) urls.push(text);
-      };
-      if (node?.matches?.("img")) {
-        push(node.currentSrc || node.src);
-      }
-      push(backgroundImage(node));
-      node?.querySelectorAll?.("img, [style*='/cards/'], [style*='.webp'], [style*='.png']").forEach((child) => {
-        if (child.matches?.("img")) {
-          push(child.currentSrc || child.src);
-        }
-        push(backgroundImage(child));
-      });
-      return urls.sort((a, b) => {
-        const aCode = codeFrom(a) ? 1 : 0;
-        const bCode = codeFrom(b) ? 1 : 0;
-        return bCode - aCode;
-      });
-    };
-    const actionOnlyName = (value) => /^(tap|untap|target|attack|block|exhaust|ready|cancel|confirm|ok|done)$/i.test(String(value || "").trim());
-    const ownerFrom = (node) => {
-      const value = [
-        node?.dataset?.zoneOwner,
-        node?.dataset?.owner,
-        node?.dataset?.player,
-        node?.getAttribute?.("data-zone-owner"),
-        node?.getAttribute?.("data-owner"),
-        node?.className
-      ].filter(Boolean).join(" ").toLowerCase();
-      if (/opponent|enemy|opp|remote/.test(value)) return "opponent";
-      if (/self|me|mine|player|local|you|own/.test(value)) return "me";
-      return "";
-    };
-    const zoneFrom = (node, rect) => {
-      const value = [
-        node?.dataset?.dropZone,
-        node?.dataset?.zone,
-        node?.getAttribute?.("data-drop-zone"),
-        node?.getAttribute?.("data-zone"),
-        node?.className
-      ].filter(Boolean).join(" ").toLowerCase();
-      if (/discard|trash|grave/.test(value)) return value.includes("discard") ? "discard" : "trash";
-      if (/stack/.test(value)) return "stack";
-      if (/base/.test(value)) return "base";
-      if (/board|battlefield|play/.test(value)) return "board";
-      if (/hand|mulligan|sideboard/.test(value)) return "hand";
-      const centerY = (rect.top + rect.height / 2) / viewportHeight;
-      if (centerY > 0.68) return "hand";
-      if (centerY > 0.38) return "board";
-      return "unknown";
-    };
-    const includeLocalCard = (node, rect) => {
-      const owner = ownerFrom(node);
-      if (owner === "opponent") return false;
-      if (owner === "me") return true;
-      const zone = zoneFrom(node, rect);
-      const centerY = (rect.top + rect.height / 2) / viewportHeight;
-      if (platform === "tcga") {
-        if (zone === "hand") return centerY > 0.62;
-        if (zone === "board" || zone === "base" || zone === "stack") return centerY > 0.42;
-        return centerY > 0.56;
-      }
-      if (zone === "hand") return centerY > 0.55;
-      if (zone === "board" || zone === "base" || zone === "stack") return centerY > 0.48;
-      return centerY > 0.52;
-    };
-    const elements = new Set();
-    const selectors = [
-      ".game-card",
-      ".card",
-      ".Card",
-      "[data-card-id]",
-      "[data-cardid]",
-      "[data-card]",
-      "[data-card-name]",
-      "[data-name]",
-      "[data-code]",
-      "[data-testid*='card' i]",
-      "[data-test*='card' i]",
-      "img[src*='/cards/']",
-      "img[src*='cards']",
-      "img[src*='.webp']",
-      "img[src*='.png']",
-      "[style*='/cards/']",
-      "[style*='.webp']",
-      "[style*='.png']"
-    ];
-    for (const selector of selectors) {
-      try {
-        const found = document.querySelectorAll(selector);
-        selectorCounts[selector] = found.length;
-        found.forEach((node) => elements.add(node));
-      } catch {}
-    }
-    if (elements.size < 8) {
-      try {
-        const found = document.querySelectorAll("[class*='card' i]");
-        selectorCounts["[class*='card' i]"] = found.length;
-        found.forEach((node) => elements.add(node));
-      } catch {}
-    }
-    const sampleNode = (node) => {
-      const rect = node.getBoundingClientRect?.();
-      const imageUrls = imageUrlsFrom(node);
-      const imgNode = node.matches?.("img") ? node : node.querySelector?.("img");
-      return {
-        tag: String(node.tagName || "").slice(0, 20),
-        className: String(node.className || "").slice(0, 120),
-        dataCardId: String(node.dataset?.cardId || node.dataset?.cardid || node.getAttribute?.("data-card-id") || "").slice(0, 80),
-        dataCard: String(node.dataset?.card || node.getAttribute?.("data-card") || "").slice(0, 80),
-        dataName: String(node.dataset?.cardName || node.dataset?.name || node.getAttribute?.("data-card-name") || "").slice(0, 80),
-        srcCode: codeFrom(String(imageUrls[0] || imgNode?.currentSrc || imgNode?.src || backgroundImage(node) || "")),
-        text: textFrom(node).slice(0, 80),
-        rect: rect ? [Math.round(rect.left), Math.round(rect.top), Math.round(rect.width), Math.round(rect.height)].join(",") : ""
-      };
-    };
-    const cards = [];
-    const frameCandidates = [];
-    const frameCandidateKeys = new Set();
-    const addFrameCandidate = (rect, zone, reason) => {
-      const minWidth = platform === "tcga" ? 32 : 34;
-      const minHeight = platform === "tcga" ? 44 : 48;
-      if (!rect || rect.width < minWidth || rect.height < minHeight) return;
-      if (rect.width > viewportWidth * 0.28 || rect.height > viewportHeight * 0.58) return;
-      const ratio = rect.width / Math.max(1, rect.height);
-      if (ratio < 0.35 || ratio > 1.25) return;
-      const key = [Math.round(rect.left / 4), Math.round(rect.top / 4), Math.round(rect.width / 4), Math.round(rect.height / 4), zone].join(":");
-      if (frameCandidateKeys.has(key)) return;
-      frameCandidateKeys.add(key);
-      frameCandidates.push({
-        zone,
-        platform,
-        confidenceScore: reason === "card-element" ? 0.72 : 0.62,
-        reason,
-        zoneRect: {
-          x: Math.round(rect.left),
-          y: Math.round(rect.top),
-          width: Math.round(rect.width),
-          height: Math.round(rect.height)
-        }
-      });
-    };
-    for (const rawNode of elements) {
-      const node = rawNode.closest?.(".game-card, .card, .Card, [data-card-id], [data-cardid], [data-card], [data-card-name], [data-name], [data-code], [data-testid*='card' i], [data-test*='card' i]") || rawNode;
-      const rect = node.getBoundingClientRect?.();
-      if (!rect || rect.width < 22 || rect.height < 30 || rect.bottom < 0 || rect.right < 0 || rect.top > viewportHeight || rect.left > viewportWidth) {
-        continue;
-      }
-      if (!includeLocalCard(node, rect)) {
-        continue;
-      }
-      const imageUrls = [...imageUrlsFrom(node), ...imageUrlsFrom(rawNode)];
-      const imageUrl = String(imageUrls.find((url, index) => codeFrom(url) || index === 0) || "");
-      const cardId = String(
-        node.dataset?.cardId ||
-        node.dataset?.cardid ||
-        node.dataset?.card ||
-        node.dataset?.code ||
-        node.getAttribute?.("data-card-id") ||
-        node.getAttribute?.("data-cardid") ||
-        node.getAttribute?.("data-card") ||
-        node.getAttribute?.("data-code") ||
-        codeFrom(imageUrl) ||
-        ""
-      );
-      const name = textFrom(node);
-      const code = codeFrom(cardId) || codeFrom(imageUrl) || codeFrom(name);
-      const hasStrongIdentity = Boolean(cardId || code);
-      const zone = zoneFrom(node, rect);
-      if (!hasStrongIdentity && actionOnlyName(name)) {
-        continue;
-      }
-      if (!hasStrongIdentity && rect.width > 260 && rect.height > 380) {
-        continue;
-      }
-      if (!hasStrongIdentity && rect.width > viewportWidth * 0.22 && rect.height > viewportHeight * 0.32) {
-        continue;
-      }
-      addFrameCandidate(rect, zone, hasStrongIdentity || imageUrl || name ? "card-element" : "unidentified-card");
-      if (!cardId && !code && !name && !imageUrl) {
-        continue;
-      }
-      const confidenceScore = code || cardId ? 0.96 : imageUrl ? 0.84 : 0.7;
-      cards.push({
-        name,
-        code,
-        cardId,
-        imageUrl,
-        zone,
-        platform,
-        confidenceScore,
-        zoneRect: {
-          x: Math.round(rect.left),
-          y: Math.round(rect.top),
-          width: Math.round(rect.width),
-          height: Math.round(rect.height)
-        }
-      });
-    }
-    return {
-      cards: cards.slice(0, 80),
-      frameCandidates: frameCandidates.slice(0, 80),
-      diagnostics: {
-        url: String(window.location.href || ""),
-        title: String(document.title || "").slice(0, 120),
-        viewport: [viewportWidth, viewportHeight].join("x"),
-        viewportWidth,
-        viewportHeight,
-        selectorCounts,
-        elementCount: elements.size,
-        frameCandidateCount: frameCandidates.length,
-        samples: Array.from(elements).slice(0, 12).map(sampleNode)
-      }
-    };
-  })()`;
-}
-
-function visionCodeFromValue(value: string): string {
-  const match = value.match(/\b([A-Z]{2,5}-\d{1,4}[A-Z]?)\b/i);
-  return match?.[1]?.toUpperCase() ?? "";
-}
-
-function isVisionActionOnlyName(value: string): boolean {
-  return /^(tap|untap|target|attack|block|exhaust|ready|cancel|confirm|ok|done)$/i.test(value.trim());
-}
-
-function sanitizeVisionRenderedCards(value: unknown[], platform: GamePlatform): VisionRenderedCardObservation[] {
-  return value
-    .map((item): VisionRenderedCardObservation | null => {
-      const record = item && typeof item === "object" && !Array.isArray(item) ? item as Record<string, unknown> : {};
-      const name = typeof record.name === "string" ? record.name.trim() : "";
-      const imageUrl = typeof record.imageUrl === "string" ? record.imageUrl.trim() : "";
-      const rawCode = typeof record.code === "string" ? record.code.trim().toUpperCase() : "";
-      const code = rawCode || visionCodeFromValue(imageUrl);
-      const cardId = typeof record.cardId === "string" ? record.cardId.trim() : "";
-      if (!name && !code && !cardId && !imageUrl) {
-        return null;
-      }
-      const zoneRect = sanitizeVisionRect(record.zoneRect);
-      const hasStrongIdentity = Boolean(cardId || code);
-      if (!hasStrongIdentity && isVisionActionOnlyName(name)) {
-        return null;
-      }
-      if (!hasStrongIdentity && zoneRect && zoneRect.width > 260 && zoneRect.height > 380) {
-        return null;
-      }
-      return {
-        name,
-        code,
-        cardId,
-        imageUrl,
-        zone: sanitizeVisionZone(record.zone),
-        platform,
-        confidenceScore: typeof record.confidenceScore === "number" ? Math.max(0, Math.min(1, record.confidenceScore)) : 0.7,
-        zoneRect
-      };
-    })
-    .filter((item): item is VisionRenderedCardObservation => Boolean(item));
-}
-
-type VisionRenderedCardsScan = {
-  cards: VisionRenderedCardObservation[];
-  frameCandidates: VisionFrameCandidate[];
-  viewportWidth: number;
-  viewportHeight: number;
-  diagnostics: Record<string, unknown>;
-};
-
-function sanitizeVisionRenderedCardsScan(value: unknown, platform: GamePlatform): VisionRenderedCardsScan {
-  if (Array.isArray(value)) {
-    return { cards: sanitizeVisionRenderedCards(value, platform), frameCandidates: [], viewportWidth: 0, viewportHeight: 0, diagnostics: {} };
-  }
-  const record = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
-  const cards = Array.isArray(record.cards) ? sanitizeVisionRenderedCards(record.cards, platform) : [];
-  const frameCandidates = Array.isArray(record.frameCandidates)
-    ? sanitizeVisionFrameCandidates(record.frameCandidates, platform)
-    : [];
-  const diagnostics = record.diagnostics && typeof record.diagnostics === "object" && !Array.isArray(record.diagnostics)
-    ? record.diagnostics as Record<string, unknown>
-    : {};
-  const viewportWidth = numberFromUnknown(diagnostics.viewportWidth);
-  const viewportHeight = numberFromUnknown(diagnostics.viewportHeight);
-  return { cards, frameCandidates, viewportWidth, viewportHeight, diagnostics };
-}
-
-function sanitizeVisionFrameCandidates(value: unknown[], platform: GamePlatform): VisionFrameCandidate[] {
-  return value
-    .map((item): VisionFrameCandidate | null => {
-      const record = item && typeof item === "object" && !Array.isArray(item) ? item as Record<string, unknown> : {};
-      const zoneRect = sanitizeVisionRect(record.zoneRect);
-      if (!zoneRect) {
-        return null;
-      }
-      if (zoneRect.width < 38 || zoneRect.height < 52) {
-        return null;
-      }
-      return {
-        zone: sanitizeVisionZone(record.zone),
-        platform,
-        confidenceScore: typeof record.confidenceScore === "number" ? Math.max(0, Math.min(1, record.confidenceScore)) : 0.6,
-        zoneRect,
-        reason: typeof record.reason === "string" ? record.reason.slice(0, 80) : undefined
-      };
-    })
-    .filter((item): item is VisionFrameCandidate => Boolean(item))
-    .slice(0, 80);
-}
-
-function numberFromUnknown(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) ? value : 0;
-}
-
-function sanitizeVisionZone(value: unknown): DeckTrackerObservation["zone"] {
-  return value === "hand" || value === "board" || value === "base" || value === "stack" || value === "trash" || value === "discard" ? value : "unknown";
-}
-
-function sanitizeVisionRect(value: unknown): DeckTrackerObservation["zoneRect"] | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  const record = value as Record<string, unknown>;
-  const x = Number(record.x);
-  const y = Number(record.y);
-  const width = Number(record.width);
-  const height = Number(record.height);
-  return [x, y, width, height].every(Number.isFinite) && width > 0 && height > 0
-    ? { x, y, width, height }
-    : undefined;
 }
 
 type ReplayRecorderFormat = {
@@ -2586,6 +2163,208 @@ const WINTHEPANDA_SPOTLIGHT: CommunitySpotlight = {
   ]
 };
 
+const MASKEDSWAN_SPOTLIGHT: CommunitySpotlight = {
+  id: "maskedswan",
+  name: "MaskedSwan",
+  kicker: "Creator spotlight",
+  location: "TCG education and entertainment",
+  description: "A TCG veteran, MaskedSwan brings foundational education and chaotic entertainment to the Riftbound community. On Twitch, he is not afraid to pull off wild, unexpected plays while also slowing down to teach the strategic basics that win games. His stream is the destination for players who want to sharpen their deck-piloting and deck-building skills while having a blast.",
+  primaryCta: {
+    id: "twitch",
+    label: "Watch Twitch",
+    url: "https://www.twitch.tv/maskedswan",
+    description: "Watch MaskedSwan combine live Riftbound education with chaotic, unexpected plays.",
+    icon: Radio,
+    featured: true
+  },
+  links: [
+    {
+      id: "twitch",
+      label: "Twitch",
+      url: "https://www.twitch.tv/maskedswan",
+      description: "Live Riftbound games, strategic fundamentals, deck discussion, and entertaining off-script plays.",
+      icon: Radio,
+      featured: true
+    },
+    {
+      id: "youtube",
+      label: "YouTube",
+      url: "https://www.youtube.com/@MaskedSwanRiftbound",
+      description: "Riftbound videos focused on stronger play, deck building, and community entertainment.",
+      icon: Video,
+      featured: true
+    },
+    {
+      id: "x",
+      label: "X",
+      url: "https://x.com/AlexSwan",
+      description: "Follow MaskedSwan's posts, updates, and Riftbound conversation.",
+      icon: X
+    },
+    {
+      id: "discord",
+      label: "Discord",
+      url: "https://discord.gg/ffxvgs7Kf",
+      description: "Join the community for Riftbound discussion, deck ideas, and learning together.",
+      icon: MessageCircle,
+      featured: true
+    },
+    {
+      id: "metafy",
+      label: "Metafy",
+      url: "https://metafy.gg/@maskedswan/sessions",
+      description: "Book a focused session with MaskedSwan through Metafy.",
+      icon: Users,
+      featured: true
+    }
+  ],
+  tags: ["TCG veteran", "Live education", "Deck building", "Chaotic entertainment"],
+  highlights: [
+    {
+      title: "TCG veteran",
+      text: "Experienced card-game fundamentals are translated into practical Riftbound decisions players can use immediately."
+    },
+    {
+      title: "Education meets chaos",
+      text: "Streams move between disciplined strategic teaching and the wild, unexpected plays that make live games memorable."
+    },
+    {
+      title: "Pilot and build better",
+      text: "Content helps players improve both how they construct their decks and how they navigate games turn by turn."
+    },
+    {
+      title: "Multiple ways to learn",
+      text: "Twitch, YouTube, Discord, X, and Metafy give players a route that fits how they prefer to watch, discuss, or practise."
+    }
+  ],
+  assets: {
+    logo: "community/maskedswan-profile.webp",
+    banner: "community/maskedswan-banner.webp",
+    tiktok: "community/maskedswan-banner.webp",
+    youtube: "community/maskedswan-banner.webp",
+    twitch: "community/maskedswan-banner.webp"
+  },
+  overviewBanner: "community/maskedswan-banner.webp",
+  overviewLogo: "community/maskedswan-profile.webp",
+  routes: [
+    {
+      key: "twitch",
+      title: "Twitch stream",
+      subtitle: "Watch live games where strategic fundamentals meet chaotic, unexpected plays.",
+      linkId: "twitch"
+    },
+    {
+      key: "youtube",
+      title: "YouTube channel",
+      subtitle: "Follow Riftbound videos about deck building, stronger piloting, and entertaining play.",
+      linkId: "youtube"
+    },
+    {
+      key: "tiktok",
+      title: "Metafy sessions",
+      subtitle: "Book focused time with MaskedSwan to sharpen your game and deck-building decisions.",
+      linkId: "metafy"
+    }
+  ]
+};
+
+const ARG0NTCG_SPOTLIGHT: CommunitySpotlight = {
+  id: "arg0ntcg",
+  name: "Arg0n",
+  kicker: "Creator spotlight",
+  location: "Riftbound content and casting",
+  description: "A semi-competitive TCG enjoyer, content creator, and caster focused primarily on Riftbound. Catch short-form Riftbound content, including pack openings, on TikTok and longer educational gameplay streams on Twitch.",
+  primaryCta: {
+    id: "twitch",
+    label: "Watch Twitch",
+    url: "https://www.twitch.tv/arg0ntcg",
+    description: "Watch Arg0n's longer educational Riftbound gameplay streams on Twitch.",
+    icon: Radio,
+    featured: true
+  },
+  links: [
+    {
+      id: "tiktok",
+      label: "TikTok",
+      url: "https://www.tiktok.com/@arg0ntcg",
+      description: "Short-form Riftbound content, including pack openings.",
+      icon: Video,
+      featured: true
+    },
+    {
+      id: "twitch",
+      label: "Twitch",
+      url: "https://www.twitch.tv/arg0ntcg",
+      description: "Longer educational gameplay-based Riftbound streams.",
+      icon: Radio,
+      featured: true
+    },
+    {
+      id: "x",
+      label: "X",
+      url: "https://x.com/Arg0nTCG",
+      description: "Follow Arg0n's posts, creator updates, and Riftbound conversation.",
+      icon: X
+    },
+    {
+      id: "youtube",
+      label: "YouTube",
+      url: "https://www.youtube.com/@arg0nTCG",
+      description: "Watch Arg0n's Riftbound videos and gameplay content.",
+      icon: Video,
+      featured: true
+    }
+  ],
+  tags: ["Riftbound", "Caster", "Educational gameplay", "Pack openings"],
+  highlights: [
+    {
+      title: "Short-form Riftbound",
+      text: "TikTok is the home for quick Riftbound content, including pack openings."
+    },
+    {
+      title: "Educational live play",
+      text: "Twitch streams make room for longer gameplay sessions with an educational focus."
+    },
+    {
+      title: "Creator and caster",
+      text: "Arg0n brings both content creation and casting to his primarily Riftbound-focused work."
+    },
+    {
+      title: "Multiple ways to watch",
+      text: "TikTok, Twitch, and YouTube offer a mix of short-form posts, live streams, and video content."
+    }
+  ],
+  assets: {
+    logo: "community/arg0ntcg-profile.webp",
+    banner: "community/arg0ntcg-banner.webp",
+    tiktok: "community/arg0ntcg-banner.webp",
+    youtube: "community/arg0ntcg-banner.webp",
+    twitch: "community/arg0ntcg-banner.webp"
+  },
+  overviewBanner: "community/arg0ntcg-banner.webp",
+  overviewLogo: "community/arg0ntcg-profile.webp",
+  routes: [
+    {
+      key: "tiktok",
+      title: "TikTok shorts",
+      subtitle: "Catch short-form Riftbound content, including pack openings.",
+      linkId: "tiktok"
+    },
+    {
+      key: "twitch",
+      title: "Twitch stream",
+      subtitle: "Watch longer educational Riftbound gameplay streams.",
+      linkId: "twitch"
+    },
+    {
+      key: "youtube",
+      title: "YouTube channel",
+      subtitle: "Follow Arg0n's Riftbound video content.",
+      linkId: "youtube"
+    }
+  ]
+};
+
 const AGITOSWIFTLY_SPOTLIGHT: CommunitySpotlight = {
   id: "agitoswiftly",
   name: "AgitoSwiftly",
@@ -2888,7 +2667,9 @@ const COMMUNITY_SPOTLIGHTS: CommunitySpotlight[] = [
   WINTHEPANDA_SPOTLIGHT,
   AGITOSWIFTLY_SPOTLIGHT,
   MRTOOLSHED_SPOTLIGHT,
-  DAEMONXGG_SPOTLIGHT
+  DAEMONXGG_SPOTLIGHT,
+  MASKEDSWAN_SPOTLIGHT,
+  ARG0NTCG_SPOTLIGHT
 ];
 
 interface CaptureNotice {
@@ -2914,7 +2695,6 @@ function App() {
   const [activeTestingSessionId, setActiveTestingSessionId] = useState(() => readActiveTestingSessionId());
   const [deckTrackerState, setDeckTrackerState] = useState<DeckTrackerState | null>(null);
   const [visionTrackerStatus, setVisionTrackerStatus] = useState<VisionDeckTrackerStatus | null>(null);
-  const [visionTrackerDebugPanel, setVisionTrackerDebugPanel] = useState<VisionTrackerDebugPanelState | null>(null);
   const [prepNotebook, setPrepNotebook] = useState<DeckNotebook | null>(null);
   const [prepOpponentLegend, setPrepOpponentLegend] = useState("");
   const [prepSideboardHint, setPrepSideboardHint] = useState(false);
@@ -2958,6 +2738,13 @@ function App() {
     expandedNavGroup: NavigationDisclosureId | null;
   } | null>(null);
   const gameRef = useRef<Electron.WebviewTag | null>(null);
+  const platformSwitchRequestRef = useRef(0);
+  const activePlatformRef = useRef<GamePlatform>(activePlatform);
+  const mountedGamePlatformRef = useRef<GamePlatform | null>(mountedGamePlatform);
+  const gameGuestAutoRecoveryRef = useRef(new Set<GamePlatform>());
+  const reviewDraftRef = useRef<MatchDraft | null>(null);
+  const queuedReviewDraftsRef = useRef<MatchDraft[]>([]);
+  const reviewDraftWasOpenRef = useRef(false);
   const gamePresentationPulseRef = useRef<{
     webview: Electron.WebviewTag;
     token: number;
@@ -2985,15 +2772,6 @@ function App() {
   const prepNotebookRef = useRef<DeckNotebook | null>(prepNotebook);
   const prepOpponentLegendRef = useRef("");
   const consumedPrepNoteDraftIdsRef = useRef(new Set<string>());
-  const visionTrackerInFlightRef = useRef(false);
-  const visionTrackerFrameRef = useRef(0);
-  const visionTrackerSkippedRef = useRef(0);
-  const visionTrackerProcessedRef = useRef(0);
-  const visionTrackerWorkerRef = useRef<Worker | null>(null);
-  const visionTrackerWorkerRequestRef = useRef(0);
-  const visionTrackerDebugRef = useRef({ signature: "", at: 0 });
-  const visionTrackerLastFrameCaptureRef = useRef(0);
-  const visionTrackerNoEvidenceUntilRef = useRef(0);
   const replayVideoRef = useRef<ReplayVideoRuntime | null>(null);
   const replayShadowClipRef = useRef<ReplayShadowClipRuntime | null>(null);
   const pendingReplayVideoRef = useRef<PendingReplayVideoSegment | null>(null);
@@ -3149,13 +2927,6 @@ function App() {
   }, []);
 
   useEffect(() => {
-    return () => {
-      visionTrackerWorkerRef.current?.terminate();
-      visionTrackerWorkerRef.current = null;
-    };
-  }, []);
-
-  useEffect(() => {
     settingsRef.current = settings;
   }, [settings]);
 
@@ -3220,6 +2991,10 @@ function App() {
   }, [health]);
 
   useEffect(() => {
+    reviewDraftRef.current = reviewDraft;
+  }, [reviewDraft]);
+
+  useEffect(() => {
     decksRef.current = decks;
   }, [decks]);
 
@@ -3240,6 +3015,14 @@ function App() {
   useEffect(() => {
     prepOpponentLegendRef.current = prepOpponentLegend;
   }, [prepOpponentLegend]);
+
+  useEffect(() => {
+    activePlatformRef.current = activePlatform;
+  }, [activePlatform]);
+
+  useEffect(() => {
+    mountedGamePlatformRef.current = mountedGamePlatform;
+  }, [mountedGamePlatform]);
 
   useEffect(() => {
     void bootstrap().catch((error) => handleBootstrapFailure(error));
@@ -3276,6 +3059,18 @@ function App() {
         return;
       }
       clearDismissedReview(repairedDraft);
+      const openReview = reviewDraftRef.current;
+      if (openReview && openReview.status !== "saved") {
+        if (openReview.id !== repairedDraft.id) {
+          queuedReviewDraftsRef.current = enqueueReviewDraft(queuedReviewDraftsRef.current, repairedDraft);
+          showCaptureNotice({
+            title: "Match logger",
+            message: "Another captured match is waiting. Finish or dismiss the open review to continue."
+          });
+        }
+        return;
+      }
+      reviewDraftRef.current = repairedDraft;
       setReviewDraft(repairedDraft);
       void stopReplayVideoForDraft(repairedDraft);
     });
@@ -3299,6 +3094,37 @@ function App() {
         showActionFeedback(status.message);
       }
     });
+    const offGameWebviewFailure = window.riftlite.onGameWebviewFailure((failure) => {
+      if (failure.platform !== mountedGamePlatformRef.current) {
+        return;
+      }
+      void (async () => {
+        const switchStatus = await window.riftlite.getGamePlatformSwitchStatus().catch(() => ({
+          allowed: false,
+          message: "RiftLite could not verify whether a match is still active."
+        }));
+        if (
+          !failure.canAutoRemount ||
+          !switchStatus.allowed ||
+          gameGuestAutoRecoveryRef.current.has(failure.platform)
+        ) {
+          showCaptureNotice({
+            title: "Game page needs attention",
+            message: `${failure.message} ${switchStatus.allowed ? "Use Refresh when you are ready." : switchStatus.message}`
+          }, 8_000);
+          if (failure.platform === "atlas") {
+            setAtlasRecoverySuggested(true);
+          }
+          return;
+        }
+        gameGuestAutoRecoveryRef.current.add(failure.platform);
+        if (failure.platform === "atlas") {
+          setAtlasShellVisibility((current) => updateAtlasShellVisibility(current, "empty-shell-recovery-started"));
+        }
+        setGameWebviewEpoch((current) => current + 1);
+        showActionFeedback(`${failure.message} RiftLite restarted the page once.`, 7_000);
+      })();
+    });
     return () => {
       offEvent();
       offHealth();
@@ -3308,6 +3134,7 @@ function App() {
       offShadowClipHotkey();
       offQuickFlagHotkey();
       offUpdate();
+      offGameWebviewFailure();
       if (actionFeedbackTimerRef.current) {
         window.clearTimeout(actionFeedbackTimerRef.current);
       }
@@ -3343,6 +3170,25 @@ function App() {
       setAtlasShellVisibility((current) => updateAtlasShellVisibility(current, "atlas-left"));
     }
   }, [activePlatform]);
+
+  useEffect(() => {
+    if (
+      activePlatform !== "atlas" ||
+      activeView !== "play" ||
+      !shouldCoverAtlasShell(atlasShellVisibility)
+    ) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      setAtlasShellVisibility((current) => updateAtlasShellVisibility(current, "shell-ready-timeout"));
+      setAtlasRecoverySuggested(true);
+      showActionFeedback(
+        "RiftLite could not verify the Atlas shell, so it has revealed the page instead of leaving it hidden.",
+        7_000
+      );
+    }, ATLAS_SHELL_COVER_TIMEOUT_MS);
+    return () => window.clearTimeout(timer);
+  }, [activePlatform, activeView, atlasShellVisibility, gameWebviewEpoch]);
 
   useEffect(() => {
     let cancelled = false;
@@ -3415,6 +3261,26 @@ function App() {
   }, [activePlatform, activeView, mountedGamePlatform, preloadUrl, sidebarCollapsed]);
 
   useEffect(() => {
+    const reviewIsOpen = Boolean(reviewDraft);
+    const reviewWasOpen = reviewDraftWasOpenRef.current;
+    reviewDraftWasOpenRef.current = reviewIsOpen;
+    if (!shouldRestoreGameWebviewFocus(
+      reviewWasOpen,
+      reviewIsOpen,
+      activePlatform,
+      mountedGamePlatform,
+      preloadUrl,
+      activeView === "play"
+    )) {
+      return;
+    }
+    const timers = [0, 100, 350].map((delay) => window.setTimeout(() => {
+      focusGameWebviewInput("atlas");
+    }, delay));
+    return () => timers.forEach((timer) => window.clearTimeout(timer));
+  }, [activePlatform, activeView, mountedGamePlatform, preloadUrl, reviewDraft]);
+
+  useEffect(() => {
     if (!DECK_TRACKER_FEATURE_ENABLED) {
       setDeckTrackerState(null);
     }
@@ -3437,28 +3303,6 @@ function App() {
     }, 2500);
     return () => window.clearInterval(timer);
   }, [activeView, activePlatform, settings?.activeDeckId, settings?.deckTrackerEnabled, settings?.deckTrackerAutoStart]);
-
-  useEffect(() => {
-    if (!DECK_TRACKER_FEATURE_ENABLED || !VISION_DECK_TRACKER_FRAME_SCAN_ENABLED || !settings?.deckTrackerEnabled || !settings.deckTrackerAutoStart) {
-      return;
-    }
-    if (activeView !== "play") {
-      return;
-    }
-    const run = () => {
-      void runVisionDeckTrackerScan();
-    };
-    run();
-    const timer = window.setInterval(run, visionDeckTrackerIntervalMs(settings.deckTrackerPerformanceMode));
-    return () => window.clearInterval(timer);
-  }, [
-    activeView,
-    activePlatform,
-    playActiveDeck?.id,
-    settings?.deckTrackerEnabled,
-    settings?.deckTrackerAutoStart,
-    settings?.deckTrackerPerformanceMode
-  ]);
 
   useEffect(() => {
     if (!settings?.activeDeckId) {
@@ -3768,17 +3612,41 @@ function App() {
     showActionFeedback("Review popup opened.");
   }
 
-  function dismissReviewDraft() {
+  async function dismissReviewDraft() {
     if (reviewDraft) {
       markReviewDismissed(reviewDraft);
     }
-    setReviewDraft(null);
+    const next = openNextQueuedReview();
+    if (!next) {
+      await window.riftlite.dismissMatchReview();
+    }
+  }
+
+  async function chooseGamePlatform(platform: GamePlatform, openPlay = false) {
+    if (platform === activePlatform) {
+      if (openPlay) openView("play");
+      return;
+    }
+    const requestId = ++platformSwitchRequestRef.current;
+    const status = await window.riftlite.getGamePlatformSwitchStatus().catch(() => ({
+      allowed: false,
+      message: "RiftLite could not verify that capture is safe to switch. Stop the current match first."
+    }));
+    if (requestId !== platformSwitchRequestRef.current) {
+      return;
+    }
+    if (!status.allowed) {
+      showActionFeedback(status.message, 5_000);
+      return;
+    }
+    setActivePlatform(platform);
+    if (openPlay) openView("play");
   }
 
   async function deleteReviewDraft(draft: MatchDraft) {
-    markReviewDismissed(draft);
-    setReviewDraft(null);
     await window.riftlite.deleteMatch(draft.id);
+    markReviewDismissed(draft);
+    openNextQueuedReview();
     const [nextMatches, nextReplays, nextDeletedMatches, nextDeletedReplays] = await Promise.all([
       window.riftlite.getMatches(),
       window.riftlite.getReplays(),
@@ -3929,7 +3797,21 @@ function App() {
   }
 
   async function saveSettings(patch: Partial<UserSettings>) {
-    const next = await window.riftlite.saveSettings(patch);
+    const { rawCapture, ...topLevelPatch } = patch;
+    let next = Object.keys(topLevelPatch).length
+      ? await window.riftlite.saveSettings(topLevelPatch)
+      : await window.riftlite.getSettings();
+    if (rawCapture) {
+      const baseline = settingsRef.current?.rawCapture;
+      const rawCapturePatch = Object.fromEntries(
+        (Object.keys(rawCapture) as Array<keyof UserSettings["rawCapture"]>)
+          .filter((key) => JSON.stringify(rawCapture[key]) !== JSON.stringify(baseline?.[key]))
+          .map((key) => [key, rawCapture[key]])
+      ) as Partial<UserSettings["rawCapture"]>;
+      if (Object.keys(rawCapturePatch).length) {
+        next = await window.riftlite.updateRawCaptureSettings(rawCapturePatch);
+      }
+    }
     setSettings(next);
     if (patch.activeHubs || patch.activeTeams || typeof patch.communitySyncEnabled === "boolean" || patch.syncMode) {
       communityLoadedRef.current = false;
@@ -4022,14 +3904,24 @@ function App() {
 
   async function confirmDraft(draft: MatchDraft) {
     const saved = await window.riftlite.confirmMatch(normalizeReviewDraft(attachTestingSessionToDraft(draft)));
-    setReviewDraft(null);
+    openNextQueuedReview();
     setMatches((current) => upsertMatchPreservingOrder(current, saved));
     const completedFirstMatch = firstMatchOnboarding?.status === "pending" && saved.status === "saved" && saved.result !== "Incomplete";
     const nextFirstMatchOnboarding = firstMatchOnboardingAfterSavedMatch(firstMatchOnboarding, saved);
     if (nextFirstMatchOnboarding && nextFirstMatchOnboarding !== firstMatchOnboarding) {
       persistFirstMatchOnboarding(nextFirstMatchOnboarding);
     }
-    showActionFeedback(completedFirstMatch ? "First match saved - setup complete." : "Match saved.", completedFirstMatch ? 5_000 : 2_600);
+    const backgroundDelivery = (saved.platform === "atlas" || saved.platform === "tcga") &&
+      saved.source !== "manual" &&
+      saved.source !== "scorepad";
+    const feedback = completedFirstMatch
+      ? backgroundDelivery
+        ? "First match saved locally - setup complete. Replay delivery and reporting will continue in the background."
+        : "First match saved - setup complete."
+      : backgroundDelivery
+        ? "Match saved locally. Replay delivery and reporting will continue in the background."
+        : "Match saved.";
+    showActionFeedback(feedback, completedFirstMatch ? 5_000 : backgroundDelivery ? 4_200 : 2_600);
     void (async () => {
       if (draft.keepReplay === false) {
         await window.riftlite.deleteReplayVideoByMatch(draft.id).catch(() => undefined);
@@ -4043,6 +3935,17 @@ function App() {
       setDeletedReplays(nextDeletedReplays);
       setDecks(nextDecks);
     })().catch(() => undefined);
+  }
+
+  function openNextQueuedReview(): MatchDraft | null {
+    const shifted = shiftReviewDraft(queuedReviewDraftsRef.current);
+    queuedReviewDraftsRef.current = shifted.remaining;
+    reviewDraftRef.current = shifted.next;
+    setReviewDraft(shifted.next);
+    if (shifted.next) {
+      void stopReplayVideoForDraft(shifted.next);
+    }
+    return shifted.next;
   }
 
   async function refreshDecks() {
@@ -4075,41 +3978,6 @@ function App() {
       setDeckTrackerState(state);
       if (status) {
         setVisionTrackerStatus(status);
-        const countedCards = state.cards.filter((card) => card.seenCount > 0).slice(0, 16);
-        setVisionTrackerDebugPanel((current) => ({
-          frameId: status.frameId || current?.frameId || "atlas-events",
-          capturedAt: status.updatedAt || new Date().toISOString(),
-          platform: status.platform === "none" ? activePlatform : status.platform,
-          healthState: healthRef.current.state,
-          renderedCount: status.processedFrames,
-          frameCandidateCount: status.skippedFrames,
-          observationCount: countedCards.length,
-          suggestionCount: status.suggestions.length,
-          confidenceScore: status.confidenceScore,
-          frameCaptured: false,
-          message: status.message,
-          observations: countedCards.map((card) => ({
-            name: card.name,
-            code: card.code || card.cardId,
-            zone: "seen",
-            confidenceScore: card.confidence === "tracked" ? 0.98 : 0.75
-          })),
-          suggestions: status.suggestions.map((card) => ({
-            name: card.name,
-            code: card.code || card.cardId,
-            zone: card.zone,
-            confidenceScore: card.confidenceScore
-          })),
-          bestMatches: countedCards.slice(0, 10).map((card) => ({
-            name: card.name,
-            code: card.code || card.cardId,
-            zone: `${card.seenCount}/${card.deckCount} seen`,
-            confidenceScore: card.confidence === "tracked" ? 0.98 : 0.75,
-            source: "Atlas event",
-            rect: ""
-          })),
-          ignoredMatches: current?.ignoredMatches ?? []
-        }));
       }
     }
   }
@@ -4154,432 +4022,19 @@ function App() {
     setDeckTrackerState(state);
   }
 
-  function visionDeckTrackerWorker(): Worker {
-    if (!visionTrackerWorkerRef.current) {
-      visionTrackerWorkerRef.current = new Worker(new URL("./visionDeckTracker.worker.ts", import.meta.url), { type: "module" });
-    }
-    return visionTrackerWorkerRef.current;
-  }
-
-  function visionFrameCaptureBudgetMs(mode: DeckTrackerPerformanceMode | undefined): number {
-    if (mode === "responsive") {
-      return 14000;
-    }
-    if (mode === "light") {
-      return 45000;
-    }
-    return 30000;
-  }
-
-  async function captureVisionFrameSample(
-    webview: Electron.WebviewTag,
-    scan: Pick<VisionRenderedCardsScan, "viewportWidth" | "viewportHeight">,
-    capturedAt: string
-  ): Promise<VisionFrameSample | null> {
-    const capturePage = (webview as unknown as { capturePage?: () => Promise<{ toDataURL?: () => string }> }).capturePage;
-    if (!capturePage) {
-      return null;
-    }
-    const image = await capturePage.call(webview);
-    const sourceDataUrl = image?.toDataURL?.() ?? "";
-    if (!sourceDataUrl) {
-      return null;
-    }
-    const imageElement = await loadVisionFrameImage(sourceDataUrl);
-    const sourceWidth = imageElement.naturalWidth || imageElement.width;
-    const sourceHeight = imageElement.naturalHeight || imageElement.height;
-    if (!sourceWidth || !sourceHeight) {
-      return null;
-    }
-    const mode = settingsRef.current?.deckTrackerPerformanceMode;
-    const maxWidth = mode === "responsive" ? 720 : mode === "light" ? 480 : 600;
-    const scale = Math.min(1, maxWidth / sourceWidth);
-    const width = Math.max(1, Math.round(sourceWidth * scale));
-    const height = Math.max(1, Math.round(sourceHeight * scale));
-    const canvas = document.createElement("canvas");
-    canvas.width = width;
-    canvas.height = height;
-    const context = canvas.getContext("2d", { alpha: false });
-    if (!context) {
-      return null;
-    }
-    context.imageSmoothingEnabled = true;
-    context.imageSmoothingQuality = "medium";
-    context.drawImage(imageElement, 0, 0, width, height);
-    return {
-      dataUrl: canvas.toDataURL("image/jpeg", mode === "responsive" ? 0.6 : 0.5),
-      width,
-      height,
-      viewportWidth: scan.viewportWidth || width,
-      viewportHeight: scan.viewportHeight || height,
-      capturedAt
-    };
-  }
-
-  function loadVisionFrameImage(dataUrl: string): Promise<HTMLImageElement> {
-    return new Promise((resolve, reject) => {
-      const image = new Image();
-      image.onload = () => resolve(image);
-      image.onerror = () => reject(new Error("Vision tracker could not decode the game frame."));
-      image.src = dataUrl;
-    });
-  }
-
-  async function matchVisionDeckTrackerInWorker(
-    deck: SavedDeck,
-    platform: GamePlatform,
-    renderedCards: VisionRenderedCardObservation[],
-    frameCandidates: VisionFrameCandidate[],
-    frameSample: VisionFrameSample | null,
-    capturedAt: string,
-    frameId: string
-  ): Promise<VisionDeckTrackerMatchResult> {
-    const worker = visionDeckTrackerWorker();
-    const id = `vision-${Date.now()}-${visionTrackerWorkerRequestRef.current += 1}`;
-    return new Promise((resolve, reject) => {
-      let timeout = 0;
-      let onMessage: (event: MessageEvent<{ id: string; result?: VisionDeckTrackerMatchResult; error?: string }>) => void;
-      let onError: (event: ErrorEvent) => void;
-      const cleanup = () => {
-        window.clearTimeout(timeout);
-        worker.removeEventListener("message", onMessage);
-        worker.removeEventListener("error", onError);
-      };
-      onMessage = (event: MessageEvent<{ id: string; result?: VisionDeckTrackerMatchResult; error?: string }>) => {
-        if (event.data?.id !== id) {
-          return;
-        }
-        cleanup();
-        if (event.data.error) {
-          reject(new Error(event.data.error));
-          return;
-        }
-        if (!event.data.result) {
-          reject(new Error("Vision tracker worker returned no result."));
-          return;
-        }
-        resolve(event.data.result);
-      };
-      onError = (event: ErrorEvent) => {
-        cleanup();
-        reject(new Error(event.message || "Vision tracker worker crashed."));
-      };
-      worker.addEventListener("message", onMessage);
-      worker.addEventListener("error", onError);
-      timeout = window.setTimeout(() => {
-        cleanup();
-        reject(new Error("Vision tracker paused because processing exceeded the frame budget."));
-      }, 6500);
-      worker.postMessage({ id, deck, platform, renderedCards, frameCandidates, frameSample, capturedAt, frameId });
-    });
-  }
-
-  function recordVisionDeckTrackerDebug(reason: string, payload: Record<string, unknown> = {}, force = false) {
-    const currentSettings = settingsRef.current;
-    if (!currentSettings?.debugMode) {
-      return;
-    }
-    const activeDeck = currentSettings?.activeDeckId
-      ? decksRef.current.find((deck) => deck.id === currentSettings.activeDeckId) ?? null
-      : null;
-    const now = Date.now();
-    const signature = JSON.stringify({
-      reason,
-      activeView: activeViewRef.current,
-      healthState: healthRef.current.state,
-      deckId: activeDeck?.id ?? "",
-      renderedCount: payload.renderedCount,
-      observationCount: payload.observationCount,
-      suggestionCount: payload.suggestionCount,
-      error: payload.error
-    });
-    if (!force && visionTrackerDebugRef.current.signature === signature && now - visionTrackerDebugRef.current.at < 5000) {
-      return;
-    }
-    visionTrackerDebugRef.current = { signature, at: now };
-    const webview = gameRef.current;
-    void window.riftlite.recordVisionDeckTrackerDebug(activePlatform, {
-      reason,
-      url: webview ? webview.getURL() : "",
-      activeView: activeViewRef.current,
-      healthState: healthRef.current.state,
-      platform: activePlatform,
-      enabled: currentSettings?.deckTrackerEnabled === true,
-      autoStart: currentSettings?.deckTrackerAutoStart === true,
-      saveToReplay: currentSettings?.deckTrackerSaveToReplay === true,
-      performanceMode: currentSettings?.deckTrackerPerformanceMode ?? "",
-      debugMode: currentSettings?.debugMode === true,
-      activeDeckId: activeDeck?.id ?? "",
-      activeDeckTitle: activeDeck?.title ?? "",
-      activeDeckLegend: activeDeck?.legend ?? "",
-      ...payload
-    }).catch(() => undefined);
-  }
-
-  async function runVisionDeckTrackerScan() {
-    if (!DECK_TRACKER_FEATURE_ENABLED || !VISION_DECK_TRACKER_FRAME_SCAN_ENABLED) {
-      return;
-    }
-    const currentSettings = settingsRef.current;
-    const activeDeck = currentSettings?.activeDeckId ? decksRef.current.find((deck) => deck.id === currentSettings.activeDeckId) ?? null : null;
-    const webview = gameRef.current;
-    if (!currentSettings?.deckTrackerEnabled || !currentSettings.deckTrackerAutoStart || !activeDeck || !webview) {
-      recordVisionDeckTrackerDebug("vision-scan-blocked", {
-        settingsLoaded: Boolean(currentSettings),
-        hasWebview: Boolean(webview),
-        hasActiveDeck: Boolean(activeDeck),
-        activeDeckId: currentSettings?.activeDeckId ?? "",
-        enabled: currentSettings?.deckTrackerEnabled === true,
-        autoStart: currentSettings?.deckTrackerAutoStart === true
-      });
-      return;
-    }
-    const healthState = healthRef.current.state;
-    if (activeViewRef.current !== "play" || !visionDeckTrackerShouldScan(healthState)) {
-      visionTrackerNoEvidenceUntilRef.current = 0;
-      setVisionTrackerStatus((current) => current ? {
-        ...current,
-        active: false,
-        state: healthState === "review-needed" || healthState === "saved" ? "paused" : current.state,
-        message: healthState === "match-detected"
-          ? current.message
-          : "Vision tracker is paused until an active match is detected.",
-        updatedAt: new Date().toISOString()
-      } : current);
-      recordVisionDeckTrackerDebug("vision-scan-paused", {
-        activeView: activeViewRef.current,
-        healthState
-      });
-      return;
-    }
-    const preScanNow = Date.now();
-    if (preScanNow < visionTrackerNoEvidenceUntilRef.current) {
-      return;
-    }
-    if (visionTrackerInFlightRef.current) {
-      visionTrackerSkippedRef.current += 1;
-      setVisionTrackerStatus((current) => current ? {
-        ...current,
-        skippedFrames: visionTrackerSkippedRef.current,
-        updatedAt: new Date().toISOString()
-      } : current);
-      recordVisionDeckTrackerDebug("vision-scan-skipped", {
-        skippedFrames: visionTrackerSkippedRef.current
-      });
-      return;
-    }
-    const currentUrl = webview.getURL();
-    const playableUrl = visionDeckTrackerUrlLooksPlayable(activePlatform, currentUrl);
-    if (!playableUrl) {
-      visionTrackerNoEvidenceUntilRef.current = Date.now() + 60000;
-      setVisionTrackerStatus((current) => current ? {
-        ...current,
-        active: false,
-        state: "paused",
-        message: "Vision tracker is paused outside an active game page.",
-        updatedAt: new Date().toISOString(),
-        processedFrames: visionTrackerProcessedRef.current,
-        skippedFrames: visionTrackerSkippedRef.current
-      } : current);
-      recordVisionDeckTrackerDebug("vision-scan-non-game-url", {
-        url: currentUrl,
-        healthState
-      });
-      return;
-    }
-    visionTrackerInFlightRef.current = true;
-    const frameNumber = visionTrackerFrameRef.current + 1;
-    visionTrackerFrameRef.current = frameNumber;
-    const frameId = `${activePlatform}-${Date.now()}-${frameNumber}`;
-    const capturedAt = new Date().toISOString();
-    try {
-      const rawCards = await webview.executeJavaScript(collectVisionRenderedCardsScript(activePlatform), true) as unknown;
-      const scan = sanitizeVisionRenderedCardsScan(rawCards, activePlatform);
-      const renderedCards = scan.cards;
-      if (!renderedCards.length && !scan.frameCandidates.length) {
-        visionTrackerNoEvidenceUntilRef.current = Date.now() + (healthState === "match-detected" ? 10000 : 30000);
-        setVisionTrackerStatus((current) => current ? {
-          ...current,
-          active: false,
-          state: "paused",
-          message: "Vision tracker is paused until visible match cards are detected.",
-          updatedAt: capturedAt,
-          processedFrames: visionTrackerProcessedRef.current,
-          skippedFrames: visionTrackerSkippedRef.current
-        } : current);
-        recordVisionDeckTrackerDebug("vision-scan-no-match-evidence", {
-          frameId,
-          healthState,
-          diagnostics: scan.diagnostics
-        });
-        return;
-      }
-      visionTrackerNoEvidenceUntilRef.current = 0;
-      const now = Date.now();
-      const shouldCaptureFrame = now - visionTrackerLastFrameCaptureRef.current >= visionFrameCaptureBudgetMs(currentSettings.deckTrackerPerformanceMode);
-      let frameSample: VisionFrameSample | null = null;
-      if (shouldCaptureFrame) {
-        frameSample = await captureVisionFrameSample(webview, scan, capturedAt).catch((error) => {
-          recordVisionDeckTrackerDebug("vision-frame-capture-failed", {
-            frameId,
-            error: error instanceof Error ? error.message : "Vision frame capture failed."
-          }, true);
-          return null;
-        });
-        if (frameSample) {
-          visionTrackerLastFrameCaptureRef.current = now;
-        }
-      }
-      recordVisionDeckTrackerDebug("vision-frame-read", {
-        frameId,
-        healthState,
-        renderedCount: renderedCards.length,
-        frameCandidateCount: scan.frameCandidates.length,
-        frameCaptured: Boolean(frameSample),
-        frameSize: frameSample ? `${frameSample.width}x${frameSample.height}` : "",
-        diagnostics: scan.diagnostics,
-        renderedSamples: renderedCards.slice(0, 8).map((card) => ({
-          name: card.name,
-          code: card.code,
-          cardId: card.cardId,
-          zone: card.zone,
-          confidenceScore: card.confidenceScore,
-          rect: card.zoneRect ? `${card.zoneRect.x},${card.zoneRect.y},${card.zoneRect.width},${card.zoneRect.height}` : ""
-        })),
-        frameCandidateSamples: scan.frameCandidates.slice(0, 8).map((candidate) => ({
-          zone: candidate.zone,
-          reason: candidate.reason,
-          confidenceScore: candidate.confidenceScore,
-          rect: `${candidate.zoneRect.x},${candidate.zoneRect.y},${candidate.zoneRect.width},${candidate.zoneRect.height}`
-        }))
-      });
-      const result = await matchVisionDeckTrackerInWorker(activeDeck, activePlatform, renderedCards, scan.frameCandidates, frameSample, capturedAt, frameId);
-      visionTrackerProcessedRef.current += 1;
-      const nextStatus: VisionDeckTrackerStatus = {
-        state: result.observations.length ? "active" : result.suggestions.length ? "low-confidence" : "active",
-        enabled: true,
-        active: true,
-        platform: activePlatform,
-        message: result.message,
-        updatedAt: capturedAt,
-        frameId,
-        confidenceScore: result.confidenceScore,
-        processedFrames: visionTrackerProcessedRef.current,
-        skippedFrames: visionTrackerSkippedRef.current,
-        suggestions: result.suggestions
-      };
-      setVisionTrackerStatus(nextStatus);
-      recordVisionDeckTrackerDebug("vision-frame-matched", {
-        frameId,
-        renderedCount: renderedCards.length,
-        observationCount: result.observations.length,
-        suggestionCount: result.suggestions.length,
-        confidenceScore: result.confidenceScore,
-        message: result.message,
-        frameDiagnostics: result.frameDiagnostics,
-        observations: result.observations.slice(0, 8).map((card) => ({
-          name: card.name,
-          code: card.code,
-          zone: card.zone,
-          confidenceScore: card.confidenceScore
-        })),
-        suggestions: result.suggestions.slice(0, 8).map((card) => ({
-          name: card.name,
-          code: card.code,
-          zone: card.zone,
-          confidenceScore: card.confidenceScore
-        })),
-        ignoredMatches: result.ignoredMatches?.slice(0, 8)
-      });
-      const diagnostics = result.frameDiagnostics ?? {};
-      const bestMatches = Array.isArray(diagnostics.bestMatches) ? diagnostics.bestMatches : [];
-      setVisionTrackerDebugPanel({
-        frameId,
-        capturedAt,
-        platform: activePlatform,
-        healthState,
-        renderedCount: renderedCards.length,
-        frameCandidateCount: scan.frameCandidates.length,
-        observationCount: result.observations.length,
-        suggestionCount: result.suggestions.length,
-        confidenceScore: result.confidenceScore,
-        frameCaptured: Boolean(frameSample),
-        message: result.message,
-        observations: result.observations.slice(0, 16).map((card) => ({
-          name: card.name || card.code || card.cardId || "Unknown card",
-          code: card.code || card.cardId || "",
-          zone: card.zone,
-          confidenceScore: card.confidenceScore ?? 0
-        })),
-        suggestions: result.suggestions.slice(0, 10).map((card) => ({
-          name: card.name || card.code || card.cardId || "Unknown card",
-          code: card.code || card.cardId || "",
-          zone: card.zone,
-          confidenceScore: card.confidenceScore
-        })),
-        bestMatches: bestMatches.slice(0, 10).map((item) => {
-          const record = item && typeof item === "object" && !Array.isArray(item) ? item as Record<string, unknown> : {};
-          return {
-            name: typeof record.name === "string" ? record.name : "Unknown card",
-            code: "",
-            zone: typeof record.zone === "string" ? record.zone : "unknown",
-            confidenceScore: typeof record.score === "number" ? record.score : 0,
-            source: typeof record.source === "string" ? record.source : "",
-            rect: typeof record.rect === "string" ? record.rect : ""
-          };
-        }),
-        ignoredMatches: (result.ignoredMatches ?? []).slice(0, 8).map((item) => `${item.name} (${item.role})`)
-      });
-      if (result.observations.length || result.suggestions.length || renderedCards.length) {
-        const state = await window.riftlite.reportVisionDeckTrackerObservations(activePlatform, result.observations, nextStatus);
-        setDeckTrackerState(state);
-        const serviceStatus = await window.riftlite.getVisionDeckTrackerStatus().catch(() => null);
-        if (serviceStatus) {
-          setVisionTrackerStatus(serviceStatus);
-        }
-      }
-    } catch (error) {
-      setVisionTrackerStatus({
-        state: "error",
-        enabled: true,
-        active: false,
-        platform: activePlatform,
-        message: error instanceof Error ? error.message : "Vision scan failed.",
-        updatedAt: new Date().toISOString(),
-        frameId,
-        confidenceScore: 0,
-        processedFrames: visionTrackerProcessedRef.current,
-        skippedFrames: visionTrackerSkippedRef.current,
-        suggestions: []
-      });
-      recordVisionDeckTrackerDebug("vision-scan-error", {
-        frameId,
-        error: error instanceof Error ? error.message : "Vision scan failed."
-      }, true);
-    } finally {
-      visionTrackerInFlightRef.current = false;
-    }
-  }
-
   async function confirmVisionSuggestion(cardKey: string) {
     const status = await window.riftlite.confirmVisionDeckTrackerSuggestion(cardKey);
-    recordVisionDeckTrackerDebug("vision-suggestion-confirmed", { cardKey }, true);
     setVisionTrackerStatus(status);
     await refreshDeckTrackerState();
   }
 
   async function rejectVisionSuggestion(cardKey: string) {
     const status = await window.riftlite.rejectVisionDeckTrackerSuggestion(cardKey);
-    recordVisionDeckTrackerDebug("vision-suggestion-rejected", { cardKey }, true);
     setVisionTrackerStatus(status);
   }
 
   async function calibrateVisionDeckTracker() {
     const status = await window.riftlite.calibrateVisionDeckTracker(activePlatform);
-    recordVisionDeckTrackerDebug("event-tracker-reset-requested", {
-      state: status.state,
-      message: status.message
-    }, true);
     setVisionTrackerStatus(status);
     await refreshDeckTrackerState();
   }
@@ -4885,13 +4340,22 @@ function App() {
     }
   }
 
-  function reloadGamePage(hardRefresh = false) {
+  async function reloadGamePage(hardRefresh = false) {
+    const switchStatus = await window.riftlite.getGamePlatformSwitchStatus().catch(() => ({
+      allowed: false,
+      message: "RiftLite could not verify that the current capture is safe to reload."
+    }));
+    if (!switchStatus.allowed) {
+      showActionFeedback(switchStatus.message, 5_000);
+      return;
+    }
     const webview = gameRef.current as (Electron.WebviewTag & { reloadIgnoringCache?: () => void }) | null;
     if (!webview) {
       showActionFeedback("Game page is not ready yet.");
       return;
     }
     try {
+      gameGuestAutoRecoveryRef.current.delete(activePlatformRef.current);
       if (hardRefresh && typeof webview.reloadIgnoringCache === "function") {
         webview.reloadIgnoringCache();
       } else {
@@ -4940,6 +4404,7 @@ function App() {
       }
       atlasReloadStormRef.current = initialAtlasReloadStormState();
       atlasEmptyShellRemountedRef.current = false;
+      gameGuestAutoRecoveryRef.current.delete("atlas");
       setAtlasShellVisibility((current) => updateAtlasShellVisibility(current, "empty-shell-recovery-started"));
       setAtlasRecoverySuggested(false);
       setGameWebviewEpoch((current) => current + 1);
@@ -4993,6 +4458,39 @@ function App() {
       window.dispatchEvent(new Event("resize"));
       requestAnimationFrame(() => window.dispatchEvent(new Event("resize")));
     })()`, true).catch(() => undefined);
+  }
+
+  function focusNativeGameWebview(platform: GamePlatform): void {
+    if (
+      !document.hasFocus() ||
+      reviewDraft ||
+      activeView !== "play" ||
+      platform !== activePlatform ||
+      platform !== mountedGamePlatform
+    ) {
+      return;
+    }
+    void window.riftlite.focusGameWebview(platform).catch(() => undefined);
+  }
+
+  function focusGameWebviewInput(platform: GamePlatform): void {
+    const webview = gameRef.current;
+    if (
+      !webview ||
+      !document.hasFocus() ||
+      reviewDraft ||
+      activeView !== "play" ||
+      platform !== activePlatform ||
+      platform !== mountedGamePlatform
+    ) {
+      return;
+    }
+    try {
+      webview.focus();
+    } catch {
+      // The native guest focus request below can still recover an OOPIF whose host element is stale.
+    }
+    focusNativeGameWebview(platform);
   }
 
   async function setGameZoom(nextZoom: number) {
@@ -6531,10 +6029,10 @@ function App() {
           </div>
           {activeView === "home" ? (
             <div className="top-actions home-top-actions">
-              <button className="segmented" data-platform="tcga" onClick={() => setActivePlatform("tcga")} data-active={activePlatform === "tcga"}>
+              <button className="segmented" data-platform="tcga" onClick={() => void chooseGamePlatform("tcga")} data-active={activePlatform === "tcga"}>
                 <Globe2 size={16} /> TCGA
               </button>
-              <button className="segmented" data-platform="atlas" onClick={() => setActivePlatform("atlas")} data-active={activePlatform === "atlas"}>
+              <button className="segmented" data-platform="atlas" onClick={() => void chooseGamePlatform("atlas")} data-active={activePlatform === "atlas"}>
                 <Globe2 size={16} /> Atlas
               </button>
               <button className="segmented icon-segment" onClick={() => openView("settings")} title="Settings" aria-label="Settings"><Settings size={17} /></button>
@@ -6542,22 +6040,22 @@ function App() {
             </div>
           ) : (
           <div className="top-actions" data-hidden={activeView !== "play"} data-tour-target="play">
-            <button className="segmented" data-platform="tcga" onClick={() => setActivePlatform("tcga")} data-active={activePlatform === "tcga"}>
+            <button className="segmented" data-platform="tcga" onClick={() => void chooseGamePlatform("tcga")} data-active={activePlatform === "tcga"}>
               <Gamepad2 size={16} /> <span className="play-action-label">TCGA</span>
             </button>
-            <button className="segmented" data-platform="atlas" onClick={() => setActivePlatform("atlas")} data-active={activePlatform === "atlas"}>
+            <button className="segmented" data-platform="atlas" onClick={() => void chooseGamePlatform("atlas")} data-active={activePlatform === "atlas"}>
               <Gamepad2 size={16} /> <span className="play-action-label">Atlas</span>
             </button>
             <button
               className="segmented icon-segment"
-              onClick={() => reloadGamePage(false)}
+              onClick={() => void reloadGamePage(false)}
               title="Refresh game page"
             >
               <RefreshCw size={16} />
             </button>
             <button
               className="segmented icon-segment"
-              onClick={() => reloadGamePage(true)}
+              onClick={() => void reloadGamePage(true)}
               title="Hard refresh game page"
             >
               <RotateCcw size={16} />
@@ -6617,7 +6115,11 @@ function App() {
                 allowpopups="true"
                 partition={GAME_WEBVIEW_PARTITIONS[mountedGamePlatform]}
                 webpreferences="backgroundThrottling=false"
-                onFocus={() => void armReplayVideoSource(mountedGamePlatform, true)}
+                onFocus={() => {
+                  void armReplayVideoSource(mountedGamePlatform, true);
+                  focusNativeGameWebview(mountedGamePlatform);
+                }}
+                onMouseDown={() => focusNativeGameWebview(mountedGamePlatform)}
                 onMouseEnter={() => void primeReplayVideoTarget(mountedGamePlatform)}
               />
             ) : (
@@ -6649,14 +6151,6 @@ function App() {
               onPopOut={window.riftlite.openDeckTrackerWindow}
               opponentLegend={deckTrackerState?.opponentLegend || prepOpponentLegend}
               communityMatches={communityMatches}
-            />
-          ) : null}
-          {DECK_TRACKER_DEBUG_PANEL_VISIBLE && DECK_TRACKER_FEATURE_ENABLED && settings?.deckTrackerEnabled && settings.debugMode ? (
-            <VisionDeckTrackerDebugWindow
-              state={deckTrackerState}
-              status={visionTrackerStatus}
-              scan={visionTrackerDebugPanel}
-              onReset={resetDeckTrackerMatch}
             />
           ) : null}
           {playActiveDeck && prepNotebook ? (
@@ -6701,10 +6195,7 @@ function App() {
             onStartGuidedTour={startGuidedTourReplay}
             onResetGuidedTour={resetGuidedTourForNextLaunch}
             onNavigate={openView}
-            onPlayPlatform={(platform) => {
-              setActivePlatform(platform);
-              openView("play");
-            }}
+            onPlayPlatform={(platform) => void chooseGamePlatform(platform, true)}
             communityTab={activeCommunityTab}
             communityDeckLegendTarget={communityDeckLegendTarget}
             spotlightTargetId={spotlightTargetId}
@@ -6807,8 +6298,10 @@ function App() {
         <div className="atlas-recovery-prompt" role="alert" data-atlas-recovery-prompt>
           <AlertTriangle size={20} />
           <div>
-            <strong>Atlas did not start correctly</strong>
-            <span>RiftLite can refresh Atlas&apos;s embedded runtime cache without removing your Atlas sign-in, local decks, or RiftLite data.</span>
+            <strong>{atlasShellVisibility === "fallback-visible" ? "Check the Atlas page" : "Atlas did not start correctly"}</strong>
+            <span>{atlasShellVisibility === "fallback-visible"
+              ? "RiftLite could not recognize the page after waiting, so it revealed Atlas. If the page is genuinely blank, use Repair Atlas."
+              : "RiftLite can refresh Atlas's embedded runtime cache without removing your Atlas sign-in, local decks, or RiftLite data."}</span>
           </div>
           <div className="atlas-recovery-actions">
             <button className="primary" disabled={atlasRecoveryBusy} onClick={() => void recoverAtlasWebview()}>
@@ -8086,157 +7579,6 @@ function DeckTrackerPopoutApp() {
         popoutMode
       />
     </main>
-  );
-}
-
-function VisionDeckTrackerDebugWindow({
-  state,
-  status,
-  scan,
-  onReset
-}: {
-  state: DeckTrackerState | null;
-  status: VisionDeckTrackerStatus | null;
-  scan: VisionTrackerDebugPanelState | null;
-  onReset: () => Promise<void>;
-}) {
-  const [collapsed, setCollapsed] = useState(false);
-  const [position, setPosition] = useState(() => {
-    try {
-      const stored = JSON.parse(window.localStorage.getItem(VISION_DEBUG_POSITION_KEY) || "null") as { x?: number; y?: number } | null;
-      if (stored && typeof stored.x === "number" && typeof stored.y === "number") {
-        return {
-          x: Math.max(90, Math.min(window.innerWidth - 360, stored.x)),
-          y: Math.max(90, Math.min(window.innerHeight - 220, stored.y))
-        };
-      }
-    } catch {
-      // Keep the test panel usable even if local storage has bad data.
-    }
-    return { x: Math.max(120, window.innerWidth - 390), y: 118 };
-  });
-  const countedCards = (state?.cards ?? []).filter((card) => card.seenCount > 0).slice(0, 12);
-  const recentReads = scan?.observations ?? [];
-  const suggestions = scan?.suggestions ?? [];
-  const bestMatches = scan?.bestMatches ?? [];
-
-  if (!state && !status && !scan) {
-    return null;
-  }
-
-  function persist(next: { x: number; y: number }) {
-    try {
-      window.localStorage.setItem(VISION_DEBUG_POSITION_KEY, JSON.stringify(next));
-    } catch {
-      // Non-fatal; the panel just falls back to its default spot next launch.
-    }
-  }
-
-  function startDrag(event: React.PointerEvent<HTMLElement>) {
-    if (event.button !== 0) {
-      return;
-    }
-    event.preventDefault();
-    const startX = event.clientX;
-    const startY = event.clientY;
-    const origin = position;
-    let latest = origin;
-    const onMove = (moveEvent: PointerEvent) => {
-      const next = {
-        x: Math.max(84, Math.min(window.innerWidth - 320, origin.x + moveEvent.clientX - startX)),
-        y: Math.max(74, Math.min(window.innerHeight - 180, origin.y + moveEvent.clientY - startY))
-      };
-      latest = next;
-      setPosition(next);
-    };
-    const onUp = () => {
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-      persist(latest);
-    };
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp, { once: true });
-  }
-
-  const statusText = status?.state
-    ? `${status.state}${typeof status.confidenceScore === "number" ? ` - ${Math.round(status.confidenceScore * 100)}%` : ""}`
-    : "waiting";
-
-  return (
-    <section
-      className="vision-debug-window"
-      data-collapsed={collapsed}
-      style={{ left: `${position.x}px`, top: `${position.y}px` }}
-      aria-label="Atlas event deck tracker debug"
-    >
-      <header onPointerDown={startDrag}>
-        <GripVertical size={15} />
-        <div>
-          <strong>Atlas event reads</strong>
-          <span>{statusText}</span>
-        </div>
-        <button
-          type="button"
-          className="icon-button"
-          onPointerDown={(event) => event.stopPropagation()}
-          onClick={() => setCollapsed((value) => !value)}
-          aria-label={collapsed ? "Expand Atlas event reads" : "Collapse Atlas event reads"}
-        >
-          {collapsed ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
-        </button>
-      </header>
-      {!collapsed ? (
-        <div className="vision-debug-body">
-          <div className="vision-debug-meta">
-            <span>{scan?.frameCaptured ? "packet" : "events"}</span>
-            <span>{scan ? `${scan.observationCount} reads` : "no scan yet"}</span>
-            <span>{scan ? `${scan.frameCandidateCount} ignored` : ""}</span>
-          </div>
-          <button type="button" className="secondary vision-debug-reset" onClick={() => void onReset()}>
-            <RefreshCw size={13} /> Reset game / BO3
-          </button>
-          <VisionDebugList title="Just picked up" items={recentReads} empty="No confident event reads yet." />
-          <VisionDebugList title="Suggestions" items={suggestions} empty="No pending suggestions." />
-          <div className="vision-debug-section">
-            <strong>Counted in deck</strong>
-            {countedCards.length ? countedCards.map((card) => (
-              <div className="vision-debug-row" key={card.cardKey}>
-                <span>{card.name}</span>
-                <small>{card.seenCount}/{card.deckCount} seen</small>
-              </div>
-            )) : <p className="muted">Nothing counted yet.</p>}
-          </div>
-          <VisionDebugList title="Recent event details" items={bestMatches} empty="No event details yet." showSource />
-        </div>
-      ) : null}
-    </section>
-  );
-}
-
-function VisionDebugList({
-  title,
-  items,
-  empty,
-  showSource = false
-}: {
-  title: string;
-  items: Array<VisionDebugItem | VisionDebugMatchItem>;
-  empty: string;
-  showSource?: boolean;
-}) {
-  return (
-    <div className="vision-debug-section">
-      <strong>{title}</strong>
-      {items.length ? items.map((item, index) => (
-        <div className="vision-debug-row" key={`${item.name}-${item.zone}-${index}`}>
-          <span>{item.name}</span>
-          <small>
-            {item.zone} - {Math.round(item.confidenceScore * 100)}%
-            {showSource && "source" in item && item.source ? ` - ${item.source}` : ""}
-          </small>
-        </div>
-      )) : <p className="muted">{empty}</p>}
-    </div>
   );
 }
 
@@ -12004,11 +11346,18 @@ function AccountView({ settings, matches, decks, onSettingsChanged, onAccountDat
   );
   const profileLink = handleDraft.trim() ? `https://www.riftlite.com/user/${encodeURIComponent(handleDraft.trim())}` : "";
   const cloudEnabled = Boolean(cloudStatus?.enabled ?? settings.accountCloudSyncEnabled);
-  const cloudNeedsChoice = accountLinked && Boolean(cloudStatus?.hasRemoteBackup) && !cloudEnabled;
+  const cloudNeedsChoice = accountLinked && Boolean(
+    cloudStatus?.requiresUserChoice || (cloudStatus?.hasRemoteBackup && !cloudEnabled)
+  );
   const cloudCounts = cloudStatus?.remoteCounts ?? { matches: 0, decks: 0, notebooks: 0, replays: 0 };
   const localSyncSnapshot = useMemo(
     () => localAccountSyncSnapshot(matches, decks, settings),
     [decks, matches, settings]
+  );
+  const tcgaReplayAutoUploadEnabled = Boolean(
+    settings.rawCapture.enabled &&
+    settings.rawCapture.tcgaWebReplayAutoUploadEnabled &&
+    settings.rawCapture.tcgaWebReplayAutoUploadAccountUid === settings.accountUid
   );
   const cloudSyncSnapshot = useMemo(() => cloudAccountSyncSnapshot(cloudStatus), [cloudStatus]);
   const syncChoicePreview = useMemo(
@@ -12256,8 +11605,9 @@ function AccountView({ settings, matches, decks, onSettingsChanged, onAccountDat
 
   async function startLink(provider: AccountLinkProvider) {
     if (linkBusy || linkSession) return;
+    const providerName = provider === "google" ? "Google" : provider === "discord" ? "Discord" : "email";
     setLinkBusy(true);
-    setStatus(`Preparing ${provider === "google" ? "Google" : "email"} sign-in...`);
+    setStatus(`Preparing ${providerName} sign-in...`);
     try {
       const session = await window.riftlite.startAccountLink();
       const loginUrl = accountLinkUrlForProvider(session.loginUrl, provider);
@@ -12271,7 +11621,7 @@ function AccountView({ settings, matches, decks, onSettingsChanged, onAccountDat
         .catch(() => undefined);
       try {
         await window.riftlite.openExternalResource(loginUrl);
-        setStatus(`Your browser is open. Finish ${provider === "google" ? "Google" : "email"} sign-in there; RiftLite will continue automatically.`);
+        setStatus(`Your browser is open. Finish ${providerName} sign-in there; RiftLite will continue automatically.`);
       } catch {
         setStatus("RiftLite could not open your browser. Expand Having trouble? to open or copy the secure sign-in link.");
       }
@@ -12397,16 +11747,13 @@ function AccountView({ settings, matches, decks, onSettingsChanged, onAccountDat
       setStatus("Verify this account before enabling automatic replay upload.");
       return;
     }
-    const next = await window.riftlite.saveSettings({
-      rawCapture: {
-        ...settings.rawCapture,
-        enabled: enabled ? true : settings.rawCapture.enabled,
-        webReplayAutoUploadEnabled: enabled,
-        webReplayAutoUploadAccountUid: enabled ? settings.accountUid : "",
-        webReplayDiscordShareEnabled: enabled ? settings.rawCapture.webReplayDiscordShareEnabled : false,
-        webReplayDiscordShareAccountUid: enabled ? settings.rawCapture.webReplayDiscordShareAccountUid : "",
-        webReplayDiscordShareHubIds: enabled ? settings.rawCapture.webReplayDiscordShareHubIds : []
-      }
+    const next = await window.riftlite.updateRawCaptureSettings({
+      enabled: enabled ? true : settings.rawCapture.enabled,
+      webReplayAutoUploadEnabled: enabled,
+      webReplayAutoUploadAccountUid: enabled ? settings.accountUid : "",
+      webReplayDiscordShareEnabled: enabled ? settings.rawCapture.webReplayDiscordShareEnabled : false,
+      webReplayDiscordShareAccountUid: enabled ? settings.rawCapture.webReplayDiscordShareAccountUid : "",
+      webReplayDiscordShareHubIds: enabled ? settings.rawCapture.webReplayDiscordShareHubIds : []
     });
     onSettingsChanged(next);
     setStatus(enabled
@@ -12415,10 +11762,24 @@ function AccountView({ settings, matches, decks, onSettingsChanged, onAccountDat
     setConnectionStatus(await window.riftlite.getAccountConnectionStatus());
   }
 
-  async function setReplayVisibility(visibility: UserSettings["rawCapture"]["visibility"]) {
-    const next = await window.riftlite.saveSettings({
-      rawCapture: { ...settings.rawCapture, visibility }
+  async function setTcgaReplayAutoUpload(enabled: boolean) {
+    if (enabled && !accountVerified) {
+      setStatus("Verify this account before enabling automatic TCGA replay upload.");
+      return;
+    }
+    const next = await window.riftlite.updateRawCaptureSettings({
+      enabled: enabled ? true : settings.rawCapture.enabled,
+      tcgaWebReplayAutoUploadEnabled: enabled,
+      tcgaWebReplayAutoUploadAccountUid: enabled ? settings.accountUid : ""
     });
+    onSettingsChanged(next);
+    setStatus(enabled
+      ? `New completed TCGA replays will upload privately to ${connectionStatus?.displayName || connectionStatus?.handle || "this verified account"}.`
+      : "Automatic TCGA replay upload is off.");
+  }
+
+  async function setReplayVisibility(visibility: UserSettings["rawCapture"]["visibility"]) {
+    const next = await window.riftlite.updateRawCaptureSettings({ visibility });
     onSettingsChanged(next);
   }
 
@@ -12427,14 +11788,11 @@ function AccountView({ settings, matches, decks, onSettingsChanged, onAccountDat
       setStatus("Verify this account before sharing replay links to Discord.");
       return;
     }
-    const rawCapture = rawCaptureSettingsForDiscordHubSelection(settings, hubId, selected);
-    const next = await window.riftlite.saveSettings({
-      rawCapture
-    });
+    const next = await window.riftlite.setWebReplayDiscordShareHub(hubId, selected);
     onSettingsChanged(next);
     setStatus(selected
-      ? "Future Atlas replays will be Unlisted and posted to this hub's Discord reports channel."
-      : rawCapture.webReplayDiscordShareHubIds.length
+      ? "Future Atlas and enabled TCGA replays will be Unlisted and posted to this hub's Discord reports channel."
+      : next.rawCapture.webReplayDiscordShareHubIds.length
         ? "This Discord destination was removed. Other selected hubs remain active."
         : "Automatic Discord replay sharing is off.");
   }
@@ -12470,13 +11828,16 @@ function AccountView({ settings, matches, decks, onSettingsChanged, onAccountDat
     if (!pending) return;
     setPendingSyncChoice(null);
     if (pending.choice === "keep-local") {
-      await uploadAccountCloudSync(pending.dismissPostLinkChoice);
+      await uploadAccountCloudSync(pending.dismissPostLinkChoice, true);
       return;
     }
     await restoreAccountCloudSync(pending.dismissPostLinkChoice);
   }
 
-  async function uploadAccountCloudSync(dismissPostLinkChoice = false) {
+  async function uploadAccountCloudSync(
+    dismissPostLinkChoice = false,
+    allowRemoteReplacement = false
+  ) {
     if (!accountLinked) {
       setStatus("Link a RiftLite account before syncing this device.");
       return;
@@ -12484,7 +11845,7 @@ function AccountView({ settings, matches, decks, onSettingsChanged, onAccountDat
     setCloudBusy(true);
     setStatus("Syncing this device...");
     try {
-      const next = await window.riftlite.uploadAccountCloudSync();
+      const next = await window.riftlite.uploadAccountCloudSync(allowRemoteReplacement);
       setCloudStatus(next);
       onSettingsChanged(await window.riftlite.getSettings());
       setStatus(next.message || "Account data synced.");
@@ -12618,7 +11979,7 @@ function AccountView({ settings, matches, decks, onSettingsChanged, onAccountDat
       setLinkQr("");
       setShowPostLinkSyncChoice(false);
       linkStartedAsFirstConnection.current = false;
-      setStatus("The previous account is safely unlinked. Choose Google or email above, then explicitly confirm the new account on RiftLite.com.");
+      setStatus("The previous account is safely unlinked. Choose Google, email, or a previously linked Discord account above, then explicitly confirm the account on RiftLite.com.");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Could not start the account switch.");
     }
@@ -12655,6 +12016,9 @@ function AccountView({ settings, matches, decks, onSettingsChanged, onAccountDat
             <button type="button" className="secondary account-provider-button" disabled={linkBusy} onClick={() => void startLink("email")}>
               <Mail size={16} /> Continue with email
             </button>
+            <button type="button" className="secondary account-provider-button" disabled={linkBusy} onClick={() => void startLink("discord")}>
+              <MessageCircle size={16} /> Continue with Discord
+            </button>
           </> : null}
           {accountLinked ? <button className="secondary" disabled={connectionBusy} onClick={() => void checkAccountConnection()}><RefreshCw size={16} /> Check connection</button> : null}
           {profileLink ? <button className="secondary" onClick={() => void window.riftlite.openExternalResource(profileLink)}><ExternalLink size={16} /> Open profile</button> : null}
@@ -12666,7 +12030,7 @@ function AccountView({ settings, matches, decks, onSettingsChanged, onAccountDat
           <div className="account-link-box account-link-waiting">
             <span className="account-link-status-icon" aria-hidden="true"><RefreshCw size={24} /></span>
             <div>
-              <h3>Finish {linkProvider === "google" ? "Google" : "email"} sign-in in your browser</h3>
+              <h3>Finish {linkProvider === "google" ? "Google" : linkProvider === "discord" ? "Discord" : "email"} sign-in in your browser</h3>
               <p className="muted">Confirm the exact RiftLite account shown on the website. This device will verify the same account and continue automatically.</p>
               <details className="account-link-help">
                 <summary>Having trouble?</summary>
@@ -12734,14 +12098,15 @@ function AccountView({ settings, matches, decks, onSettingsChanged, onAccountDat
       ) : null}
       <div className="rail-card">
         <h2>Replay and account connection</h2>
-        <p className="muted">One verified identity owns your private hubs, Discord link, device backup, and every new Atlas web replay.</p>
+        <p className="muted">One verified identity owns your private hubs, Discord link, device backup, and every new web replay you separately enable.</p>
         <div className="drilldown-grid">
           <Metric label="Website identity" value={accountVerified ? "Matches desktop" : accountLinked ? "Check required" : "Not connected"} />
           <Metric label="Replay library" value={connectionStatus?.replayLibraryReady ? "Accessible" : "Not verified"} />
           <Metric label="Replay upload target" value={accountVerified ? connectionStatus?.displayName || connectionStatus?.handle || "Verified account" : "Blocked"} />
           <Metric label="Older data" value={connectionStatus?.migrationState === "attention" ? "Needs repair" : connectionStatus?.migrationState === "pending" ? "Finishing" : "Ready"} />
           <Metric label="Last verified" value={formatCloudDate(connectionStatus?.checkedAt || settings.accountLastVerifiedAt)} />
-          <Metric label="Auto upload" value={replayAutoUploadEnabled ? "On" : "Off"} />
+          <Metric label="Atlas auto upload" value={replayAutoUploadEnabled ? "On" : "Off"} />
+          <Metric label="TCGA auto upload" value={tcgaReplayAutoUploadEnabled ? "On" : "Off"} />
           <Metric label="Discord reports" value={discordReplayShareEnabled ? `${selectedDiscordShareHubIds.length} hub${selectedDiscordShareHubIds.length === 1 ? "" : "s"}` : "Off"} />
         </div>
         <div className="account-migration-progress" data-tone={migrationProgress.tone}>
@@ -12763,10 +12128,20 @@ function AccountView({ settings, matches, decks, onSettingsChanged, onAccountDat
             onChange={(event) => void setReplayAutoUpload(event.target.checked)}
           />
         </label>
+        <label className="toggle-row">
+          <span><Upload size={16} /> Automatically upload my completed TCGA replays</span>
+          <input
+            type="checkbox"
+            checked={tcgaReplayAutoUploadEnabled}
+            disabled={!accountVerified || connectionBusy}
+            onChange={(event) => void setTcgaReplayAutoUpload(event.target.checked)}
+          />
+        </label>
+        <p className="muted">TCGA is a separate opt-in. RiftLite records only the match's WebRTC game channel for this feature; the broader local Research Monitor remains off unless you start it yourself.</p>
         <label>New replay visibility
           <select
             value={settings.rawCapture.visibility}
-            disabled={!replayAutoUploadEnabled || discordReplayShareEnabled}
+            disabled={(!replayAutoUploadEnabled && !tcgaReplayAutoUploadEnabled) || discordReplayShareEnabled}
             onChange={(event) => void setReplayVisibility(event.target.value as UserSettings["rawCapture"]["visibility"])}
           >
             <option value="private">Private — only me</option>
@@ -12777,7 +12152,7 @@ function AccountView({ settings, matches, decks, onSettingsChanged, onAccountDat
         {discordShareHubs.length ? (
           <div className="settings-note">
             <strong><Radio size={15} /> Automatically post future replay links</strong>
-            <span>Selecting a hub is the complete opt-in. New Atlas replays become Unlisted and are posted to that hub's configured Discord reports channel.</span>
+            <span>Selecting a hub is the complete Discord opt-in. New Atlas replays and separately enabled TCGA replays become Unlisted and are posted to that hub's configured Discord reports channel.</span>
             {discordShareHubs.map((hub) => (
               <label className="toggle-row" key={hub.id}>
                 <span>{hub.name} <small>Hub ID: {hub.id}</small></span>
@@ -13300,6 +12675,95 @@ function CaptureLabView({ summary, bundlePath, settings, embedded = false, onSav
 }) {
   const tcga = summary?.latest.find((item) => item.platform === "tcga");
   const atlas = summary?.latest.find((item) => item.platform === "atlas");
+  const [tcgaMonitor, setTcgaMonitor] = useState<TcgaReplayResearchStatus | null>(null);
+  const [tcgaMonitorMessage, setTcgaMonitorMessage] = useState("");
+
+  const refreshTcgaMonitor = useCallback(async () => {
+    const status = await window.riftlite.getTcgaReplayResearchStatus();
+    setTcgaMonitor(status);
+    return status;
+  }, []);
+
+  useEffect(() => {
+    void refreshTcgaMonitor().catch(() => undefined);
+    const timer = window.setInterval(() => void refreshTcgaMonitor().catch(() => undefined), 1_500);
+    return () => window.clearInterval(timer);
+  }, [refreshTcgaMonitor]);
+
+  async function startTcgaMonitor() {
+    setTcgaMonitorMessage("Starting TCGA replay monitor...");
+    try {
+      const status = await window.riftlite.startTcgaReplayResearchCapture();
+      setTcgaMonitor(status);
+      setTcgaMonitorMessage(!status.active
+        ? "Monitor start cancelled."
+        : status.transportState === "error"
+          ? `Monitor started, but the TCGA game-channel hook needs attention: ${status.transportError || "unknown error"}`
+          : status.transportState === "ready"
+            ? "Monitor ready. Play the representative TCGA games."
+            : "Monitor active and waiting for TCGA. Open TCGA before joining a match.");
+    } catch (error) {
+      setTcgaMonitorMessage(`Could not start the TCGA monitor: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  async function stopTcgaMonitor() {
+    setTcgaMonitorMessage("Finalising TCGA monitor file...");
+    try {
+      const status = await window.riftlite.stopTcgaReplayResearchCapture();
+      setTcgaMonitor(status);
+      const assessment = status.analysis?.assessment;
+      const webReplayFileCount = status.webReplayExports.filter((entry) => (
+        entry.status === "exported" && Boolean(entry.exportPath)
+      )).length;
+      const captureMessage = !status.exportPath
+        ? "TCGA monitor stopped."
+        : assessment?.replayTimeline === "complete"
+          ? "Monitor saved. Decoder checks passed and the replay timeline appears complete."
+          : assessment?.decoderFixture === "usable"
+            ? "Monitor saved. The decoder data is usable, but the replay timeline is partial; check the analysis below."
+            : "Monitor stopped and the captured file is ready for diagnostic review.";
+      const webReplayMessage = status.webReplayExportError
+        ? " The research capture is intact, but Web Replay companion generation failed."
+        : webReplayFileCount > 0
+          ? ` Created ${webReplayFileCount} local Web Replay companion${webReplayFileCount === 1 ? "" : "s"}.`
+          : "";
+      setTcgaMonitorMessage(`${captureMessage}${webReplayMessage}`);
+    } catch (error) {
+      setTcgaMonitorMessage(`Could not finalise the TCGA monitor: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  async function deleteTcgaMonitorFiles() {
+    try {
+      const status = await window.riftlite.deleteTcgaReplayResearchCaptures();
+      setTcgaMonitor(status);
+      setTcgaMonitorMessage(status.stopReason === "deleted" ? `Deleted ${status.deletedFiles} TCGA monitor file${status.deletedFiles === 1 ? "" : "s"}.` : "Delete cancelled.");
+    } catch (error) {
+      setTcgaMonitorMessage(`Could not delete the TCGA monitor files: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  const tcgaWebReplayExports = (tcgaMonitor?.webReplayExports ?? []).filter((entry) => (
+    entry.status === "exported" && Boolean(entry.exportPath)
+  ));
+  const tcgaWebReplayMessages = tcgaWebReplayExports.reduce((total, entry) => total + entry.messageCount, 0);
+  const tcgaMonitorPill = tcgaMonitor?.active
+    ? tcgaMonitor.transportState === "error"
+      ? { className: "failed", label: "needs attention" }
+      : tcgaMonitor.transportState === "ready"
+        ? { className: "pending", label: "recording" }
+        : { className: "pending", label: "waiting for TCGA" }
+    : tcgaMonitor?.lastError
+      ? { className: "failed", label: "needs attention" }
+      : tcgaMonitor?.webReplayExportError
+        ? { className: "pending", label: "capture saved" }
+        : tcgaMonitor?.analysis?.assessment.decoderFixture === "unusable"
+          ? { className: "failed", label: "not usable" }
+          : tcgaMonitor?.capped || tcgaMonitor?.analysis?.assessment.replayTimeline === "partial"
+            ? { className: "pending", label: "partial" }
+            : tcgaMonitor?.exportPath
+              ? { className: "synced", label: "ready" }
+              : { className: "disabled", label: "off" };
   return (
     <section className={embedded ? "capture-lab capture-lab-embedded" : "dashboard-page capture-lab"}>
       <div className="panel-header">
@@ -13343,6 +12807,69 @@ function CaptureLabView({ summary, bundlePath, settings, embedded = false, onSav
           <p className="muted">Leave this enabled while testing TCGA, Atlas, replay capture, or match review. After a missed match or capture issue, use Create bundle and send the generated JSON file.</p>
         </section>
       ) : null}
+
+      <section className="rail-card">
+        <div className="evidence-title">
+          <div>
+            <h2>TCGA Web Replay monitor</h2>
+            <p className="muted">Records TCGA's game-channel messages alongside visible board checkpoints so we can map them into the RiftLite Web Replay model.</p>
+          </div>
+          <span className={`sync-pill ${tcgaMonitorPill.className}`}>
+            {tcgaMonitorPill.label}
+          </span>
+        </div>
+        <div className="metric-grid">
+          <Metric label="Records" value={String(tcgaMonitor?.recordCount ?? 0)} />
+          <Metric label="Game messages" value={String(tcgaMonitor?.recordKinds["page-rtc-data"] ?? 0)} />
+          <Metric label="Board checks" value={String(tcgaMonitor?.recordKinds["preload-dom-checkpoint"] ?? 0)} />
+          <Metric label="Captured" value={formatBytes(tcgaMonitor?.byteCount ?? 0)} />
+          <Metric label="Dropped" value={String(tcgaMonitor?.droppedCount ?? 0)} />
+          <Metric label="Limit" value={tcgaMonitor?.capped ? tcgaMonitor.capReason || "reached" : "OK"} />
+          <Metric label="Decoder" value={tcgaMonitor?.analysis?.assessment.decoderFixture ?? (tcgaMonitor?.active ? "pending" : "not analysed")} />
+          <Metric label="Timeline" value={tcgaMonitor?.analysis?.assessment.replayTimeline ?? (tcgaMonitor?.active ? "pending" : "not analysed")} />
+          <Metric label="Decoded messages" value={String(tcgaMonitor?.analysis?.transport.logicalMessages ?? 0)} />
+          <Metric label="Incomplete chunks" value={String(tcgaMonitor?.analysis?.transport.incompleteChunkGroups ?? 0)} />
+          <Metric label="Web Replay files" value={String(tcgaWebReplayExports.length)} />
+          <Metric label="Replay messages" value={String(tcgaWebReplayMessages)} />
+        </div>
+        <div className="row-actions">
+          <button className="primary" type="button" disabled={tcgaMonitor?.active === true} onClick={() => void startTcgaMonitor()}>
+            <Radio size={15} /> Start monitor
+          </button>
+          <button className="secondary" type="button" disabled={tcgaMonitor?.active !== true} onClick={() => void stopTcgaMonitor()}>
+            <Square size={15} /> Stop and save
+          </button>
+          <button className="secondary" type="button" onClick={() => void window.riftlite.openTcgaReplayResearchFolder()}>
+            <FolderOpen size={15} /> Open folder
+          </button>
+          <button className="secondary" type="button" onClick={() => void deleteTcgaMonitorFiles()}>
+            <Trash2 size={15} /> Delete captures
+          </button>
+        </div>
+        <p className="muted">Start before joining a match. Stop after the test games; the compressed JSONL and per-game Web Replay companions stay on this computer and are not uploaded by RiftLite.</p>
+        {tcgaMonitor?.active && tcgaMonitor.transportState === "error" ? <p className="muted">Game-channel hook error: {tcgaMonitor.transportError || "Unknown error"}. Stop and keep the file; board and network evidence may still be useful.</p> : null}
+        {tcgaMonitor?.analysis?.assessment.replayTimeline === "partial" ? (
+          <p className="muted">Partial timeline: {tcgaMonitor.analysis.assessment.reasonCodes.join(", ").replaceAll("-", " ")}.</p>
+        ) : null}
+        {tcgaMonitor?.exportPath ? <input readOnly value={tcgaMonitor.exportPath} /> : null}
+        {tcgaMonitor?.analysisPath ? <input readOnly value={tcgaMonitor.analysisPath} /> : null}
+        {tcgaWebReplayExports.length ? (
+          <p className="muted">Created {tcgaWebReplayExports.length} local per-game Web Replay companion{tcgaWebReplayExports.length === 1 ? "" : "s"}.</p>
+        ) : null}
+        {tcgaWebReplayExports.map((entry) => (
+          <input
+            aria-label={`TCGA Web Replay companion ${entry.ordinal}`}
+            key={entry.captureSessionId}
+            readOnly
+            value={entry.exportPath}
+          />
+        ))}
+        {tcgaMonitor?.webReplayExportError ? (
+          <p className="muted">The research capture was saved, but automatic Web Replay companion generation failed. The original JSONL is intact.</p>
+        ) : null}
+        {tcgaMonitorMessage ? <p className="muted">{tcgaMonitorMessage}</p> : null}
+        {tcgaMonitor?.lastError ? <p className="muted">{tcgaMonitor.lastError}</p> : null}
+      </section>
 
       <section className="rail-card">
         <h2>Privacy-safe by default</h2>
@@ -19375,16 +18902,21 @@ function ReplayRawCapturePanel({
   }
   const deliverySummary = replayDeliverySummary(rawCapture, settings.rawCapture.enabled);
   const hasRiftLiteReplay = Boolean(rawCapture?.uploadUrl?.includes("riftlite.com/replays/"));
+  const accountReady = hasVerifiedRiftLiteAccount(settings);
   const canUpload = Boolean(
     settings.rawCapture.enabled &&
-    settings.accountUid &&
-    settings.firebaseRefreshToken &&
+    accountReady &&
     rawCapture?.localPath &&
     !hasRiftLiteReplay
   );
   const activeHubIds = new Set(settings.activeHubs.map((hub) => hub.id));
   const discordHubIds = activeDiscordReplayHubIds(settings).filter((hubId) => activeHubIds.has(hubId));
-  const canShareDiscord = Boolean(hasRiftLiteReplay && discordHubIds.length);
+  const canShareDiscord = Boolean(
+    accountReady &&
+    (replay.platform === "atlas" || replay.platform === "tcga") &&
+    hasRiftLiteReplay &&
+    discordHubIds.length
+  );
   const discordShared = rawCapture?.discordShareStatus === "shared";
   const deliveryStages = replayDeliveryStages(rawCapture);
   return (
@@ -19392,13 +18924,16 @@ function ReplayRawCapturePanel({
       <div className="replay-health-title">
         <div>
           <h2>RiftLite web replay capture</h2>
-          <span>{rawCapture ? `${rawCapture.messageCount} Atlas WebSocket frame${rawCapture.messageCount === 1 ? "" : "s"} captured.` : "No raw Atlas sidecar is attached to this replay."}</span>
+          <span>{rawCapture
+            ? `${rawCapture.messageCount} ${replay.platform === "tcga" ? "TCGA game message" : "Atlas WebSocket frame"}${rawCapture.messageCount === 1 ? "" : "s"} captured.`
+            : `No ${replay.platform === "tcga" ? "TCGA game-channel capture" : "raw Atlas sidecar"} is attached to this replay.`}</span>
         </div>
         <strong>{deliverySummary.statusLabel}</strong>
       </div>
       <div className="replay-health-grid">
         <StatRow label="Provider" value="RiftLite Web Replay" />
-        <StatRow label="Room" value={rawCapture?.roomCode || "Not captured"} />
+        <StatRow label="Source" value={replay.platform === "tcga" ? "TCGA game channel" : "Atlas WebSocket"} />
+        <StatRow label="Room" value={replay.platform === "tcga" ? "Not applicable" : rawCapture?.roomCode || "Not captured"} />
         <StatRow label="Visibility" value={rawCapture?.visibility || settings.rawCapture.visibility} />
         <StatRow label="Uploaded" value={rawCapture?.uploadedAt ? new Date(rawCapture.uploadedAt).toLocaleString() : deliverySummary.uploadLabel} />
         <StatRow label="Discord reports" value={deliverySummary.discordLabel} />
@@ -19434,11 +18969,20 @@ function ReplayRawCapturePanel({
           </button>
         </div>
       ) : (
-        <button className="secondary" type="button" disabled={!canUpload} onClick={onUpload}>
+        <button
+          className="secondary"
+          type="button"
+          disabled={!canUpload}
+          onClick={onUpload}
+          title={!accountReady ? "Open Account and finish verification before uploading." : undefined}
+        >
           <Upload size={14} /> Upload to web replay
         </button>
       )}
-      {rawCapture?.error ? <p className="muted">{rawCapture.error}</p> : null}
+      {!accountReady && rawCapture?.localPath ? (
+        <p className="muted">The replay is saved locally. Open Account and finish verification or reconnect the same account before retrying.</p>
+      ) : null}
+      {rawCapture?.error ? <p className="muted">{replayDeliveryErrorMessage(rawCapture.error)}</p> : null}
       {rawCapture?.discordShareError ? <p className="muted">{rawCapture.discordShareError}</p> : null}
       {status ? <p className="muted">{status}</p> : null}
     </section>
@@ -22144,7 +21688,7 @@ function SettingsView({
         {RIFTLITE_WEB_REPLAY_FEATURE_VISIBLE ? (
           <div className="rail-card">
             <h2>RiftLite web replay</h2>
-            <p className="muted">Opt in to automatically capture completed Atlas matches and upload them to the RiftLite account linked on this device. New uploads are private unless you choose another visibility.</p>
+            <p className="muted">Choose Atlas and TCGA independently. Completed captures upload to the RiftLite account linked on this device and are private unless you choose another visibility.</p>
             <label className="toggle-row">
               <span><Upload size={16} /> Automatically upload Atlas replays</span>
               <input
@@ -22173,6 +21717,32 @@ function SettingsView({
                 })}
               />
             </label>
+            <label className="toggle-row">
+              <span><Upload size={16} /> Automatically upload TCGA replays</span>
+              <input
+                type="checkbox"
+                checked={Boolean(
+                  settings.rawCapture.enabled &&
+                  settings.rawCapture.tcgaWebReplayAutoUploadEnabled &&
+                  settings.rawCapture.tcgaWebReplayAutoUploadAccountUid === settings.accountUid
+                )}
+                disabled={
+                  !settings.accountUid ||
+                  !settings.firebaseRefreshToken ||
+                  !settings.accountLastVerifiedAt ||
+                  Boolean(settings.accountLastVerificationError)
+                }
+                onChange={(event) => void onSave({
+                  rawCapture: {
+                    ...settings.rawCapture,
+                    enabled: event.target.checked ? true : settings.rawCapture.enabled,
+                    tcgaWebReplayAutoUploadEnabled: event.target.checked,
+                    tcgaWebReplayAutoUploadAccountUid: event.target.checked ? settings.accountUid : ""
+                  }
+                })}
+              />
+            </label>
+            <p className="muted">TCGA upload records only the bounded WebRTC game channel. It does not enable the broader TCGA Research Monitor, and it fails closed if a completed match cannot be matched to exactly one clean channel.</p>
             <p className="muted">
               {settings.accountUid
                 ? settings.accountLastVerifiedAt && !settings.accountLastVerificationError
@@ -22186,8 +21756,10 @@ function SettingsView({
                 value={settings.rawCapture.visibility}
                 disabled={!(
                   settings.rawCapture.enabled &&
-                  settings.rawCapture.webReplayAutoUploadEnabled &&
-                  settings.rawCapture.webReplayAutoUploadAccountUid === settings.accountUid
+                  (
+                    (settings.rawCapture.webReplayAutoUploadEnabled && settings.rawCapture.webReplayAutoUploadAccountUid === settings.accountUid) ||
+                    (settings.rawCapture.tcgaWebReplayAutoUploadEnabled && settings.rawCapture.tcgaWebReplayAutoUploadAccountUid === settings.accountUid)
+                  )
                 )}
                 onChange={(event) => void onSave({
                   rawCapture: { ...settings.rawCapture, visibility: event.target.value as UserSettings["rawCapture"]["visibility"] }
@@ -22198,8 +21770,8 @@ function SettingsView({
                 <option value="public">Public — listed on RiftLite</option>
               </select>
             </label>
-            <p className="muted">The source capture can contain room codes, player names, chat, and match state. It is stored privately for processing; only the reconstructed replay follows the visibility selected above.</p>
-            <p className="muted">Private-hub Discord replay sharing is configured from the Account tab. When enabled, new shared replays use Unlisted visibility.</p>
+            <p className="muted">Source captures can contain player names, hidden cards, decks, and match state. They are stored privately for processing; only the reconstructed replay follows the visibility selected above.</p>
+            <p className="muted">Private-hub Discord replay sharing is configured once from the Account tab and applies to both Atlas and enabled TCGA captures. New shared replays use Unlisted visibility.</p>
           </div>
         ) : null}
         {DECK_TRACKER_FEATURE_ENABLED ? (
@@ -26775,6 +26347,15 @@ function MatchReviewModal({ draft, decks, battlefields, previousFlags, onClose, 
   const isScorepadDraft = draft.source === "scorepad" || draft.source === "manual";
   const confidence = reviewCaptureConfidence(draft, reviewGames, isScorepadDraft);
   const bo3Notice = isMultiGameReview ? reviewBo3Notice(draft, reviewGames) : "";
+  const isAutomaticTcgaSave = draft.platform === "tcga" && !isScorepadDraft;
+  const saveProgressTitle = isAutomaticTcgaSave
+    ? "Securing this TCGA match locally"
+    : "Saving this match";
+  const saveProgressDetail = isAutomaticTcgaSave
+    ? "Saving the result and replay artifact locally. Web delivery and reporting start after both are secure."
+    : isScorepadDraft
+      ? "Writing the reviewed result to your local match history."
+      : "Saving the result locally. Replay delivery and reporting will continue in the background.";
 
   return (
     <div className="modal-backdrop">
@@ -26803,6 +26384,37 @@ function MatchReviewModal({ draft, decks, battlefields, previousFlags, onClose, 
             <Flag size={16} />
             <span>{saveError}</span>
           </div>
+        ) : null}
+        {isSaving ? (
+          <section
+            className="review-save-progress"
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+            aria-busy="true"
+          >
+            <div className="review-save-progress-copy">
+              <strong>{saveProgressTitle}</strong>
+              <span>{saveProgressDetail}</span>
+            </div>
+            <div
+              className="review-save-progress-track"
+              role="progressbar"
+              aria-label="Match save in progress"
+              aria-valuetext={saveProgressTitle}
+            >
+              <span />
+              <span />
+              <span />
+            </div>
+            {!isScorepadDraft ? (
+              <div className="review-save-progress-stages" aria-hidden="true">
+                <span>Save result</span>
+                <span>Secure replay</span>
+                <span>Start delivery</span>
+              </div>
+            ) : null}
+          </section>
         ) : null}
         <div className="review-grid">
           <label>Result<select value={draft.result} onChange={(event) => patchMatchResult(event.target.value as MatchDraft["result"])}><option>Win</option><option>Loss</option><option>Draw</option><option>Incomplete</option></select></label>

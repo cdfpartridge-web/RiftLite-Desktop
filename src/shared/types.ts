@@ -88,6 +88,14 @@ export interface MatchDraft {
   hiddenFromStats?: boolean;
   hiddenFromHistory?: boolean;
   keepReplay?: boolean;
+  /**
+   * Durable first-party Web Replay association. This is stored on the match as
+   * well as on an optional local ReplayRecord because TCGA capture can be
+   * published when the user chose not to keep a local replay.
+   */
+  webReplayId?: string;
+  webReplayAccountUid?: string;
+  webReplayLocalReplayId?: string;
   testingSessionId?: string;
   testingSessionLabel?: string;
   status: "pending-review" | "saved" | "incomplete";
@@ -1035,6 +1043,18 @@ export interface CommunityMatch {
   webReplayId?: string;
 }
 
+export interface GamePlatformSwitchStatus {
+  allowed: boolean;
+  message: string;
+}
+
+export interface GameWebviewFailure {
+  platform: GamePlatform;
+  reason: "load-failed" | "render-process-gone" | "unresponsive";
+  message: string;
+  canAutoRemount: boolean;
+}
+
 export interface MatchHistoryCsvExportPayload {
   scope: "personal" | "hub";
   label?: string;
@@ -1096,6 +1116,7 @@ export interface AccountCloudSyncStatus {
   enabled: boolean;
   signedIn: boolean;
   hasRemoteBackup: boolean;
+  requiresUserChoice?: boolean;
   lastSyncedAt: string;
   lastRestoredAt: string;
   remoteUpdatedAt: string;
@@ -1178,6 +1199,8 @@ export interface RawCaptureSettings {
   enabled: boolean;
   webReplayAutoUploadEnabled: boolean;
   webReplayAutoUploadAccountUid: string;
+  tcgaWebReplayAutoUploadEnabled: boolean;
+  tcgaWebReplayAutoUploadAccountUid: string;
   webReplayDiscordShareEnabled: boolean;
   webReplayDiscordShareAccountUid: string;
   webReplayDiscordShareHubIds: string[];
@@ -1286,6 +1309,7 @@ export interface UserSettings {
     communitySyncEnabled: boolean;
     firebaseUid: string;
     firebaseRefreshToken: string;
+    firebaseCredentialGeneration: string;
     accountUid: string;
     accountEmail: string;
   accountHandle: string;
@@ -1298,6 +1322,7 @@ export interface UserSettings {
   accountCloudSyncLastRestoredAt: string;
   accountCloudSyncDeviceId: string;
   accountCloudSyncDeviceName: string;
+  accountCloudSyncRemoteGenerationId: string;
   accountCloudSyncLastError: string;
   anonymousDiagnosticsEnabled: boolean;
   anonymousInstallId: string;
@@ -1395,6 +1420,140 @@ export interface CaptureDiagnosticsSummary {
   byKind: Record<string, number>;
   byPlatform: Record<GamePlatform, number>;
   latest: CapturePlatformEvidence[];
+}
+
+export type TcgaReplayDecoderFixtureAssessment = "usable" | "degraded" | "unusable";
+export type TcgaReplayTimelineAssessment = "complete" | "partial" | "unusable";
+
+export interface TcgaReplayResearchAnalysisReport {
+  schema: "riftlite-tcga-research-analysis";
+  version: 1;
+  sourceIntegrity: {
+    headerPresent: boolean;
+    footerPresent: boolean;
+    validJsonLines: number;
+    invalidJsonLines: number;
+    contiguousSequence: boolean;
+    declaredRecordCountMatches: boolean;
+    compressedSha256Matches: boolean | null;
+    records: number;
+    expandedBytes: number;
+    compressedBytes: number;
+    capped: boolean;
+    droppedRecords: number;
+  };
+  transport: {
+    frames: number;
+    decodedFrames: number;
+    truncatedFrames: number;
+    unavailableFrames: number;
+    chunkFrames: number;
+    chunkGroups: number;
+    completeChunkGroups: number;
+    incompleteChunkGroups: number;
+    incompleteChunkCount: number;
+    duplicateChunks: number;
+    logicalMessages: number;
+    decodeFailures: number;
+    directions: { in: number; out: number };
+    issueCounts: Record<string, number>;
+  };
+  messageTypes: {
+    gameData: number;
+    playerData: number;
+    newcomerGameData: number;
+    gameDataRequest: number;
+    ping: number;
+    pong: number;
+    other: number;
+  };
+  coverage: {
+    initialState: boolean;
+    playerState: boolean;
+    setup: boolean;
+    mulligan: boolean;
+    turns: boolean;
+    history: boolean;
+    stack: boolean;
+    reveal: boolean;
+    terminal: boolean;
+    perspectivePlayers: number;
+    stateSnapshots: number;
+    historyEvents: number;
+    turnTransitions: number;
+    maxTurnCount: number;
+    stackUpdates: number;
+    revealUpdates: number;
+    decklists: number;
+    domCheckpoints: number;
+  };
+  assessment: {
+    decoderFixture: TcgaReplayDecoderFixtureAssessment;
+    replayTimeline: TcgaReplayTimelineAssessment;
+    reasonCodes: string[];
+  };
+  privacy: {
+    rawInput: "SENSITIVE";
+    hiddenCardIdentityObserved: boolean;
+    safeAggregateOnly: true;
+    includesDecodedPayloads: false;
+    includesPlayerIdentifiers: false;
+    includesCardIdentities: false;
+  };
+}
+
+/**
+ * Privacy-safe metadata for one local TCGA Web Replay source companion.
+ * Decoded protocol payloads and player identifiers are deliberately excluded.
+ */
+export interface TcgaReplayResearchWebReplayExportSummary {
+  ordinal: number;
+  captureSessionId: string;
+  status: "exported" | "skipped";
+  exportPath: string;
+  messageCount: number;
+  frameCount: number;
+  decodedFrameCount: number;
+  logicalMessageCount: number;
+  playerCount: number;
+  perspectivePresent: boolean;
+  endedByLeaving: boolean;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  rawJsonBytes: number;
+  compressedBytes: number;
+  sha256: string;
+  reasonCodes: string[];
+}
+
+export interface TcgaReplayResearchStatus {
+  active: boolean;
+  directory: string;
+  privacy: "SENSITIVE";
+  sessionId: string;
+  stopReason: string;
+  workingPath: string;
+  exportPath: string;
+  summaryPath: string;
+  analysisPath: string;
+  analysis: TcgaReplayResearchAnalysisReport | null;
+  webReplayExports: TcgaReplayResearchWebReplayExportSummary[];
+  webReplayExportError: string;
+  startedAt: string;
+  stoppedAt: string;
+  recordCount: number;
+  recordKinds: Record<string, number>;
+  transportState: "off" | "waiting" | "ready" | "error";
+  transportError: string;
+  droppedCount: number;
+  byteCount: number;
+  uncompressedBytes: number;
+  compressedBytes: number;
+  capped: boolean;
+  capReason: string;
+  sha256: string;
+  lastError: string;
+  deletedFiles: number;
 }
 
 export interface SpotlightClickPayload {
@@ -1759,8 +1918,12 @@ export interface AtlasWebviewRecoveryResult {
 export interface RiftLiteApi {
   getSettings(): Promise<UserSettings>;
   saveSettings(settings: Partial<UserSettings>): Promise<UserSettings>;
+  updateRawCaptureSettings(settings: Partial<RawCaptureSettings>): Promise<UserSettings>;
+  setWebReplayDiscordShareHub(hubId: string, selected: boolean): Promise<UserSettings>;
   getCaptureHealth(): Promise<CaptureHealth>;
+  getGamePlatformSwitchStatus(): Promise<GamePlatformSwitchStatus>;
   forceCaptureReview(platform: GamePlatform): Promise<MatchDraft | null>;
+  dismissMatchReview(): Promise<void>;
   getMatches(): Promise<MatchDraft[]>;
   getDeletedMatches(): Promise<MatchDraft[]>;
   saveMatchDraft(draft: MatchDraft): Promise<MatchDraft>;
@@ -1866,7 +2029,7 @@ export interface RiftLiteApi {
   exportAccountData(): Promise<string>;
   getAccountCloudSyncStatus(): Promise<AccountCloudSyncStatus>;
   setAccountCloudSyncEnabled(enabled: boolean): Promise<AccountCloudSyncStatus>;
-  uploadAccountCloudSync(): Promise<AccountCloudSyncStatus>;
+  uploadAccountCloudSync(allowRemoteReplacement?: boolean): Promise<AccountCloudSyncStatus>;
   restoreAccountCloudSync(): Promise<AccountCloudSyncStatus>;
   getAccountCloudSyncConflicts(): Promise<AccountCloudSyncConflictSummary[]>;
   keepAccountCloudSyncConflictCurrent(conflictId: string): Promise<AccountCloudSyncConflictResolutionResult>;
@@ -1911,6 +2074,7 @@ export interface RiftLiteApi {
   downloadUpdate(): Promise<UpdateStatus>;
   installUpdate(): Promise<void>;
   recoverAtlasWebview(): Promise<AtlasWebviewRecoveryResult>;
+  focusGameWebview(platform: GamePlatform): Promise<boolean>;
   getGamePreloadUrl(platform: GamePlatform): Promise<string>;
   getAssetUrl(relativePath: string): Promise<string>;
   getBattlefields(): Promise<BattlefieldOption[]>;
@@ -1924,6 +2088,11 @@ export interface RiftLiteApi {
     includeSensitiveData?: boolean;
   }): Promise<string | null>;
   openDiagnosticsFolder(): Promise<void>;
+  getTcgaReplayResearchStatus(): Promise<TcgaReplayResearchStatus>;
+  startTcgaReplayResearchCapture(): Promise<TcgaReplayResearchStatus>;
+  stopTcgaReplayResearchCapture(): Promise<TcgaReplayResearchStatus>;
+  openTcgaReplayResearchFolder(): Promise<void>;
+  deleteTcgaReplayResearchCaptures(): Promise<TcgaReplayResearchStatus>;
   takeScreenshot(): Promise<ScreenshotResult>;
   chooseScreenshotDirectory(): Promise<UserSettings>;
   openScreenshotDirectory(): Promise<void>;
@@ -1934,6 +2103,7 @@ export interface RiftLiteApi {
   trackSpotlightClick(payload: SpotlightClickPayload): Promise<void>;
   onCaptureEvent(callback: (event: CaptureEvent) => void): () => void;
   onCaptureHealth(callback: (health: CaptureHealth) => void): () => void;
+  onGameWebviewFailure(callback: (failure: GameWebviewFailure) => void): () => void;
   onMatchDraft(callback: (draft: MatchDraft) => void): () => void;
   onReplayUpdated(callback: (replay: ReplayRecord) => void): () => void;
   onScreenshotSaved(callback: (result: ScreenshotResult) => void): () => void;

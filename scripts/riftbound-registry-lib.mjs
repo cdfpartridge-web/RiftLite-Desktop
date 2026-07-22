@@ -259,11 +259,48 @@ export function mergeRegistryOverlay(cards, overlay = {}) {
     byPrintId.set(merged.printId, merged);
   }
 
+  const imageHashAliasesByPrintId = normalizeImageHashAliasesByPrintId(
+    overlay.imageHashAliasesByPrintId || {},
+  );
+  for (const [printId, imageHashAliases] of imageHashAliasesByPrintId) {
+    const existing = byPrintId.get(printId);
+    if (!existing) {
+      throw new Error(`Image-hash aliases reference an unknown print id: ${printId}`);
+    }
+    byPrintId.set(printId, {
+      ...existing,
+      imageHashAliases: uniqueStrings([
+        ...(existing.imageHashAliases || []),
+        ...imageHashAliases,
+      ]).filter((hash) => hash !== existing.imageHash),
+    });
+  }
+
   const specialBattlefields = normalizeSpecialBattlefields(overlay.specialBattlefields || []);
   return {
     cards: [...byPrintId.values()].sort(comparePrintIds),
     specialBattlefields,
   };
+}
+
+function normalizeImageHashAliasesByPrintId(source) {
+  if (!source || typeof source !== "object" || Array.isArray(source)) {
+    throw new Error("imageHashAliasesByPrintId must be an object");
+  }
+  return Object.entries(source).map(([rawPrintId, rawHashes]) => {
+    const printId = normalizePrintId(rawPrintId).printId;
+    const hashes = uniqueStrings(rawHashes).map((hash) => {
+      const normalized = String(hash).trim().toLowerCase();
+      if (!/^[a-f0-9]{40}$/.test(normalized)) {
+        throw new Error(`${printId} has an invalid alternate image hash: ${hash}`);
+      }
+      return normalized;
+    });
+    if (!hashes.length) {
+      throw new Error(`${printId} must declare at least one alternate image hash`);
+    }
+    return [printId, hashes];
+  });
 }
 
 function normalizeOverlayCard(rawCard) {
@@ -341,12 +378,16 @@ export function validateRegistry(cards, expectations = {}, specialBattlefields =
     if (byPrintId.has(card.printId)) errors.push(`Duplicate print id: ${card.printId}`);
     byPrintId.set(card.printId, card);
 
-    if (card.imageHash) {
-      const priorName = hashNames.get(card.imageHash);
+    for (const imageHash of uniqueStrings([card.imageHash, ...(card.imageHashAliases || [])])) {
+      if (!/^[a-f0-9]{40}$/.test(imageHash)) {
+        errors.push(`${card.printId} has an invalid image hash: ${imageHash}`);
+        continue;
+      }
+      const priorName = hashNames.get(imageHash);
       if (priorName && priorName.toLocaleLowerCase() !== card.name.toLocaleLowerCase()) {
-        errors.push(`Image hash ${card.imageHash} maps to both ${priorName} and ${card.name}`);
+        errors.push(`Image hash ${imageHash} maps to both ${priorName} and ${card.name}`);
       } else {
-        hashNames.set(card.imageHash, card.name);
+        hashNames.set(imageHash, card.name);
       }
     }
   }
@@ -437,6 +478,9 @@ function assertNormalizedCard(card) {
   readRequiredString(card.type, `${card.printId} type`);
   if (!card.variants || typeof card.variants !== "object") {
     throw new Error(`${card.printId} is missing variant metadata`);
+  }
+  if (card.imageHashAliases !== undefined && !Array.isArray(card.imageHashAliases)) {
+    throw new Error(`${card.printId} imageHashAliases must be an array`);
   }
   for (const key of ["alternateArt", "overnumbered", "signature"]) {
     if (typeof card.variants[key] !== "boolean") {

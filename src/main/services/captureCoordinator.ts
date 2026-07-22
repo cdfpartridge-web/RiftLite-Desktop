@@ -81,6 +81,20 @@ interface MatchDraftFinalGuardDecision {
   debugState: MatchCapturePopupState | null;
 }
 
+interface DeferredReplayFinalization {
+  draft: MatchDraft;
+  endEvent: CaptureEvent;
+  resolvedReplayEvents: NonNullable<ReplayRecord["structuredEvents"]>;
+  visualFrames: ReplayScreenshotFrame[];
+  settings: Awaited<ReturnType<RiftLiteStore["getSettings"]>> | null;
+  deckTrackerSnapshots: ReplayRecord["deckTrackerSnapshots"];
+}
+
+type CaptureFinalizeIdentity = RawCaptureFinishIdentity & {
+  /** False while the draft is still waiting for the user to confirm its result. */
+  confirmedResult?: boolean;
+};
+
 interface RecentAtlasDraftPublication {
   publishedAtMs: number;
   opponentName: string;
@@ -153,6 +167,11 @@ export class CaptureCoordinator {
   private readonly timedReplayState = new Map<GamePlatform, TimedReplayState>();
   private readonly recentEventIds = new Map<string, number>();
   private readonly platformEventQueues = new Map<GamePlatform, Promise<void>>();
+  private readonly replayFinalizationByMatchId = new Map<string, Promise<void>>();
+  private readonly deferredReplayFinalizationByMatchId = new Map<string, DeferredReplayFinalization>();
+  private readonly pendingConfirmedReplayFinalizationMatchIds = new Set<string>();
+  private readonly nonBlockingDeferredReplayFinalizationMatchIds = new Set<string>();
+  private captureMaintenanceGate: { promise: Promise<void>; release: () => void } | null = null;
   private readonly pendingAtlasReviews = new Map<GamePlatform, PendingAtlasReview>();
   private readonly recentAtlasDraftPublications = new Map<GamePlatform, RecentAtlasDraftPublication>();
   private lastHealthEmitAt = 0;
@@ -167,7 +186,7 @@ export class CaptureCoordinator {
     private readonly captureReplayFrame?: ReplayFrameCapture,
     private readonly deckTracker?: DeckTrackerService,
     private readonly finalizeRawCaptureForMatch?: (
-      identity: RawCaptureFinishIdentity,
+      identity: CaptureFinalizeIdentity,
       replay?: ReplayRecord
     ) => Promise<ReplayRecord | null>
   ) {
@@ -203,10 +222,16 @@ export class CaptureCoordinator {
   }
 
   handleEvent(event: CaptureEvent): Promise<void> {
+    const maintenanceGate = this.captureMaintenanceGate?.promise;
     const previous = this.platformEventQueues.get(event.platform) ?? Promise.resolve();
     const next = previous
       .catch(() => undefined)
-      .then(() => this.handleEventNow(event));
+      .then(async () => {
+        if (maintenanceGate) {
+          await maintenanceGate;
+        }
+        return this.handleEventNow(event);
+      });
     this.platformEventQueues.set(event.platform, next);
     return next.finally(() => {
       if (this.platformEventQueues.get(event.platform) === next) {
@@ -417,6 +442,18 @@ export class CaptureCoordinator {
         const deckTrackerSnapshots = settings?.deckTrackerSaveToReplay === false ? [] : this.deckTracker?.replaySnapshots(finalEvent.platform) ?? [];
         const savedDraft = await this.saveAndPublishDraftForReview(draft, finalEvent, "automatic-match-end");
         if (!savedDraft) {
+          if (this.isDuplicateAtlasTerminalEcho(draft, finalEvent)) {
+            this.tracker.clear(finalEvent.platform);
+            await this.stopTimedReplayCapture(finalEvent.platform, false);
+            this.deckTracker?.clear(finalEvent.platform);
+            this.health = {
+              ...this.health,
+              state: "watching",
+              message: "Atlas duplicate match-complete echo discarded"
+            };
+            this.emitHealth(true);
+            return;
+          }
           if (finalEvent.platform === "atlas") {
             this.deferAtlasReview(finalEvent, settings);
           }
@@ -430,7 +467,7 @@ export class CaptureCoordinator {
         }
         this.emitHealth(true);
         this.tracker.clear(finalEvent.platform);
-        void this.finalizeReplayForDraft(savedDraft, finalEvent, replayEvents, settings, deckTrackerSnapshots).finally(() => {
+        void this.trackReplayFinalization(savedDraft, finalEvent, replayEvents, settings, deckTrackerSnapshots).finally(() => {
           this.deckTracker?.clear(finalEvent.platform);
         }).catch(() => undefined);
       } catch (error) {
@@ -520,6 +557,17 @@ export class CaptureCoordinator {
         suppressed: false,
         reason: "FINAL_GUARD_NON_ATLAS",
         hasAtlasBo3Evidence: false,
+        debugState: null
+      };
+    }
+    // A reliable new-session boundary is stronger evidence than the BO3
+    // continuation heuristic. Holding here would let tracker.ingest replace
+    // the old session on the very next line, silently losing the review.
+    if (callSite === "rollover-before-new-session") {
+      return {
+        suppressed: false,
+        reason: "FINAL_GUARD_ATLAS_AUTHORITATIVE_ROLLOVER",
+        hasAtlasBo3Evidence: true,
         debugState: null
       };
     }
@@ -748,17 +796,248 @@ export class CaptureCoordinator {
       this.resolveReplayEventCards(endEvent.platform, replayEvents),
       this.stopTimedReplayCapture(endEvent.platform, true, endEvent.capturedAt)
     ]);
-    const rawCaptureIdentity = rawCaptureFinishIdentity(draft, endEvent);
+    await this.persistPreparedReplayFinalization({
+      draft,
+      endEvent,
+      resolvedReplayEvents,
+      visualFrames,
+      settings,
+      deckTrackerSnapshots
+    });
+  }
+
+  private async persistPreparedReplayFinalization(prepared: DeferredReplayFinalization): Promise<void> {
+    let latest: MatchDraft | undefined;
+    try {
+      latest = (await this.store.getMatches()).find((match) => match.id === prepared.draft.id);
+    } catch (error) {
+      this.deferredReplayFinalizationByMatchId.set(prepared.draft.id, prepared);
+      throw error;
+    }
+    if (!latest) {
+      this.deferredReplayFinalizationByMatchId.set(prepared.draft.id, prepared);
+      return;
+    }
+
+    const rawCaptureIdentity = rawCaptureFinishIdentity(latest, prepared.endEvent);
     let replay: ReplayRecord | undefined;
-    if (settings?.replayCaptureEnabled !== false) {
-      const latest = (await this.store.getMatches()).find((match) => match.id === draft.id);
-      if (latest?.keepReplay !== false) {
-        replay = await this.store.saveReplay(
-          this.createReplay(draft, resolvedReplayEvents, visualFrames, deckTrackerSnapshots)
-        ).catch(() => undefined);
+    if (prepared.settings?.replayCaptureEnabled !== false && latest.keepReplay !== false) {
+      try {
+        replay = await this.store.saveReplayIfMatchActive(
+          this.createReplay(
+            latest,
+            prepared.resolvedReplayEvents,
+            prepared.visualFrames,
+            prepared.deckTrackerSnapshots
+          )
+        ) ?? undefined;
+      } catch (error) {
+        this.deferredReplayFinalizationByMatchId.set(prepared.draft.id, prepared);
+        throw error;
+      }
+      if (!replay) {
+        // A replay purge tombstone or deleted parent intentionally blocks
+        // recreation. Do not upload raw material after that user action.
+        this.deferredReplayFinalizationByMatchId.delete(prepared.draft.id);
+        return;
       }
     }
-    await this.finalizeRawCaptureForMatch?.(rawCaptureIdentity, replay).catch(() => undefined);
+    try {
+      await this.finalizeRawCaptureForMatch?.(rawCaptureIdentity, replay);
+      this.deferredReplayFinalizationByMatchId.delete(prepared.draft.id);
+    } catch (error) {
+      // RawCaptureService already converts ordinary upload/network failures
+      // into durable pending metadata. An exception here therefore means the
+      // local manifest/registration itself was not committed; retain the
+      // prepared material and make confirmation retry instead of silently
+      // closing the only path that can create the Web Replay.
+      this.deferredReplayFinalizationByMatchId.set(prepared.draft.id, prepared);
+      throw error;
+    }
+  }
+
+  private trackReplayFinalization(
+    draft: MatchDraft,
+    endEvent: CaptureEvent,
+    replayEvents: NonNullable<ReplayRecord["structuredEvents"]>,
+    settings: Awaited<ReturnType<RiftLiteStore["getSettings"]>> | null,
+    deckTrackerSnapshots: ReplayRecord["deckTrackerSnapshots"] = []
+  ): Promise<void> {
+    const previous = this.replayFinalizationByMatchId.get(draft.id) ?? Promise.resolve();
+    const pending = previous
+      .catch(() => undefined)
+      .then(() => this.finalizeReplayForDraft(draft, endEvent, replayEvents, settings, deckTrackerSnapshots))
+      .catch(() => undefined);
+    this.replayFinalizationByMatchId.set(draft.id, pending);
+    void pending.then(() => {
+      if (this.replayFinalizationByMatchId.get(draft.id) === pending) {
+        this.replayFinalizationByMatchId.delete(draft.id);
+      }
+    });
+    return pending;
+  }
+
+  async waitForReplayFinalization(matchId: string): Promise<void> {
+    const pending = this.replayFinalizationByMatchId.get(matchId);
+    if (pending) {
+      await pending;
+    }
+    // Confirmation can race an already-running finalizer: confirmMatch may
+    // check the deferred map just before that finalizer fails and records its
+    // prepared work. Re-check only after the in-flight promise has settled so
+    // a transient storage failure cannot strand the replay/raw capture.
+    const deferred = this.deferredReplayFinalizationByMatchId.get(matchId);
+    if (deferred) {
+      // Surface a second failure to the confirmation IPC. Reporting success
+      // here would close the review while leaving the provider permanently
+      // blocked by finalization work that has no remaining retry trigger.
+      await this.persistPreparedReplayFinalization(deferred);
+    }
+  }
+
+  async waitForAllReplayFinalizations(): Promise<void> {
+    while (this.replayFinalizationByMatchId.size) {
+      await Promise.all([...this.replayFinalizationByMatchId.values()]);
+    }
+  }
+
+  hasActiveMatchCapture(): boolean {
+    const hasBlockingReplayFinalization = [...this.replayFinalizationByMatchId.keys()]
+      .some((matchId) => !this.nonBlockingDeferredReplayFinalizationMatchIds.has(matchId));
+    const hasBlockingDeferredReplayFinalization = [...this.deferredReplayFinalizationByMatchId.keys()]
+      .some((matchId) => !this.nonBlockingDeferredReplayFinalizationMatchIds.has(matchId));
+    return Boolean(
+      this.tracker.get("atlas") ||
+      this.tracker.get("tcga") ||
+      this.tracker.get("sim") ||
+      this.closingPlatforms.size ||
+      this.pendingAtlasReviews.size ||
+      hasBlockingReplayFinalization ||
+      hasBlockingDeferredReplayFinalization ||
+      this.pendingConfirmedReplayFinalizationMatchIds.size ||
+      this.health.state === "review-needed"
+    );
+  }
+
+  getGamePlatformSwitchStatus(): { allowed: boolean; message: string } {
+    if (!this.hasActiveMatchCapture()) {
+      return { allowed: true, message: "Ready to switch game provider." };
+    }
+    return {
+      allowed: false,
+      message: "Finish or stop the current match and complete its review before switching game provider."
+    };
+  }
+
+  dismissMatchReview(matchId = ""): void {
+    if (matchId) {
+      this.deferredReplayFinalizationByMatchId.delete(matchId);
+      this.pendingConfirmedReplayFinalizationMatchIds.delete(matchId);
+      this.nonBlockingDeferredReplayFinalizationMatchIds.delete(matchId);
+    }
+    if (this.health.state !== "review-needed") {
+      return;
+    }
+    this.health = {
+      ...this.health,
+      state: "watching",
+      message: "Match review closed; capture is ready"
+    };
+    this.emitHealth(true);
+  }
+
+  markConfirmedReplayFinalizationPending(matchId: string, error: unknown): void {
+    if (matchId) {
+      this.pendingConfirmedReplayFinalizationMatchIds.add(matchId);
+    }
+    this.health = {
+      ...this.health,
+      state: "review-needed",
+      message: `Web Replay still needs to be saved: ${error instanceof Error ? error.message : String(error)}`
+    };
+    this.emitHealth(true);
+  }
+
+  markConfirmedReplayFinalizationQueued(matchId: string): void {
+    if (matchId) {
+      this.nonBlockingDeferredReplayFinalizationMatchIds.delete(matchId);
+      this.pendingConfirmedReplayFinalizationMatchIds.add(matchId);
+    }
+  }
+
+  /**
+   * Remote delivery failed after the match and retry metadata were durable.
+   * Release the in-memory capture blocker without reopening match review; the
+   * startup/two-minute delivery lanes remain responsible for the retry.
+   */
+  markConfirmedReplayDeliveryDeferred(matchId: string): void {
+    const wasPending = this.pendingConfirmedReplayFinalizationMatchIds.delete(matchId);
+    if (matchId) {
+      // Keep the prepared finalization available for the background retry lane,
+      // but do not treat a confirmed, durable match as an open capture/review.
+      this.nonBlockingDeferredReplayFinalizationMatchIds.add(matchId);
+    }
+    if (wasPending && this.health.state === "saved") {
+      this.health = {
+        ...this.health,
+        message: "Match saved locally; Web Replay delivery will retry in the background"
+      };
+      this.emitHealth(true);
+    }
+  }
+
+  markConfirmedReplayFinalizationComplete(matchId: string): void {
+    const wasPending = this.pendingConfirmedReplayFinalizationMatchIds.delete(matchId);
+    this.nonBlockingDeferredReplayFinalizationMatchIds.delete(matchId);
+    if (
+      wasPending &&
+      this.health.state === "review-needed" &&
+      this.health.message.startsWith("Web Replay still needs to be saved:")
+    ) {
+      this.health = {
+        ...this.health,
+        state: "saved",
+        message: "Match saved locally; Web Replay delivery recovered"
+      };
+      this.emitHealth(true);
+    }
+  }
+
+  /**
+   * Hold newly arriving game events while a database-wide restore swaps the
+   * local store. Events already queued are drained first; if they reveal an
+   * active match the restore is rejected and capture continues normally.
+   */
+  async beginDataMaintenance(): Promise<() => void> {
+    if (this.captureMaintenanceGate) {
+      throw new Error("RiftLite data maintenance is already running.");
+    }
+    let releaseGate!: () => void;
+    const promise = new Promise<void>((resolve) => {
+      releaseGate = resolve;
+    });
+    const gate = {
+      promise,
+      release: () => {
+        if (this.captureMaintenanceGate === gate) {
+          this.captureMaintenanceGate = null;
+        }
+        releaseGate();
+      }
+    };
+    const queuedBeforeMaintenance = [...this.platformEventQueues.values()];
+    this.captureMaintenanceGate = gate;
+    try {
+      await Promise.all(queuedBeforeMaintenance.map((pending) => pending.catch(() => undefined)));
+      await this.waitForAllReplayFinalizations();
+      if (this.hasActiveMatchCapture()) {
+        throw new Error("Finish the current match and its review before restoring RiftLite data or moving the replay folder.");
+      }
+      return gate.release;
+    } catch (error) {
+      gate.release();
+      throw error;
+    }
   }
 
   private shouldReleaseAtlasFinalLandingReview(event: CaptureEvent): boolean {
@@ -839,7 +1118,7 @@ export class CaptureCoordinator {
         lastEventAt: finalEvent.capturedAt
       };
       this.emitHealth(true);
-      void this.finalizeReplayForDraft(savedDraft, finalEvent, replayEvents, settings, deckTrackerSnapshots).finally(() => {
+      void this.trackReplayFinalization(savedDraft, finalEvent, replayEvents, settings, deckTrackerSnapshots).finally(() => {
         this.deckTracker?.clear(platform);
       }).catch(() => undefined);
     } catch (error) {
@@ -867,13 +1146,23 @@ export class CaptureCoordinator {
     }
   }
 
-  async confirmMatch(draft: MatchDraft): Promise<MatchDraft> {
+  async confirmMatch(
+    draft: MatchDraft,
+    options: { deferReplayFinalization?: boolean } = {}
+  ): Promise<MatchDraft> {
     const saved: MatchDraft = {
       ...draft,
       status: "saved",
       updatedAt: new Date().toISOString()
     };
     const result = await this.store.saveMatch(saved);
+    const deferredFinalization = this.deferredReplayFinalizationByMatchId.get(draft.id);
+    if (deferredFinalization && !options.deferReplayFinalization) {
+      await this.persistPreparedReplayFinalization({
+        ...deferredFinalization,
+        draft: result
+      });
+    }
     if (draft.keepReplay === false) {
       await this.store.deleteReplayByMatch(draft.id).catch(() => undefined);
     }
@@ -883,8 +1172,20 @@ export class CaptureCoordinator {
       message: "Match saved locally"
     };
     this.emitHealth(true);
-    void this.syncService.syncMatch(result, { quiet: true }).catch(() => undefined);
     return result;
+  }
+
+  /**
+   * Runs remote match reporting after replay finalization has persisted its
+   * upload identity. Keeping this separate from confirmMatch lets the main
+   * process compose TCGA confirmation -> replay upload -> match/hub sync in a
+   * deterministic order without making a failed network request undo a local
+   * save.
+   */
+  async syncConfirmedMatch(match: MatchDraft): Promise<MatchDraft> {
+    return this.syncService.syncMatch(match, { quiet: true }).catch(async () => (
+      (await this.store.getMatches()).find((candidate) => candidate.id === match.id) ?? match
+    ));
   }
 
   async forceReview(platform: GamePlatform): Promise<MatchDraft | null> {
@@ -951,7 +1252,7 @@ export class CaptureCoordinator {
         lastEventAt: capturedAt
       };
       this.emitHealth(true);
-      void this.finalizeReplayForDraft(savedDraft, forcedEnd, replayEvents, settings, deckTrackerSnapshots).finally(() => {
+      void this.trackReplayFinalization(savedDraft, forcedEnd, replayEvents, settings, deckTrackerSnapshots).finally(() => {
         this.deckTracker?.clear(activePlatform);
       }).catch(() => undefined);
       return savedDraft;
@@ -1161,19 +1462,6 @@ export class CaptureCoordinator {
     try {
       const replayEvents = this.tracker.getReplayEvents(event.platform);
       const deckTrackerSnapshots = settings?.deckTrackerSaveToReplay === false ? [] : this.deckTracker?.replaySnapshots(event.platform) ?? [];
-      const preGuard = this.evaluateAtlasBo3PreDraftFinalGuard(rolloverEnd, "rollover-before-new-session");
-      if (preGuard?.suppressed) {
-        this.recordMatchDraftFinalGuard(rolloverEnd, null, "rollover-before-new-session", preGuard);
-        this.health = {
-          ...this.health,
-          platform: event.platform,
-          state: "match-detected",
-          message: "Atlas BO3 continuation kept active instead of opening a rollover review",
-          lastEventAt: capturedAt
-        };
-        this.emitHealth(true);
-        return;
-      }
       const draft = await this.createDraftFromEvent(rolloverEnd);
       const savedDraft = await this.saveAndPublishDraftForReview(draft, rolloverEnd, "rollover-before-new-session");
       if (!savedDraft) {
@@ -1187,6 +1475,11 @@ export class CaptureCoordinator {
         this.emitHealth(true);
         return;
       }
+      const pending = this.pendingAtlasReviews.get(event.platform);
+      if (pending) {
+        clearTimeout(pending.timer);
+        this.pendingAtlasReviews.delete(event.platform);
+      }
       this.tracker.clear(event.platform);
       this.health = {
         ...this.health,
@@ -1196,7 +1489,7 @@ export class CaptureCoordinator {
         lastEventAt: capturedAt
       };
       this.emitHealth(true);
-      await this.finalizeReplayForDraft(savedDraft, rolloverEnd, replayEvents, settings, deckTrackerSnapshots).finally(() => {
+      await this.trackReplayFinalization(savedDraft, rolloverEnd, replayEvents, settings, deckTrackerSnapshots).finally(() => {
         this.deckTracker?.clear(event.platform);
       }).catch(() => undefined);
     } finally {
@@ -1399,7 +1692,7 @@ export class CaptureCoordinator {
         lastEventAt: finalEvent.capturedAt
       };
       this.emitHealth(true);
-      await this.finalizeReplayForDraft(savedDraft, finalEvent, replayEvents, settings, deckTrackerSnapshots).finally(() => {
+      await this.trackReplayFinalization(savedDraft, finalEvent, replayEvents, settings, deckTrackerSnapshots).finally(() => {
         this.deckTracker?.clear(platform);
       }).catch(() => undefined);
     } finally {
@@ -1591,10 +1884,25 @@ export class CaptureCoordinator {
     ].some(hasPayloadValue);
     const pairedCounterEvidence = Array.isArray(snapshot.counterPlayers) &&
       snapshot.counterPlayers.filter((item) => {
-        const record = item && typeof item === "object" && !Array.isArray(item) ? item as Record<string, unknown> : {};
-        return hasPayloadValue(record.name) && hasPayloadValue(record.score);
+        const record = item && typeof item === "object" && !Array.isArray(item)
+          ? item as Record<string, unknown>
+          : {};
+        return hasPayloadValue(record.name) && readPayloadNumber(record.score) !== undefined;
       }).length >= 2;
-    return !resultText && !identityEvidence && !pairedCounterEvidence;
+    const nonZeroGame = this.tracker.previewGames(event.platform).some((game) => (
+      (game.myPoints ?? 0) > 0 || (game.oppPoints ?? 0) > 0
+    ));
+    const rows = Array.isArray(snapshot.rows) ? snapshot.rows : [];
+    const gameplayRows = rows.some((row) => {
+      const text = row && typeof row === "object" && !Array.isArray(row)
+        ? readPayloadString((row as Record<string, unknown>).text)
+        : readPayloadString(row);
+      return /starting turn|mulligan|played|combat|attack|block|wins!|opponent.*left|left the game/i.test(text);
+    });
+    // Names, legends and battlefield setup can all exist in a lobby that
+    // disconnects at 0-0. Without a result or actual gameplay, publishing it
+    // creates a blank match report and pollutes the next capture window.
+    return !resultText && !(nonZeroGame && (identityEvidence || pairedCounterEvidence)) && !gameplayRows;
   }
 
   private shouldIgnoreFalseTcgaResultEnd(event: CaptureEvent): boolean {
@@ -2130,7 +2438,7 @@ function compactCaptureEvent(event: CaptureEvent): CaptureEvent {
   };
 }
 
-function rawCaptureFinishIdentity(draft: MatchDraft, endEvent: CaptureEvent): RawCaptureFinishIdentity {
+function rawCaptureFinishIdentity(draft: MatchDraft, endEvent: CaptureEvent): CaptureFinalizeIdentity {
   const events = [...draft.rawEvidence, endEvent];
   const values = (keys: string[]) => uniqueCaptureIdentityValues(events.flatMap((event) => (
     keys.map((key) => readPayloadString(event.payload[key]))
@@ -2155,7 +2463,10 @@ function rawCaptureFinishIdentity(draft: MatchDraft, endEvent: CaptureEvent): Ra
     title: `${draft.myChampion || "Unknown"} vs ${draft.opponentChampion || "Unknown"}`,
     capturedAt: draft.capturedAt,
     completedAt: endEvent.capturedAt,
-    match: rawCaptureMatchSummaryFromDraft(draft)
+    match: rawCaptureMatchSummaryFromDraft(draft),
+    // This runs when the review is created, before the user confirms it.
+    // TCGA keeps the private candidate until matches:confirm calls again.
+    ...(draft.platform === "tcga" ? { confirmedResult: false } : {})
   };
 }
 
@@ -2176,6 +2487,9 @@ function compactPayload(payload: Record<string, unknown> = {}): Record<string, u
     "format",
     "atlasResultKind",
     "atlasGameInstanceId",
+    "atlasLocalPlayerSeat",
+    "atlasLocalBattlefieldZone",
+    "atlasOpponentBattlefieldZone",
     "endText",
     "localPlayerName",
     "configuredUsername",

@@ -11,6 +11,7 @@ export class AccountCloudSyncQueue {
   private inFlight: Promise<void> | null = null;
   private pendingReason = "";
   private followUpDue = false;
+  private suspensionCount = 0;
 
   constructor(
     private readonly run: AccountCloudSyncRun,
@@ -20,6 +21,76 @@ export class AccountCloudSyncQueue {
 
   queue(reason = "Local data changed"): void {
     this.pendingReason = reason;
+    if (this.suspensionCount > 0) {
+      return;
+    }
+    this.schedule();
+  }
+
+  /**
+   * Pause scheduled uploads while a destructive local restore is in progress.
+   * A caller may discard work which was queued before the restore began; any
+   * genuinely new mutation queued while suspended is retained for afterwards.
+   * The returned resume function is idempotent and supports nested callers.
+   */
+  suspend(options: { discardPending?: boolean } = {}): () => void {
+    this.suspensionCount += 1;
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
+    if (options.discardPending === true) {
+      this.discardPending();
+    }
+
+    let resumed = false;
+    return () => {
+      if (resumed) {
+        return;
+      }
+      resumed = true;
+      this.suspensionCount = Math.max(0, this.suspensionCount - 1);
+      if (this.suspensionCount === 0 && this.pendingReason) {
+        this.schedule();
+      }
+    };
+  }
+
+  /** Discard only work queued before a restore successfully acquires its fence. */
+  discardPending(): void {
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
+    this.pendingReason = "";
+    this.followUpDue = false;
+  }
+
+  /**
+   * Removes and returns the pending reason so a restore can put it back if the
+   * fenced database replacement fails. Work queued later while suspended stays
+   * authoritative and is never overwritten by the older reason.
+   */
+  takePendingReason(): string {
+    const reason = this.pendingReason;
+    this.discardPending();
+    return reason;
+  }
+
+  restorePendingReason(reason: string): void {
+    if (!reason || this.pendingReason) {
+      return;
+    }
+    this.pendingReason = reason;
+    if (this.suspensionCount === 0) {
+      this.schedule();
+    }
+  }
+
+  private schedule(): void {
+    if (this.suspensionCount > 0) {
+      return;
+    }
     if (this.timer) {
       clearTimeout(this.timer);
     }
@@ -30,6 +101,9 @@ export class AccountCloudSyncQueue {
   }
 
   private async drain(): Promise<void> {
+    if (this.suspensionCount > 0) {
+      return;
+    }
     if (this.inFlight) {
       this.followUpDue = true;
       return;
@@ -49,6 +123,10 @@ export class AccountCloudSyncQueue {
     } finally {
       if (this.inFlight === operation) {
         this.inFlight = null;
+      }
+      if (this.suspensionCount > 0) {
+        this.followUpDue = false;
+        return;
       }
       if (this.followUpDue && this.pendingReason) {
         this.followUpDue = false;

@@ -129,10 +129,11 @@ export class DeckTrackerService {
       }
     }
     const state = this.buildState(settings, deck, event.platform, event.capturedAt);
-    if (shouldSnapshotEvent(event, observations.length) || this.stateSignature(state) !== platformState.lastSignature) {
+    const signature = this.stateSignature(state);
+    if (event.kind === "match-start" || event.kind === "match-end" || signature !== platformState.lastSignature) {
       this.addSnapshot(event.platform, state, event.kind === "match-start" ? "match-start" : event.kind === "match-end" ? "final-result" : "capture-update");
     }
-    platformState.lastSignature = this.stateSignature(state);
+    platformState.lastSignature = signature;
   }
 
   async getState(platform?: GamePlatform): Promise<DeckTrackerState> {
@@ -253,7 +254,7 @@ export class DeckTrackerService {
     const now = new Date().toISOString();
     const state = this.buildState(settings, deck, "atlas", now);
     const signature = this.stateSignature(state);
-    if (trackerObservations.length || signature !== platformState.lastSignature) {
+    if (signature !== platformState.lastSignature) {
       this.addSnapshot("atlas", state, "atlas-event");
       platformState.lastSignature = signature;
     }
@@ -950,14 +951,6 @@ function coerceObservation(value: unknown, platform: GamePlatform, capturedAt: s
     ownerPlayerId: readString(record.ownerPlayerId),
     zoneRect: coerceZoneRect(record.zoneRect)
   };
-}
-
-function shouldSnapshotEvent(event: CaptureEvent, observationCount: number): boolean {
-  if (event.kind === "match-start" || event.kind === "match-end") {
-    return true;
-  }
-  const payload = event.payload ?? {};
-  return observationCount > 0 || Boolean(payload.score || payload.turnText || payload.atlasScoreCandidates);
 }
 
 function shouldCarryAtlasOpponentMemory(

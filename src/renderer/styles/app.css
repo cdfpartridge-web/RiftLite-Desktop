@@ -13347,6 +13347,85 @@ button.replay-export-card:hover {
   font-weight: 900;
 }
 
+.review-save-progress {
+  display: grid;
+  gap: 8px;
+  margin: 10px 16px 0;
+  padding: 11px 12px;
+  border: 1px solid rgb(40 215 255 / 42%);
+  border-radius: 8px;
+  background: linear-gradient(135deg, rgb(40 215 255 / 10%), rgb(7 17 33 / 96%));
+}
+
+.review-save-progress-copy {
+  display: grid;
+  gap: 3px;
+}
+
+.review-save-progress-copy strong {
+  color: #eaf8ff;
+  font-size: 13px;
+}
+
+.review-save-progress-copy span,
+.review-save-progress-stages {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.review-save-progress-track {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+  height: 6px;
+}
+
+.review-save-progress-track > span {
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgb(40 215 255 / 38%), var(--cyan));
+  opacity: .3;
+  transform: scaleX(.72);
+  animation: review-save-progress-pulse 1.2s ease-in-out infinite;
+}
+
+.review-save-progress-track > span:nth-child(2) {
+  animation-delay: .18s;
+}
+
+.review-save-progress-track > span:nth-child(3) {
+  animation-delay: .36s;
+}
+
+.review-save-progress-stages {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.review-save-progress-stages span:nth-child(2) {
+  text-align: center;
+}
+
+.review-save-progress-stages span:last-child {
+  text-align: right;
+}
+
+@keyframes review-save-progress-pulse {
+  50% {
+    opacity: 1;
+    transform: scaleX(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .review-save-progress-track > span {
+    animation: none;
+    opacity: .72;
+    transform: none;
+  }
+}
+
 .icon-button {
   width: 34px;
   height: 34px;

@@ -126,47 +126,6 @@ function deckTrackerCardsFromSection(deck: SavedDeck | null, role: "main" | "sid
   }).filter((card) => card.cardKey));
 }
 
-export function visionDeckTrackerCards(deck: SavedDeck | null): DeckTrackerLibraryCard[] {
-  const mainCards = mainDeckTrackerCards(deck).map((card) => ({ ...card, role: "main" as const }));
-  const legendCard = legendDeckTrackerCard(deck);
-  return legendCard ? [...mainCards, legendCard] : mainCards;
-}
-
-function legendDeckTrackerCard(deck: SavedDeck | null): DeckTrackerLibraryCard | null {
-  if (!deck?.snapshotJson) {
-    return null;
-  }
-  const snapshot = parseJsonRecord(deck.snapshotJson);
-  const entry = readDeckEntry(snapshot.legendEntry ?? snapshot.legend_entry ?? {
-    qty: 1,
-    name: readString(snapshot.legend ?? deck.legend),
-    cardId: readString(snapshot.legendKey ?? snapshot.legend_key),
-    imageUrl: ""
-  });
-  const name = entry?.name || readString(snapshot.legend ?? deck.legend);
-  if (!name) {
-    return null;
-  }
-  const cardId = entry?.cardId || "";
-  const imageUrl = entry?.imageUrl || "";
-  const code = deckTrackerCodeFromImage(imageUrl) || deckTrackerCodeFromImage(cardId);
-  const cardKey = deckTrackerCardKey({ cardId, imageUrl, name, code }) || normalizeDeckTrackerKey(name);
-  const aliases = [
-    ...deckTrackerIdentityAliases({ cardKey, cardId, code, imageUrl, name }),
-    normalizeDeckTrackerKey(deck.legend || "")
-  ].filter(Boolean);
-  return {
-    cardKey,
-    aliases: [...new Set(aliases)],
-    name,
-    code,
-    cardId,
-    imageUrl,
-    qty: 1,
-    role: "legend"
-  };
-}
-
 export function observationCountsForDeck(
   observations: DeckTrackerObservation[],
   deckCards: MainDeckCard[]

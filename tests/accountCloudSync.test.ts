@@ -58,6 +58,7 @@ function baseSettings(): UserSettings {
     accountCloudSyncEnabled: false,
     accountCloudSyncDeviceId: "device-local",
     accountCloudSyncDeviceName: "Local device",
+    accountCloudSyncRemoteGenerationId: "",
     accountCloudSyncLastSyncedAt: "",
     accountCloudSyncLastRestoredAt: "",
     accountCloudSyncLastError: "",
@@ -65,6 +66,8 @@ function baseSettings(): UserSettings {
       enabled: false,
       webReplayAutoUploadEnabled: false,
       webReplayAutoUploadAccountUid: "",
+      tcgaWebReplayAutoUploadEnabled: false,
+      tcgaWebReplayAutoUploadAccountUid: "",
       uploadEnabled: false,
       endpoint: "https://riftreplay.com/api/v1/replays",
       apiKey: "",
@@ -92,6 +95,8 @@ function backup(settings: UserSettings): RiftLiteBackupFile {
 function manifestDocument(options: {
   version?: number;
   generationId?: string;
+  updatedAt?: string;
+  deviceId?: string;
   payload?: string;
   chunkChecksums?: string[];
   chunkCount?: number;
@@ -106,8 +111,8 @@ function manifestDocument(options: {
     fields: {
       format: stringValue("riftlite.account-cloud-sync"),
       version: integerValue(options.version ?? 2),
-      updated_at: stringValue("2026-07-09T10:00:00.000Z"),
-      device_id: stringValue("device-remote"),
+      updated_at: stringValue(options.updatedAt ?? "2026-07-09T10:00:00.000Z"),
+      device_id: stringValue(options.deviceId ?? "device-remote"),
       device_name: stringValue("Remote device"),
       app_version: stringValue("0.7.90-test"),
       generation_id: stringValue(options.generationId ?? "generation-old"),
@@ -234,6 +239,12 @@ function harness(initialBackup?: RiftLiteBackupFile) {
       settings = { ...settings, ...patch };
       return settings;
     }),
+    updateSettings: vi.fn(async (
+      mutation: (current: Readonly<UserSettings>) => Partial<UserSettings>
+    ) => {
+      settings = { ...settings, ...mutation(settings) };
+      return settings;
+    }),
     exportBackupData: vi.fn(async () => exportedBackup),
     restoreBackupData: vi.fn(async (next: RiftLiteBackupFile) => {
       exportedBackup = next;
@@ -298,7 +309,7 @@ describe("FirebaseSyncService account cloud sync", () => {
       return {};
     });
 
-    await service.uploadAccountCloudSync();
+    await service.uploadAccountCloudSync("Account data synced.", { allowRemoteReplacement: true });
 
     const calls = request.mock.calls as Array<[string, string, RequestOptions]>;
     const chunkWrite = calls.find(([path, , options]) => options.method === "PATCH" && path.includes("/chunks/"));
@@ -344,6 +355,159 @@ describe("FirebaseSyncService account cloud sync", () => {
     expect(manifestWrite?.[2].precondition).toEqual({ exists: false });
   });
 
+  it("does not overwrite a newer sequential generation from another device", async () => {
+    const { service, store, getSettings } = harness();
+    await store.saveSettings({
+      accountCloudSyncEnabled: true,
+      accountCloudSyncRemoteGenerationId: "generation-this-device-last-saw"
+    });
+    const request = replaceFirestoreRequest(service, async (_path, _token, options) => {
+      expect(options.method).toBe("GET");
+      return manifestDocument({ generationId: "generation-from-other-device" });
+    });
+
+    const status = await service.uploadAccountCloudSync();
+
+    expect(status).toMatchObject({
+      enabled: false,
+      hasRemoteBackup: true,
+      requiresUserChoice: true
+    });
+    expect(status.message).toContain("changed on another device");
+    expect(getSettings()).toMatchObject({
+      accountCloudSyncEnabled: false,
+      accountCloudSyncRemoteGenerationId: "generation-this-device-last-saw"
+    });
+    expect(store.exportBackupData).not.toHaveBeenCalled();
+    expect(request.mock.calls.some(([, , options]) => options.method === "PATCH")).toBe(false);
+  });
+
+  it("uploads from its pinned generation and rotates the durable generation pin", async () => {
+    const { service, store, getSettings } = harness();
+    await store.saveSettings({
+      accountCloudSyncEnabled: true,
+      accountCloudSyncRemoteGenerationId: "generation-old"
+    });
+    let currentManifest = manifestDocument({ generationId: "generation-old", updateTime: "old-update-time" });
+    const request = replaceFirestoreRequest(service, async (path, _token, options) => {
+      if (options.method === "GET") return currentManifest;
+      if (options.method === "PATCH" && path.endsWith("/manifest/current")) {
+        currentManifest = { fields: options.body?.fields ?? {}, updateTime: "new-update-time" };
+      }
+      return {};
+    });
+
+    await service.uploadAccountCloudSync();
+
+    const manifestWrite = (request.mock.calls as Array<[string, string, RequestOptions]>)
+      .find(([path, , options]) => options.method === "PATCH" && path.endsWith("/manifest/current"));
+    const generationId = (manifestWrite?.[2].body?.fields?.generation_id as { stringValue?: string })?.stringValue;
+    expect(generationId).toMatch(/^[a-f0-9-]+$/);
+    expect(generationId).not.toBe("generation-old");
+    expect(getSettings()).toMatchObject({
+      accountCloudSyncEnabled: true,
+      accountCloudSyncRemoteGenerationId: generationId,
+      accountCloudSyncLastError: ""
+    });
+  });
+
+  it("adopts a provably identical pre-v0.9.10 generation without a false conflict", async () => {
+    const { service, store, getSettings } = harness();
+    await store.saveSettings({
+      accountCloudSyncEnabled: true,
+      accountCloudSyncLastSyncedAt: "2026-07-09T10:00:00.000Z",
+      accountCloudSyncRemoteGenerationId: ""
+    });
+    let currentManifest = manifestDocument({
+      generationId: "legacy-known-generation",
+      deviceId: "device-local",
+      updatedAt: "2026-07-09T10:00:00.000Z",
+      updateTime: "old-update-time"
+    });
+    const request = replaceFirestoreRequest(service, async (path, _token, options) => {
+      if (options.method === "GET") return currentManifest;
+      if (options.method === "PATCH" && path.endsWith("/manifest/current")) {
+        currentManifest = { fields: options.body?.fields ?? {}, updateTime: "new-update-time" };
+      }
+      return {};
+    });
+
+    await service.uploadAccountCloudSync();
+
+    expect(request.mock.calls.some(([path, , options]) =>
+      options.method === "PATCH" && path.endsWith("/manifest/current"))).toBe(true);
+    expect(getSettings().accountCloudSyncRemoteGenerationId).not.toBe("");
+    expect(getSettings().accountCloudSyncRemoteGenerationId).not.toBe("legacy-known-generation");
+  });
+
+  it("does not silently recreate a cloud generation removed elsewhere", async () => {
+    const { service, store, getSettings } = harness();
+    await store.saveSettings({
+      accountCloudSyncEnabled: true,
+      accountCloudSyncRemoteGenerationId: "generation-removed"
+    });
+    let currentManifest: Record<string, unknown> | null = null;
+    const request = replaceFirestoreRequest(service, async (path, _token, options) => {
+      if (options.method === "GET" && path.endsWith("/manifest/current")) {
+        if (!currentManifest) throw new Error("Firestore 404");
+        return currentManifest;
+      }
+      if (options.method === "PATCH" && path.endsWith("/manifest/current")) {
+        currentManifest = { fields: options.body?.fields ?? {}, updateTime: "recreated-update-time" };
+      }
+      return {};
+    });
+
+    const blocked = await service.uploadAccountCloudSync();
+    expect(blocked).toMatchObject({
+      enabled: false,
+      hasRemoteBackup: false,
+      requiresUserChoice: true
+    });
+    expect(blocked.message).toContain("removed elsewhere");
+    expect(request.mock.calls.some(([, , options]) => options.method === "PATCH")).toBe(false);
+
+    await service.uploadAccountCloudSync(
+      "Account data synced.",
+      { allowRemoteReplacement: true }
+    );
+    expect(request.mock.calls.some(([path, , options]) =>
+      options.method === "PATCH" && path.endsWith("/manifest/current"))).toBe(true);
+    expect(getSettings().accountCloudSyncRemoteGenerationId).not.toBe("generation-removed");
+  });
+
+  it("reports a removed pinned backup accurately during a status-only check", async () => {
+    const { service, store } = harness();
+    await store.saveSettings({
+      accountCloudSyncRemoteGenerationId: "generation-removed"
+    });
+    replaceFirestoreRequest(service, async () => {
+      throw new Error("Firestore 404");
+    });
+
+    const status = await service.getAccountCloudSyncStatus();
+
+    expect(status).toMatchObject({ hasRemoteBackup: false, requiresUserChoice: true });
+    expect(status.message).toContain("removed elsewhere");
+    expect(status.message).not.toContain("No account cloud backup yet");
+  });
+
+  it("reports a mismatched pinned generation accurately during a status-only check", async () => {
+    const { service, store } = harness();
+    await store.saveSettings({
+      accountCloudSyncRemoteGenerationId: "generation-this-device-last-saw"
+    });
+    replaceFirestoreRequest(service, async () => (
+      manifestDocument({ generationId: "generation-from-other-device" })
+    ));
+
+    const status = await service.getAccountCloudSyncStatus();
+
+    expect(status).toMatchObject({ hasRemoteBackup: true, requiresUserChoice: true });
+    expect(status.message).toContain("changed elsewhere");
+    expect(status.message).toContain("Choose Restore");
+  });
+
   it("discards an automatic upload when cloud sync is disabled", async () => {
     const { service, store } = harness();
     const request = replaceFirestoreRequest(service, async () => {
@@ -358,7 +522,7 @@ describe("FirebaseSyncService account cloud sync", () => {
     expect(request).not.toHaveBeenCalled();
   });
 
-  it("serializes cloud mutations in invocation order", async () => {
+  it("rejects restore instead of waiting behind an upload that could replace its source", async () => {
     const { service } = harness();
     const events: string[] = [];
     let releaseUpload!: () => void;
@@ -381,12 +545,104 @@ describe("FirebaseSyncService account cloud sync", () => {
     const upload = service.uploadAccountCloudSync();
     await vi.waitFor(() => expect(events).toEqual(["upload-start"]));
     const restore = service.restoreAccountCloudSync();
-    await Promise.resolve();
+    await expect(restore).rejects.toThrow("currently uploading");
     expect(events).toEqual(["upload-start"]);
 
     releaseUpload();
-    await Promise.all([upload, restore]);
-    expect(events).toEqual(["upload-start", "upload-end", "restore-start"]);
+    await upload;
+    expect(events).toEqual(["upload-start", "upload-end"]);
+  });
+
+  it("refuses a new upload once restore intent has been established", async () => {
+    const { service } = harness();
+    let releaseRestore!: () => void;
+    const restoreGate = new Promise<void>((resolve) => {
+      releaseRestore = resolve;
+    });
+    const uploadUnlocked = vi.fn(async () => ({}));
+    Object.assign(service, {
+      restoreAccountCloudSyncUnlocked: vi.fn(async () => {
+        await restoreGate;
+        return {};
+      }),
+      uploadAccountCloudSyncUnlocked: uploadUnlocked
+    });
+
+    const restore = service.restoreAccountCloudSync();
+    await Promise.resolve();
+    await expect(service.uploadAccountCloudSync()).rejects.toThrow("being restored");
+    expect(uploadUnlocked).not.toHaveBeenCalled();
+    releaseRestore();
+    await restore;
+  });
+
+  it("refuses a local backup restore before replacement when an upload is active", async () => {
+    const { service } = harness();
+    let releaseUpload!: () => void;
+    const uploadGate = new Promise<void>((resolve) => {
+      releaseUpload = resolve;
+    });
+    const uploadUnlocked = vi.fn(async () => {
+      await uploadGate;
+      return {};
+    });
+    Object.assign(service, { uploadAccountCloudSyncUnlocked: uploadUnlocked });
+    const localDatabaseReplacement = vi.fn(async () => undefined);
+
+    const upload = service.uploadAccountCloudSync();
+    await vi.waitFor(() => expect(uploadUnlocked).toHaveBeenCalledOnce());
+    await expect(service.runWithAccountCloudRestoreFence(
+      () => localDatabaseReplacement()
+    )).rejects.toThrow("currently uploading");
+    expect(localDatabaseReplacement).not.toHaveBeenCalled();
+
+    releaseUpload();
+    await upload;
+  });
+
+  it("blocks direct uploads for the entire local backup restore fence", async () => {
+    const { service } = harness();
+    let releaseLocalRestore!: () => void;
+    const localRestoreGate = new Promise<void>((resolve) => {
+      releaseLocalRestore = resolve;
+    });
+    let markLocalRestoreStarted!: () => void;
+    const localRestoreStarted = new Promise<void>((resolve) => {
+      markLocalRestoreStarted = resolve;
+    });
+    const uploadUnlocked = vi.fn(async () => ({}));
+    Object.assign(service, { uploadAccountCloudSyncUnlocked: uploadUnlocked });
+
+    const localRestore = service.runWithAccountCloudRestoreFence(async () => {
+      markLocalRestoreStarted();
+      await localRestoreGate;
+    });
+    await localRestoreStarted;
+    await expect(service.uploadAccountCloudSync()).rejects.toThrow("being restored");
+    expect(uploadUnlocked).not.toHaveBeenCalled();
+
+    releaseLocalRestore();
+    await localRestore;
+  });
+
+  it("reuses one common fence for cloud and retained-backup restores", async () => {
+    const { service } = harness();
+    const restoreCurrent = vi.fn(async () => ({}));
+    const restoreLegacy = vi.fn(async () => ({}));
+    Object.assign(service, {
+      restoreAccountCloudSyncUnlocked: restoreCurrent,
+      restoreAccountCloudSyncConflictLegacyUnlocked: restoreLegacy
+    });
+
+    await service.runWithAccountCloudRestoreFence(async (restoreFence) => {
+      await service.restoreAccountCloudSync(restoreFence);
+    });
+    await service.runWithAccountCloudRestoreFence(async (restoreFence) => {
+      await service.restoreAccountCloudSyncConflictLegacy("a".repeat(64), restoreFence);
+    });
+
+    expect(restoreCurrent).toHaveBeenCalledOnce();
+    expect(restoreLegacy).toHaveBeenCalledOnce();
   });
 
   it("never switches the manifest when part of a generation upload is interrupted", async () => {
@@ -408,13 +664,54 @@ describe("FirebaseSyncService account cloud sync", () => {
       return {};
     });
 
-    await expect(service.uploadAccountCloudSync()).rejects.toThrow("simulated interrupted chunk write");
+    await expect(service.uploadAccountCloudSync(
+      "Account data synced.",
+      { allowRemoteReplacement: true }
+    )).rejects.toThrow("simulated interrupted chunk write");
 
     const calls = request.mock.calls as Array<[string, string, RequestOptions]>;
     const chunkWrites = calls.filter(([path, , options]) => options.method === "PATCH" && path.includes("/chunks/"));
     expect(chunkWrites.length).toBeGreaterThan(1);
     expect(calls.some(([path, , options]) => options.method === "PATCH" && path.endsWith("/manifest/current"))).toBe(false);
     expect(calls.some(([, , options]) => options.method === "DELETE")).toBe(true);
+  });
+
+  it("abandons and cleans an upload generation when unlink starts before the manifest switch", async () => {
+    const { service, store, getSettings } = harness();
+    const oldManifest = manifestDocument({ generationId: "generation-old" });
+    let releaseChunkWrite!: () => void;
+    const chunkWriteGate = new Promise<void>((resolve) => {
+      releaseChunkWrite = resolve;
+    });
+    const request = replaceFirestoreRequest(service, async (path, _token, options) => {
+      if (options.method === "GET") return oldManifest;
+      if (options.method === "PATCH" && path.includes("/chunks/")) {
+        await chunkWriteGate;
+      }
+      return {};
+    });
+
+    const pendingUpload = service.uploadAccountCloudSync(
+      "Account data synced.",
+      { allowRemoteReplacement: true }
+    );
+    await vi.waitFor(() => expect(request.mock.calls.some(([path, , options]) =>
+      options.method === "PATCH" && path.includes("/chunks/"))).toBe(true));
+    const pendingUnlink = service.unlinkAccount();
+    releaseChunkWrite();
+
+    await expect(pendingUpload).rejects.toThrow("account changed");
+    await pendingUnlink;
+    expect(request.mock.calls.some(([path, , options]) =>
+      options.method === "PATCH" && path.endsWith("/manifest/current"))).toBe(false);
+    expect(request.mock.calls.some(([path, , options]) =>
+      options.method === "DELETE" && path.includes("/chunks/"))).toBe(true);
+    expect(store.exportBackupData).toHaveBeenCalledOnce();
+    expect(getSettings()).toMatchObject({
+      accountUid: "",
+      firebaseRefreshToken: "",
+      accountCloudSyncEnabled: false
+    });
   });
 
   it("treats a concurrent manifest precondition failure as a safe conflict and cleans its orphan", async () => {
@@ -430,7 +727,10 @@ describe("FirebaseSyncService account cloud sync", () => {
       return {};
     });
 
-    await expect(service.uploadAccountCloudSync()).rejects.toThrow("changed on another device");
+    await expect(service.uploadAccountCloudSync(
+      "Account data synced.",
+      { allowRemoteReplacement: true }
+    )).rejects.toThrow("changed on another device");
 
     const calls = request.mock.calls as Array<[string, string, RequestOptions]>;
     const generatedChunkPath = calls.find(([path, , options]) => options.method === "PATCH" && path.includes("/chunks/"))?.[0];
@@ -466,8 +766,42 @@ describe("FirebaseSyncService account cloud sync", () => {
     expect(store.restoreBackupData).not.toHaveBeenCalled();
   });
 
+  it("pins the restored generation as the new local sync base", async () => {
+    const { service, store, getSettings } = harness();
+    const cloudBackup = backup(baseSettings());
+    const compressed = deflateRawSync(Buffer.from(JSON.stringify(cloudBackup), "utf8")).toString("base64");
+    const manifest = manifestDocument({
+      generationId: "generation-restored",
+      payload: compressed,
+      byteSize: Buffer.byteLength(compressed, "utf8")
+    });
+    replaceFirestoreRequest(service, async (path, _token, options) => {
+      if (options.method === "GET" && path.endsWith("/manifest/current")) return manifest;
+      return {
+        fields: {
+          generation_id: stringValue("generation-restored"),
+          index: integerValue(0),
+          payload: stringValue(compressed),
+          byte_size: integerValue(Buffer.byteLength(compressed, "utf8")),
+          checksum: stringValue(checksum(compressed))
+        }
+      };
+    });
+
+    await service.restoreAccountCloudSync();
+
+    expect(store.restoreBackupData).toHaveBeenCalledOnce();
+    expect(getSettings()).toMatchObject({
+      accountCloudSyncEnabled: true,
+      accountCloudSyncLastSyncedAt: "2026-07-09T10:00:00.000Z",
+      accountCloudSyncRemoteGenerationId: "generation-restored",
+      accountCloudSyncLastError: ""
+    });
+    expect(getSettings().accountCloudSyncLastRestoredAt).not.toBe("");
+  });
+
   it("restores legacy fixed chunks and disables raw replay upload in restored settings", async () => {
-    const { service, store } = harness();
+    const { service, store, getSettings } = harness();
     const cloudBackup = backup({
       ...baseSettings(),
       rawCapture: {
@@ -475,6 +809,8 @@ describe("FirebaseSyncService account cloud sync", () => {
         apiKey: "secret-key",
         webReplayAutoUploadEnabled: true,
         webReplayAutoUploadAccountUid: "account-1",
+        tcgaWebReplayAutoUploadEnabled: true,
+        tcgaWebReplayAutoUploadAccountUid: "account-1",
         uploadEnabled: true,
         visibility: "public"
       }
@@ -507,8 +843,51 @@ describe("FirebaseSyncService account cloud sync", () => {
       apiKey: "",
       webReplayAutoUploadEnabled: false,
       webReplayAutoUploadAccountUid: "",
+      tcgaWebReplayAutoUploadEnabled: false,
+      tcgaWebReplayAutoUploadAccountUid: "",
       uploadEnabled: false,
       visibility: "private"
+    });
+    expect(getSettings().accountCloudSyncRemoteGenerationId).toMatch(/^legacy:[a-f0-9]{64}$/);
+  });
+
+  it("does not apply a decoded cloud backup after unlink starts", async () => {
+    const { service, store, getSettings } = harness();
+    const cloudBackup = backup(baseSettings());
+    const compressed = deflateRawSync(Buffer.from(JSON.stringify(cloudBackup), "utf8")).toString("base64");
+    const manifest = manifestDocument({
+      generationId: "generation-checked",
+      payload: compressed,
+      byteSize: Buffer.byteLength(compressed, "utf8")
+    });
+    let resolveChunk!: (value: Record<string, unknown>) => void;
+    const request = replaceFirestoreRequest(service, async (path, _token, options) => {
+      if (options.method === "GET" && path.endsWith("/manifest/current")) return manifest;
+      return new Promise<Record<string, unknown>>((resolve) => {
+        resolveChunk = resolve;
+      });
+    });
+
+    const pendingRestore = service.restoreAccountCloudSync();
+    await vi.waitFor(() => expect(request.mock.calls.some(([path]) => path.includes("/chunks/"))).toBe(true));
+    const pendingUnlink = service.unlinkAccount();
+    resolveChunk({
+      fields: {
+        generation_id: stringValue("generation-checked"),
+        index: integerValue(0),
+        payload: stringValue(compressed),
+        byte_size: integerValue(Buffer.byteLength(compressed, "utf8")),
+        checksum: stringValue(checksum(compressed))
+      }
+    });
+
+    await expect(pendingRestore).rejects.toThrow("account changed");
+    await pendingUnlink;
+    expect(store.restoreBackupData).not.toHaveBeenCalled();
+    expect(getSettings()).toMatchObject({
+      accountUid: "",
+      firebaseRefreshToken: "",
+      accountCloudSyncEnabled: false
     });
   });
 
@@ -968,11 +1347,13 @@ describe("FirebaseSyncService account cloud sync", () => {
     fetchMock.mockRestore();
   });
 
-  it("does not restore old credentials when token refresh races account unlink", async () => {
+  it("does not restore old credentials or disable local capture when token refresh races account unlink", async () => {
     const { service, store, getSettings } = harness();
     await store.saveSettings({
       firebaseUid: "account-1",
       firebaseRefreshToken: "refresh-old",
+      accountCloudSyncLastSyncedAt: "2026-07-20T12:00:00.000Z",
+      accountCloudSyncRemoteGenerationId: "generation-before-unlink",
       activeHubs: [{
         id: "private-hub-a",
         name: "Private Hub A",
@@ -988,11 +1369,14 @@ describe("FirebaseSyncService account cloud sync", () => {
         visibility: "private",
         joinedAt: "2026-07-01T00:00:00.000Z"
       }],
+      privateHubWebReplayGrantKeys: ["private-hub-a|old-match|old-replay"],
       rawCapture: {
         ...baseSettings().rawCapture,
         enabled: true,
         webReplayAutoUploadEnabled: true,
-        webReplayAutoUploadAccountUid: "account-1"
+        webReplayAutoUploadAccountUid: "account-1",
+        tcgaWebReplayAutoUploadEnabled: true,
+        tcgaWebReplayAutoUploadAccountUid: "account-1"
       }
     });
     let resolveRefresh!: (value: {
@@ -1026,14 +1410,167 @@ describe("FirebaseSyncService account cloud sync", () => {
       accountUid: "",
       firebaseUid: "",
       firebaseRefreshToken: "",
+      accountCloudSyncLastSyncedAt: "",
+      accountCloudSyncRemoteGenerationId: "",
       activeHubs: [],
       activeTeams: [],
+      privateHubWebReplayGrantKeys: [],
       rawCapture: {
-        enabled: false,
+        enabled: true,
         webReplayAutoUploadEnabled: false,
-        webReplayAutoUploadAccountUid: ""
+        webReplayAutoUploadAccountUid: "",
+        tcgaWebReplayAutoUploadEnabled: false,
+        tcgaWebReplayAutoUploadAccountUid: ""
       }
     });
+  });
+
+  it("does not apply a successful account verification after unlink", async () => {
+    const { service, getSettings } = harness();
+    let resolveVerification!: (value: Record<string, unknown>) => void;
+    const authenticatedWebsiteRequest = vi.fn(() => new Promise<Record<string, unknown>>((resolve) => {
+      resolveVerification = resolve;
+    }));
+    Object.assign(service, { authenticatedWebsiteRequest });
+
+    const pendingVerification = service.getAccountConnectionStatus();
+    await vi.waitFor(() => expect(authenticatedWebsiteRequest).toHaveBeenCalledOnce());
+    await service.unlinkAccount();
+    resolveVerification({
+      connection: {
+        verified: true,
+        uid: "account-1",
+        authenticatedUid: "account-1",
+        identityUids: ["account-1"],
+        email: "old@example.com",
+        handle: "old-handle",
+        checkedAt: "2026-07-21T12:00:00.000Z"
+      }
+    });
+
+    await expect(pendingVerification).resolves.toMatchObject({ verified: false });
+    expect(getSettings()).toMatchObject({
+      accountUid: "",
+      firebaseUid: "",
+      firebaseRefreshToken: "",
+      accountHandle: "",
+      accountLastVerificationError: ""
+    });
+  });
+
+  it("does not let a failed verification for account A poison account B", async () => {
+    const { service, store, getSettings } = harness();
+    let rejectVerification!: (error: Error) => void;
+    const authenticatedWebsiteRequest = vi.fn(() => new Promise<Record<string, unknown>>((_resolve, reject) => {
+      rejectVerification = reject;
+    }));
+    Object.assign(service, { authenticatedWebsiteRequest });
+
+    const pendingVerification = service.getAccountConnectionStatus();
+    await vi.waitFor(() => expect(authenticatedWebsiteRequest).toHaveBeenCalledOnce());
+    service.invalidateLinkedAccountAuth();
+    await store.saveSettings({
+      accountUid: "account-2",
+      firebaseUid: "account-2",
+      firebaseRefreshToken: "refresh-account-2",
+      accountHandle: "account-two",
+      accountLastVerificationError: ""
+    });
+    rejectVerification(new Error("account A network failure"));
+
+    await expect(pendingVerification).resolves.toMatchObject({ verified: false });
+    expect(getSettings()).toMatchObject({
+      accountUid: "account-2",
+      firebaseUid: "account-2",
+      firebaseRefreshToken: "refresh-account-2",
+      accountHandle: "account-two",
+      accountLastVerificationError: ""
+    });
+  });
+
+  it("discards a generic token refresh that finishes after unlink", async () => {
+    const { service, getSettings } = harness();
+    let resolveRefresh!: (value: {
+      uid: string;
+      idToken: string;
+      refreshToken: string;
+      expiresAt: number;
+    }) => void;
+    const refreshToken = vi.fn(() => new Promise<{
+      uid: string;
+      idToken: string;
+      refreshToken: string;
+      expiresAt: number;
+    }>((resolve) => {
+      resolveRefresh = resolve;
+    }));
+    Object.assign(service, { auth: null, refreshToken });
+
+    const pendingStatus = service.getAccountCloudSyncStatus();
+    await vi.waitFor(() => expect(refreshToken).toHaveBeenCalledOnce());
+    await service.unlinkAccount();
+    resolveRefresh({
+      uid: "account-1",
+      idToken: "stale-id-token",
+      refreshToken: "stale-rotated-refresh",
+      expiresAt: Math.floor(Date.now() / 1000) + 3600
+    });
+
+    await expect(pendingStatus).rejects.toThrow("account changed");
+    expect(getSettings()).toMatchObject({
+      accountUid: "",
+      firebaseUid: "",
+      firebaseRefreshToken: ""
+    });
+    expect((service as unknown as { auth: unknown }).auth).toBeNull();
+  });
+
+  it("rejects an old browser-link completion after unlink", async () => {
+    const { service, getSettings } = harness();
+    let resolveStatus!: (value: Record<string, unknown>) => void;
+    const authenticatedWebsiteRequest = vi.fn(() => new Promise<Record<string, unknown>>((resolve) => {
+      resolveStatus = resolve;
+    }));
+    const signInWithCustomToken = vi.fn();
+    Object.assign(service, { authenticatedWebsiteRequest, signInWithCustomToken });
+
+    const pendingStatus = service.getAccountLinkStatus("old-link-session");
+    await vi.waitFor(() => expect(authenticatedWebsiteRequest).toHaveBeenCalledOnce());
+    await service.unlinkAccount();
+    resolveStatus({
+      status: "complete",
+      customToken: "old-custom-token",
+      uid: "account-1"
+    });
+
+    await expect(pendingStatus).rejects.toThrow("account changed");
+    expect(signInWithCustomToken).not.toHaveBeenCalled();
+    expect(getSettings()).toMatchObject({ accountUid: "", firebaseRefreshToken: "" });
+  });
+
+  it("uses freshly persisted credentials when a cold replay-token refresh rotates twice", async () => {
+    const { service, getSettings } = harness();
+    const refreshToken = vi.fn(async (token: string) => token === "refresh"
+      ? {
+          uid: "account-1",
+          idToken: "first-id-token",
+          refreshToken: "refresh-rotated-on-auth",
+          expiresAt: Math.floor(Date.now() / 1000) + 3600
+        }
+      : {
+          uid: "account-1",
+          idToken: "replay-id-token",
+          refreshToken: "refresh-rotated-for-replay",
+          expiresAt: Math.floor(Date.now() / 1000) + 3600
+        });
+    Object.assign(service, { auth: null, refreshToken });
+
+    await expect(service.refreshLinkedAccountIdToken()).resolves.toBe("replay-id-token");
+    expect(refreshToken.mock.calls.map(([token]) => token)).toEqual([
+      "refresh",
+      "refresh-rotated-on-auth"
+    ]);
+    expect(getSettings().firebaseRefreshToken).toBe("refresh-rotated-on-auth");
   });
 
   it("refuses to mint a replay token after the caller's pinned account changes", async () => {
@@ -1171,7 +1708,8 @@ describe("FirebaseSyncService account cloud sync", () => {
         role: "member",
         visibility: "private",
         joinedAt: "2026-07-01T00:00:00.000Z"
-      }]
+      }],
+      privateHubWebReplayGrantKeys: ["old-hub|old-match|old-replay"]
     });
     Object.assign(service, {
       authenticatedWebsiteRequest: vi.fn(async () => ({
@@ -1201,7 +1739,8 @@ describe("FirebaseSyncService account cloud sync", () => {
       firebaseRefreshToken: "fresh-refresh-token",
       accountCloudSyncEnabled: false,
       activeHubs: [expect.objectContaining({ id: "stale-hub" })],
-      activeTeams: [expect.objectContaining({ id: "stale-team" })]
+      activeTeams: [expect.objectContaining({ id: "stale-team" })],
+      privateHubWebReplayGrantKeys: ["old-hub|old-match|old-replay"]
     });
   });
 
@@ -1210,6 +1749,13 @@ describe("FirebaseSyncService account cloud sync", () => {
     await store.saveSettings({
       accountUid: "old-account",
       firebaseUid: "old-account",
+      accountHandle: "old-player",
+      accountDisplayName: "Old Player",
+      accountProfilePublic: true,
+      accountCloudSyncLastSyncedAt: "2026-07-20T12:00:00.000Z",
+      accountCloudSyncLastRestoredAt: "2026-07-20T12:01:00.000Z",
+      accountCloudSyncRemoteGenerationId: "old-account-generation",
+      accountCloudSyncLastError: "old account error",
       activeHubs: [{ id: "old-hub", name: "Old hub", sync: true, claimed: true }],
       activeTeams: [{
         id: "old-team",
@@ -1219,7 +1765,8 @@ describe("FirebaseSyncService account cloud sync", () => {
         role: "member",
         visibility: "private",
         joinedAt: "2026-07-01T00:00:00.000Z"
-      }]
+      }],
+      privateHubWebReplayGrantKeys: ["old-hub|old-match|old-replay"]
     });
     Object.assign(service, {
       authenticatedWebsiteRequest: vi.fn(async () => ({
@@ -1233,7 +1780,9 @@ describe("FirebaseSyncService account cloud sync", () => {
         refreshToken: "new-refresh-token",
         expiresAt: Math.floor(Date.now() / 1000) + 3600
       })),
-      getAccountProfile: vi.fn(async () => null),
+      getAccountProfile: vi.fn(async () => {
+        throw new Error("profile service temporarily unavailable");
+      }),
       getAccountConnectionStatus: vi.fn(async () => ({ verified: true }))
     });
 
@@ -1241,8 +1790,16 @@ describe("FirebaseSyncService account cloud sync", () => {
 
     expect(getSettings()).toMatchObject({
       accountUid: "new-account",
+      accountHandle: "",
+      accountDisplayName: "Player#newacc",
+      accountProfilePublic: false,
+      accountCloudSyncLastSyncedAt: "",
+      accountCloudSyncLastRestoredAt: "",
+      accountCloudSyncRemoteGenerationId: "",
+      accountCloudSyncLastError: "",
       activeHubs: [],
-      activeTeams: []
+      activeTeams: [],
+      privateHubWebReplayGrantKeys: []
     });
   });
 

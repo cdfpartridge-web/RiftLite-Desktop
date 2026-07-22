@@ -17,6 +17,17 @@ export interface ReplayDeliverySummary {
   discordLabel: string;
 }
 
+const REPLAY_AUTH_ERROR_PATTERN = /authentication_required|linked RiftLite account token|device credential is not linked/i;
+
+export function replayDeliveryErrorMessage(value: unknown): string {
+  const message = typeof value === "string" ? value.trim() : "";
+  if (!message) return "";
+  if (REPLAY_AUTH_ERROR_PATTERN.test(message)) {
+    return "RiftLite account verification is required. Open Account, finish verification or reconnect the same account, then retry. The local replay capture is safe.";
+  }
+  return message;
+}
+
 function replayDiscordEligible(metadata: RawCaptureReplayMetadata | undefined): boolean {
   return Boolean(
     metadata?.webReplayDiscordShareEligible ||
@@ -89,6 +100,7 @@ export function replayDeliveryStages(metadata: RawCaptureReplayMetadata | undefi
   const processingComplete = metadata?.processingStatus === "ready";
   const processingFailed = metadata?.processingStatus === "failed";
   const discordEligible = replayDiscordEligible(metadata);
+  const replayError = replayDeliveryErrorMessage(metadata?.error);
 
   return [
     {
@@ -116,7 +128,7 @@ export function replayDeliveryStages(metadata: RawCaptureReplayMetadata | undefi
       detail: uploadComplete
         ? "Raw replay reached RiftLite.com"
         : uploadFailed
-          ? metadata?.error || "Upload failed"
+          ? replayError || "Upload failed"
           : uploadActive
             ? "Uploading the replay"
             : "Waiting to upload",
@@ -135,7 +147,7 @@ export function replayDeliveryStages(metadata: RawCaptureReplayMetadata | undefi
       detail: processingComplete
         ? "Web replay is ready to watch"
         : processingFailed
-          ? metadata?.error || "Website processing failed"
+          ? replayError || "Website processing failed"
           : uploadComplete
             ? "Website is interpreting the replay"
             : "Starts after upload",

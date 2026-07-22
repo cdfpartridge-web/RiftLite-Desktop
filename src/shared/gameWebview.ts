@@ -30,3 +30,18 @@ export function gameWebviewIsReady(
 ): mounted is GamePlatform {
   return Boolean(preloadUrl) && mounted === selected;
 }
+
+export function shouldRestoreGameWebviewFocus(
+  reviewWasOpen: boolean,
+  reviewIsOpen: boolean,
+  selected: GamePlatform,
+  mounted: GamePlatform | null,
+  preloadUrl: string,
+  playIsVisible: boolean
+): boolean {
+  return reviewWasOpen &&
+    !reviewIsOpen &&
+    playIsVisible &&
+    selected === "atlas" &&
+    gameWebviewIsReady(selected, mounted, preloadUrl);
+}

@@ -3,6 +3,7 @@ import { gamePlatformForTrustedUrl } from "./embeddedContentSecurity.js";
 import type { CaptureEvent, GamePlatform, RawCaptureAppendFramePayload } from "./types.js";
 
 const MAX_CAPTURE_EVENT_BYTES = 2 * 1024 * 1024;
+const MAX_TCGA_RESEARCH_EVENT_BYTES = 4 * 1024 * 1024;
 const MAX_RAW_FRAME_BYTES = 1_500_000;
 const MAX_RAW_JSON_DEPTH = 64;
 const MAX_RAW_JSON_NODES = 200_000;
@@ -29,6 +30,18 @@ const CaptureEventSchema = z.object({
   url: z.string().trim().min(1).max(4_096),
   payload: z.record(z.string(), z.unknown())
 }).strict();
+
+const TcgaResearchEventSchema = z.object({
+  schema: z.literal("riftlite-tcga-preload-research"),
+  version: z.literal(1),
+  id: z.string().trim().min(1).max(256),
+  kind: z.enum(["dom-checkpoint", "interaction"]),
+  capturedAt: z.string().trim().min(1).max(64).refine((value) => Number.isFinite(Date.parse(value))),
+  url: z.string().trim().min(1).max(4_096),
+  payload: z.record(z.string(), z.unknown())
+}).strict();
+
+export type TcgaResearchIngressEvent = z.infer<typeof TcgaResearchEventSchema>;
 
 const RawCaptureFrameSchema = z.object({
   seq: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
@@ -162,6 +175,17 @@ export function validatedCaptureEvent(
     return null;
   }
   return parsed.data as CaptureEvent;
+}
+
+export function validatedTcgaResearchEvent(value: unknown): TcgaResearchIngressEvent | null {
+  const parsed = TcgaResearchEventSchema.safeParse(value);
+  if (!parsed.success || jsonByteLength(parsed.data) > MAX_TCGA_RESEARCH_EVENT_BYTES) {
+    return null;
+  }
+  if (gamePlatformForTrustedUrl(parsed.data.url) !== "tcga") {
+    return null;
+  }
+  return parsed.data;
 }
 
 export function validatedRawCaptureFrame(value: unknown): RawCaptureAppendFramePayload | null {

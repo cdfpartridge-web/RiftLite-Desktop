@@ -1,8 +1,8 @@
-export type AccountLinkProvider = "google" | "email";
+export type AccountLinkProvider = "google" | "email" | "discord";
 
 export function accountLinkUrlForProvider(loginUrl: string, provider: AccountLinkProvider): string {
-  if (provider !== "google" && provider !== "email") {
-    throw new Error("Choose Google or email to continue.");
+  if (provider !== "google" && provider !== "email" && provider !== "discord") {
+    throw new Error("Choose Google, email, or Discord to continue.");
   }
 
   let url: URL;

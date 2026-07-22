@@ -13,6 +13,14 @@ describe("TcgaResolver", () => {
     await expect(resolver.resolveLegend("https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/0eab83392b310417d2630d50a3bfee3dd02b31c4-744x1039.png?accountingTag=RB&auto=format&fit=fill&q=80&w=444")).resolves.toBe("Kennen");
   });
 
+  it("resolves Risen Altar from the alternate portrait hash served by TCGA", async () => {
+    const resolver = new TcgaResolver(resolve(process.cwd(), "resources/tcga_card_lookup.json"));
+
+    await expect(resolver.resolveBattlefield(
+      "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/e41bc5d29f91f652d553bef56e2c84e95010ef1a-744x1039.png?accountingTag=RB&auto=format&fit=fill&q=80&w=744"
+    )).resolves.toBe("Risen Altar");
+  });
+
   it("recognizes signed and overnumbered legend print codes", async () => {
     const resolver = new TcgaResolver(resolve(process.cwd(), "resources/tcga_card_lookup.json"));
 

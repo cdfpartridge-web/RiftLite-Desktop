@@ -3,7 +3,7 @@
 Last verified: 2026-07-12
 Release baseline: RiftLite `v0.8.03` (package SemVer `0.8.3`)
 Production website: `https://www.riftlite.com`
-System status: live, Atlas-only, account-linked, opt-in automatic capture/upload
+System status: Atlas live/account-linked; isolated TCGA local adapter validated but not deployed or auto-uploaded
 
 This is the durable technical and product handover for the complete RiftLite Web Replay system. Read this document together with `docs/CURRENT_STATE.md` before changing replay capture, upload, account authentication, replay privacy, Discord delivery, normalization, the web player, or the desktop embed.
 
@@ -843,7 +843,7 @@ If two clearly identical perspectives report zero common actions, inspect whethe
 
 ## 26. Known constraints and deliberate future work
 
-- Atlas only; TCGA does not currently feed Web Replay V2.
+- Local desktop automatic capture/upload now supports Atlas and TCGA through separate account-bound opt-ins and provider-specific collectors. The TCGA promotion is not deployed or published; TCGA remains BO1-only until multi-game channel attribution is implemented.
 - Internet required for upload and playback; no offline canonical cache.
 - 4 MiB compressed transport limit due Vercel Functions. Future large captures need signed multipart Blob upload without changing init/complete identity semantics.
 - No replay deletion/retention UI or artifact garbage collector.
@@ -912,3 +912,27 @@ At v0.8.00:
 - the production homepage contained both main-navigation and hero replay links.
 
 This document is explanatory source-of-truth, but code and focused tests remain authoritative when they disagree with a stale sentence. Update this handover whenever replay contracts, storage, privacy, authentication, consent, or operational procedures materially change.
+
+## 30. TCGA provider extension validated locally on 2026-07-20
+
+TCGA was added as a sibling provider rather than an Atlas compatibility mode:
+
+- Desktop research finalization creates bounded, deterministic per-channel `riftlite-tcga-raw-capture` version 1 gzip companions. The TCGA Capture Lab reports their paths and safe aggregate counts; exporter failure is non-fatal to the parent research capture, and retention/deletion removes companions with their parent.
+- The exporter is called only by TCGA Replay Research Capture. It does not call `RawCaptureService`, Firebase, the Replay V2 HTTP client, Discord, or any upload path.
+- Website completion dispatches by the immutable replay platform. `atlas` still executes the original `parseRawCaptureV1` and `normalizeRawCaptureV1` path; `tcga` executes strict TCGA validation and its provider-specific normalizer. Cross-schema inputs and provider-changing retries fail closed.
+- TCGA normalization emits opaque player/card/message identities, removes raw source/channel/capture identifiers, and converts opponent/private or uncertain cards to identity-free placeholders before canonical serialization. Result state remains unresolved without authoritative terminal evidence.
+- The Akali-versus-Irelia game-02 fixture now produces 478 events and 19 deterministic checkpoints over 12 minutes 47 seconds, with phases `matchup -> battlefield_pick -> first_player_choice -> mulligan -> in_game`, final turn 13 and score 7-7. Canonical JSON is 15,903,791 bytes / 1,453,736 bytes gzip. TCGA `grouppedToId` children inherit the live host zone while grouped, so all 290 projected attachment states remain co-located through Base/B1/B2 movement; explicit detach/discard positions still win. The provider's positional card counters are preserved in the shared white/red counter slots, including explicit zero, updates, and removal.
+- Local preview uses `/replays/tcga/{fixtureId}` and `/api/local/tcga-replays/{fixtureId}` only when `NODE_ENV` is not production and `RIFTLITE_LOCAL_TCGA_REPLAY_DIR` is explicitly configured. Only canonical JSON is served; raw research/source capture is never served by this route.
+
+No Vercel deployment, GitHub push/release, Discord action, or production replay/data mutation was authorized for this work.
+
+## 31. TCGA product capture and Replay V2 promotion completed locally on 2026-07-20
+
+- The desktop product collector receives only validated `rtc-channel` and `rtc-data` events for TCGA's `game` data channel. Research-only Network/DOM evidence has no product entry point and is additionally rejected at the main-process event boundary unless the user separately starts the Research Monitor.
+- TCGA automatic upload is a separate, default-off, verified-account consent. The consenting UID is captured with the channel and rechecked before registration, authentication, retry, and upload. Account switch/unlink or consent withdrawal clears memory and pending material.
+- Replay-ready association uses a strict saved-match time window and requires exactly one clean channel with two players, one outbound perspective, opening state, setup 0-to-10 progression, mulligan evidence, in-game/turn evidence, meaningful history, and both legend and battlefield identities. Invalid/truncated/unavailable/oversized/duplicate/incomplete transport taints the channel. BO3/multi-game matches are rejected.
+- If the local result is incomplete, the sole validated candidate is stored as an account-bound non-product gzip plus a privacy-safe integrity sidecar and returns `awaiting-result`; no Replay V2 registration occurs. A later confirmation can recover it from a fresh process, add only the privacy-safe result/paired points, create the production artifact, upload once, and delete the pending pair. Tampering, ambiguity, account mismatch, expiry, and replay-folder changes fail closed.
+- Replay-folder changes clear live mid-game state and atomically migrate valid pending pairs to the new private raw-capture directory. Pending retention is seven days with a hard 30-day ceiling; explicit consent withdrawal/purge APIs remove pending files.
+- Server completion dispatches on immutable platform. Production TCGA accepts only `riftlite-tcga-web-replay`, clean transport, and Win/Loss/Draw metadata; research companions are local-preview-only. The TCGA normalizer projects authoritative result, paired points, terminal phase, and end boundary, then runs shared timeline/checkpoint and provider-specific privacy verification before persistence.
+- TCGA uses the normal authenticated upload, library, canonical API, and player. Combining remains Atlas-only. Discord sharing verifies readiness/result before changing visibility, and Atlas Discord consent does not affect TCGA visibility or delivery.
+- Local verification: website 61 files / 411 tests plus production build; desktop 80 files / 629 tests plus the mandatory 49-test account gate, TypeScript/build/package, ASAR inspection, updater checksum validation, and isolated packaged startup smoke. No deployment, publication, Discord action, or production-data write occurred.

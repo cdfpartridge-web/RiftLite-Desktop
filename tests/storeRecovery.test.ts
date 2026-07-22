@@ -46,6 +46,323 @@ function savedReplay(id: string): ReplayRecord {
 }
 
 describe("RiftLiteStore database recovery", () => {
+  it("keeps failed candidate writes invisible and out of later successful commits", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "riftlite-store-atomic-write-failure-"));
+    try {
+      const dbPath = join(directory, "riftlite-v06.sqlite");
+      const legacyPath = join(directory, "riftlite-v06-store.json");
+      const store = new RiftLiteStore(dbPath, legacyPath);
+      await store.load();
+      await store.saveMatch(savedMatch("committed-before-failure"));
+      await store.getMatches();
+
+      interface StoreWriteInternals {
+        writeDatabaseFile(database: object): Promise<void>;
+      }
+      const internals = store as unknown as StoreWriteInternals;
+      let releaseFailedWrite!: () => void;
+      let markFailedWriteStarted!: () => void;
+      const failedWriteGate = new Promise<void>((resolve) => {
+        releaseFailedWrite = resolve;
+      });
+      const failedWriteStarted = new Promise<void>((resolve) => {
+        markFailedWriteStarted = resolve;
+      });
+      const writeSpy = vi.spyOn(internals, "writeDatabaseFile").mockImplementationOnce(async () => {
+        markFailedWriteStarted();
+        await failedWriteGate;
+        throw new Error("simulated database rename failure");
+      });
+
+      const failingSave = store.saveMatch(savedMatch("must-never-leak"));
+      await failedWriteStarted;
+
+      // Reads and lifecycle consumers stay on the previous committed database
+      // for the entire asynchronous persistence window.
+      expect((await store.getMatches()).map((match) => match.id)).toEqual(["committed-before-failure"]);
+      await expect(store.hasActiveRawCaptureParent("not-finalized", "must-never-leak")).resolves.toBe(false);
+      releaseFailedWrite();
+      await expect(failingSave).rejects.toThrow("simulated database rename failure");
+      expect((await store.getMatches()).some((match) => match.id === "must-never-leak")).toBe(false);
+
+      const reopenedAfterFailure = new RiftLiteStore(dbPath, legacyPath);
+      await reopenedAfterFailure.load();
+      expect((await reopenedAfterFailure.getMatches()).some((match) => match.id === "must-never-leak")).toBe(false);
+
+      writeSpy.mockRestore();
+      await store.saveMatch(savedMatch("committed-after-failure"));
+      expect((await store.getMatches()).map((match) => match.id)).toEqual(expect.arrayContaining([
+        "committed-before-failure",
+        "committed-after-failure"
+      ]));
+      expect((await store.getMatches()).some((match) => match.id === "must-never-leak")).toBe(false);
+
+      const reopenedAfterSuccess = new RiftLiteStore(dbPath, legacyPath);
+      await reopenedAfterSuccess.load();
+      expect((await reopenedAfterSuccess.getMatches()).map((match) => match.id)).toEqual(expect.arrayContaining([
+        "committed-before-failure",
+        "committed-after-failure"
+      ]));
+      expect((await reopenedAfterSuccess.getMatches()).some((match) => match.id === "must-never-leak")).toBe(false);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("aborts a restore instead of losing a write that arrives while the replacement is being built", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "riftlite-store-restore-write-race-"));
+    try {
+      const dbPath = join(directory, "riftlite-v06.sqlite");
+      const legacyPath = join(directory, "riftlite-v06-store.json");
+      const store = new RiftLiteStore(dbPath, legacyPath);
+      await store.load();
+      await store.saveMatch(savedMatch("original-before-restore"));
+      const backup: RiftLiteBackupFile = {
+        format: "riftlite.backup",
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        appVersion: "test",
+        settings: await store.getSettings(),
+        matches: [savedMatch("restored-snapshot")],
+        deletedMatches: [],
+        decks: [],
+        notebooks: [],
+        replays: [],
+        deletedReplays: []
+      };
+
+      interface StoreWriteInternals {
+        db: object | null;
+        stageDatabaseFile(database: object): Promise<string>;
+      }
+      const internals = store as unknown as StoreWriteInternals;
+      const activeDatabase = internals.db;
+      const originalStage = internals.stageDatabaseFile.bind(store);
+      let releaseCandidateWrite!: () => void;
+      let markCandidateWriteStarted!: () => void;
+      const candidateWriteGate = new Promise<void>((resolve) => {
+        releaseCandidateWrite = resolve;
+      });
+      const candidateWriteStarted = new Promise<void>((resolve) => {
+        markCandidateWriteStarted = resolve;
+      });
+      let restoreCandidateDatabase: object | null = null;
+      vi.spyOn(internals, "stageDatabaseFile").mockImplementation(async (database) => {
+        if (database !== activeDatabase && !restoreCandidateDatabase) {
+          restoreCandidateDatabase = database;
+          const stagedPath = await originalStage(database);
+          markCandidateWriteStarted();
+          await candidateWriteGate;
+          return stagedPath;
+        }
+        return originalStage(database);
+      });
+
+      const restoring = store.restoreBackupData(backup);
+      await candidateWriteStarted;
+
+      // Even after the entire restore candidate has reached disk, the
+      // canonical database must remain the last committed live state. A crash
+      // here therefore reopens the original data, never the staged restore.
+      const reopenedWhileRestoreIsStaged = new RiftLiteStore(dbPath, legacyPath);
+      await reopenedWhileRestoreIsStaged.load();
+      expect((await reopenedWhileRestoreIsStaged.getMatches()).map((match) => match.id)).toContain("original-before-restore");
+      expect((await reopenedWhileRestoreIsStaged.getMatches()).some((match) => match.id === "restored-snapshot")).toBe(false);
+
+      await store.saveMatch(savedMatch("written-during-restore"));
+      releaseCandidateWrite();
+
+      await expect(restoring).rejects.toThrow("data changed while the restore was running");
+      expect((await store.getMatches()).map((match) => match.id)).toEqual(expect.arrayContaining([
+        "original-before-restore",
+        "written-during-restore"
+      ]));
+      expect((await store.getMatches()).some((match) => match.id === "restored-snapshot")).toBe(false);
+
+      const reloaded = new RiftLiteStore(dbPath, legacyPath);
+      await reloaded.load();
+      expect((await reloaded.getMatches()).map((match) => match.id)).toEqual(expect.arrayContaining([
+        "original-before-restore",
+        "written-during-restore"
+      ]));
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("retains the byte fence against an unexpected live-database mutation", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "riftlite-store-restore-unpersisted-race-"));
+    try {
+      const dbPath = join(directory, "riftlite-v06.sqlite");
+      const legacyPath = join(directory, "riftlite-v06-store.json");
+      const store = new RiftLiteStore(dbPath, legacyPath);
+      await store.load();
+      await store.saveMatch(savedMatch("delete-during-restore"));
+      const backup: RiftLiteBackupFile = {
+        format: "riftlite.backup",
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        appVersion: "test",
+        settings: await store.getSettings(),
+        matches: [savedMatch("restored-snapshot")],
+        deletedMatches: [],
+        decks: [],
+        notebooks: [],
+        replays: [],
+        deletedReplays: []
+      };
+
+      interface StoreRestoreInternals {
+        db: {
+          exec(sql: string, params?: unknown[]): Array<{ values: unknown[][] }>;
+          run(sql: string, params?: unknown[]): void;
+        } | null;
+        stageDatabaseFile(database: object): Promise<string>;
+        invalidateMatchCache(): void;
+      }
+      const internals = store as unknown as StoreRestoreInternals;
+      const activeDatabase = internals.db;
+      const originalStage = internals.stageDatabaseFile.bind(store);
+      let markCandidateStaged!: () => void;
+      let releaseCandidate!: () => void;
+      const candidateStaged = new Promise<void>((resolve) => {
+        markCandidateStaged = resolve;
+      });
+      const candidateGate = new Promise<void>((resolve) => {
+        releaseCandidate = resolve;
+      });
+      vi.spyOn(internals, "stageDatabaseFile").mockImplementation(async (database) => {
+        const stagedPath = await originalStage(database);
+        if (database !== activeDatabase) {
+          markCandidateStaged();
+          await candidateGate;
+        }
+        return stagedPath;
+      });
+
+      const restoring = store.restoreBackupData(backup);
+      await candidateStaged;
+      const raw = internals.db?.exec(
+        "SELECT data_json FROM matches WHERE id=?",
+        ["delete-during-restore"]
+      )[0]?.values[0]?.[0];
+      expect(typeof raw).toBe("string");
+      const deletedAt = "2026-07-21T18:00:00.000Z";
+      const deleted = { ...JSON.parse(String(raw)) as MatchDraft, deletedAt, updatedAt: deletedAt };
+      // Simulate an unexpected internal writer that bypassed the serialized
+      // public mutation API and did not advance databaseMutationVersion. The
+      // exact-byte fence must still reject the restore.
+      internals.db?.run(
+        "UPDATE matches SET updated_at=?, data_json=? WHERE id=?",
+        [deletedAt, JSON.stringify(deleted), "delete-during-restore"]
+      );
+      internals.invalidateMatchCache();
+      releaseCandidate();
+      await expect(restoring).rejects.toThrow("data changed while the restore was running");
+      expect((await store.getDeletedMatches()).map((match) => match.id)).toContain("delete-during-restore");
+      expect((await store.getMatches()).some((match) => match.id === "restored-snapshot")).toBe(false);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps replay upload parents inactive after soft deletion or permanent purge", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "riftlite-store-replay-purge-race-"));
+    try {
+      const store = new RiftLiteStore(join(directory, "riftlite-v06.sqlite"), join(directory, "riftlite-v06-store.json"));
+      await store.load();
+
+      await store.saveMatch(savedMatch("match-safe"));
+      const replay = savedReplay("safe");
+      await expect(store.saveReplayIfMatchActive(replay)).resolves.toMatchObject({ id: replay.id });
+      await expect(store.hasActiveRawCaptureParent(replay.id, replay.matchId)).resolves.toBe(true);
+      await store.purgeReplay(replay.id);
+
+      await expect(store.hasActiveRawCaptureParent(replay.id, replay.matchId)).resolves.toBe(false);
+      await expect(store.saveReplayIfMatchActive(replay)).resolves.toBeNull();
+      expect((await store.getReplays()).some((candidate) => candidate.id === replay.id)).toBe(false);
+
+      await store.saveMatch(savedMatch("match-soft-delete"));
+      const softDeletedReplay = savedReplay("soft-delete");
+      await store.saveReplayIfMatchActive(softDeletedReplay);
+      await store.deleteReplay(softDeletedReplay.id);
+
+      await expect(store.hasActiveRawCaptureParent(softDeletedReplay.id, softDeletedReplay.matchId)).resolves.toBe(false);
+      await expect(store.updateActiveReplay(softDeletedReplay.id, (current) => ({ ...current, title: "must not save" })))
+        .resolves.toBeNull();
+      await expect(store.saveReplayIfMatchActive(softDeletedReplay)).resolves.toBeNull();
+      expect((await store.getDeletedReplays()).find((candidate) => candidate.id === softDeletedReplay.id)?.title)
+        .toBe(softDeletedReplay.title);
+
+      await expect(store.hasActiveRawCaptureParent("not-finalized-yet", "match-soft-delete"))
+        .resolves.toBe(true);
+
+      await store.saveMatch(savedMatch("match-parent-purge"));
+      const parentReplay = savedReplay("parent-purge");
+      await store.saveReplayIfMatchActive(parentReplay);
+      await store.purgeMatch(parentReplay.matchId);
+
+      await expect(store.hasActiveRawCaptureParent(parentReplay.id, parentReplay.matchId)).resolves.toBe(false);
+      await expect(store.saveReplayIfMatchActive(parentReplay)).resolves.toBeNull();
+      expect((await store.getReplays()).some((candidate) => candidate.id === parentReplay.id)).toBe(false);
+
+      const orphanReplay = savedReplay("missing-parent");
+      await store.saveReplay(orphanReplay);
+      await expect(store.hasActiveRawCaptureParent(orphanReplay.id, orphanReplay.matchId)).resolves.toBe(false);
+      await expect(store.updateActiveReplay(orphanReplay.id, (current) => ({ ...current, title: "must not save" })))
+        .resolves.toBeNull();
+      expect((await store.getReplays()).find((candidate) => candidate.id === orphanReplay.id)?.title)
+        .toBe(orphanReplay.title);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("never lets a stale conditional sync save recreate a deleted or missing match", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "riftlite-store-save-match-if-lifecycle-"));
+    try {
+      const store = new RiftLiteStore(join(directory, "riftlite-v06.sqlite"), join(directory, "riftlite-v06-store.json"));
+      await store.load();
+      const original = await store.saveMatch({
+        ...savedMatch("conditional-save"),
+        notes: "latest local note",
+        sync: { community: "pending", hubs: { "hub-current": "pending" }, teams: {} }
+      });
+      const staleSyncResult: MatchDraft = {
+        ...original,
+        notes: "stale remote copy",
+        sync: {
+          community: "synced",
+          hubs: { "hub-current": "synced", "removed-hub": "synced" },
+          teams: {}
+        }
+      };
+
+      const merged = await store.saveMatchIf(staleSyncResult, () => true);
+      expect(merged).toMatchObject({
+        notes: "latest local note",
+        sync: { community: "synced", hubs: { "hub-current": "synced" } }
+      });
+      expect(merged?.sync.hubs).not.toHaveProperty("removed-hub");
+
+      const staleBeforeDelete = (await store.getMatches()).find((match) => match.id === original.id)!;
+      await store.deleteMatch(original.id);
+      await expect(store.saveMatchIf({
+        ...staleBeforeDelete,
+        sync: { ...staleBeforeDelete.sync, community: "synced" }
+      }, () => true)).resolves.toBeNull();
+      expect((await store.getMatches()).some((match) => match.id === original.id)).toBe(false);
+      expect((await store.getDeletedMatches()).filter((match) => match.id === original.id)).toHaveLength(1);
+
+      await store.purgeMatch(original.id);
+      await expect(store.saveMatchIf(staleBeforeDelete, () => true)).resolves.toBeNull();
+      expect((await store.getMatches()).some((match) => match.id === original.id)).toBe(false);
+      expect((await store.getDeletedMatches()).some((match) => match.id === original.id)).toBe(false);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("atomically preserves independent replay video and raw-capture updates", async () => {
     const directory = await mkdtemp(join(tmpdir(), "riftlite-store-replay-update-"));
     try {
@@ -185,6 +502,7 @@ describe("RiftLiteStore database recovery", () => {
       expect(settings.communitySyncEnabled).toBe(true);
       expect(settings.accountCloudSyncEnabled).toBe(false);
       expect(settings.rawCapture.webReplayAutoUploadEnabled).toBe(false);
+      expect(settings.rawCapture.tcgaWebReplayAutoUploadEnabled).toBe(false);
       expect(legacyImport).toHaveBeenCalledTimes(1);
     } finally {
       await rm(directory, { recursive: true, force: true });
@@ -210,6 +528,8 @@ describe("RiftLiteStore database recovery", () => {
         enabled: false,
         webReplayAutoUploadEnabled: false,
         webReplayAutoUploadAccountUid: "",
+        tcgaWebReplayAutoUploadEnabled: false,
+        tcgaWebReplayAutoUploadAccountUid: "",
         uploadEnabled: false,
         visibility: "private"
       });
