@@ -1,6 +1,7 @@
 node_modules/
 dist/
 release/
+output/
 .vite/
 *.log
 *.err.log
@@ -10,6 +11,7 @@ vite-dev.log
 debug.log
 *.jsonl
 .atlas-inspect/
+.playwright-cli/
 *-inspection.json
 tmp-*.json
 capture-lab-check.png

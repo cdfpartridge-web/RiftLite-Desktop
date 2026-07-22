@@ -73,4 +73,116 @@ describe("AccountCloudSyncQueue", () => {
     expect(run).toHaveBeenCalledTimes(2);
     expect(run).toHaveBeenLastCalledWith("Match deleted");
   });
+
+  it("discards stale pending work when suspended for a restore", async () => {
+    const run = vi.fn(async () => undefined);
+    const queue = new AccountCloudSyncQueue(run, vi.fn(), 20_000);
+
+    queue.queue("Stale pre-restore mutation");
+    const resume = queue.suspend({ discardPending: true });
+    await vi.advanceTimersByTimeAsync(40_000);
+    expect(run).not.toHaveBeenCalled();
+
+    resume();
+    await vi.advanceTimersByTimeAsync(40_000);
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it("retains mutations queued while suspended and debounces them after resume", async () => {
+    const run = vi.fn(async () => undefined);
+    const queue = new AccountCloudSyncQueue(run, vi.fn(), 20_000);
+
+    const resume = queue.suspend({ discardPending: true });
+    queue.queue("Match restored");
+    queue.queue("Settings restored");
+    await vi.advanceTimersByTimeAsync(40_000);
+    expect(run).not.toHaveBeenCalled();
+
+    resume();
+    await vi.advanceTimersByTimeAsync(19_999);
+    expect(run).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run).toHaveBeenCalledWith("Settings restored");
+  });
+
+  it("supports nested suspension without resuming uploads too early", async () => {
+    const run = vi.fn(async () => undefined);
+    const queue = new AccountCloudSyncQueue(run, vi.fn(), 20_000);
+
+    const resumeOuter = queue.suspend();
+    const resumeInner = queue.suspend();
+    queue.queue("Match changed");
+    resumeOuter();
+    await vi.advanceTimersByTimeAsync(40_000);
+    expect(run).not.toHaveBeenCalled();
+
+    resumeInner();
+    resumeInner();
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves pre-existing work when restore fence acquisition fails", async () => {
+    const run = vi.fn(async () => undefined);
+    const queue = new AccountCloudSyncQueue(run, vi.fn(), 20_000);
+
+    queue.queue("Match saved before refused restore");
+    const resume = queue.suspend();
+    // The service fence refuses here, so discardPending is intentionally not
+    // called and the old automatic sync must resume unchanged.
+    resume();
+    await vi.advanceTimersByTimeAsync(20_000);
+
+    expect(run).toHaveBeenCalledOnce();
+    expect(run).toHaveBeenCalledWith("Match saved before refused restore");
+  });
+
+  it("discards pre-restore work only after acquisition and retains changes made during restore", async () => {
+    const run = vi.fn(async () => undefined);
+    const queue = new AccountCloudSyncQueue(run, vi.fn(), 20_000);
+
+    queue.queue("Stale pre-restore mutation");
+    const resume = queue.suspend();
+    queue.discardPending();
+    queue.queue("Mutation made during restore");
+    resume();
+    await vi.advanceTimersByTimeAsync(20_000);
+
+    expect(run).toHaveBeenCalledOnce();
+    expect(run).toHaveBeenCalledWith("Mutation made during restore");
+  });
+
+  it("restores the captured pre-restore reason when the fenced restore fails", async () => {
+    const run = vi.fn(async () => undefined);
+    const queue = new AccountCloudSyncQueue(run, vi.fn(), 20_000);
+
+    queue.queue("Match saved before failed restore");
+    const resume = queue.suspend();
+    const pendingReason = queue.takePendingReason();
+    // The restore fence has now been released after an atomic replacement
+    // failure, so the caller puts the pending intent back before resuming.
+    queue.restorePendingReason(pendingReason);
+    resume();
+    await vi.advanceTimersByTimeAsync(20_000);
+
+    expect(run).toHaveBeenCalledOnce();
+    expect(run).toHaveBeenCalledWith("Match saved before failed restore");
+  });
+
+  it("does not let a restored old reason overwrite a mutation made during restore", async () => {
+    const run = vi.fn(async () => undefined);
+    const queue = new AccountCloudSyncQueue(run, vi.fn(), 20_000);
+
+    queue.queue("Stale pre-restore mutation");
+    const resume = queue.suspend();
+    const pendingReason = queue.takePendingReason();
+    queue.queue("New mutation made during failed restore");
+    queue.restorePendingReason(pendingReason);
+    resume();
+    await vi.advanceTimersByTimeAsync(20_000);
+
+    expect(run).toHaveBeenCalledOnce();
+    expect(run).toHaveBeenCalledWith("New mutation made during failed restore");
+  });
 });

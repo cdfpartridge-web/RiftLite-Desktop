@@ -27,6 +27,12 @@ const packageManifest = JSON.parse(
 ) as PackageManifest;
 
 const mainSource = readFileSync(new URL("../src/main/main.ts", import.meta.url), "utf8");
+const macWorkflowSource = readFileSync(
+  new URL("../.github/workflows/build-mac.yml", import.meta.url),
+  "utf8"
+);
+const afterPackSource = readFileSync(new URL("../build/afterPack.cjs", import.meta.url), "utf8");
+const macPackageSource = readFileSync(new URL("../scripts/package-mac-release.cjs", import.meta.url), "utf8");
 
 const PRODUCTION_CONTINUITY = {
   appId: "com.riftlite.desktop.beta06",
@@ -47,8 +53,8 @@ describe("RiftLite v0.9 production build identity", () => {
       userDataDirectory: PRODUCTION_CONTINUITY.userDataDirectory,
       mediaDirectoryName: PRODUCTION_CONTINUITY.mediaDirectoryName,
       protocol: PRODUCTION_CONTINUITY.protocol,
-      packageVersion: "0.9.0",
-      displayVersion: "0.9.00",
+      packageVersion: "0.9.11",
+      displayVersion: "0.9.11",
       updatesEnabled: true,
       usageAnalyticsEnabled: true
     });
@@ -68,7 +74,7 @@ describe("RiftLite v0.9 production build identity", () => {
     const build = packageManifest.build;
 
     expect(packageManifest.name).toBe("riftlite-desktop-v09");
-    expect(packageManifest.version).toBe("0.9.0");
+    expect(packageManifest.version).toBe("0.9.11");
     expect(build?.appId).toBe(PRODUCTION_CONTINUITY.appId);
     expect(build?.productName).toBe(RIFTLITE_BUILD_IDENTITY.appName);
     expect(build?.executableName).toBe(RIFTLITE_BUILD_IDENTITY.appName);
@@ -97,6 +103,20 @@ describe("RiftLite v0.9 production build identity", () => {
       }
     ]);
     expect(packageManifest.scripts?.["electron:build"]).toContain("--publish never");
-    expect(packageManifest.scripts?.["electron:build:mac"]).toContain("--publish never");
+    expect(packageManifest.scripts?.["electron:build:mac"]).toContain("npm run package:mac");
+    expect(macPackageSource).toContain('publish: "never"');
+  });
+
+  it("builds the game preload before development smoke tests and fails closed on missing packaged tools", () => {
+    expect(packageManifest.scripts?.["electron:smoke"]).toContain("npm run build:game-preload");
+    expect(afterPackSource).toContain("Cannot stamp the Windows executable because rcedit is missing");
+    expect(afterPackSource).toContain("Cannot package replay video support because the FFmpeg binary is missing");
+    expect(afterPackSource).toContain("Cannot package replay video support because the FFmpeg license is missing");
+  });
+
+  it("refuses to publish a macOS tag that does not match the package version", () => {
+    expect(macWorkflowSource).toContain("if: github.ref_type == 'tag'");
+    expect(macWorkflowSource).toContain('const expectedTag = `mac-v${pkg.version}`;');
+    expect(macWorkflowSource).toContain("process.env.RELEASE_TAG !== expectedTag");
   });
 });

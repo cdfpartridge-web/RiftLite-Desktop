@@ -31,12 +31,13 @@ function savedBo1(id: string, result: MatchDraft["result"], score: string, captu
     flags: "",
     notes: "",
     games: [{
+      gameNumber: 1,
       result,
-      myScore: Number(myScore),
-      opponentScore: Number(opponentScore),
-      wentFirst: "unknown",
+      myPoints: Number(myScore),
+      oppPoints: Number(opponentScore),
+      wentFirst: "undecided",
       myBattlefield: "Zaun Warrens",
-      opponentBattlefield: "Ripper's Bay"
+      oppBattlefield: "Ripper's Bay"
     }],
     rawEvidence: [],
     sync: { community: "disabled", hubs: {}, teams: {} }
@@ -60,8 +61,61 @@ describe("match combine repair helpers", () => {
     expect(combined.combinedFromMatchIds).toEqual(["first", "second"]);
   });
 
+  it("preserves exact battlefield identities and images from each source game", () => {
+    const first = savedBo1("first", "Win", "7-5", "2026-05-30T10:00:00.000Z");
+    const second = savedBo1("second", "Loss", "3-7", "2026-05-30T10:12:00.000Z");
+    first.games[0] = {
+      ...first.games[0],
+      myBattlefieldCode: "OGN-123",
+      oppBattlefieldCode: "OGN-456",
+      myBattlefieldImage: "https://cdn.example/my-battlefield.webp",
+      oppBattlefieldImage: "https://cdn.example/opp-battlefield.webp"
+    };
+    second.games[0] = {
+      ...second.games[0],
+      myBattlefieldCode: "OGN-789",
+      oppBattlefieldCode: "OGN-012"
+    };
+
+    const combined = buildCombinedBo3Match([first, second], "combined", "2026-05-30T10:20:00.000Z");
+
+    expect(combined.games[0]).toMatchObject({
+      myBattlefieldCode: "OGN-123",
+      oppBattlefieldCode: "OGN-456",
+      myBattlefieldImage: "https://cdn.example/my-battlefield.webp",
+      oppBattlefieldImage: "https://cdn.example/opp-battlefield.webp"
+    });
+    expect(combined.games[1]).toMatchObject({
+      myBattlefieldCode: "OGN-789",
+      oppBattlefieldCode: "OGN-012"
+    });
+  });
+
+  it("does not mislabel the first source game's web replay as the combined Bo3 replay", () => {
+    const first = {
+      ...savedBo1("first", "Win", "7-5", "2026-05-30T10:00:00.000Z"),
+      webReplayId: "single-game-replay",
+      webReplayAccountUid: "account-1",
+      webReplayLocalReplayId: "local-replay-1"
+    };
+    const second = savedBo1("second", "Loss", "3-7", "2026-05-30T10:12:00.000Z");
+
+    const combined = buildCombinedBo3Match([first, second], "combined", "2026-05-30T10:20:00.000Z");
+
+    expect(combined.webReplayId).toBeUndefined();
+    expect(combined.webReplayAccountUid).toBeUndefined();
+    expect(combined.webReplayLocalReplayId).toBeUndefined();
+  });
+
   it("marks originals hidden and can restore them for undo", () => {
-    const original = savedBo1("first", "Win", "7-5", "2026-05-30T10:00:00.000Z");
+    const original = {
+      ...savedBo1("first", "Win", "7-5", "2026-05-30T10:00:00.000Z"),
+      sync: {
+        community: "synced" as const,
+        hubs: { "hub-1": "synced" as const },
+        teams: { "team-1": "failed" as const }
+      }
+    };
     const hidden = markOriginalAsCombined(original, "combined", "2026-05-30T10:20:00.000Z");
     const restored = restoreCombinedOriginal(hidden, "2026-05-30T10:25:00.000Z");
 
@@ -71,6 +125,11 @@ describe("match combine repair helpers", () => {
     expect(restored.mergedIntoMatchId).toBeUndefined();
     expect(restored.hiddenFromStats).toBeUndefined();
     expect(restored.hiddenFromHistory).toBeUndefined();
+    expect(restored.sync).toEqual({
+      community: "pending",
+      hubs: { "hub-1": "pending" },
+      teams: { "team-1": "pending" }
+    });
   });
 
   it("warns when selected rows do not look like the same match", () => {

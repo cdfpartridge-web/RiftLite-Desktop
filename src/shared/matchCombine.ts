@@ -91,6 +91,12 @@ export function buildCombinedBo3Match(matches: MatchDraft[], id: string, now: st
     mergedIntoMatchId: undefined,
     hiddenFromStats: false,
     hiddenFromHistory: false,
+    // A combined row represents multiple games. Reusing the first source
+    // match's replay identity would grant access to a single-game replay while
+    // presenting it as the whole Bo3.
+    webReplayId: undefined,
+    webReplayAccountUid: undefined,
+    webReplayLocalReplayId: undefined,
     status: "saved",
     format: "Bo3",
     result: summary.result,
@@ -120,7 +126,14 @@ export function markOriginalAsCombined(match: MatchDraft, combinedMatchId: strin
 export function restoreCombinedOriginal(match: MatchDraft, now: string): MatchDraft {
   const restored = {
     ...match,
-    updatedAt: now
+    updatedAt: now,
+    // Undo must actively publish the non-superseded document again. Keeping a
+    // stale `synced` value would make the normal reporter skip that write.
+    sync: {
+      community: match.sync.community === "disabled" ? "disabled" as const : "pending" as const,
+      hubs: Object.fromEntries(Object.keys(match.sync.hubs ?? {}).map((hubId) => [hubId, "pending" as const])),
+      teams: Object.fromEntries(Object.keys(match.sync.teams ?? {}).map((teamId) => [teamId, "pending" as const]))
+    }
   };
   delete restored.mergedIntoMatchId;
   delete restored.hiddenFromStats;
@@ -146,6 +159,8 @@ function gameFromMatch(match: MatchDraft, gameNumber: number): MatchGame {
     oppPoints: existing?.oppPoints ?? fallbackPoints.oppPoints,
     myBattlefield: existing?.myBattlefield || match.myBattlefield,
     oppBattlefield: existing?.oppBattlefield || match.opponentBattlefield,
+    myBattlefieldCode: existing?.myBattlefieldCode,
+    oppBattlefieldCode: existing?.oppBattlefieldCode,
     myBattlefieldImage: existing?.myBattlefieldImage,
     oppBattlefieldImage: existing?.oppBattlefieldImage,
     extraBattlefields: existing?.extraBattlefields ?? [],

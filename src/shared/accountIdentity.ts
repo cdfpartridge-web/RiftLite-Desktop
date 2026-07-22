@@ -28,6 +28,22 @@ export function linkedAccountAuthUidMatches(
     .includes(authenticated));
 }
 
+export function hasVerifiedRiftLiteAccount(
+  settings: Pick<UserSettings,
+    "accountUid" |
+    "firebaseRefreshToken" |
+    "accountLastVerifiedAt" |
+    "accountLastVerificationError"
+  >
+): boolean {
+  return Boolean(
+    String(settings.accountUid ?? "").trim() &&
+    String(settings.firebaseRefreshToken ?? "").trim() &&
+    String(settings.accountLastVerifiedAt ?? "").trim() &&
+    !String(settings.accountLastVerificationError ?? "").trim()
+  );
+}
+
 export function verifiedAccountConnectionUid(
   storedAccountUid: unknown,
   reportedCanonicalUid: unknown,

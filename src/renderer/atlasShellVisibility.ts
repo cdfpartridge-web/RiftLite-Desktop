@@ -1,11 +1,14 @@
-export type AtlasShellVisibility = "inactive" | "covered" | "ready";
+export type AtlasShellVisibility = "inactive" | "covered" | "recovering" | "ready" | "fallback-visible";
 
 export type AtlasShellVisibilityEvent =
   | "atlas-entered"
   | "atlas-shell-ready"
   | "webview-load-started"
   | "empty-shell-recovery-started"
+  | "shell-ready-timeout"
   | "atlas-left";
+
+export const ATLAS_SHELL_COVER_TIMEOUT_MS = 12_000;
 
 export const INITIAL_ATLAS_SHELL_VISIBILITY: AtlasShellVisibility = "inactive";
 
@@ -23,16 +26,18 @@ export function updateAtlasShellVisibility(
     case "atlas-entered":
       return current === "inactive" ? "covered" : current;
     case "atlas-shell-ready":
-      return current === "covered" ? "ready" : current;
+      return current === "covered" || current === "recovering" || current === "fallback-visible" ? "ready" : current;
     case "webview-load-started":
       return current;
     case "empty-shell-recovery-started":
-      return "covered";
+      return "recovering";
+    case "shell-ready-timeout":
+      return current === "covered" || current === "recovering" ? "fallback-visible" : current;
     case "atlas-left":
       return "inactive";
   }
 }
 
 export function shouldCoverAtlasShell(visibility: AtlasShellVisibility): boolean {
-  return visibility === "covered";
+  return visibility === "covered" || visibility === "recovering";
 }

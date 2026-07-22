@@ -1,8 +1,8 @@
 # RiftLite Current Engineering State
 
-> **Current handover:** After reading this file, read `docs/HANDOVER_2026-07-19_V0.9.00.md`. It records the published v0.9.00 desktop, website/Firestore deployment, release artifacts, security/account work, and remaining post-release checks.
+> **Current release:** v0.9.11 supersedes the unpublished v0.9.10 release candidate. Read `docs/release-notes-v0.9.11.md` for the customer-facing summary and `docs/HANDOVER_2026-07-21_V0.9.10_RC.md` for the underlying account/Web Replay/match-reporting audit and artifact safeguards.
 
-Last updated: 2026-07-19
+Last updated: 2026-07-22
 
 This is the durable handoff for continuing RiftLite work in a fresh Codex task. Read this file before changing code.
 
@@ -10,7 +10,7 @@ This is the durable handoff for continuing RiftLite work in a fresh Codex task. 
 
 - Active cross-platform release source repo:
   `C:\Users\cdfpa\OneDrive\Documents\Claude\Projects\Riftlite Beta 0.6\desktop-v06`
-- Current package version: `0.9.0` (customer-facing build `v0.9.00`); published
+- Current local package version: `0.9.11` (customer-facing build `v0.9.11`); fully built and validated locally before publication
 - Current branch: `windows-release-v0.8.03` (the branch name is older than the local build)
 - Windows GitHub release repository (`windows` remote): `cdfpartridge-web/RiftLite-Desktop`
 - macOS GitHub release repository (`origin` remote): `cdfpartridge-web/RiftLite-Desktop-mac`
@@ -167,7 +167,7 @@ User-facing replay features include:
 - original-audio volume and mute controls
 - Shadowplay-style rolling clips and a live review-flag hotkey
 
-Raw Atlas/WebSocket replay reconstruction is now enabled as the first-party **RiftLite web replay** feature. It is Atlas-only and requires an explicit, account-bound Settings opt-in before capture and automatic upload begin. The old local reconstructed Replay Lab remains parked.
+First-party **RiftLite Web Replay** now supports provider-isolated Atlas WebSocket capture and TCGA action capture. Each provider requires explicit account-bound consent before capture and automatic upload begin. Both use the authenticated website library/player; two-perspective combining remains Atlas-only. The old local reconstructed Replay Lab remains parked.
 
 Vision deck tracking was also paused. Keep its source and types, but do not start workers, sample frames, or show Vision UI while its feature flag is disabled.
 
@@ -745,6 +745,56 @@ On 2026-07-12 after restoring Vendetta legend artwork in the desktop Community M
 - Windows release source is pinned by tag `v0.8.03`; GitHub release: `https://github.com/cdfpartridge-web/RiftLite-Desktop/releases/tag/v0.8.03`
 - the website and macOS repository were not changed for this release
 
+On 2026-07-20 after diagnosing the v0.9 RiftAtlas battlefield inversion locally:
+
+- tester diagnostics showed two Atlas BO3 sessions whose automatically captured local/opponent battlefield pairs were consistently reversed; the newest unswapped game 3 should be local `Sunken Temple`, opponent `Sigil of the Storm`
+- root cause was a global `battlefieldB = local` assumption; live Atlas assigns battlefield A to seat 0 and battlefield B to seat 1
+- capture now resolves the local numeric seat from authoritative room-shell/snapshot frames by exact WebSocket player-ID match, maps A/B per seat, resets across BO3 room changes, rejects stale socket evidence, and leaves fields blank instead of guessing while seat is unknown
+- future diagnostics retain only the numeric seat and mapped zones, not the private Atlas player ID
+- the release gate passed 73 test files / 585 tests and local NSIS packaging; canonical local installer `RiftLiteBetaInstall.exe` is 201493752 bytes with SHA-256 `9C608E9C77FF8C5A1B191EB2AA1B5E9D6C9B0E8EAF029B7A85EB58C1EFF7CAFC`
+- the rebuild was local only; no GitHub asset, website, Discord message, or production data was changed
+
+On 2026-07-20 after adding the local TCGA BinaryPack decoder and complete-capture groundwork:
+
+- the supplied Akali-vs-Kennen capture decoded cleanly into 1,014 logical messages, 367 state snapshots, 146 history events, nine turn transitions, 44 stack updates, and 41 reveal updates; it is useful protocol evidence but remains a partial timeline because the old 64 MiB ceiling dropped one record, left one chunk group incomplete, and missed terminal evidence
+- the monitor now decodes bounded direct/chunked PeerJS BinaryPack messages with reconnect-safe channel identities and writes a privacy-safe aggregate `.analysis.json` beside each gzip/summary pair; strict checksum, sequence, cap, drop, chunk, setup, and terminal checks prevent partial captures from being labelled replay-ready
+- the research-only ceiling is 128 MiB, full DOM research checkpoints are cadence-limited while interaction checkpoints and RTC data remain intact, normal app quit finalizes an active capture, and Capture Lab shows Decoder/Timeline/readiness diagnostics
+- the TCGA Web Replay adapter remains intentionally disconnected until a second clean setup-to-result capture verifies completeness and supplies the fixture for canonical projection, seek, and hidden-information tests
+- the release gate passed 77 test files / 600 tests plus TypeScript, Electron main/game-preload/renderer production builds, Windows x64/NSIS packaging, ASAR/updater inspection, and an isolated packaged-app smoke launch
+- canonical local installer `RiftLiteBetaInstall.exe` is 201606257 bytes with SHA-256 `6F277B63B92EDA19A772E6D18B309A18C12226CAF8A2A98E959EF41D5558BFBA`; the build is local only and no GitHub asset, website, Discord message, or production data was changed
+
+On 2026-07-20 after remotely updating desktop homepage video 2:
+
+- the installed v0.9 desktop already supported two videos from `https://www.riftlite.com/api/app/home`, but the website endpoint exposed only the singular legacy field, so slot 2 remained the installer fallback
+- website commit `c32812c` now returns an ordered, validated, canonicalized two-video array while retaining the singular first-video field for older clients; slot-aware fallback prevents missing or invalid content from moving between positions
+- Firestore `app_config/home` retains video 1 `4n0x_t-wprg` and now supplies video 2 `gUHFg8zSnSY` (`How to Play RENEKTON | Vendetta Riftbound Guide & Decklist`)
+- five focused route tests, changed-file lint, the full website suite (55 files / 371 tests, with one file / nine tests skipped), local and Vercel production builds, and live cached/uncached endpoint checks passed
+- Vercel deployment `dpl_2FQwrmhGkEMKieStPAfm9DV4oDHv` is Ready on `www.riftlite.com`; no installer rebuild or desktop release was required, and future video swaps can be Firestore-only
+
+On 2026-07-20 after building the first isolated TCGA-to-Web-Replay path locally:
+
+- TCGA Replay Research Capture now creates one bounded, deterministic `riftlite-tcga-raw-capture` version 1 gzip companion per decoded game channel when **Stop and save** finalizes; Capture Lab lists paths/counts, exporter failure is non-fatal to the parent research capture, and retention/deletion removes companions with their parent
+- the TCGA exporter remains entirely separate from Atlas `RawCaptureService`, automatic upload, Firebase, Discord, and production HTTP paths
+- the website accepts Atlas and TCGA as explicit replay providers; Atlas still runs through its original parser/normalizer byte-for-byte, while strict cross-schema and provider-retry checks prevent either source entering the other provider path
+- the TCGA normalizer merges authoritative full state into Canonical Replay V2, uses opaque identities, removes source/channel/player identifiers, and replaces opponent/private/hidden-exile/uncertain cards with identity-free placeholders before serialization
+- the clean Akali-vs-Irelia game channel translates deterministically into 478 events and 19 sparse checkpoints over 12m47s, with phases `matchup -> battlefield_pick -> first_player_choice -> mulligan -> in_game`, turn 13 and final 7-7 board; no winner/result is guessed from the non-terminal capture
+- TCGA grouped cards now inherit their host's current zone while `grouppedToId` remains active, keeping all 290 projected attachment states together through Base/B1/B2 movement; positional card counters now appear at their captured times and preserve zero, changes, and removal
+- the canonical fixture is 15,903,791 bytes (1,453,736-byte gzip estimate), passes publication/privacy/seek checks, and is served only by a development route gated on `RIFTLITE_LOCAL_TCGA_REPLAY_DIR`
+- website verification passed 60 files / 396 tests (plus one file / nine tests skipped), lint with zero errors, and the local Next production build; focused Atlas/TCGA normalization and player regression checks also passed
+- no Vercel deployment, GitHub push/tag/release, Discord action, automatic TCGA upload, or production-data mutation occurred
+
+On 2026-07-20 after fixing blank RiftAtlas battlefield fields in the desktop match logger:
+
+- the Mel-vs-Zed raw capture was complete and unambiguous: the local viewer was authoritative seat 0, local Battlefield A was `Heisho, Shell of the World`, and opponent Battlefield B was `Minefield`; the Web Replay correctly used that raw evidence while the saved desktop game retained two blank battlefield fields
+- root cause was Electron world isolation: Atlas creates its socket in the page's main JavaScript world, while `gamePreload.ts` runs with `contextIsolation: true`, so the preload's `window.WebSocket` wrapper never received the authoritative seat frame even though the main-process debugger captured it
+- the main debugger now sends a narrow, validated, identity-free seat signal to the same Atlas guest before raw-frame deduplication; the preload applies the existing seat-aware A/B ownership mapping, while a newest-match-socket guard rejects delayed frames from older rooms
+- the bridge contains no Atlas player ID, auth token, raw frame, deck, hand, or chat data; TCGA and the already-correct Atlas Web Replay normalizer are unchanged, and ownership still fails closed instead of guessing when authoritative seat evidence is absent
+- focused Atlas/logger coverage passed 166 tests plus four bridge-focused files / 20 tests; the full release gate passed 79 files / 611 tests and the mandatory account-sync gate passed five files / 49 tests
+- the packaged ASAR contains the main bridge, newest-socket guard, preload listener, and validator; `latest.yml` size/SHA-512 matches the installer, and a packaged launch smoke remained healthy until intentionally stopped
+- canonical local installer `RiftLiteBetaInstall.exe` is 202010805 bytes with SHA-256 `88D85F504F60B77AF97B2C1E0FF9EB0B9BE11280BDCC04951ABB33294412F09D`; blockmap is 188720 bytes with SHA-256 `9860AB1E5C7F2FD06563FB704323E999C71B07C0EC22F8EFA5EE38C55B0778F8`; `latest.yml` is 343 bytes with SHA-256 `23B63621492C10B2E1C9699B19728B9126B3CF19317201360C06E06DA6EAC9F2`
+- the historical Mel match row was not silently rewritten; the raw capture remains sufficient for an explicit repair if requested
+- the rebuild was local only; no GitHub asset, website, Firestore data, Discord message, or production data was changed
+
 Always rerun after code changes. Useful commands:
 
 ```powershell
@@ -793,6 +843,92 @@ The intentional 0.8.00 implementation, tests, assets, and documentation were com
 
 Use this exact starter message in a new task opened in the same workspace:
 
-> Work from `C:\Users\cdfpa\OneDrive\Documents\Claude\Projects\Riftlite Beta 0.6\desktop-v06`. Read `docs/CURRENT_STATE.md` first. For any web replay work, also read `docs/WEB_REPLAY_SYSTEM_HANDOVER.md` completely. Preserve both the desktop and website dirty working trees and do not rebuild or publish unless I ask. Continue with: [describe the next bug or feature].
+> Work from `C:\Users\cdfpa\OneDrive\Documents\Claude\Projects\Riftlite Beta 0.6\desktop-v06`. Before changing anything, read `docs/CURRENT_STATE.md` and `docs/HANDOVER_2026-07-20.md` completely. For replay work, also read `docs/WEB_REPLAY_SYSTEM_HANDOVER.md`. Preserve both repositories and the known desktop CRLF/stat-only status entries. Do not rebuild, deploy, push, tag, publish, send Discord messages, or mutate production data unless I explicitly ask. Continue with: [describe the next bug or feature].
 
 The old task remains useful as an archive, but day-to-day engineering context should come from this file, the current code, tests, diagnostics, and attached logs.
+
+## 2026-07-20 TCGA Web Replay promotion (local only)
+
+- TCGA Web Replay is now a normal sibling provider in the local website and desktop source. Atlas remains on its original parser, JSON-to-gzip upload, association, and Discord paths.
+- Desktop TCGA upload has a separate default-off, account-bound consent switch. Product capture accepts only bounded `game` WebRTC channel events; it does not enable or ingest the broader DOM/network Research Monitor.
+- A channel must decode without transport loss or ambiguity and contain exactly two players, an authoritative local perspective, opening/setup/mulligan/gameplay/history evidence, and both legends and battlefields. Short disconnects, tainted frames, and BO3/multi-game attribution fail closed.
+- A clean capture with an unresolved saved result is kept locally as an account-bound `awaiting-result` artifact and privacy-safe integrity sidecar. It is never registered or uploaded until a later authoritative Win/Loss/Draw; restart recovery, account mismatch, tamper detection, seven-day retention, consent withdrawal, and replay-folder migration are covered.
+- Website Replay V2 now accepts `atlas` or `tcga` as an immutable provider, but normal TCGA publication accepts only `riftlite-tcga-web-replay` sources with clean transport and a resolved desktop result. Research companions remain local-preview-only. Canonical result, paired points, terminal phase, and end boundary are projected and verified alongside timeline/checkpoint/privacy checks.
+- TCGA replays appear in the normal authenticated upload/library/player flow. Combining remains Atlas-only, and Discord sharing checks readiness/result before visibility changes; Atlas Discord consent cannot make a TCGA replay Unlisted or post it.
+- Website verification passed 61 files / 411 tests (one file / nine tests skipped), ESLint with zero errors and 15 existing warnings, and the local Next production build. Desktop release verification passed the five-file / 49-test account gate, all 80 files / 629 tests, TypeScript, Electron/game-preload/renderer production builds, Windows x64 packaging, ASAR inspection, updater checksum validation, and an isolated packaged startup smoke.
+- Local installer: `release/RiftLiteBetaInstall.exe`, 202109579 bytes, SHA-256 `9FE940CDEC5F8F15B3AA14FBE3AB0444699FDB5249EF33B8BB969D975B9FF5F9`. Blockmap: 188647 bytes, SHA-256 `BC3CCB627AB69A834989E2647104FFE723D3DD4A06A20664F8CD464157B52C93`. `latest.yml`: 343 bytes, SHA-256 `0C9EB431AB22AC63D0249BF62EF0889D55BE5124D1D0C8C9F2F1BE41866D1CDF`; its installer size and SHA-512 match exactly.
+- This work was local only. No website deployment, GitHub commit/push/tag/release, Discord action, or production-data mutation occurred.
+
+## 2026-07-21 updater handoff and legacy Discord account recovery (local only)
+
+- The Windows update loop had a deterministic cause: `electron-updater` called `quitAndInstall`, but the active TCGA Research Monitor `before-quit` guard cancelled that updater-owned quit and later called ordinary `app.quit()`. That discarded the pending NSIS launch, so the old version reopened and offered the same update again.
+- Update installation now finalizes the monitor before the updater begins its quit, permits the updater-owned quit through the global guard, and rejects install requests made before the `update-downloaded` state. Monitor-finalization errors are logged without converting the updater quit back into an ordinary quit.
+- Legacy users such as a profile with a handle and Discord verification but no email did not have a second mystery website account. The hardened Google/email link flow could not authenticate that old Firebase UID, so selecting any new browser account correctly failed the pinned-UID check and surfaced the account mismatch.
+- Desktop and website now offer **Continue with Discord** only as recovery for an existing Discord-linked RiftLite account. The website uses short-lived, HMAC-sealed, HttpOnly OAuth state/result cookies, Discord's `identify` scope, stable Discord user ID lookup across guild links, canonical UID resolution, exact pending desktop-session validation, and the existing one-time Firebase custom-token handoff. It refuses unlinked, ambiguous, expired, mismatched, or already-used identities and never silently merges accounts.
+- Google/email linking and the existing Atlas/TCGA replay paths are unchanged. The no-email mismatch message now directs the tester to Discord recovery; a normal provider mismatch remains pinned and requires the same provider or an explicit safe account switch.
+- Production setup required before testers can use the new button: register `https://www.riftlite.com/api/auth/discord/callback` in the Discord Developer Portal, retain `DISCORD_CLIENT_SECRET` plus the client/application ID in Vercel, and deploy the website. `DISCORD_OAUTH_REDIRECT_URI` is optional and only for a separately registered preview/local callback.
+- Verification passed the desktop release gate (five account files / 49 tests and all 80 files / 632 tests), all 62 passed website files / 418 tests (one file / nine tests skipped), website ESLint with zero errors and 15 existing warnings, the Next production build, Windows packaging, updater manifest matching, packaged-ASAR inspection, and an isolated 12-second packaged startup smoke.
+- Canonical local installer remains `release/RiftLiteBetaInstall.exe`: 202440245 bytes, SHA-256 `4EE7AD12DA408B1B5660DF8F6B288498DDA7A95F1F502C8F6A8AE322E9A9752F`. Blockmap: 188488 bytes, SHA-256 `BD591F70C6CACE7A10345E985127738E631B03B433A6ACD6BB1B9106A8E55423`. `latest.yml`: 343 bytes, SHA-256 `DD6DE181062E7BA65F177EB854FBE5B5F8C51E2FD079E2BB07A4AE0A2BAD3D74`; its installer size and SHA-512 match exactly.
+- This work was local only. No Vercel deployment, Discord configuration change, GitHub operation, production-data mutation, or updater publish occurred.
+
+## 2026-07-21 Atlas post-game chat focus repair (local only)
+
+- The Windows-only report that Atlas chat stopped accepting typing after a game was traced to the post-game match-review dialog taking focus from Electron's out-of-process `<webview>`. Closing or auto-saving the dialog removed the host overlay but did not explicitly focus the Atlas guest again. The Atlas capture preload has no keyboard/input interception or chat-field mutation, and the application-wide keyboard handler only consumes the explicit Play-page reload shortcuts.
+- When an Atlas review transitions from open to closed while Play remains visible, the renderer now restores the host webview and retries the handoff briefly after the overlay unmounts. A trusted app-only IPC handler also focuses the tracked native Atlas guest `WebContents`, which repairs the OOPIF keyboard target that an HTML-element-only `focus()` can leave stale. Focusing or clicking the webview requests the same native self-heal.
+- The repair is scoped to Atlas, the selected/mounted provider, the visible Play page, and a foreground RiftLite window. It does not run while review is open, on TCGA/Sim, on another RiftLite page, or while the user is working in another Windows application.
+- Verification passed the focused lifecycle/security tests, TypeScript, the five-file / 49-test account gate, all 80 desktop test files / 634 tests, Electron/game-preload/renderer production builds, Windows NSIS packaging, exact `latest.yml` installer size/SHA-512 validation, packaged-ASAR content checks, and an isolated 12-second packaged startup smoke.
+- Canonical local installer remains `release/RiftLiteBetaInstall.exe`: 203,242,409 bytes, SHA-256 `067B98BCDA00C02863F8ABED97D1B66836B7866FEBE677773CDFD84F11B9217F`. Blockmap: 189,911 bytes, SHA-256 `1B2EBA31D3D6BB1C5848CA584CBE28E734612328BBC8B0645FFD832FC7B55AD9`. `latest.yml`: 343 bytes, SHA-256 `23CBCCB07748A5C63BCF92179624E59F46720C7454271F7C20C30A2F78A0A6B0`.
+- This work was local only. No deployment, push, tag, release, updater publish, Discord action, website change, or production-data mutation occurred.
+
+## 2026-07-21 Replay V2 linked-account authentication repair (local only)
+
+- The tester's `RiftLite replay init 401` occurred after 536 Atlas frames were captured and the match result finalized. The capture was healthy; Replay V2 rejected the desktop credential before processing began.
+- Replay V2 previously accepted only durable Firebase provider metadata or the short-lived `riftlite_linked_account` custom claim. Account connection was already able to prove an exact immutable `identityAliases` association, so historical anonymous desktop aliases and refreshed Discord-recovery custom-token sessions could pass Account verification but fail replay upload.
+- Website Replay V2 now falls back to the same server-owned association proof. An exact historical alias may resolve to its canonical UID, and a bare custom-token UID is accepted only with an exact canonical self-association. Unassociated anonymous/custom credentials, mismatched aliases, missing tokens, and invalid/expired tokens still fail closed. Direct Google/email/provider credentials keep the existing no-extra-read path.
+- Discord account recovery now establishes the canonical self-association before issuing a Firebase custom token. If that association cannot be claimed, no recovered credential is issued.
+- Desktop automatic upload, manual upload, and Discord replay delivery now require a successfully verified Account state, not merely a stored UID and refresh token. Raw `authentication_required` JSON is converted into an actionable Account/reconnect instruction, and the UI explicitly confirms the local replay capture remains safe and retryable.
+- Regression coverage proves exact alias/custom association behavior, Discord callback ordering, unverified-account auto-upload refusal, friendly handling of the reported top-level-string 401 response, and preservation of the local capture.
+- Verification passed the desktop account gate (five files / 50 tests), all 80 desktop files / 638 tests, TypeScript, production builds, Windows NSIS packaging, packaged-ASAR checks, updater size/SHA-512 validation, and an isolated 12-second packaged startup smoke. Website verification passed all 64 runnable files / 426 tests (one file / nine tests skipped), ESLint with zero errors and 15 existing warnings, and the Next production build.
+- Canonical local installer remains `release/RiftLiteBetaInstall.exe`: 203,708,518 bytes, SHA-256 `99C0C06E71C227A11F7987F19B65065472B72FB8D68BA45E98C6268B35387F26`. Blockmap: 190,914 bytes, SHA-256 `196F14E2DEA6D4441C46D0FDA5FB9B3B18A65D3EA52F48396A31F73A86914BC6`. `latest.yml`: 343 bytes, SHA-256 `29B1A84AE11C457DB0C27B998A3407C004ABBB4E339FC63347CF3E64051AB9BE`; its installer size and SHA-512 match exactly.
+- The fix is local only. The website authentication change must be deployed before public Replay V2 accepts these credentials; the rebuilt installer was not published. No Vercel deployment, GitHub operation, updater publish, Discord action, or production-data mutation occurred.
+
+## 2026-07-21 v0.9.10 website and Discord test deployment
+
+- The public Replay V2 archive no longer ends after the default first 48 records. The public API now uses bounded opaque keyset cursors ordered by creation time plus replay ID, returns `pageInfo`, and reads only one batch plus a look-ahead record.
+- The website library appends and deduplicates later pages, preserves loaded cards when a later request fails, offers retry, and resets the cursor on refresh.
+- Full website validation passed 72 files / 476 tests (one file / nine emulator tests skipped), TypeScript, ESLint with zero errors and 14 existing warnings, diff checks, and local and Vercel production builds.
+- Production deployment `dpl_9hGQ3sRgS5g9esMzARMsayyp1kJD` is live on `https://www.riftlite.com`. Live API checks returned two separate 48-record batches with no duplicate IDs. Production Playwright clicked **Load more replays** and rendered 96 cards with zero console errors; the only warning was the existing AdSense warning.
+- Discord diagnostics found that the valid `RB Uk Testing` bot token was paired with an inaccessible stale guild ID. Production and local configuration now point at the bot's actual `Team UK - Riftbound` guild, and all seven guild slash commands registered successfully.
+- Automatic TCGA replay delivery requires no separate Discord worker: the deployed Replay V2 route uses the production bot token, confirms current hub membership, posts only to configured `reports_channel` destinations, and retains deterministic duplicate prevention. No Discord message or replay mutation was generated during deployment verification.
+- Discord OAuth account recovery is deployed but remains intentionally unavailable until `DISCORD_CLIENT_SECRET` is added to Vercel and `https://www.riftlite.com/api/auth/discord/callback` is registered in the Discord Developer Portal. This does not block TCGA replay upload or automatic Discord posting.
+- The v0.9.10 desktop installer remains local and unpublished; no GitHub push, tag, release, or updater publish occurred.
+
+## 2026-07-21 TCGA Ambessa capture follow-up
+
+- The Ambessa match did capture the local battlefield image, but TCGA supplied alternate artwork hash `e41bc5d29f91f652d553bef56e2c84e95010ef1a` without a card name or code. The registry now supports validated `imageHashAliases`, mapping that hash to `VEN-163` / **Risen Altar**, so both match reporting and replay identity resolution recover the battlefield without changing Atlas handling.
+- TCGA opening-hand presentation no longer stops at an opponent-only hidden-hand snapshot. The viewer prefers the capture player's first real hand, carries both hands only for consented combined captures, and uses an honest count-only mulligan fallback when exact cards cannot be proved. The TCGA normalizer can emit the exact perspective mulligan action only when unique IDs, the ordered deck boundary, set delta, and redraw count all agree; otherwise it deliberately remains count-only.
+- TCGA match confirmation is now local-first: SQLite, the product gzip, replay index metadata, and the replay-to-match association are committed before the popup returns. Replay upload/processing/Discord delivery plus Firebase match/hub sync run in the background, with a durable pending manifest retried at startup and every two minutes. Atlas confirmation remains on its established synchronous path.
+- TCGA Discord consent is snapshotted and integrity-bound at capture start, then intersected with completion-time/current active hub membership. Eligible future TCGA replays use the same configured Atlas hub destinations automatically. Current consent is reloaded immediately before every Discord POST and retry, so a revoked hub is never posted to; an uploaded replay remains ready if delivery is skipped or fails. Captures created before this consent evidence existed are not silently auto-posted and require the explicit **Share to Discord** action.
+- The matching website/player changes are live at `https://www.riftlite.com` in production deployment `dpl_5j6GAuEmWiNzKF71SbVvpP7kkusK`.
+- Current validation passed all 90 desktop test files / 788 tests and all 72 runnable website test files / 481 tests; the nine emulator-gated website tests were skipped in the ordinary run.
+- The affected Ambessa replay `rl2_5fd0b45bc42bb42587e4ecb8dccda930` was reprocessed from its checksum-verified private raw artifact. Its canonical artifact now contains 496 events, the exact two-card perspective mulligan at event 46, and no integrity or privacy issues; the old immutable canonical artifact remains available for rollback. No Discord message was sent for this historical capture.
+- Final local Windows installer: `release/RiftLiteBetaInstall.exe`, 197,550,006 bytes, SHA-256 `E6A4DD77434823B92A80A49886719EEB41B46FAEC4097FAF50AA8331941B6EBF`. Packaging, NSIS verification, updater-manifest validation, and the isolated packaged smoke all passed. The installer remains local and unpublished.
+
+## 2026-07-21 TCGA BO1 replay score correction
+
+- The desktop match logger was already authoritative: the newest TCGA loss stored BO1 record `0-1` separately from Riftbound points `5-6`. No desktop schema or runtime change was required.
+- TCGA canonical replay normalization now mirrors Atlas semantics. `game.result.finalScores` retains captured Riftbound points, while `series.result.finalScores` derives `1-0`, `0-1`, or `0-0` solely from the confirmed match-logger Win/Loss/Draw.
+- Discord BO1 replay formatting now resolves the authoritative winner/loser/outcome before any legacy series score. This also prevents already-processed TCGA canonicals with point totals in the old field from reporting those totals again; BO3 behavior is unchanged.
+- Production deployment `dpl_14BUQETRv8oFXuQC5pMejT2AqV6L` is live on `https://www.riftlite.com`. The two existing TCGA canonical replays were atomically reprocessed: the Ambessa win retains points `7-6` with series `1-0`, and Ambessa vs Kennen retains points `5-6` with series `0-1`. Both passed integrity/privacy verification, and their prior immutable artifacts remain available for rollback.
+- The existing Ambessa vs Kennen Discord report was edited in place from `5-6` to `0-1`; no duplicate message was posted.
+- Website validation passed 72 files / 485 tests, with nine emulator-gated tests skipped; ESLint had zero errors and the production Next build passed. No desktop rebuild was needed because the installed v0.9.10 client already emitted the correct authoritative result.
+
+## 2026-07-22 v0.9.11 release build
+
+- The accumulated v0.9.10 release candidate plus the final TCGA owner-relative battlefield correction is promoted as v0.9.11; v0.9.10 remains unpublished.
+- Desktop release validation passed TypeScript, the mandatory 76-test account-sync gate, all 92 test files / 798 tests, Electron and renderer production builds, Windows NSIS packaging, updater metadata checks, regenerated differential blockmap validation, executable/archive identity checks, and the isolated packaged-app smoke test.
+- Windows installer: `release/RiftLiteBetaInstall.exe`, 199,416,522 bytes, SHA-256 `D6FFDC1721CDCFFA635FA00B6DEC8D34BB162EAB6143FC990C019948FD58B415`.
+- Windows blockmap: `release/RiftLiteBetaInstall.exe.blockmap`, 185,053 bytes, SHA-256 `B4E54E3447422FC27832F3221509054F93505B9A9E8F51CA44B540FD763FCCD2`.
+- Windows updater manifest: `release/latest.yml`, 344 bytes, SHA-256 `B476E93F7E1A711969049AEEC7919E51AF14A43A8F89AECEADDBCAA9A8C656A9`.
+- The matching website source passed 72 files / 489 tests, lint with zero errors and 14 existing warnings, and the Next production build. It was pushed to the website release branch after the already-live Vercel deployment.
+- macOS publication uses the hardened native GitHub Actions workflow from the same desktop commit. The workflow builds and verifies x64 and arm64 DMG/ZIP artifacts and publishes them under tag `mac-v0.9.11`; it does not reuse older v0.9.00 artifacts.

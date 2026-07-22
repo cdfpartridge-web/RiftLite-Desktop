@@ -1,6 +1,6 @@
 import { app } from "electron";
 import { copyFile, mkdir, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, renameSync } from "node:fs";
 import { createRequire } from "node:module";
 import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
@@ -12,10 +12,33 @@ import { buildCombinedBo3Match, buildMatchCombinePreview, markOriginalAsCombined
 import type { CaptureEvent, DeckNotebook, ImportSummary, MatchDraft, OverlayDisplayOptions, ReplayRecord, RiftLiteBackupFile, RiftLiteBackupOptions, SavedDeck, UserSettings } from "../../shared/types.js";
 import { sanitizeBackupFile } from "./backupSanitizer.js";
 import { redactCorruptSettingsText, redactSensitiveSettings, sensitiveCredentialPatch, stripLegacyHubSecrets, type SecureCredentialVault } from "./secureCredentialVault.js";
+import {
+  ReplayPayloadStore,
+  replayPayloadFieldsShareIdentity,
+  replayPayloadReference,
+  storedReplayWithReference,
+  withoutReplayPayloadReference,
+  type StoredReplayRecord
+} from "./replayPayloadStore.js";
 
 interface PersistedState {
   settings?: Partial<UserSettings>;
   matches?: MatchDraft[];
+}
+
+interface AtomicDatabaseMutationOptions<T> {
+  invalidateMatches?: boolean;
+  invalidateReplays?: boolean;
+  onCommitted?: (result: T) => void;
+  skipPrewriteBackup?: boolean;
+  operationName?: string;
+}
+
+export interface StorePerformanceEvent {
+  operation: string;
+  durationMs: number;
+  databaseBytes: number;
+  candidateBytes: number;
 }
 
 const require = createRequire(import.meta.url);
@@ -32,6 +55,7 @@ const DEFAULT_SETTINGS: UserSettings = {
   communitySyncEnabled: true,
   firebaseUid: "",
   firebaseRefreshToken: "",
+  firebaseCredentialGeneration: "",
   accountUid: "",
   accountEmail: "",
   accountHandle: "",
@@ -44,6 +68,7 @@ const DEFAULT_SETTINGS: UserSettings = {
   accountCloudSyncLastRestoredAt: "",
   accountCloudSyncDeviceId: "",
   accountCloudSyncDeviceName: "",
+  accountCloudSyncRemoteGenerationId: "",
   accountCloudSyncLastError: "",
   anonymousDiagnosticsEnabled: true,
   anonymousInstallId: "",
@@ -70,6 +95,8 @@ const DEFAULT_SETTINGS: UserSettings = {
     enabled: false,
     webReplayAutoUploadEnabled: false,
     webReplayAutoUploadAccountUid: "",
+    tcgaWebReplayAutoUploadEnabled: false,
+    tcgaWebReplayAutoUploadAccountUid: "",
     webReplayDiscordShareEnabled: false,
     webReplayDiscordShareAccountUid: "",
     webReplayDiscordShareHubIds: [],
@@ -143,6 +170,10 @@ function normalizeRawCaptureSettings(value: unknown, fallback = DEFAULT_SETTINGS
   const webReplayAutoUploadAccountUid = hasWebReplayUploadConsent && typeof raw.webReplayAutoUploadAccountUid === "string"
     ? raw.webReplayAutoUploadAccountUid.trim()
     : "";
+  const hasTcgaWebReplayUploadConsent = typeof raw.tcgaWebReplayAutoUploadEnabled === "boolean";
+  const tcgaWebReplayAutoUploadAccountUid = hasTcgaWebReplayUploadConsent && typeof raw.tcgaWebReplayAutoUploadAccountUid === "string"
+    ? raw.tcgaWebReplayAutoUploadAccountUid.trim()
+    : "";
   const hasDiscordShareConsent = typeof raw.webReplayDiscordShareEnabled === "boolean";
   const webReplayDiscordShareAccountUid = hasDiscordShareConsent && typeof raw.webReplayDiscordShareAccountUid === "string"
     ? raw.webReplayDiscordShareAccountUid.trim()
@@ -161,6 +192,8 @@ function normalizeRawCaptureSettings(value: unknown, fallback = DEFAULT_SETTINGS
     enabled: hasSeparateUploadConsent && raw.enabled === true,
     webReplayAutoUploadEnabled: hasWebReplayUploadConsent && raw.webReplayAutoUploadEnabled === true,
     webReplayAutoUploadAccountUid,
+    tcgaWebReplayAutoUploadEnabled: hasTcgaWebReplayUploadConsent && raw.tcgaWebReplayAutoUploadEnabled === true,
+    tcgaWebReplayAutoUploadAccountUid,
     webReplayDiscordShareEnabled: hasDiscordShareConsent && raw.webReplayDiscordShareEnabled === true,
     webReplayDiscordShareAccountUid,
     webReplayDiscordShareHubIds,
@@ -243,7 +276,13 @@ export class RiftLiteStore {
   private replaysLoadPromise: Promise<ReplayRecord[]> | null = null;
   private lastDatabaseBackupAt = 0;
   private persistQueue: Promise<void> = Promise.resolve();
+  private databaseOperationQueue: Promise<void> = Promise.resolve();
+  private databaseMutationVersion = 0;
+  private restoreInProgress = false;
+  private settingsMutationQueue: Promise<void> = Promise.resolve();
   private legacyJsonPendingFinalization = false;
+  private readonly replayPayloadStore: ReplayPayloadStore;
+  private performanceReporter: ((event: StorePerformanceEvent) => void) | null = null;
 
   constructor(
     dbPath = join(app.getPath("userData"), "riftlite-v06.sqlite"),
@@ -253,6 +292,7 @@ export class RiftLiteStore {
   ) {
     this.dbPath = dbPath;
     this.legacyJsonPath = legacyJsonPath;
+    this.replayPayloadStore = new ReplayPayloadStore(join(dirname(dbPath), "replay-payloads"));
   }
 
   async load(): Promise<void> {
@@ -341,7 +381,61 @@ export class RiftLiteStore {
   }
 
   async saveSettings(patch: Partial<UserSettings>): Promise<UserSettings> {
-    const current = await this.getSettings();
+    return this.enqueueSettingsMutation(() => patch);
+  }
+
+  setPerformanceReporter(reporter: ((event: StorePerformanceEvent) => void) | null): void {
+    this.performanceReporter = reporter;
+  }
+
+  async updateSettings(
+    mutation: (current: Readonly<UserSettings>) => Partial<UserSettings>
+  ): Promise<UserSettings> {
+    return this.enqueueSettingsMutation(mutation);
+  }
+
+  private enqueueSettingsMutation(
+    mutation: (current: Readonly<UserSettings>) => Partial<UserSettings>
+  ): Promise<UserSettings> {
+    const operation = this.settingsMutationQueue.then(() => this.enqueueDatabaseOperation(async () => {
+      const current = await this.getSettings();
+      return this.withDatabaseRepair("save-settings", () => (
+        this.saveSettingsUnlocked(mutation(current), current)
+      ));
+    }));
+    this.settingsMutationQueue = operation.then(
+      () => undefined,
+      () => undefined
+    );
+    return operation;
+  }
+
+  private async saveSettingsUnlocked(
+    patch: Partial<UserSettings>,
+    current: UserSettings
+  ): Promise<UserSettings> {
+    const protectedSettings = await this.prepareSettingsForSave(patch, current);
+    return this.runAtomicDatabaseMutation(
+      async (db) => {
+        db.run("INSERT OR REPLACE INTO settings (key, value_json, updated_at) VALUES (?, ?, ?)", [
+          "settings",
+          JSON.stringify(protectedSettings.persistedSettings),
+          Date.now()
+        ]);
+        return protectedSettings.runtimeSettings;
+      },
+      {
+        onCommitted: (runtimeSettings) => {
+          this.settingsCache = runtimeSettings;
+        }
+      }
+    );
+  }
+
+  private async prepareSettingsForSave(
+    patch: Partial<UserSettings>,
+    current: UserSettings
+  ): Promise<{ runtimeSettings: UserSettings; persistedSettings: UserSettings }> {
     const replayVideoMode = Object.prototype.hasOwnProperty.call(patch, "replayVideoMode")
       ? normalizeReplayVideoMode((patch as { replayVideoMode?: unknown }).replayVideoMode)
       : current.replayVideoMode;
@@ -351,6 +445,9 @@ export class RiftLiteStore {
     const next: UserSettings = {
       ...current,
       ...patch,
+      // The secure credential vault owns this transaction marker. Renderer or
+      // restore patches cannot manufacture a credential/identity pairing.
+      firebaseCredentialGeneration: current.firebaseCredentialGeneration,
       replayVideoMode,
       replayFramePreset,
       replayCustomFlagTypes: Object.prototype.hasOwnProperty.call(patch, "replayCustomFlagTypes")
@@ -366,21 +463,12 @@ export class RiftLiteStore {
       activeTeams: patch.activeTeams ? [...patch.activeTeams] : current.activeTeams
     };
     const sanitizedNext = stripLegacyHubSecrets(next);
-    const protectedSettings = this.credentialVault
+    return this.credentialVault
       ? await this.credentialVault.protectForSave(sanitizedNext, sensitiveCredentialPatch(patch))
       : {
           runtimeSettings: sanitizedNext,
           persistedSettings: sanitizedNext
         };
-    const db = await this.database();
-    db.run("INSERT OR REPLACE INTO settings (key, value_json, updated_at) VALUES (?, ?, ?)", [
-      "settings",
-      JSON.stringify(protectedSettings.persistedSettings),
-      Date.now()
-    ]);
-    this.settingsCache = protectedSettings.runtimeSettings;
-    await this.persist();
-    return protectedSettings.runtimeSettings;
   }
 
   async getMatches(): Promise<MatchDraft[]> {
@@ -394,20 +482,17 @@ export class RiftLiteStore {
   }
 
   async saveMatch(draft: MatchDraft): Promise<MatchDraft> {
-    const db = await this.database();
     const now = new Date().toISOString();
     const next = compactMatchForStorage(normalizeStoredMatch({ ...draft, updatedAt: now }));
-    await this.withDatabaseRepair("save-match", async () => {
+    return this.enqueueAtomicDatabaseMutation("save-match", (db) => {
       db.run(
         `INSERT OR REPLACE INTO matches
          (id, platform, status, result, captured_at, updated_at, data_json)
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
         [next.id, next.platform, next.status, next.result, next.capturedAt, next.updatedAt, JSON.stringify(next)]
       );
-      await this.persist();
-    });
-    this.invalidateMatchCache();
-    return next;
+      return next;
+    }, { invalidateMatches: true });
   }
 
   async previewCombinedMatches(matchIds: string[]): Promise<MatchCombinePreview> {
@@ -417,19 +502,16 @@ export class RiftLiteStore {
 
   async combineMatches(payload: MatchCombineSavePayload): Promise<MatchDraft> {
     const orderedMatchIds = payload.orderedMatchIds.filter(Boolean).slice(0, 3);
-    const matches = await this.getMatchesByIds(orderedMatchIds);
-    const preview = buildMatchCombinePreview(matches);
-    if (!preview.canSave) {
-      const error = preview.warnings.find((warning) => warning.severity === "error")?.message ?? "Those matches cannot be combined.";
-      throw new Error(error);
-    }
-
-    const db = await this.database();
-    const now = new Date().toISOString();
-    const combined = compactMatchForStorage(normalizeStoredMatch(buildCombinedBo3Match(matches, randomUUID(), now)));
-    const originals = matches.map((match) => compactMatchForStorage(normalizeStoredMatch(markOriginalAsCombined(match, combined.id, now))));
-
-    await this.withDatabaseRepair("combine-matches", async () => {
+    return this.enqueueAtomicDatabaseMutation("combine-matches", (db) => {
+      const matches = this.getMatchesByIdsFromDatabase(db, orderedMatchIds);
+      const preview = buildMatchCombinePreview(matches);
+      if (!preview.canSave) {
+        const error = preview.warnings.find((warning) => warning.severity === "error")?.message ?? "Those matches cannot be combined.";
+        throw new Error(error);
+      }
+      const now = new Date().toISOString();
+      const combined = compactMatchForStorage(normalizeStoredMatch(buildCombinedBo3Match(matches, randomUUID(), now)));
+      const originals = matches.map((match) => compactMatchForStorage(normalizeStoredMatch(markOriginalAsCombined(match, combined.id, now))));
       db.run(
         `INSERT OR REPLACE INTO matches
          (id, platform, status, result, captured_at, updated_at, data_json)
@@ -442,26 +524,31 @@ export class RiftLiteStore {
           [original.updatedAt, JSON.stringify(original), original.id]
         );
       }
-      await this.persist();
-    });
-    this.invalidateMatchCache();
-    return combined;
+      return combined;
+    }, { invalidateMatches: true });
   }
 
-  async undoCombinedMatch(combinedMatchId: string): Promise<MatchDraft[]> {
-    const db = await this.database();
-    const row = db.exec("SELECT data_json FROM matches WHERE id=?", [combinedMatchId])[0]?.values[0]?.[0];
-    if (typeof row !== "string") {
-      throw new Error("Combined match was not found.");
-    }
-    const combined = normalizeStoredMatch(JSON.parse(row) as MatchDraft);
-    if (!combined.manualRepair || !combined.combinedFromMatchIds?.length) {
-      throw new Error("That match is not a combined Bo3 repair.");
-    }
-
-    const now = new Date().toISOString();
-    const restored: MatchDraft[] = [];
-    await this.withDatabaseRepair("undo-combined-match", async () => {
+  async undoCombinedMatch(
+    combinedMatchId: string,
+    guard: (combined: Readonly<MatchDraft>) => boolean = () => true
+  ): Promise<MatchDraft[]> {
+    return this.enqueueAtomicDatabaseMutation("undo-combined-match", (db) => {
+      const row = db.exec("SELECT data_json FROM matches WHERE id=?", [combinedMatchId])[0]?.values[0]?.[0];
+      if (typeof row !== "string") {
+        throw new Error("Combined match was not found.");
+      }
+      const combined = normalizeStoredMatch(JSON.parse(row) as MatchDraft);
+      if (combined.deletedAt) {
+        throw new Error("Combined match is no longer active.");
+      }
+      if (!combined.manualRepair || !combined.combinedFromMatchIds?.length) {
+        throw new Error("That match is not a combined Bo3 repair.");
+      }
+      if (!guard(combined)) {
+        throw new Error("The combined match or linked account changed while undo was running. Nothing was changed locally.");
+      }
+      const now = new Date().toISOString();
+      const restored: MatchDraft[] = [];
       const deletedCombined = normalizeStoredMatch({ ...combined, deletedAt: now, updatedAt: now });
       db.run(
         "UPDATE matches SET updated_at=?, data_json=? WHERE id=?",
@@ -477,10 +564,8 @@ export class RiftLiteStore {
         db.run("UPDATE matches SET updated_at=?, data_json=? WHERE id=?", [next.updatedAt, JSON.stringify(next), next.id]);
         restored.push(next);
       }
-      await this.persist();
-    });
-    this.invalidateMatchCache();
-    return restored;
+      return restored;
+    }, { invalidateMatches: true });
   }
 
   private async getMatchesByIds(matchIds: string[]): Promise<MatchDraft[]> {
@@ -489,15 +574,16 @@ export class RiftLiteStore {
       const matches = new Map(cached.filter((match) => !match.deletedAt).map((match) => [match.id, match]));
       return matchIds.map((id) => matches.get(id)).filter((match): match is MatchDraft => Boolean(match));
     }
-    const db = await this.database();
+    return this.getMatchesByIdsFromDatabase(await this.database(), matchIds);
+  }
+
+  private getMatchesByIdsFromDatabase(db: Database, matchIds: string[]): MatchDraft[] {
     const matches = new Map<string, MatchDraft>();
     for (const id of new Set(matchIds.filter(Boolean))) {
       const row = db.exec("SELECT data_json FROM matches WHERE id=?", [id])[0]?.values[0]?.[0];
-      if (typeof row === "string") {
-        const match = normalizeStoredMatch(JSON.parse(row) as MatchDraft);
-        if (!match.deletedAt) {
-          matches.set(id, match);
-        }
+      const match = this.parseStoredMatch(row);
+      if (match && !match.deletedAt) {
+        matches.set(id, match);
       }
     }
     return matchIds.map((id) => matches.get(id)).filter((match): match is MatchDraft => Boolean(match));
@@ -532,41 +618,46 @@ export class RiftLiteStore {
   }
 
   async deleteMatch(id: string): Promise<void> {
-    const db = await this.database();
-    const row = db.exec("SELECT data_json FROM matches WHERE id=?", [id])[0]?.values[0]?.[0];
-    if (typeof row === "string") {
+    await this.enqueueAtomicDatabaseMutation("delete-match", (db) => {
+      const row = db.exec("SELECT data_json FROM matches WHERE id=?", [id])[0]?.values[0]?.[0];
+      if (typeof row !== "string") {
+        return;
+      }
       const now = new Date().toISOString();
       const match = normalizeStoredMatch({ ...JSON.parse(row) as MatchDraft, deletedAt: now, updatedAt: now });
       db.run("UPDATE matches SET updated_at=?, data_json=? WHERE id=?", [match.updatedAt, JSON.stringify(match), id]);
-      await this.deleteReplayByMatch(id, now);
-      this.invalidateMatchCache();
-    }
-    await this.persist();
+      this.markReplaysDeletedByMatchInDatabase(db, id, now);
+    }, { invalidateMatches: true, invalidateReplays: true });
   }
 
   async restoreMatch(id: string): Promise<MatchDraft | null> {
-    const db = await this.database();
-    const row = db.exec("SELECT data_json FROM matches WHERE id=?", [id])[0]?.values[0]?.[0];
-    if (typeof row !== "string") {
-      return null;
-    }
-    const now = new Date().toISOString();
-    const match = normalizeStoredMatch({ ...JSON.parse(row) as MatchDraft, deletedAt: undefined, updatedAt: now });
-    delete match.deletedAt;
-    db.run("UPDATE matches SET updated_at=?, data_json=? WHERE id=?", [match.updatedAt, JSON.stringify(match), id]);
-    await this.restoreReplayByMatch(id);
-    await this.persist();
-    this.invalidateMatchCache();
-    return match;
+    return this.enqueueAtomicDatabaseMutation("restore-match", (db) => {
+      const row = db.exec("SELECT data_json FROM matches WHERE id=?", [id])[0]?.values[0]?.[0];
+      if (typeof row !== "string") {
+        return null;
+      }
+      const now = new Date().toISOString();
+      const match = normalizeStoredMatch({ ...JSON.parse(row) as MatchDraft, deletedAt: undefined, updatedAt: now });
+      delete match.deletedAt;
+      db.run("UPDATE matches SET updated_at=?, data_json=? WHERE id=?", [match.updatedAt, JSON.stringify(match), id]);
+      this.restoreReplaysByMatchInDatabase(db, id);
+      return match;
+    }, { invalidateMatches: true, invalidateReplays: true });
   }
 
   async purgeMatch(id: string): Promise<void> {
-    const db = await this.database();
-    db.run("DELETE FROM matches WHERE id=?", [id]);
-    db.run("DELETE FROM replays WHERE match_id=?", [id]);
-    await this.persist();
-    this.invalidateMatchCache();
-    this.invalidateReplayCache();
+    await this.enqueueAtomicDatabaseMutation("purge-match", (db) => {
+      const replayIds = db.exec("SELECT id FROM replays WHERE match_id=?", [id])[0]?.values ?? [];
+      const purgedAt = new Date().toISOString();
+      for (const row of replayIds) {
+        db.run(
+          "INSERT OR REPLACE INTO replay_purge_tombstones (replay_id, purged_at) VALUES (?, ?)",
+          [String(row[0]), purgedAt]
+        );
+      }
+      db.run("DELETE FROM matches WHERE id=?", [id]);
+      db.run("DELETE FROM replays WHERE match_id=?", [id]);
+    }, { invalidateMatches: true, invalidateReplays: true });
   }
 
   async getSavedDecks(): Promise<SavedDeck[]> {
@@ -581,7 +672,10 @@ export class RiftLiteStore {
   }
 
   async getSavedDeck(id: string): Promise<SavedDeck | null> {
-    const db = await this.database();
+    return this.readSavedDeckFromDatabase(await this.database(), id);
+  }
+
+  private readSavedDeckFromDatabase(db: Database, id: string): SavedDeck | null {
     const result = db.exec(
       `SELECT id, source_url, source_key, title, legend, snapshot_json,
               last_imported_at, last_refresh_status, last_refresh_error
@@ -598,52 +692,59 @@ export class RiftLiteStore {
     if (!key) {
       return null;
     }
-    const db = await this.database();
+    return this.readSavedDeckBySourceKeyFromDatabase(await this.database(), key);
+  }
+
+  private readSavedDeckBySourceKeyFromDatabase(db: Database, sourceKey: string): SavedDeck | null {
     const result = db.exec(
       `SELECT id, source_url, source_key, title, legend, snapshot_json,
               last_imported_at, last_refresh_status, last_refresh_error
        FROM saved_decks
        WHERE source_key=?`,
-      [key]
+      [sourceKey]
     );
     const row = result[0]?.values[0];
     return row ? savedDeckFromRow(row) : null;
   }
 
   async upsertSavedDeck(deck: Partial<SavedDeck> & Pick<SavedDeck, "title" | "legend" | "snapshotJson">): Promise<SavedDeck> {
-    const db = await this.database();
-    const now = new Date().toISOString();
-    const existing = deck.sourceKey ? await this.getSavedDeckBySourceKey(deck.sourceKey) : deck.id ? await this.getSavedDeck(deck.id) : null;
-    const next: SavedDeck = {
-      id: existing?.id || deck.id || randomUUID(),
-      sourceUrl: deck.sourceUrl ?? existing?.sourceUrl ?? "",
-      sourceKey: deck.sourceKey ?? existing?.sourceKey ?? "",
-      title: deck.title.trim() || existing?.title || "Untitled deck",
-      legend: normalizeLegendName(deck.legend || existing?.legend || ""),
-      snapshotJson: deck.snapshotJson || existing?.snapshotJson || "",
-      lastImportedAt: now,
-      lastRefreshStatus: deck.lastRefreshStatus ?? "ok",
-      lastRefreshError: deck.lastRefreshError ?? ""
-    };
-    db.run(
-      `INSERT OR REPLACE INTO saved_decks
-       (id, source_url, source_key, title, legend, snapshot_json, last_imported_at, last_refresh_status, last_refresh_error)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        next.id,
-        next.sourceUrl,
-        next.sourceKey,
-        next.title,
-        next.legend,
-        next.snapshotJson,
-        next.lastImportedAt,
-        next.lastRefreshStatus,
-        next.lastRefreshError
-      ]
-    );
-    this.ensureDeckNotebookCurrentVersion(db, next);
-    await this.persist();
-    return next;
+    return this.enqueueAtomicDatabaseMutation("upsert-saved-deck", (db) => {
+      const now = new Date().toISOString();
+      const existing = deck.sourceKey
+        ? this.readSavedDeckBySourceKeyFromDatabase(db, deck.sourceKey.trim())
+        : deck.id
+          ? this.readSavedDeckFromDatabase(db, deck.id)
+          : null;
+      const next: SavedDeck = {
+        id: existing?.id || deck.id || randomUUID(),
+        sourceUrl: deck.sourceUrl ?? existing?.sourceUrl ?? "",
+        sourceKey: deck.sourceKey ?? existing?.sourceKey ?? "",
+        title: deck.title.trim() || existing?.title || "Untitled deck",
+        legend: normalizeLegendName(deck.legend || existing?.legend || ""),
+        snapshotJson: deck.snapshotJson || existing?.snapshotJson || "",
+        lastImportedAt: now,
+        lastRefreshStatus: deck.lastRefreshStatus ?? "ok",
+        lastRefreshError: deck.lastRefreshError ?? ""
+      };
+      db.run(
+        `INSERT OR REPLACE INTO saved_decks
+         (id, source_url, source_key, title, legend, snapshot_json, last_imported_at, last_refresh_status, last_refresh_error)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          next.id,
+          next.sourceUrl,
+          next.sourceKey,
+          next.title,
+          next.legend,
+          next.snapshotJson,
+          next.lastImportedAt,
+          next.lastRefreshStatus,
+          next.lastRefreshError
+        ]
+      );
+      this.ensureDeckNotebookCurrentVersion(db, next);
+      return next;
+    });
   }
 
   async renameSavedDeck(id: string, title: string): Promise<SavedDeck> {
@@ -651,68 +752,91 @@ export class RiftLiteStore {
     if (!cleanTitle) {
       throw new Error("Deck name is required.");
     }
-    const db = await this.database();
-    const existing = await this.getSavedDeck(id);
-    if (!existing) {
-      throw new Error("Deck not found.");
-    }
-    const next: SavedDeck = { ...existing, title: cleanTitle };
-    db.run("UPDATE saved_decks SET title=? WHERE id=?", [next.title, next.id]);
+    return this.enqueueAtomicDatabaseMutation("rename-saved-deck", (db) => {
+      const existing = this.readSavedDeckFromDatabase(db, id);
+      if (!existing) {
+        throw new Error("Deck not found.");
+      }
+      const next: SavedDeck = { ...existing, title: cleanTitle };
+      db.run("UPDATE saved_decks SET title=? WHERE id=?", [next.title, next.id]);
 
-    const notebook = this.readDeckNotebook(db, next.id);
-    const currentHash = deckSnapshotHash(next.snapshotJson);
-    if (currentHash && notebook.versions.some((version) => version.snapshotHash === currentHash && version.title !== cleanTitle)) {
-      this.writeDeckNotebook(db, next.id, {
-        ...notebook,
-        versions: notebook.versions.map((version) => (
-          version.snapshotHash === currentHash ? { ...version, title: cleanTitle } : version
-        )),
-        updatedAt: new Date().toISOString()
-      });
-    }
-
-    await this.persist();
-    return next;
+      const notebook = this.readDeckNotebook(db, next.id);
+      const currentHash = deckSnapshotHash(next.snapshotJson);
+      if (currentHash && notebook.versions.some((version) => version.snapshotHash === currentHash && version.title !== cleanTitle)) {
+        this.writeDeckNotebook(db, next.id, {
+          ...notebook,
+          versions: notebook.versions.map((version) => (
+            version.snapshotHash === currentHash ? { ...version, title: cleanTitle } : version
+          )),
+          updatedAt: new Date().toISOString()
+        });
+      }
+      return next;
+    });
   }
 
   async deleteSavedDeck(id: string): Promise<void> {
-    const db = await this.database();
-    db.run("DELETE FROM saved_decks WHERE id=?", [id]);
-    db.run("DELETE FROM deck_notebooks WHERE deck_id=?", [id]);
-    const settings = await this.getSettings();
-    if (settings.activeDeckId === id) {
-      await this.saveSettings({ activeDeckId: "" });
-      return;
-    }
-    await this.persist();
+    await this.enqueueAtomicDatabaseMutation("delete-saved-deck", async (db) => {
+      // Hydrate device-bound credentials before deriving the replacement
+      // runtime cache. The SQLite row is intentionally redacted by the secure
+      // vault and must never become the live settings object on a cold cache.
+      const runtimeSettings = await this.getSettings();
+      db.run("DELETE FROM saved_decks WHERE id=?", [id]);
+      db.run("DELETE FROM deck_notebooks WHERE deck_id=?", [id]);
+      const raw = db.exec("SELECT value_json FROM settings WHERE key='settings'")[0]?.values[0]?.[0];
+      let persistedSettings: Partial<UserSettings> = {};
+      if (typeof raw === "string") {
+        try {
+          persistedSettings = JSON.parse(raw) as Partial<UserSettings>;
+        } catch {
+          persistedSettings = {};
+        }
+      }
+      const activeDeckId = runtimeSettings.activeDeckId;
+      if (activeDeckId !== id) {
+        return null;
+      }
+      db.run("INSERT OR REPLACE INTO settings (key, value_json, updated_at) VALUES (?, ?, ?)", [
+        "settings",
+        JSON.stringify({ ...persistedSettings, activeDeckId: "" }),
+        Date.now()
+      ]);
+      return { ...runtimeSettings, activeDeckId: "" };
+    }, {
+      onCommitted: (nextSettings) => {
+        if (nextSettings) {
+          this.settingsCache = nextSettings;
+        }
+      }
+    });
   }
 
   async getDeckNotebook(deckId: string): Promise<DeckNotebook> {
-    const db = await this.database();
-    const deck = await this.getSavedDeck(deckId);
-    const notebook = this.readDeckNotebook(db, deckId);
-    if (!deck) {
-      return notebook;
-    }
-    const next = deckNotebookWithCurrentVersion(notebook, deck);
-    if (JSON.stringify(next) !== JSON.stringify(notebook)) {
-      this.writeDeckNotebook(db, deckId, next);
-      await this.persist();
-    }
-    return next;
+    return this.enqueueAtomicDatabaseMutation("get-deck-notebook", (db) => {
+      const deck = this.readSavedDeckFromDatabase(db, deckId);
+      const notebook = this.readDeckNotebook(db, deckId);
+      if (!deck) {
+        return notebook;
+      }
+      const next = deckNotebookWithCurrentVersion(notebook, deck);
+      if (JSON.stringify(next) !== JSON.stringify(notebook)) {
+        this.writeDeckNotebook(db, deckId, next);
+      }
+      return next;
+    });
   }
 
   async saveDeckNotebook(deckId: string, notebook: DeckNotebook): Promise<DeckNotebook> {
-    const db = await this.database();
-    const deck = await this.getSavedDeck(deckId);
-    let next = normalizeDeckNotebook(deckId, notebook);
-    if (deck) {
-      next = sanitizeDeckNotebookForDeck(deckNotebookWithCurrentVersion(next, deck), deck);
-    }
-    next = { ...next, updatedAt: new Date().toISOString() };
-    this.writeDeckNotebook(db, deckId, next);
-    await this.persist();
-    return next;
+    return this.enqueueAtomicDatabaseMutation("save-deck-notebook", (db) => {
+      const deck = this.readSavedDeckFromDatabase(db, deckId);
+      let next = normalizeDeckNotebook(deckId, notebook);
+      if (deck) {
+        next = sanitizeDeckNotebookForDeck(deckNotebookWithCurrentVersion(next, deck), deck);
+      }
+      next = { ...next, updatedAt: new Date().toISOString() };
+      this.writeDeckNotebook(db, deckId, next);
+      return next;
+    });
   }
 
   async getDeckNotebooks(): Promise<DeckNotebook[]> {
@@ -737,35 +861,232 @@ export class RiftLiteStore {
   }
 
   async saveReplay(replay: ReplayRecord): Promise<ReplayRecord> {
-    const db = await this.database();
     const next = compactReplayForStorage(replay);
-    await this.withDatabaseRepair("save-replay", async () => {
+    const prepared = await this.replayPayloadStore.prepare(next);
+    return this.enqueueAtomicDatabaseMutation("save-replay", (db) => {
       db.run(
         `INSERT OR REPLACE INTO replays
          (id, match_id, platform, captured_at, data_json)
          VALUES (?, ?, ?, ?, ?)`,
-        [next.id, next.matchId, next.platform, next.capturedAt, JSON.stringify(next)]
+        [next.id, next.matchId, next.platform, next.capturedAt, JSON.stringify(prepared.stored)]
       );
-      this.invalidateReplayCache();
-      await this.persist();
-    });
-    return next;
+      return next;
+    }, { invalidateReplays: true });
+  }
+
+  /** Saves sync state only while the latest persisted match is still active. */
+  async saveMatchIf(draft: MatchDraft, guard: () => boolean): Promise<MatchDraft | null> {
+    return this.enqueueAtomicDatabaseMutation("save-match-if-current", (db) => {
+      const row = db.exec("SELECT data_json FROM matches WHERE id=?", [draft.id])[0]?.values[0]?.[0];
+      const current = this.parseStoredMatch(row);
+      if (!current || current.deletedAt) {
+        return null;
+      }
+      const requestedHubs = draft.sync?.hubs ?? {};
+      const requestedTeams = draft.sync?.teams ?? {};
+      const next = compactMatchForStorage(normalizeStoredMatch({
+        ...current,
+        updatedAt: new Date().toISOString(),
+        sync: {
+          community: current.sync.community === "disabled"
+            ? "disabled"
+            : draft.sync?.community ?? current.sync.community,
+          hubs: Object.fromEntries(Object.entries(current.sync.hubs).map(([hubId, state]) => [
+            hubId,
+            Object.prototype.hasOwnProperty.call(requestedHubs, hubId) ? requestedHubs[hubId] : state
+          ])),
+          teams: Object.fromEntries(Object.entries(current.sync.teams ?? {}).map(([teamId, state]) => [
+            teamId,
+            Object.prototype.hasOwnProperty.call(requestedTeams, teamId) ? requestedTeams[teamId] : state
+          ]))
+        }
+      }));
+      if (!guard()) {
+        return null;
+      }
+      db.run(
+        `UPDATE matches
+         SET platform=?, status=?, result=?, captured_at=?, updated_at=?, data_json=?
+         WHERE id=?`,
+        [next.platform, next.status, next.result, next.capturedAt, next.updatedAt, JSON.stringify(next), next.id]
+      );
+      return next;
+    }, { invalidateMatches: true });
+  }
+
+  /**
+   * Atomically records the remote replay identity without replacing newer
+   * match edits or sync state. The account/replay checks are supplied by the
+   * caller and are evaluated in the same serialized database mutation as the
+   * active-match check.
+   */
+  async attachWebReplayToActiveMatch(
+    matchId: string,
+    webReplayId: string,
+    accountUid: string,
+    localReplayId: string,
+    guard: () => boolean
+  ): Promise<MatchDraft | null> {
+    return this.enqueueAtomicDatabaseMutation("attach-web-replay-to-active-match", (db) => {
+      const row = db.exec("SELECT data_json FROM matches WHERE id=?", [matchId])[0]?.values[0]?.[0];
+      const current = this.parseStoredMatch(row);
+      if (!current || current.deletedAt || !guard()) {
+        return null;
+      }
+      const currentReplayId = current.webReplayId?.trim() ?? "";
+      const currentAccountUid = current.webReplayAccountUid?.trim() ?? "";
+      if (
+        currentReplayId &&
+        (currentReplayId !== webReplayId || (currentAccountUid && currentAccountUid !== accountUid))
+      ) {
+        return null;
+      }
+      const next = compactMatchForStorage(normalizeStoredMatch({
+        ...current,
+        webReplayId,
+        webReplayAccountUid: accountUid,
+        webReplayLocalReplayId: localReplayId || current.webReplayLocalReplayId || undefined
+      }));
+      db.run("UPDATE matches SET data_json=? WHERE id=?", [JSON.stringify(next), matchId]);
+      return next;
+    }, { invalidateMatches: true });
+  }
+
+  /**
+   * Saves a newly-finalized replay only while its parent match still exists and
+   * has not been deleted. The match check and replay insert intentionally have
+   * no await between them: sql.js executes both against the same in-memory
+   * database turn, so a concurrent delete/purge cannot slip into the gap and
+   * leave an orphaned replay behind.
+   */
+  async saveReplayIfMatchActive(replay: ReplayRecord): Promise<ReplayRecord | null> {
+    const next = compactReplayForStorage(replay);
+    const prepared = await this.replayPayloadStore.prepare(next);
+    return this.enqueueAtomicDatabaseMutation("save-replay-if-match-active", (db) => {
+      const purged = db.exec("SELECT 1 FROM replay_purge_tombstones WHERE replay_id=?", [next.id])[0]?.values[0]?.[0];
+      if (purged) {
+        return null;
+      }
+      const existingRow = db.exec("SELECT data_json FROM replays WHERE id=?", [next.id])[0]?.values[0]?.[0];
+      const existing = this.parseStoredReplayMetadata(existingRow);
+      if (existing?.deletedAt) {
+        return null;
+      }
+      const matchRow = db.exec("SELECT data_json FROM matches WHERE id=?", [next.matchId])[0]?.values[0]?.[0];
+      const match = this.parseStoredMatch(matchRow);
+      if (!match || match.deletedAt) {
+        return null;
+      }
+      db.run(
+        `INSERT OR REPLACE INTO replays
+         (id, match_id, platform, captured_at, data_json)
+         VALUES (?, ?, ?, ?, ?)`,
+        [next.id, next.matchId, next.platform, next.capturedAt, JSON.stringify(prepared.stored)]
+      );
+      return next;
+    }, { invalidateReplays: true });
+  }
+
+  /**
+   * Returns whether a persisted raw-capture manifest still belongs to live
+   * local data. A named replay is authoritative: deleting or purging that
+   * replay must not fall back to its still-live match and restart an upload.
+   * A missing replay may fall back to an active match for crash recovery when
+   * the manifest was written before the replay row was finalized.
+   */
+  async hasActiveRawCaptureParent(replayId?: string, matchId?: string): Promise<boolean> {
+    const db = await this.database();
+    const normalizedReplayId = replayId?.trim() ?? "";
+    const normalizedMatchId = matchId?.trim() ?? "";
+    if (normalizedReplayId) {
+      const purged = db.exec(
+        "SELECT 1 FROM replay_purge_tombstones WHERE replay_id=?",
+        [normalizedReplayId]
+      )[0]?.values[0]?.[0];
+      if (purged) {
+        return false;
+      }
+      const replayRow = db.exec(
+        "SELECT data_json FROM replays WHERE id=?",
+        [normalizedReplayId]
+      )[0]?.values[0]?.[0];
+      const replay = this.parseStoredReplayMetadata(replayRow);
+      if (replay) {
+        if (replay.deletedAt || (normalizedMatchId && replay.matchId !== normalizedMatchId)) {
+          return false;
+        }
+        const parentRow = db.exec(
+          "SELECT data_json FROM matches WHERE id=?",
+          [replay.matchId]
+        )[0]?.values[0]?.[0];
+        const parent = this.parseStoredMatch(parentRow);
+        return Boolean(parent && !parent.deletedAt);
+      }
+    }
+    if (!normalizedMatchId) {
+      return false;
+    }
+    const matchRow = db.exec(
+      "SELECT data_json FROM matches WHERE id=?",
+      [normalizedMatchId]
+    )[0]?.values[0]?.[0];
+    const match = this.parseStoredMatch(matchRow);
+    return Boolean(match && !match.deletedAt);
+  }
+
+  /** Atomically applies delayed replay metadata only while the replay is live. */
+  async updateActiveReplay(
+    id: string,
+    update: (current: ReplayRecord) => ReplayRecord
+  ): Promise<ReplayRecord | null> {
+    return this.enqueueAtomicDatabaseMutation("update-active-replay", async (db) => {
+      const purged = db.exec("SELECT 1 FROM replay_purge_tombstones WHERE replay_id=?", [id])[0]?.values[0]?.[0];
+      if (purged) {
+        return null;
+      }
+      const row = db.exec("SELECT data_json FROM replays WHERE id=?", [id])[0]?.values[0]?.[0];
+      const stored = this.parseStoredReplayMetadata(row);
+      if (!stored || stored.deletedAt) {
+        return null;
+      }
+      const current = await this.hydrateStoredReplay(stored);
+      const parentRow = db.exec(
+        "SELECT data_json FROM matches WHERE id=?",
+        [current.matchId]
+      )[0]?.values[0]?.[0];
+      const parent = this.parseStoredMatch(parentRow);
+      if (!parent || parent.deletedAt) {
+        return null;
+      }
+      const candidate = update(current);
+      const payloadUnchanged = replayPayloadFieldsShareIdentity(current, candidate);
+      const next = compactReplayForStorage({
+        ...candidate,
+        id: current.id,
+        matchId: current.matchId,
+        platform: current.platform,
+        capturedAt: current.capturedAt,
+        deletedAt: undefined
+      });
+      const persisted = await this.prepareStoredReplayUpdate(stored, next, payloadUnchanged);
+      db.run("UPDATE replays SET data_json=? WHERE id=?", [JSON.stringify(persisted), id]);
+      return next;
+    }, { invalidateReplays: true });
   }
 
   async updateReplay(
     id: string,
     update: (current: ReplayRecord) => ReplayRecord
   ): Promise<ReplayRecord | null> {
-    const db = await this.database();
-    let saved: ReplayRecord | null = null;
-    await this.withDatabaseRepair("update-replay", async () => {
+    return this.enqueueAtomicDatabaseMutation("update-replay", async (db) => {
       const row = db.exec("SELECT data_json FROM replays WHERE id=?", [id])[0]?.values[0]?.[0];
-      const current = this.parseStoredReplay(row);
-      if (!current) {
-        saved = null;
-        return;
+      const stored = this.parseStoredReplayMetadata(row);
+      if (!stored) {
+        return null;
       }
+      const current = await this.hydrateStoredReplay(stored);
       const candidate = update(current);
+      const payloadUnchanged = replayPayloadFieldsShareIdentity(current, candidate);
       const next = compactReplayForStorage({
         ...candidate,
         id: current.id,
@@ -773,68 +1094,74 @@ export class RiftLiteStore {
         platform: current.platform,
         capturedAt: current.capturedAt
       });
-      db.run("UPDATE replays SET data_json=? WHERE id=?", [JSON.stringify(next), id]);
-      this.invalidateReplayCache();
-      await this.persist();
-      saved = next;
-    });
-    return saved;
+      const persisted = await this.prepareStoredReplayUpdate(stored, next, payloadUnchanged);
+      db.run("UPDATE replays SET data_json=? WHERE id=?", [JSON.stringify(persisted), id]);
+      return next;
+    }, { invalidateReplays: true });
   }
 
   async deleteReplay(id: string): Promise<void> {
-    const db = await this.database();
-    const now = new Date().toISOString();
-    const row = db.exec("SELECT data_json FROM replays WHERE id=?", [id])[0]?.values[0]?.[0];
-    if (typeof row === "string") {
-      const replay = { ...JSON.parse(row) as ReplayRecord, deletedAt: now };
+    await this.enqueueAtomicDatabaseMutation("delete-replay", (db) => {
+      const row = db.exec("SELECT data_json FROM replays WHERE id=?", [id])[0]?.values[0]?.[0];
+      if (typeof row !== "string") {
+        return;
+      }
+      const now = new Date().toISOString();
+      const replay = { ...JSON.parse(row) as StoredReplayRecord, deletedAt: now };
       db.run("UPDATE replays SET data_json=? WHERE id=?", [JSON.stringify(replay), id]);
-      await this.persist();
-      this.invalidateReplayCache();
-    }
+    }, { invalidateReplays: true });
   }
 
   async restoreReplay(id: string): Promise<ReplayRecord | null> {
-    const db = await this.database();
-    const row = db.exec("SELECT data_json FROM replays WHERE id=?", [id])[0]?.values[0]?.[0];
-    if (typeof row !== "string") {
-      return null;
-    }
-    const replay = { ...JSON.parse(row) as ReplayRecord, deletedAt: undefined };
-    delete replay.deletedAt;
-    db.run("UPDATE replays SET data_json=? WHERE id=?", [JSON.stringify(replay), id]);
-    await this.persist();
-    this.invalidateReplayCache();
-    return replay;
+    return this.enqueueAtomicDatabaseMutation("restore-replay", async (db) => {
+      const row = db.exec("SELECT data_json FROM replays WHERE id=?", [id])[0]?.values[0]?.[0];
+      if (typeof row !== "string") {
+        return null;
+      }
+      const replay = { ...JSON.parse(row) as StoredReplayRecord, deletedAt: undefined };
+      delete replay.deletedAt;
+      db.run("UPDATE replays SET data_json=? WHERE id=?", [JSON.stringify(replay), id]);
+      return this.hydrateStoredReplay(replay);
+    }, { invalidateReplays: true });
   }
 
   async purgeReplay(id: string): Promise<void> {
-    const db = await this.database();
-    db.run("DELETE FROM replays WHERE id=?", [id]);
-    await this.persist();
-    this.invalidateReplayCache();
+    await this.enqueueAtomicDatabaseMutation("purge-replay", (db) => {
+      db.run(
+        "INSERT OR REPLACE INTO replay_purge_tombstones (replay_id, purged_at) VALUES (?, ?)",
+        [id, new Date().toISOString()]
+      );
+      db.run("DELETE FROM replays WHERE id=?", [id]);
+    }, { invalidateReplays: true });
   }
 
   async deleteReplayByMatch(matchId: string, deletedAt = new Date().toISOString()): Promise<void> {
-    const db = await this.database();
+    await this.enqueueAtomicDatabaseMutation("delete-replays-by-match", (db) => {
+      this.markReplaysDeletedByMatchInDatabase(db, matchId, deletedAt);
+    }, { invalidateReplays: true });
+  }
+
+  private markReplaysDeletedByMatchInDatabase(db: Database, matchId: string, deletedAt: string): void {
     const result = db.exec("SELECT id, data_json FROM replays WHERE match_id=?", [matchId]);
     for (const row of result[0]?.values ?? []) {
-      const replay = { ...JSON.parse(String(row[1])) as ReplayRecord, deletedAt };
+      const replay = { ...JSON.parse(String(row[1])) as StoredReplayRecord, deletedAt };
       db.run("UPDATE replays SET data_json=? WHERE id=?", [JSON.stringify(replay), String(row[0])]);
     }
-    await this.persist();
-    this.invalidateReplayCache();
   }
 
   async restoreReplayByMatch(matchId: string): Promise<void> {
-    const db = await this.database();
+    await this.enqueueAtomicDatabaseMutation("restore-replays-by-match", (db) => {
+      this.restoreReplaysByMatchInDatabase(db, matchId);
+    }, { invalidateReplays: true });
+  }
+
+  private restoreReplaysByMatchInDatabase(db: Database, matchId: string): void {
     const result = db.exec("SELECT id, data_json FROM replays WHERE match_id=?", [matchId]);
     for (const row of result[0]?.values ?? []) {
-      const replay = { ...JSON.parse(String(row[1])) as ReplayRecord, deletedAt: undefined };
+      const replay = { ...JSON.parse(String(row[1])) as StoredReplayRecord, deletedAt: undefined };
       delete replay.deletedAt;
       db.run("UPDATE replays SET data_json=? WHERE id=?", [JSON.stringify(replay), String(row[0])]);
     }
-    await this.persist();
-    this.invalidateReplayCache();
   }
 
   private async readAllReplays(): Promise<ReplayRecord[]> {
@@ -847,9 +1174,10 @@ export class RiftLiteStore {
     this.replaysLoadPromise = (async () => {
       const db = await this.database();
       const result = db.exec("SELECT data_json FROM replays ORDER BY captured_at DESC");
-      const replays = (result[0]?.values ?? [])
-        .map((row) => this.parseStoredReplay(row[0]))
-        .filter((replay): replay is ReplayRecord => Boolean(replay));
+      const storedReplays = (result[0]?.values ?? [])
+        .map((row) => this.parseStoredReplayMetadata(row[0]))
+        .filter((replay): replay is StoredReplayRecord => Boolean(replay));
+      const replays = await mapWithConcurrency(storedReplays, 4, (stored) => this.hydrateStoredReplay(stored));
       this.replaysCache = replays;
       return replays;
     })();
@@ -883,26 +1211,43 @@ export class RiftLiteStore {
   }
 
   async restoreBackupData(backup: RiftLiteBackupFile, options: { preserveAccount?: boolean; preserveReplays?: boolean } = {}): Promise<void> {
+    if (this.restoreInProgress) {
+      throw new Error("A RiftLite data restore is already in progress.");
+    }
     if (backup.format !== "riftlite.backup" || backup.version !== 1) {
       throw new Error("That backup file is not a supported RiftLite backup.");
     }
-    const currentSettings = await this.getSettings();
-    const activeDb = await this.database();
+    this.restoreInProgress = true;
+    try {
+    // Take the starting snapshot while holding the same operation queue as all
+    // logical writers. Candidate construction remains off-lock so normal saves
+    // can continue; the final fenced swap reacquires the queue below.
+    const restoreStart = await this.enqueueDatabaseOperation(async () => {
+      const currentSettings = await this.getSettings();
+      const activeDb = await this.database();
+      await this.persist();
+      await this.createLastKnownGoodBackup("pre-restore", true);
+      return {
+        currentSettings,
+        activeDb,
+        mutationVersion: this.databaseMutationVersion,
+        databaseBytes: activeDb.export()
+      };
+    });
+    const currentSettings = restoreStart.currentSettings;
+    const activeDb = restoreStart.activeDb;
+    const restoreStartMutationVersion = restoreStart.mutationVersion;
+    const restoreStartDatabaseBytes = restoreStart.databaseBytes;
     if (!this.sql) {
       throw new Error("RiftLite database did not initialize");
     }
-
-    // Persist and snapshot the exact live state before attempting any destructive
-    // import. The restore itself is built in an isolated sql.js clone so a bad row
-    // or failed disk write cannot leave the active database half-replaced.
-    await this.persist();
-    await this.createLastKnownGoodBackup("pre-restore", true);
-    let candidateDb: Database | null = new this.sql.Database(activeDb.export());
+    let candidateDb: Database | null = new this.sql.Database(restoreStartDatabaseBytes);
 
     try {
       candidateDb.run("DELETE FROM matches");
       if (!options.preserveReplays) {
         candidateDb.run("DELETE FROM replays");
+        candidateDb.run("DELETE FROM replay_purge_tombstones");
       }
       candidateDb.run("DELETE FROM saved_decks");
       candidateDb.run("DELETE FROM deck_notebooks");
@@ -918,6 +1263,7 @@ export class RiftLiteStore {
             ...restoredSettings,
             firebaseUid: currentSettings.firebaseUid,
             firebaseRefreshToken: currentSettings.firebaseRefreshToken,
+            firebaseCredentialGeneration: currentSettings.firebaseCredentialGeneration,
             accountUid: currentSettings.accountUid,
             accountEmail: currentSettings.accountEmail,
             accountHandle: currentSettings.accountHandle,
@@ -930,7 +1276,11 @@ export class RiftLiteStore {
             accountCloudSyncLastRestoredAt: currentSettings.accountCloudSyncLastRestoredAt,
             accountCloudSyncDeviceId: currentSettings.accountCloudSyncDeviceId,
             accountCloudSyncDeviceName: currentSettings.accountCloudSyncDeviceName,
+            accountCloudSyncRemoteGenerationId: currentSettings.accountCloudSyncRemoteGenerationId,
             accountCloudSyncLastError: currentSettings.accountCloudSyncLastError,
+            activeHubs: currentSettings.activeHubs,
+            activeTeams: currentSettings.activeTeams,
+            privateHubWebReplayGrantKeys: currentSettings.privateHubWebReplayGrantKeys,
             rawCapture: currentSettings.rawCapture,
             scorepadDeviceId: currentSettings.scorepadDeviceId,
             scorepadDeviceSecret: currentSettings.scorepadDeviceSecret,
@@ -999,11 +1349,12 @@ export class RiftLiteStore {
         const replays = [...(backup.replays ?? []), ...(backup.deletedReplays ?? [])];
         for (const replay of replays) {
           const next = compactReplayForStorage(replay);
+          const prepared = await this.replayPayloadStore.prepare(next);
           candidateDb.run(
             `INSERT OR REPLACE INTO replays
              (id, match_id, platform, captured_at, data_json)
              VALUES (?, ?, ?, ?, ?)`,
-            [next.id, next.matchId, next.platform, next.capturedAt, JSON.stringify(next)]
+            [next.id, next.matchId, next.platform, next.capturedAt, JSON.stringify(prepared.stored)]
           );
         }
       }
@@ -1013,73 +1364,121 @@ export class RiftLiteStore {
         throw new Error(`Restored RiftLite backup failed validation: ${integrityIssue}`);
       }
 
-      await this.writeDatabaseFile(candidateDb);
-      this.db = candidateDb;
-      candidateDb = null;
+      // Stage the replacement beside the live database without touching the
+      // canonical file. While that asynchronous write is in progress, normal
+      // saves are free to continue and will advance databaseMutationVersion.
+      const stagedDatabase = candidateDb;
+      let stagedCandidatePath = await this.stageDatabaseFile(stagedDatabase);
       try {
-        activeDb.close();
-      } catch {
-        // The validated replacement is already active and safely persisted.
+        await this.enqueueDatabaseOperation(async () => {
+          // Drain every disk write queued while the candidate was built. The
+          // shared operation queue then prevents a candidate commit from
+          // overlapping this byte/version fence and synchronous replacement.
+          await this.persistQueue.catch(() => undefined);
+          const activeDatabaseChanged = this.db !== activeDb
+            || this.databaseMutationVersion !== restoreStartMutationVersion
+            || !Buffer.from(activeDb.export()).equals(Buffer.from(restoreStartDatabaseBytes));
+          if (activeDatabaseChanged) {
+            throw new Error("RiftLite data changed while the restore was running. Nothing was replaced; please try the restore again.");
+          }
+          renameSync(stagedCandidatePath, this.dbPath);
+          stagedCandidatePath = "";
+          this.db = stagedDatabase;
+          candidateDb = null;
+          this.databaseMutationVersion += 1;
+          try {
+            activeDb.close();
+          } catch {
+            // The validated replacement is already active and safely persisted.
+          }
+          this.invalidateMatchCache();
+          this.invalidateReplayCache();
+          // `settings` was normalized from the candidate while preserving this
+          // device's credential-vault identity. Keeping it hot avoids a
+          // post-restore read that would reconcile/self-heal the active DB
+          // outside the serialized restore swap.
+          this.settingsCache = settings;
+        });
+      } finally {
+        if (stagedCandidatePath) {
+          await unlink(stagedCandidatePath).catch(() => undefined);
+        }
       }
-      this.invalidateMatchCache();
-      this.invalidateReplayCache();
-      this.settingsCache = null;
     } catch (error) {
       candidateDb?.close();
       throw error;
     }
+    } finally {
+      this.restoreInProgress = false;
+    }
   }
 
   async importLegacyData(sourcePath = join(homedir(), ".riftlite", "riftlite.db")): Promise<ImportSummary> {
-    const db = await this.database();
-    const summary: ImportSummary = { importedMatches: 0, importedHubs: 0, importedSettings: 0, sourcePath };
+    await this.database();
+    const emptySummary: ImportSummary = { importedMatches: 0, importedHubs: 0, importedSettings: 0, sourcePath };
     if (!this.sql || !existsSync(sourcePath)) {
-      return summary;
+      return emptySummary;
     }
 
     const legacy = new this.sql.Database(await readFile(sourcePath));
     try {
-      const settings = readLegacySettings(legacy);
-      const current = await this.getSettings();
-      const joinedHubs = parseLegacyHubs(settings.joined_hubs);
-      const nextSettings: Partial<UserSettings> = {
-        username: settings.username || current.username,
-        firebaseUid: settings.firebase_uid || current.firebaseUid,
-        firebaseRefreshToken: settings.firebase_refresh_token || current.firebaseRefreshToken,
-        communitySyncEnabled: settings.auto_sync_enabled === "1" || current.communitySyncEnabled,
-        firstRunComplete: current.firstRunComplete || Boolean(settings.username),
-        activeHubs: mergeHubs(current.activeHubs, joinedHubs)
-      };
-      await this.saveSettings(nextSettings);
-      summary.importedSettings = Object.keys(settings).length;
-      summary.importedHubs = joinedHubs.length;
+      // Hydrate secure credentials before entering the serialized import. Once
+      // cached, the current settings are refreshed by any earlier queued
+      // settings mutation before this candidate action runs.
+      await this.getSettings();
+      const imported = await this.enqueueAtomicDatabaseMutation("import-legacy-data", async (db) => {
+        const summary: ImportSummary = { ...emptySummary };
+        const legacySettings = readLegacySettings(legacy);
+        const current = await this.getSettings();
+        const joinedHubs = parseLegacyHubs(legacySettings.joined_hubs);
+        const settingsPatch: Partial<UserSettings> = {
+          username: legacySettings.username || current.username,
+          firebaseUid: legacySettings.firebase_uid || current.firebaseUid,
+          firebaseRefreshToken: legacySettings.firebase_refresh_token || current.firebaseRefreshToken,
+          communitySyncEnabled: legacySettings.auto_sync_enabled === "1" || current.communitySyncEnabled,
+          firstRunComplete: current.firstRunComplete || Boolean(legacySettings.username),
+          activeHubs: mergeHubs(current.activeHubs, joinedHubs)
+        };
+        const protectedSettings = await this.prepareSettingsForSave(settingsPatch, current);
+        db.run("INSERT OR REPLACE INTO settings (key, value_json, updated_at) VALUES (?, ?, ?)", [
+          "settings",
+          JSON.stringify(protectedSettings.persistedSettings),
+          Date.now()
+        ]);
+        summary.importedSettings = Object.keys(legacySettings).length;
+        summary.importedHubs = joinedHubs.length;
 
-      const rows = legacy.exec("SELECT * FROM matches ORDER BY id ASC")[0];
-      const columns = rows?.columns ?? [];
-      for (const values of rows?.values ?? []) {
-        const row = Object.fromEntries(columns.map((column, index) => [column, values[index]]));
-        const match = legacyRowToMatch(row, await this.getSettings());
-        const exists = db.exec("SELECT id FROM matches WHERE id=?", [match.id])[0]?.values.length;
-        const normalizedMatch = normalizeImportedMatch(match);
-        db.run(
-          `INSERT OR IGNORE INTO matches
-           (id, platform, status, result, captured_at, updated_at, data_json)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`,
-          [
-            normalizedMatch.id,
-            normalizedMatch.platform,
-            normalizedMatch.status,
-            normalizedMatch.result,
-            normalizedMatch.capturedAt,
-            normalizedMatch.updatedAt,
-            JSON.stringify(normalizedMatch)
-          ]
-        );
-        if (!exists) summary.importedMatches += 1;
-      }
-      await this.persist();
-      this.invalidateMatchCache();
-      return summary;
+        const rows = legacy.exec("SELECT * FROM matches ORDER BY id ASC")[0];
+        const columns = rows?.columns ?? [];
+        for (const values of rows?.values ?? []) {
+          const row = Object.fromEntries(columns.map((column, index) => [column, values[index]]));
+          const match = legacyRowToMatch(row, protectedSettings.runtimeSettings);
+          const exists = db.exec("SELECT id FROM matches WHERE id=?", [match.id])[0]?.values.length;
+          const normalizedMatch = normalizeImportedMatch(match);
+          db.run(
+            `INSERT OR IGNORE INTO matches
+             (id, platform, status, result, captured_at, updated_at, data_json)
+             VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            [
+              normalizedMatch.id,
+              normalizedMatch.platform,
+              normalizedMatch.status,
+              normalizedMatch.result,
+              normalizedMatch.capturedAt,
+              normalizedMatch.updatedAt,
+              JSON.stringify(normalizedMatch)
+            ]
+          );
+          if (!exists) summary.importedMatches += 1;
+        }
+        return { summary, runtimeSettings: protectedSettings.runtimeSettings };
+      }, {
+        invalidateMatches: true,
+        onCommitted: ({ runtimeSettings }) => {
+          this.settingsCache = runtimeSettings;
+        }
+      });
+      return imported.summary;
     } finally {
       legacy.close();
     }
@@ -1098,6 +1497,7 @@ export class RiftLiteStore {
       if (this.legacyImportEnabled) {
         await this.importLegacyData().catch(() => undefined);
       }
+      await this.migrateStoredPayloads();
       await this.repairDatabaseIfNeeded("post-migration-integrity-check");
       // Hydrate/migrate credentials before taking the startup snapshot so a
       // newly-created recovery backup does not preserve legacy plaintext.
@@ -1148,6 +1548,10 @@ export class RiftLiteStore {
         data_json TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_replays_match_id ON replays(match_id);
+      CREATE TABLE IF NOT EXISTS replay_purge_tombstones (
+        replay_id TEXT PRIMARY KEY,
+        purged_at TEXT NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS saved_decks (
         id TEXT PRIMARY KEY,
         source_url TEXT NOT NULL,
@@ -1250,7 +1654,7 @@ export class RiftLiteStore {
     }
   }
 
-  private compactStoredPayloads(): void {
+  private async migrateStoredPayloads(): Promise<void> {
     const db = this.db;
     if (!db) return;
     let changed = false;
@@ -1272,8 +1676,13 @@ export class RiftLiteStore {
       const id = String(row[0]);
       const raw = String(row[1] ?? "");
       try {
-        const replay = compactReplayForStorage(JSON.parse(raw) as ReplayRecord);
-        const next = JSON.stringify(replay);
+        const stored = JSON.parse(raw) as StoredReplayRecord;
+        const reference = replayPayloadReference(stored);
+        const replay = compactReplayForStorage(stored);
+        const nextStored = reference
+          ? storedReplayWithReference(replay, reference)
+          : (await this.replayPayloadStore.prepare(replay)).stored;
+        const next = JSON.stringify(nextStored);
         if (next !== raw) {
           db.run("UPDATE replays SET data_json=? WHERE id=?", [next, id]);
           changed = true;
@@ -1312,16 +1721,43 @@ export class RiftLiteStore {
     }
   }
 
-  private parseStoredReplay(raw: unknown): ReplayRecord | null {
+  private parseStoredReplayMetadata(raw: unknown): StoredReplayRecord | null {
     if (typeof raw !== "string") {
       return null;
     }
     try {
-      return compactReplayForStorage(JSON.parse(raw) as ReplayRecord);
+      return JSON.parse(raw) as StoredReplayRecord;
     } catch (error) {
       console.warn("Skipping unreadable stored replay row", error);
       return null;
     }
+  }
+
+  private async hydrateStoredReplay(stored: StoredReplayRecord): Promise<ReplayRecord> {
+    try {
+      return compactReplayForStorage(await this.replayPayloadStore.hydrate(stored));
+    } catch (error) {
+      console.warn(`Replay payload for ${stored.id} could not be loaded`, error);
+      return compactReplayForStorage({
+        ...withoutReplayPayloadReference(stored),
+        events: [],
+        structuredEvents: [],
+        visualFrames: [],
+        deckTrackerSnapshots: []
+      });
+    }
+  }
+
+  private async prepareStoredReplayUpdate(
+    previous: StoredReplayRecord,
+    next: ReplayRecord,
+    payloadUnchanged: boolean
+  ): Promise<StoredReplayRecord> {
+    const reference = replayPayloadReference(previous);
+    if (payloadUnchanged && reference) {
+      return storedReplayWithReference(next, reference);
+    }
+    return (await this.replayPayloadStore.prepare(next)).stored;
   }
 
   private writeDeckNotebook(db: Database, deckId: string, notebook: DeckNotebook): void {
@@ -1341,7 +1777,116 @@ export class RiftLiteStore {
     }
   }
 
+  /**
+   * Serializes complete logical database operations, not merely their final
+   * disk writes. This keeps every read-modify-write mutation based on the most
+   * recently committed database and prevents two callers from swapping clones
+   * derived from the same stale snapshot.
+   */
+  private enqueueDatabaseOperation<T>(action: () => Promise<T>): Promise<T> {
+    const operation = this.databaseOperationQueue
+      .catch(() => undefined)
+      .then(action);
+    this.databaseOperationQueue = operation.then(
+      () => undefined,
+      () => undefined
+    );
+    return operation;
+  }
+
+  private enqueueAtomicDatabaseMutation<T>(
+    context: string,
+    action: (database: Database) => T | Promise<T>,
+    options: AtomicDatabaseMutationOptions<T> = {}
+  ): Promise<T> {
+    return this.enqueueDatabaseOperation(() => this.withDatabaseRepair(
+      context,
+      () => this.runAtomicDatabaseMutation(action, { ...options, operationName: context })
+    ));
+  }
+
+  /**
+   * Runs while databaseOperationQueue is held. Mutations are made against an
+   * isolated sql.js clone and only become visible after the staged file rename
+   * succeeds. A failed export/write/rename therefore leaves both the active
+   * in-memory database and the canonical file at the previous commit.
+   */
+  private async runAtomicDatabaseMutation<T>(
+    action: (database: Database) => T | Promise<T>,
+    options: AtomicDatabaseMutationOptions<T> = {}
+  ): Promise<T> {
+    const startedAt = performance.now();
+    const activeDb = await this.database();
+    if (!this.sql) {
+      throw new Error("RiftLite database did not initialize");
+    }
+    const startingMutationVersion = this.databaseMutationVersion;
+    const activeBytes = activeDb.export();
+    let candidateDb: Database | null = new this.sql.Database(activeBytes);
+    try {
+      const result = await action(candidateDb);
+      const candidateBytes = candidateDb.export();
+      if (Buffer.from(candidateBytes).equals(Buffer.from(activeBytes))) {
+        candidateDb.close();
+        candidateDb = null;
+        options.onCommitted?.(result);
+        return result;
+      }
+
+      if (this.db !== activeDb || this.databaseMutationVersion !== startingMutationVersion) {
+        throw new Error("RiftLite data changed while a database operation was running. Nothing was saved; please try again.");
+      }
+
+      // Advance the restore fence before the asynchronous disk commit. A
+      // failed write may conservatively invalidate a concurrent restore, but it
+      // can never allow that restore to discard an attempted live mutation.
+      this.databaseMutationVersion += 1;
+      const commitMutationVersion = this.databaseMutationVersion;
+      const committedDb = candidateDb;
+      const persistAfterPrevious = this.persistQueue
+        .catch(() => undefined)
+        .then(async () => {
+          if (this.db !== activeDb || this.databaseMutationVersion !== commitMutationVersion) {
+            throw new Error("RiftLite data changed before a database operation could be committed. Nothing was saved; please try again.");
+          }
+          if (!options.skipPrewriteBackup) {
+            await this.createLastKnownGoodBackup("prewrite").catch(() => undefined);
+          }
+          await this.writeDatabaseFile(committedDb, candidateBytes);
+          this.db = committedDb;
+          candidateDb = null;
+          try {
+            activeDb.close();
+          } catch {
+            // The replacement is already durable and active.
+          }
+          if (options.invalidateMatches) {
+            this.invalidateMatchCache();
+          }
+          if (options.invalidateReplays) {
+            this.invalidateReplayCache();
+          }
+          options.onCommitted?.(result);
+        });
+      this.persistQueue = persistAfterPrevious;
+      await persistAfterPrevious;
+      const durationMs = performance.now() - startedAt;
+      if (durationMs >= 75) {
+        this.performanceReporter?.({
+          operation: options.operationName || "database-mutation",
+          durationMs: Math.round(durationMs),
+          databaseBytes: activeBytes.byteLength,
+          candidateBytes: candidateBytes.byteLength
+        });
+      }
+      return result;
+    } finally {
+      candidateDb?.close();
+    }
+  }
+
   private async persist(options: { skipPrewriteBackup?: boolean } = {}): Promise<void> {
+    this.databaseMutationVersion += 1;
     const persistAfterPrevious = this.persistQueue
       .catch(() => undefined)
       .then(async () => {
@@ -1357,16 +1902,29 @@ export class RiftLiteStore {
     await persistAfterPrevious;
   }
 
-  private async writeDatabaseFile(database: Database): Promise<void> {
-    await mkdir(dirname(this.dbPath), { recursive: true });
-    const tempPath = `${this.dbPath}.tmp-${process.pid}-${Date.now()}-${randomUUID()}`;
-    await writeFile(tempPath, Buffer.from(database.export()));
+  private async writeDatabaseFile(database: Database, exportedBytes?: Uint8Array): Promise<void> {
+    return this.writeDatabaseBytes(exportedBytes ?? database.export());
+  }
+
+  private async writeDatabaseBytes(bytes: Uint8Array): Promise<void> {
+    const tempPath = await this.stageDatabaseBytes(bytes);
     try {
       await rename(tempPath, this.dbPath);
     } catch (error) {
       await unlink(tempPath).catch(() => undefined);
       throw error;
     }
+  }
+
+  private async stageDatabaseFile(database: Database): Promise<string> {
+    return this.stageDatabaseBytes(database.export());
+  }
+
+  private async stageDatabaseBytes(bytes: Uint8Array): Promise<string> {
+    await mkdir(dirname(this.dbPath), { recursive: true });
+    const tempPath = `${this.dbPath}.tmp-${process.pid}-${Date.now()}-${randomUUID()}`;
+    await writeFile(tempPath, Buffer.from(bytes));
+    return tempPath;
   }
 
   private async withDatabaseRepair<T>(context: string, action: () => Promise<T>): Promise<T> {
@@ -1436,6 +1994,7 @@ export class RiftLiteStore {
     this.replaysCache = null;
     this.migrateSchema();
     await this.migrateLegacyJson().catch(() => undefined);
+    await this.migrateStoredPayloads().catch(() => undefined);
     if (this.legacyImportEnabled) {
       await this.importLegacyData().catch(() => undefined);
     }
@@ -1568,6 +2127,7 @@ export class RiftLiteStore {
         this.settingsCache = null;
         this.migrateSchema();
         await this.migrateLegacyJson().catch(() => undefined);
+        await this.migrateStoredPayloads().catch(() => undefined);
         await this.getSettings();
         await this.repairDatabaseIfNeeded(`restore-${context}`);
         await this.persist();
@@ -1723,6 +2283,24 @@ function compactReplayVideoAsset(video: ReplayRecord["video"]): ReplayRecord["vi
   return clean as unknown as ReplayRecord["video"];
 }
 
+async function mapWithConcurrency<T, R>(
+  values: T[],
+  limit: number,
+  mapper: (value: T) => Promise<R>
+): Promise<R[]> {
+  const results = new Array<R>(values.length);
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(Math.max(1, limit), values.length) }, async () => {
+    while (cursor < values.length) {
+      const index = cursor;
+      cursor += 1;
+      results[index] = await mapper(values[index]);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
 function compactCaptureEvents(events: CaptureEvent[], limit: number): CaptureEvent[] {
   return [...events]
     .slice(-limit)
@@ -1738,6 +2316,9 @@ function compactCapturePayload(payload: Record<string, unknown> = {}): Record<st
     "active",
     "format",
     "atlasResultKind",
+    "atlasLocalPlayerSeat",
+    "atlasLocalBattlefieldZone",
+    "atlasOpponentBattlefieldZone",
     "endText",
     "configuredUsername",
     "localPlayerName",
@@ -1770,7 +2351,9 @@ function compactCapturePayload(payload: Record<string, unknown> = {}): Record<st
       compact[key] = compactUnknown(payload[key]);
     }
   }
-  compact.payloadKeys = Object.keys(payload).sort();
+  compact.payloadKeys = Array.isArray(payload.payloadKeys)
+    ? payload.payloadKeys.filter((value): value is string => typeof value === "string").slice(0, 80)
+    : Object.keys(payload).filter((key) => key !== "payloadKeys").sort();
   if (Array.isArray(payload.counterPlayers)) {
     compact.counterPlayers = payload.counterPlayers.slice(0, 4).map(compactUnknown);
   }

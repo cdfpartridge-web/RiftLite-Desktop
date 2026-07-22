@@ -6,6 +6,7 @@ import type {
   CaptureDiagnosticsSummary,
   CaptureEvent,
   CaptureHealth,
+  GameWebviewFailure,
   DeckNotebook,
   DeckTrackerState,
   GamePlatform,
@@ -33,8 +34,12 @@ import type {
 const api: RiftLiteApi = {
   getSettings: () => ipcRenderer.invoke("settings:get") as Promise<UserSettings>,
   saveSettings: (settings) => ipcRenderer.invoke("settings:save", settings) as Promise<UserSettings>,
+  updateRawCaptureSettings: (settings) => ipcRenderer.invoke("settings:raw-capture:update", settings) as Promise<UserSettings>,
+  setWebReplayDiscordShareHub: (hubId, selected) => ipcRenderer.invoke("settings:web-replay-discord-hub:set", hubId, selected) as Promise<UserSettings>,
   getCaptureHealth: () => ipcRenderer.invoke("capture:health:get") as Promise<CaptureHealth>,
+  getGamePlatformSwitchStatus: () => ipcRenderer.invoke("capture:platform-switch-status"),
   forceCaptureReview: (platform) => ipcRenderer.invoke("capture:force-review", platform) as Promise<MatchDraft | null>,
+  dismissMatchReview: () => ipcRenderer.invoke("capture:dismiss-review") as Promise<void>,
   getMatches: () => ipcRenderer.invoke("matches:get") as Promise<MatchDraft[]>,
   getDeletedMatches: () => ipcRenderer.invoke("matches:deleted") as Promise<MatchDraft[]>,
   saveMatchDraft: (draft) => ipcRenderer.invoke("matches:save-draft", draft) as Promise<MatchDraft>,
@@ -136,7 +141,10 @@ const api: RiftLiteApi = {
   exportAccountData: () => ipcRenderer.invoke("account:export") as ReturnType<RiftLiteApi["exportAccountData"]>,
   getAccountCloudSyncStatus: () => ipcRenderer.invoke("account:cloud-sync:status") as ReturnType<RiftLiteApi["getAccountCloudSyncStatus"]>,
   setAccountCloudSyncEnabled: (enabled) => ipcRenderer.invoke("account:cloud-sync:set-enabled", enabled) as ReturnType<RiftLiteApi["setAccountCloudSyncEnabled"]>,
-  uploadAccountCloudSync: () => ipcRenderer.invoke("account:cloud-sync:upload") as ReturnType<RiftLiteApi["uploadAccountCloudSync"]>,
+  uploadAccountCloudSync: (allowRemoteReplacement) => ipcRenderer.invoke(
+    "account:cloud-sync:upload",
+    allowRemoteReplacement === true
+  ) as ReturnType<RiftLiteApi["uploadAccountCloudSync"]>,
   restoreAccountCloudSync: () => ipcRenderer.invoke("account:cloud-sync:restore") as ReturnType<RiftLiteApi["restoreAccountCloudSync"]>,
   getAccountCloudSyncConflicts: () => ipcRenderer.invoke("account:cloud-sync:conflicts") as ReturnType<RiftLiteApi["getAccountCloudSyncConflicts"]>,
   keepAccountCloudSyncConflictCurrent: (conflictId) => ipcRenderer.invoke("account:cloud-sync:conflict:keep-current", conflictId) as ReturnType<RiftLiteApi["keepAccountCloudSyncConflictCurrent"]>,
@@ -185,6 +193,7 @@ const api: RiftLiteApi = {
   downloadUpdate: () => ipcRenderer.invoke("updates:download") as Promise<UpdateStatus>,
   installUpdate: () => ipcRenderer.invoke("updates:install") as Promise<void>,
   recoverAtlasWebview: () => ipcRenderer.invoke("atlas-webview:recover") as ReturnType<RiftLiteApi["recoverAtlasWebview"]>,
+  focusGameWebview: (platform) => ipcRenderer.invoke("game-webview:focus", platform) as Promise<boolean>,
   getGamePreloadUrl: (platform: GamePlatform) => ipcRenderer.invoke("game-preload:url", platform) as Promise<string>,
   getAssetUrl: (relativePath: string) => ipcRenderer.invoke("assets:url", relativePath) as Promise<string>,
   getBattlefields: () => ipcRenderer.invoke("battlefields:get") as Promise<BattlefieldOption[]>,
@@ -196,6 +205,11 @@ const api: RiftLiteApi = {
   getDiagnosticsSummary: () => ipcRenderer.invoke("diagnostics:summary") as Promise<CaptureDiagnosticsSummary>,
   createDiagnosticsBundle: (options) => ipcRenderer.invoke("diagnostics:bundle", options) as Promise<string | null>,
   openDiagnosticsFolder: () => ipcRenderer.invoke("diagnostics:open") as Promise<void>,
+  getTcgaReplayResearchStatus: () => ipcRenderer.invoke("tcga-research:status") as ReturnType<RiftLiteApi["getTcgaReplayResearchStatus"]>,
+  startTcgaReplayResearchCapture: () => ipcRenderer.invoke("tcga-research:start") as ReturnType<RiftLiteApi["startTcgaReplayResearchCapture"]>,
+  stopTcgaReplayResearchCapture: () => ipcRenderer.invoke("tcga-research:stop") as ReturnType<RiftLiteApi["stopTcgaReplayResearchCapture"]>,
+  openTcgaReplayResearchFolder: () => ipcRenderer.invoke("tcga-research:open") as Promise<void>,
+  deleteTcgaReplayResearchCaptures: () => ipcRenderer.invoke("tcga-research:delete") as ReturnType<RiftLiteApi["deleteTcgaReplayResearchCaptures"]>,
   takeScreenshot: () => ipcRenderer.invoke("screenshot:take") as Promise<ScreenshotResult>,
   chooseScreenshotDirectory: () => ipcRenderer.invoke("screenshot:choose-directory") as Promise<UserSettings>,
   openScreenshotDirectory: () => ipcRenderer.invoke("screenshot:open-directory") as Promise<void>,
@@ -219,6 +233,11 @@ const api: RiftLiteApi = {
     const listener = (_event: Electron.IpcRendererEvent, payload: MatchDraft) => callback(payload);
     ipcRenderer.on("match:draft", listener);
     return () => ipcRenderer.removeListener("match:draft", listener);
+  },
+  onGameWebviewFailure: (callback) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: GameWebviewFailure) => callback(payload);
+    ipcRenderer.on("game-webview:failure", listener);
+    return () => ipcRenderer.removeListener("game-webview:failure", listener);
   },
   onReplayUpdated: (callback) => {
     const listener = (_event: Electron.IpcRendererEvent, payload: ReplayRecord) => callback(payload);

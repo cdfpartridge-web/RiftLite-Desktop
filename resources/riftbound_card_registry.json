@@ -30048,6 +30048,9 @@
       "champion": null,
       "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/47402ed9d5eebb9e38176315bdaf1a556845eef7-1039x744.png?accountingTag=RB",
       "imageHash": "47402ed9d5eebb9e38176315bdaf1a556845eef7",
+      "imageHashAliases": [
+        "e41bc5d29f91f652d553bef56e2c84e95010ef1a"
+      ],
       "artist": "Kudos Productions",
       "updatedAt": "2026-07-14T21:35:21.671Z",
       "variants": {

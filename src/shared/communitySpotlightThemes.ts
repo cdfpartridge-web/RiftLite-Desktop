@@ -6,9 +6,11 @@ export const COMMUNITY_SPOTLIGHT_IDS = [
   "dunc",
   "ritualtcg",
   "winthepanda",
+  "maskedswan",
   "agitoswiftly",
   "mrtoolshed",
-  "daemonxgg"
+  "daemonxgg",
+  "arg0ntcg"
 ] as const;
 
 export type CommunitySpotlightId = typeof COMMUNITY_SPOTLIGHT_IDS[number];
@@ -32,9 +34,11 @@ export const COMMUNITY_SPOTLIGHT_THEMES = {
   dunc: { primary: "#37D9FF", secondary: "#8A55FF" },
   ritualtcg: { primary: "#FF7A1A", secondary: "#58E7FF" },
   winthepanda: { primary: "#44506D", secondary: "#B89B6C" },
+  maskedswan: { primary: "#D65A2E", secondary: "#315B73" },
   agitoswiftly: { primary: "#EF7C00", secondary: "#C83A52" },
   mrtoolshed: { primary: "#356BFF", secondary: "#D94B80" },
-  daemonxgg: { primary: "#E37B0E", secondary: "#45A66E" }
+  daemonxgg: { primary: "#E37B0E", secondary: "#45A66E" },
+  arg0ntcg: { primary: "#3D8FB8", secondary: "#D2DEE8" }
 } as const satisfies Record<CommunitySpotlightId, CommunitySpotlightTheme>;
 
 export function communitySpotlightTheme(value: unknown): CommunitySpotlightTheme {

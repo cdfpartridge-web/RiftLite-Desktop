@@ -3,7 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   GAME_WEBVIEW_PARTITIONS,
   gameWebviewIsReady,
-  nextMountedGamePlatform
+  nextMountedGamePlatform,
+  shouldRestoreGameWebviewFocus
 } from "../src/shared/gameWebview.js";
 
 describe("game webview lifecycle", () => {
@@ -23,5 +24,16 @@ describe("game webview lifecycle", () => {
 
   it("uses the same Atlas partition that the recovery action clears", () => {
     expect(GAME_WEBVIEW_PARTITIONS.atlas).toBe("persist:riftlite-atlas");
+  });
+
+  it("restores Atlas input focus after the post-game review closes", () => {
+    expect(shouldRestoreGameWebviewFocus(true, false, "atlas", "atlas", "file:///gamePreload.cjs", true)).toBe(true);
+  });
+
+  it("does not steal focus while review is open, Play is hidden, or another provider is active", () => {
+    expect(shouldRestoreGameWebviewFocus(true, true, "atlas", "atlas", "file:///gamePreload.cjs", true)).toBe(false);
+    expect(shouldRestoreGameWebviewFocus(true, false, "atlas", "atlas", "file:///gamePreload.cjs", false)).toBe(false);
+    expect(shouldRestoreGameWebviewFocus(true, false, "tcga", "tcga", "file:///gamePreload.cjs", true)).toBe(false);
+    expect(shouldRestoreGameWebviewFocus(true, false, "atlas", "tcga", "file:///gamePreload.cjs", true)).toBe(false);
   });
 });

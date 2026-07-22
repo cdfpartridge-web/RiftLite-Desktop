@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   RawCaptureIngressLimiter,
   validatedCaptureEvent,
-  validatedRawCaptureFrame
+  validatedRawCaptureFrame,
+  validatedTcgaResearchEvent
 } from "../src/shared/ipcPayloadSecurity.js";
 
 describe("IPC payload security", () => {
@@ -32,6 +33,23 @@ describe("IPC payload security", () => {
     expect(validatedCaptureEvent({ ...base, url: "https://evil.example/?riftatlas=1" }, "atlas")).toBeNull();
     expect(validatedCaptureEvent({ ...base, kind: "execute-shell" }, "atlas")).toBeNull();
     expect(validatedCaptureEvent({ ...base, unexpected: true }, "atlas")).toBeNull();
+  });
+
+  it("accepts only bounded TCGA research checkpoints from a TCGA page", () => {
+    const event = {
+      schema: "riftlite-tcga-preload-research",
+      version: 1,
+      id: "tcga-research-1",
+      kind: "dom-checkpoint",
+      capturedAt: "2026-07-20T12:00:00.000Z",
+      url: "https://tcg-arena.fr/game/ROOM-1",
+      payload: { reason: "test", state: { cards: [] } }
+    };
+
+    expect(validatedTcgaResearchEvent(event)).toEqual(event);
+    expect(validatedTcgaResearchEvent({ ...event, url: "https://evil.example/tcg-arena.fr" })).toBeNull();
+    expect(validatedTcgaResearchEvent({ ...event, kind: "execute-shell" })).toBeNull();
+    expect(validatedTcgaResearchEvent({ ...event, payload: { text: "x".repeat(4 * 1024 * 1024) } })).toBeNull();
   });
 
   it("accepts only bounded Atlas frames from trusted websocket origins", () => {

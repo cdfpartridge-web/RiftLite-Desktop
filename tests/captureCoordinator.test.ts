@@ -124,10 +124,13 @@ function draft(overrides: Partial<MatchDraft> = {}): MatchDraft {
 
 function coordinatorHarness(options: {
   failSave?: boolean;
+  failSaveCount?: number;
+  replayCaptureEnabled?: boolean;
   finalizeRawCaptureForMatch?: ReturnType<typeof vi.fn>;
 } = {}): {
   coordinator: CaptureCoordinator;
   saved: MatchDraft[];
+  savedReplays: Array<Record<string, unknown>>;
   sent: Array<{ channel: string; payload: unknown }>;
   syncService: { syncMatch: ReturnType<typeof vi.fn> };
   diagnostics: { record: ReturnType<typeof vi.fn> };
@@ -136,14 +139,23 @@ function coordinatorHarness(options: {
     resolveBattlefield: ReturnType<typeof vi.fn>;
     resolveCard: ReturnType<typeof vi.fn>;
   };
+  store: {
+    saveReplayIfMatchActive: ReturnType<typeof vi.fn>;
+  };
 } {
   const saved: MatchDraft[] = [];
+  const savedReplays: Array<Record<string, unknown>> = [];
   const sent: Array<{ channel: string; payload: unknown }> = [];
+  let remainingSaveFailures = options.failSave ? Number.POSITIVE_INFINITY : options.failSaveCount ?? 0;
   const store = {
-    getSettings: vi.fn(async () => settings),
+    getSettings: vi.fn(async () => ({
+      ...settings,
+      replayCaptureEnabled: options.replayCaptureEnabled ?? settings.replayCaptureEnabled
+    })),
     getMatches: vi.fn(async () => saved),
     saveMatch: vi.fn(async (draft: MatchDraft) => {
-      if (options.failSave) {
+      if (remainingSaveFailures > 0) {
+        remainingSaveFailures -= 1;
         throw new Error("database disk image is malformed");
       }
       const index = saved.findIndex((item) => item.id === draft.id);
@@ -155,6 +167,10 @@ function coordinatorHarness(options: {
       return draft;
     }),
     saveReplay: vi.fn(async () => undefined),
+    saveReplayIfMatchActive: vi.fn(async (replay: Record<string, unknown>) => {
+      savedReplays.push(replay);
+      return replay;
+    }),
     deleteReplayByMatch: vi.fn(async () => undefined),
     getSavedDecks: vi.fn(async () => [])
   };
@@ -187,10 +203,12 @@ function coordinatorHarness(options: {
       options.finalizeRawCaptureForMatch as never
     ),
     saved,
+    savedReplays,
     sent,
     syncService,
     diagnostics,
-    resolver
+    resolver,
+    store
   };
 }
 
@@ -307,7 +325,7 @@ describe("CaptureCoordinator", () => {
     expect(sent.filter((item) => item.channel === "match:draft")).toHaveLength(0);
   });
 
-  it("syncs confirmed matches quietly so background sync does not reopen review", async () => {
+  it("defers remote sync until replay finalization and then syncs quietly", async () => {
     const { coordinator, saved, sent, syncService } = coordinatorHarness();
     const match = draft();
 
@@ -315,11 +333,108 @@ describe("CaptureCoordinator", () => {
 
     expect(result.status).toBe("saved");
     expect(saved[0]?.status).toBe("saved");
+    expect(syncService.syncMatch).not.toHaveBeenCalled();
+
+    const synced = await coordinator.syncConfirmedMatch(result);
+
+    expect(synced.id).toBe(match.id);
     expect(syncService.syncMatch).toHaveBeenCalledWith(
       expect.objectContaining({ id: match.id, status: "saved" }),
       { quiet: true }
     );
     expect(sent.some((item) => item.channel === "match:draft")).toBe(false);
+  });
+
+  it("blocks provider switching through active capture and review, then releases it when review closes", async () => {
+    const { coordinator } = coordinatorHarness();
+    expect(coordinator.getGamePlatformSwitchStatus().allowed).toBe(true);
+
+    await coordinator.handleEvent(event("match-start", {
+      active: true,
+      myName: "BMU",
+      opponentName: "Switch Guard",
+      myChampion: "Akali",
+      opponentChampion: "Kennen"
+    }));
+    expect(coordinator.getGamePlatformSwitchStatus()).toMatchObject({ allowed: false });
+
+    await coordinator.forceReview("tcga");
+    await coordinator.waitForAllReplayFinalizations();
+    expect(coordinator.getGamePlatformSwitchStatus()).toMatchObject({ allowed: false });
+
+    coordinator.dismissMatchReview();
+    expect(coordinator.getGamePlatformSwitchStatus().allowed).toBe(true);
+  });
+
+  it("holds new capture events during data maintenance and rejects maintenance once a match is active", async () => {
+    const { coordinator } = coordinatorHarness();
+    const releaseMaintenance = await coordinator.beginDataMaintenance();
+    let handled = false;
+    const pending = coordinator.handleEvent(event("match-start", {
+      active: true,
+      myName: "BMU",
+      opponentName: "Maintenance Guard",
+      myChampion: "Akali",
+      opponentChampion: "Irelia"
+    })).then(() => {
+      handled = true;
+    });
+
+    await Promise.resolve();
+    expect(handled).toBe(false);
+    releaseMaintenance();
+    await pending;
+    expect(handled).toBe(true);
+    await expect(coordinator.beginDataMaintenance()).rejects.toThrow("Finish the current match");
+  });
+
+  it("marks automatic TCGA replay finalization as awaiting user confirmation", async () => {
+    let releaseFinalization!: () => void;
+    const finalizeRawCaptureForMatch = vi.fn(() => new Promise<null>((resolve) => {
+      releaseFinalization = () => resolve(null);
+    }));
+    const { coordinator, saved } = coordinatorHarness({ finalizeRawCaptureForMatch });
+
+    await coordinator.handleEvent(event("match-start", {
+      active: true,
+      myName: "BMU",
+      opponentName: "Arena Rival",
+      myChampion: "Akali",
+      opponentChampion: "Irelia",
+      score: { me: "0", opp: "0", source: "tcga-counter-paired" }
+    }, "2026-07-21T10:00:00.000Z"));
+    await coordinator.handleEvent(event("match-snapshot", {
+      active: true,
+      myName: "BMU",
+      opponentName: "Arena Rival",
+      myChampion: "Akali",
+      opponentChampion: "Irelia",
+      score: { me: "7", opp: "5", source: "tcga-counter-paired" }
+    }, "2026-07-21T10:10:00.000Z"));
+    await coordinator.handleEvent(event("match-end", {
+      active: false,
+      reason: "inactive-debounce",
+      score: { me: "", opp: "", source: "none" }
+    }, "2026-07-21T10:10:05.000Z"));
+
+    await vi.waitFor(() => expect(finalizeRawCaptureForMatch).toHaveBeenCalledOnce());
+    expect(finalizeRawCaptureForMatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        platform: "tcga",
+        confirmedResult: false,
+        match: expect.objectContaining({ result: "win" })
+      }),
+      undefined
+    );
+    let waitFinished = false;
+    const pendingWait = coordinator.waitForReplayFinalization(saved[0]?.id ?? "").then(() => {
+      waitFinished = true;
+    });
+    await Promise.resolve();
+    expect(waitFinished).toBe(false);
+    releaseFinalization();
+    await pendingWait;
+    expect(waitFinished).toBe(true);
   });
 
   it("ignores TCGA pre-game inactive blips before opponent and legend evidence exists", async () => {
@@ -373,6 +488,83 @@ describe("CaptureCoordinator", () => {
       result: "Win",
       score: "1-0"
     });
+  });
+
+  it("resets a quick-disconnect TCGA lobby when a different opponent starts", async () => {
+    const { coordinator, saved, sent } = coordinatorHarness();
+
+    await coordinator.handleEvent(event("match-start", {
+      active: true,
+      myName: "BMU",
+      opponentName: "Disconnected Rival",
+      myChampion: "Akali",
+      opponentChampion: "Kennen",
+      myBattlefield: "Zaun Warrens",
+      opponentBattlefield: "Dusk Rose Lab",
+      score: { me: "0", opp: "0", source: "tcga-counter-paired" }
+    }, "2026-07-21T12:00:00.000Z"));
+
+    await coordinator.handleEvent(event("match-start", {
+      active: true,
+      myName: "BMU",
+      opponentName: "Real Rival",
+      myChampion: "Akali",
+      opponentChampion: "Irelia",
+      score: { me: "0", opp: "0", source: "tcga-counter-paired" }
+    }, "2026-07-21T12:02:00.000Z"));
+    await coordinator.handleEvent(event("match-snapshot", {
+      active: true,
+      myName: "BMU",
+      opponentName: "Real Rival",
+      myChampion: "Akali",
+      opponentChampion: "Irelia",
+      score: { me: "7", opp: "5", source: "tcga-counter-paired" }
+    }, "2026-07-21T12:12:00.000Z"));
+    await coordinator.handleEvent(event("match-end", {
+      active: false,
+      reason: "inactive-debounce",
+      score: { me: "", opp: "", source: "none" }
+    }, "2026-07-21T12:12:05.000Z"));
+
+    expect(saved).toHaveLength(1);
+    expect(saved[0]).toMatchObject({
+      capturedAt: "2026-07-21T12:02:00.000Z",
+      opponentName: "Real Rival",
+      opponentChampion: "Irelia",
+      result: "Win",
+      score: "1-0"
+    });
+    expect(JSON.stringify(saved[0].rawEvidence)).not.toContain("Disconnected Rival");
+    expect(sent.filter((item) => item.channel === "match:draft")).toHaveLength(1);
+  });
+
+  it("drops a named TCGA 0-0 disconnect without creating a blank report", async () => {
+    const { coordinator, saved, sent } = coordinatorHarness();
+
+    await coordinator.handleEvent(event("match-start", {
+      active: true,
+      myName: "BMU",
+      opponentName: "Lobby Rival",
+      myChampion: "Akali",
+      opponentChampion: "Kennen",
+      myBattlefield: "Zaun Warrens",
+      opponentBattlefield: "Dusk Rose Lab",
+      score: { me: "0", opp: "0", source: "tcga-counter-paired" },
+      counterPlayers: [
+        { name: "BMU", score: "0" },
+        { name: "Lobby Rival", score: "0" }
+      ]
+    }, "2026-07-21T13:00:00.000Z"));
+    await coordinator.handleEvent(event("match-end", {
+      active: false,
+      reason: "inactive-debounce",
+      score: { me: "", opp: "", source: "none" },
+      counterPlayers: []
+    }, "2026-07-21T13:00:10.000Z"));
+
+    expect(saved).toHaveLength(0);
+    expect(sent.filter((item) => item.channel === "match:draft")).toHaveLength(0);
+    expect(coordinator.hasActiveCaptureSession("tcga")).toBe(false);
   });
 
   it("opens a review from retained TCGA evidence when the final end event is empty", async () => {
@@ -516,6 +708,282 @@ describe("CaptureCoordinator", () => {
         })
       ]
     });
+  });
+
+  it("retries Atlas replay and raw finalization after the review draft's first storage write fails", async () => {
+    const finalizeRawCaptureForMatch = vi.fn(async () => null);
+    const { coordinator, savedReplays } = coordinatorHarness({
+      failSaveCount: 1,
+      replayCaptureEnabled: true,
+      finalizeRawCaptureForMatch
+    });
+
+    await coordinator.handleEvent(event("match-start", {
+      active: true,
+      myName: "BMU",
+      opponentName: "Storage Rival",
+      myChampion: "Akali",
+      opponentChampion: "Irelia",
+      seriesId: "atlas-storage-retry",
+      matchId: "atlas-storage-game",
+      roomCode: "RETRYROOM",
+      score: { me: "8", opp: "5", source: "atlas-score-track" }
+    }, "2026-07-21T15:00:00.000Z", "atlas"));
+
+    const review = await coordinator.forceReview("atlas");
+    expect(review).not.toBeNull();
+    await coordinator.waitForAllReplayFinalizations();
+    expect(savedReplays).toHaveLength(0);
+    expect(finalizeRawCaptureForMatch).not.toHaveBeenCalled();
+
+    const saved = await coordinator.confirmMatch(review!);
+    await coordinator.waitForReplayFinalization(saved.id);
+
+    expect(savedReplays).toHaveLength(1);
+    expect(savedReplays[0]).toMatchObject({ matchId: saved.id, platform: "atlas" });
+    expect(finalizeRawCaptureForMatch).toHaveBeenCalledOnce();
+    expect(finalizeRawCaptureForMatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        platform: "atlas",
+        localMatchId: saved.id,
+        match: expect.objectContaining({ result: "win" })
+      }),
+      expect.objectContaining({ matchId: saved.id, platform: "atlas" })
+    );
+  });
+
+  it("rechecks deferred Atlas finalization when confirmation races the first replay write failure", async () => {
+    const finalizeRawCaptureForMatch = vi.fn(async () => null);
+    const { coordinator, savedReplays, store } = coordinatorHarness({
+      replayCaptureEnabled: true,
+      finalizeRawCaptureForMatch
+    });
+    let markFirstReplayWriteStarted!: () => void;
+    let releaseFirstReplayWrite!: () => void;
+    const firstReplayWriteStarted = new Promise<void>((resolve) => {
+      markFirstReplayWriteStarted = resolve;
+    });
+    const firstReplayWriteGate = new Promise<void>((resolve) => {
+      releaseFirstReplayWrite = resolve;
+    });
+    store.saveReplayIfMatchActive.mockImplementationOnce(async () => {
+      markFirstReplayWriteStarted();
+      await firstReplayWriteGate;
+      throw new Error("transient replay database write failure");
+    });
+
+    await coordinator.handleEvent(event("match-start", {
+      active: true,
+      myName: "BMU",
+      opponentName: "Finalizer Race",
+      myChampion: "Akali",
+      opponentChampion: "Irelia",
+      seriesId: "atlas-finalizer-race",
+      matchId: "atlas-finalizer-race-game",
+      roomCode: "RACEROOM",
+      score: { me: "8", opp: "6", source: "atlas-score-track" }
+    }, "2026-07-21T15:30:00.000Z", "atlas"));
+
+    const review = await coordinator.forceReview("atlas");
+    expect(review).not.toBeNull();
+    await firstReplayWriteStarted;
+
+    // Confirmation completes its initial deferred check while the first replay
+    // write is still in flight and therefore has not populated the map yet.
+    const saved = await coordinator.confirmMatch(review!);
+    const finalized = coordinator.waitForReplayFinalization(saved.id);
+    releaseFirstReplayWrite();
+    await finalized;
+
+    expect(store.saveReplayIfMatchActive).toHaveBeenCalledTimes(2);
+    expect(savedReplays).toHaveLength(1);
+    expect(savedReplays[0]).toMatchObject({ matchId: saved.id, platform: "atlas" });
+    expect(finalizeRawCaptureForMatch).toHaveBeenCalledOnce();
+  });
+
+  it("surfaces a repeated replay write failure instead of silently stranding confirmed work", async () => {
+    const { coordinator, savedReplays, store } = coordinatorHarness({ replayCaptureEnabled: true });
+    let markFirstReplayWriteStarted!: () => void;
+    let releaseFirstReplayWrite!: () => void;
+    const firstReplayWriteStarted = new Promise<void>((resolve) => {
+      markFirstReplayWriteStarted = resolve;
+    });
+    const firstReplayWriteGate = new Promise<void>((resolve) => {
+      releaseFirstReplayWrite = resolve;
+    });
+    store.saveReplayIfMatchActive
+      .mockImplementationOnce(async () => {
+        markFirstReplayWriteStarted();
+        await firstReplayWriteGate;
+        throw new Error("first transient replay write failure");
+      })
+      .mockRejectedValueOnce(new Error("second replay write failure"));
+
+    await coordinator.handleEvent(event("match-start", {
+      active: true,
+      myName: "BMU",
+      opponentName: "Repeated Failure",
+      myChampion: "Akali",
+      opponentChampion: "Irelia",
+      seriesId: "atlas-repeated-failure",
+      matchId: "atlas-repeated-failure-game",
+      score: { me: "8", opp: "4", source: "atlas-score-track" }
+    }, "2026-07-21T16:00:00.000Z", "atlas"));
+
+    const review = await coordinator.forceReview("atlas");
+    expect(review).not.toBeNull();
+    await firstReplayWriteStarted;
+    const saved = await coordinator.confirmMatch(review!);
+    const finalized = coordinator.waitForReplayFinalization(saved.id);
+    releaseFirstReplayWrite();
+
+    await expect(finalized).rejects.toThrow("second replay write failure");
+    expect(coordinator.hasActiveMatchCapture()).toBe(true);
+    expect(savedReplays).toHaveLength(0);
+
+    // The prepared material remains available for the next confirmation/retry.
+    await coordinator.waitForReplayFinalization(saved.id);
+    expect(savedReplays).toHaveLength(1);
+  });
+
+  it("retries a failed Atlas raw-manifest finalization when the review is confirmed", async () => {
+    const finalizeRawCaptureForMatch = vi.fn()
+      .mockRejectedValueOnce(new Error("raw manifest rename failed"))
+      .mockResolvedValueOnce(null);
+    const { coordinator } = coordinatorHarness({
+      replayCaptureEnabled: true,
+      finalizeRawCaptureForMatch
+    });
+
+    await coordinator.handleEvent(event("match-start", {
+      active: true,
+      myName: "BMU",
+      opponentName: "Manifest Retry",
+      myChampion: "Akali",
+      opponentChampion: "Irelia",
+      matchId: "atlas-raw-retry",
+      score: { me: "8", opp: "5", source: "atlas-score-track" }
+    }, "2026-07-21T16:30:00.000Z", "atlas"));
+
+    const review = await coordinator.forceReview("atlas");
+    expect(review).not.toBeNull();
+    await coordinator.waitForAllReplayFinalizations();
+    expect(finalizeRawCaptureForMatch).toHaveBeenCalledOnce();
+    expect(coordinator.hasActiveMatchCapture()).toBe(true);
+
+    await expect(coordinator.confirmMatch(review!)).resolves.toMatchObject({ id: review!.id, status: "saved" });
+    expect(finalizeRawCaptureForMatch).toHaveBeenCalledTimes(2);
+  });
+
+  it("lets a local-first confirmation defer replay finalization until its background phase", async () => {
+    const finalizeRawCaptureForMatch = vi.fn()
+      .mockRejectedValueOnce(new Error("initial manifest failure"))
+      .mockResolvedValueOnce(null);
+    const { coordinator } = coordinatorHarness({
+      replayCaptureEnabled: true,
+      finalizeRawCaptureForMatch
+    });
+
+    await coordinator.handleEvent(event("match-start", {
+      active: true,
+      myName: "BMU",
+      opponentName: "Deferred Delivery",
+      myChampion: "Akali",
+      opponentChampion: "Irelia",
+      matchId: "deferred-delivery",
+      score: { me: "8", opp: "5", source: "atlas-score-track" }
+    }, "2026-07-21T16:45:00.000Z", "atlas"));
+
+    const review = await coordinator.forceReview("atlas");
+    expect(review).not.toBeNull();
+    await coordinator.waitForAllReplayFinalizations();
+    expect(finalizeRawCaptureForMatch).toHaveBeenCalledOnce();
+
+    await expect(coordinator.confirmMatch(review!, { deferReplayFinalization: true }))
+      .resolves.toMatchObject({ id: review!.id, status: "saved" });
+    expect(finalizeRawCaptureForMatch).toHaveBeenCalledOnce();
+
+    await coordinator.waitForReplayFinalization(review!.id);
+    expect(finalizeRawCaptureForMatch).toHaveBeenCalledTimes(2);
+  });
+
+  it("releases a confirmed capture when durable remote delivery is deferred", () => {
+    const { coordinator } = coordinatorHarness({ replayCaptureEnabled: true });
+
+    coordinator.markConfirmedReplayFinalizationQueued("background-delivery-failure");
+    expect(coordinator.hasActiveMatchCapture()).toBe(true);
+
+    coordinator.markConfirmedReplayDeliveryDeferred("background-delivery-failure");
+
+    expect(coordinator.hasActiveMatchCapture()).toBe(false);
+    expect(coordinator.getHealth().state).not.toBe("review-needed");
+  });
+
+  it("keeps a failed prepared replay retryable without blocking the confirmed match", async () => {
+    const finalizeRawCaptureForMatch = vi.fn()
+      .mockRejectedValueOnce(new Error("initial manifest failure"))
+      .mockRejectedValueOnce(new Error("background manifest failure"))
+      .mockResolvedValueOnce(null);
+    const { coordinator } = coordinatorHarness({
+      replayCaptureEnabled: true,
+      finalizeRawCaptureForMatch
+    });
+
+    await coordinator.handleEvent(event("match-start", {
+      active: true,
+      myName: "BMU",
+      opponentName: "Background Retry",
+      myChampion: "Akali",
+      opponentChampion: "Irelia",
+      matchId: "background-retry",
+      score: { me: "8", opp: "4", source: "atlas-score-track" }
+    }, "2026-07-21T16:50:00.000Z", "atlas"));
+    const review = await coordinator.forceReview("atlas");
+    expect(review).not.toBeNull();
+    await coordinator.waitForAllReplayFinalizations();
+    await coordinator.confirmMatch(review!, { deferReplayFinalization: true });
+
+    coordinator.markConfirmedReplayFinalizationQueued(review!.id);
+    await expect(coordinator.waitForReplayFinalization(review!.id))
+      .rejects.toThrow("background manifest failure");
+    coordinator.markConfirmedReplayDeliveryDeferred(review!.id);
+    expect(coordinator.hasActiveMatchCapture()).toBe(false);
+
+    coordinator.markConfirmedReplayFinalizationQueued(review!.id);
+    await expect(coordinator.waitForReplayFinalization(review!.id)).resolves.toBeUndefined();
+    coordinator.markConfirmedReplayFinalizationComplete(review!.id);
+    expect(coordinator.hasActiveMatchCapture()).toBe(false);
+    expect(finalizeRawCaptureForMatch).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps the Atlas review retryable when raw-manifest finalization fails twice", async () => {
+    const finalizeRawCaptureForMatch = vi.fn()
+      .mockRejectedValueOnce(new Error("first raw manifest failure"))
+      .mockRejectedValueOnce(new Error("second raw manifest failure"))
+      .mockResolvedValueOnce(null);
+    const { coordinator } = coordinatorHarness({
+      replayCaptureEnabled: true,
+      finalizeRawCaptureForMatch
+    });
+
+    await coordinator.handleEvent(event("match-start", {
+      active: true,
+      myName: "BMU",
+      opponentName: "Manifest Failure",
+      myChampion: "Akali",
+      opponentChampion: "Irelia",
+      matchId: "atlas-raw-repeat",
+      score: { me: "8", opp: "3", source: "atlas-score-track" }
+    }, "2026-07-21T17:00:00.000Z", "atlas"));
+
+    const review = await coordinator.forceReview("atlas");
+    expect(review).not.toBeNull();
+    await coordinator.waitForAllReplayFinalizations();
+
+    await expect(coordinator.confirmMatch(review!)).rejects.toThrow("second raw manifest failure");
+    expect(coordinator.hasActiveMatchCapture()).toBe(true);
+    await expect(coordinator.confirmMatch(review!)).resolves.toMatchObject({ id: review!.id, status: "saved" });
+    expect(finalizeRawCaptureForMatch).toHaveBeenCalledTimes(3);
   });
 
   it("ignores RiftAtlas deck builder pages that expose card-like DOM as active", async () => {
@@ -1851,6 +2319,7 @@ describe("CaptureCoordinator", () => {
 
     expect(saved).toHaveLength(1);
     expect(sent.filter((item) => item.channel === "match:draft")).toHaveLength(1);
+    expect(coordinator.hasActiveCaptureSession("atlas")).toBe(false);
     expect(diagnostics.record).toHaveBeenCalledWith(expect.objectContaining({
       kind: "debug",
       payload: expect.objectContaining({
@@ -2554,6 +3023,7 @@ describe("CaptureCoordinator", () => {
 
     expect(saved).toHaveLength(1);
     expect(sent.filter((item) => item.channel === "match:draft")).toHaveLength(1);
+    expect(coordinator.hasActiveCaptureSession("atlas")).toBe(false);
     expect(diagnostics.record).toHaveBeenCalledWith(expect.objectContaining({
       kind: "debug",
       payload: expect.objectContaining({
@@ -2829,6 +3299,187 @@ describe("CaptureCoordinator", () => {
       [2, "Win", 7, 5],
       [3, "Win", 8, 4]
     ]);
+  });
+
+  it("does not open an Atlas review for same-room clock-prefixed setup labels", async () => {
+    const { coordinator, saved, sent } = coordinatorHarness();
+    const roomCode = "ELNHM";
+    const base = {
+      active: true,
+      roomCode,
+      format: "Bo1",
+      myName: "BMU",
+      configuredUsername: "BMU",
+      myChampion: "Akali",
+      opponentChampion: "Irelia"
+    };
+    const score = (me: string, opp: string) => ({
+      me,
+      opp,
+      source: "atlas-score-track",
+      raw: [`me:active:${me}:Set your score to ${me}`, `unknown:active:${opp}:${opp}`]
+    });
+
+    await coordinator.handleEvent(event("match-start", {
+      ...base,
+      opponentName: "waffles",
+      rows: [{ text: "BMU mulliganed 1 card" }],
+      score: score("0", "0")
+    }, "2026-07-22T09:22:30.000Z", "atlas"));
+
+    const opponentSequence = [
+      ["22Locked in a", "2026-07-22T09:22:32.000Z"],
+      ["22Must", "2026-07-22T09:22:34.000Z"],
+      ["22Chose waffles to take the first", "2026-07-22T09:22:36.000Z"],
+      ["10Wins initiative (11 vs 1) and decides who plays first", "2026-07-22T09:22:38.000Z"],
+      ["waffles", "2026-07-22T09:22:40.518Z"]
+    ] as const;
+    for (const [opponentName, capturedAt] of opponentSequence) {
+      await coordinator.handleEvent(event("match-snapshot", {
+        ...base,
+        opponentName,
+        score: score("0", "0")
+      }, capturedAt, "atlas"));
+    }
+
+    expect(saved).toHaveLength(0);
+    expect(sent.filter((item) => item.channel === "match:draft")).toHaveLength(0);
+
+    await coordinator.handleEvent(event("match-snapshot", {
+      ...base,
+      opponentName: "waffles",
+      score: score("7", "5")
+    }, "2026-07-22T09:35:00.000Z", "atlas"));
+    await coordinator.handleEvent(atlasMatchComplete({
+      ...base,
+      opponentName: "waffles",
+      score: score("7", "5")
+    }, "2026-07-22T09:35:05.000Z"));
+
+    expect(saved).toHaveLength(1);
+    expect(saved[0]).toMatchObject({
+      capturedAt: "2026-07-22T09:22:30.000Z",
+      opponentName: "waffles",
+      result: "Win"
+    });
+    expect(saved[0].rawEvidence.map((item) => item.payload.opponentName)).toEqual(expect.arrayContaining([
+      "waffles",
+      "22Locked in a",
+      "22Must",
+      "22Chose waffles to take the first",
+      "10Wins initiative (11 vs 1) and decides who plays first"
+    ]));
+    expect(sent.filter((item) => item.channel === "match:draft")).toHaveLength(1);
+  });
+
+  it("reviews a meaningful Atlas game before a real replacement opponent reuses the room", async () => {
+    const { coordinator, saved, sent } = coordinatorHarness();
+    const roomCode = "REUSED";
+    const first = {
+      active: true,
+      roomCode,
+      format: "Bo1",
+      myName: "BMU",
+      configuredUsername: "BMU",
+      opponentName: "First Rival",
+      myChampion: "Akali",
+      opponentChampion: "Kennen"
+    };
+
+    await coordinator.handleEvent(event("match-start", {
+      ...first,
+      score: { me: "0", opp: "0", source: "atlas-score-track" }
+    }, "2026-07-22T10:00:00.000Z", "atlas"));
+    await coordinator.handleEvent(event("match-snapshot", {
+      ...first,
+      score: { me: "4", opp: "2", source: "atlas-score-track" }
+    }, "2026-07-22T10:04:00.000Z", "atlas"));
+    await coordinator.handleEvent(event("match-start", {
+      ...first,
+      opponentName: "Replacement Rival",
+      opponentChampion: "Irelia",
+      score: { me: "0", opp: "0", source: "atlas-score-track" }
+    }, "2026-07-22T10:05:00.000Z", "atlas"));
+
+    expect(saved).toHaveLength(1);
+    expect(saved[0]).toMatchObject({ opponentName: "First Rival", score: "1-0" });
+    expect(saved[0].games[0]).toMatchObject({ myPoints: 4, oppPoints: 2 });
+    expect(sent.filter((item) => item.channel === "match:draft")).toHaveLength(1);
+    expect(coordinator.hasActiveCaptureSession("atlas")).toBe(true);
+  });
+
+  it("keeps an incomplete Atlas BO3 for review before a different opponent starts", async () => {
+    const { coordinator, saved, sent, diagnostics } = coordinatorHarness();
+    const score = (me: string, opp: string) => ({
+      me,
+      opp,
+      source: "atlas-score-track",
+      raw: [`me:active:${me}:Set your score to ${me}`, `unknown:active:${opp}:${opp}`]
+    });
+    const firstMatch = {
+      active: true,
+      format: "Bo3",
+      myName: "BMU",
+      configuredUsername: "BMU",
+      roomCode: "FIRSTROOM",
+      opponentName: "First Rival",
+      myChampion: "Akali",
+      opponentChampion: "Kennen"
+    };
+
+    await coordinator.handleEvent(event("match-start", {
+      ...firstMatch,
+      score: score("0", "0")
+    }, "2026-07-21T11:00:00.000Z", "atlas"));
+    await coordinator.handleEvent(event("match-snapshot", {
+      ...firstMatch,
+      score: score("7", "5")
+    }, "2026-07-21T11:10:00.000Z", "atlas"));
+    await coordinator.handleEvent(event("match-end", {
+      ...firstMatch,
+      reason: "result-text-detected",
+      atlasResultKind: "game-result",
+      atlasBo3Queue: true,
+      atlasBo3GameNumber: 1,
+      endText: "Confirm Game 1 Winner",
+      score: score("7", "5")
+    }, "2026-07-21T11:10:05.000Z", "atlas"));
+
+    expect(saved).toHaveLength(0);
+
+    await coordinator.handleEvent(event("match-start", {
+      active: true,
+      format: "Bo1",
+      myName: "BMU",
+      configuredUsername: "BMU",
+      roomCode: "SECONDROOM",
+      opponentName: "Second Rival",
+      myChampion: "Mel",
+      opponentChampion: "Irelia",
+      score: score("0", "0")
+    }, "2026-07-21T11:12:30.000Z", "atlas"));
+
+    expect(saved).toHaveLength(1);
+    expect(saved[0]).toMatchObject({
+      platform: "atlas",
+      format: "Bo3",
+      result: "Incomplete",
+      score: "1-0",
+      opponentName: "First Rival"
+    });
+    expect(saved[0].games.map((game) => [game.gameNumber, game.result, game.myPoints, game.oppPoints])).toEqual([
+      [1, "Win", 7, 5]
+    ]);
+    expect(sent.filter((item) => item.channel === "match:draft")).toHaveLength(1);
+    expect(coordinator.hasActiveCaptureSession("atlas")).toBe(true);
+    expect(diagnostics.record).toHaveBeenCalledWith(expect.objectContaining({
+      kind: "debug",
+      payload: expect.objectContaining({
+        callSite: "rollover-before-new-session",
+        guardReason: "FINAL_GUARD_ATLAS_AUTHORITATIVE_ROLLOVER",
+        emittedToRenderer: true
+      })
+    }));
   });
 
   it("finalizes RiftAtlas game two as one Bo3 when the second confirm is followed by a real match exit", async () => {

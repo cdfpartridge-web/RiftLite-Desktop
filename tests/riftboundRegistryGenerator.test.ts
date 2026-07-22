@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   dedupeCards,
+  mergeRegistryOverlay,
   normalizePrintId,
   normalizeSourceCard,
   validateRegistry,
@@ -114,6 +115,21 @@ describe("RiftCodex registry generator", () => {
       imageHash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     };
     expect(() => dedupeCards([first, second])).toThrow(/multiple images/i);
+  });
+
+  it("keeps observed TCGA alternate artwork hashes attached to their exact print", () => {
+    const card = normalizeSourceCard(sourceCard({
+      name: "Risen Altar",
+      riftbound_id: "ven-163-166",
+      classification: { type: "Battlefield", supertype: null },
+    }), "VEN");
+    const alternateHash = "e41bc5d29f91f652d553bef56e2c84e95010ef1a";
+    const merged = mergeRegistryOverlay([card], {
+      imageHashAliasesByPrintId: { "VEN-163": [alternateHash] },
+    });
+
+    expect(merged.cards[0].imageHashAliases).toEqual([alternateHash]);
+    expect(validateRegistry(merged.cards).uniqueImageHashes).toBe(2);
   });
 
   it("enforces required codes and per-set count floors", () => {

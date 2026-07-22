@@ -1,9 +1,44 @@
 import { ipcRenderer } from "electron";
+import {
+  atlasBattlefieldCardsByOwner,
+  atlasBattlefieldZonesForSeat,
+  type AtlasPlayerSeat
+} from "../shared/atlasBattlefieldOwnership.js";
+import {
+  ATLAS_EMPTY_SHELL_MIN_AGE_MS,
+  assessAtlasShell,
+  atlasVisibleEmptyCheckDelay,
+  isAtlasAuthSurfaceEvidence,
+  shouldReportAtlasEmptyShell
+} from "../shared/atlasShellHealth.js";
 import { riftboundCardCodeFromValue } from "../shared/cardIdentity.js";
+import { gamePlatformForTrustedUrl } from "../shared/embeddedContentSecurity.js";
+import { resolveGameWebviewPlatformIdentity } from "../shared/gameWebviewIdentity.js";
+import {
+  ATLAS_BATTLEFIELD_SEAT_IPC_CHANNEL,
+  atlasPlayerIdFromUrl,
+  atlasRoomCodeFromUrl,
+  parseAtlasPlayerSeatFrame,
+  validatedAtlasBattlefieldSeatSignal,
+  type AtlasBattlefieldSeatSignal,
+  type AtlasPlayerSeatEvidence
+} from "../shared/atlasSeatTracker.js";
 import { readTcgaLocalPlayerName, readTcgaProfileName } from "../shared/tcgaIdentity.js";
+import { shouldCaptureTcgaResearchCheckpoint } from "../shared/tcgaResearchCheckpoint.js";
 import type { BattlefieldCandidate, CaptureEvent, CaptureKind, GamePlatform } from "../shared/types.js";
 
-const platform = (location.host.includes("riftatlas") ? "atlas" : "tcga") as GamePlatform;
+function trustedGameWebviewPlatform(): GamePlatform {
+  const resolved = resolveGameWebviewPlatformIdentity(
+    process.argv,
+    gamePlatformForTrustedUrl(location.href, true)
+  );
+  if (!resolved) {
+    throw new Error("RiftLite game preload could not establish a trusted platform identity.");
+  }
+  return resolved;
+}
+
+const platform = trustedGameWebviewPlatform();
 const MAX_TEXT = 4000;
 const INTERESTING_URL = /(match|game|live|socket|state|battle|deck|arena|atlas|api)/i;
 const SCORE_KEYS = /(score|scores|point|points|counter|counters|damage|total)/i;
@@ -11,6 +46,9 @@ const SNAPSHOT_DEBOUNCE_MS = 800;
 const ACTIVE_HEARTBEAT_MS = 5_000;
 const IDLE_HEARTBEAT_MS = 12_000;
 const DEBUG_MODE_REFRESH_MS = 10_000;
+const TCGA_RESEARCH_MODE_REFRESH_MS = 2_000;
+const TCGA_RESEARCH_MAX_IPC_BYTES = 3_500_000;
+const TCGA_RESEARCH_DOM_CHECKPOINT_MIN_INTERVAL_MS = 10_000;
 const ATLAS_INTERACTION_QUIET_MS = 900;
 const DECK_TRACKER_FEATURE_ENABLED = false;
 const BATTLEFIELD_NAMES = [
@@ -109,6 +147,7 @@ let previousActive = false;
 let endTimer: number | undefined;
 let lastActiveSnapshot: Record<string, unknown> = {};
 let lastSnapshotSignature = "";
+let lastTcgaResearchSignature = "";
 let lastEndSignature = "";
 let endedVisibleResultKey = "";
 let snapshotTimer: number | undefined;
@@ -116,6 +155,9 @@ let eventCounter = 0;
 let rawCaptureSeq = 0;
 let rawCaptureSocketSeq = 1;
 let debugEnabled = false;
+let tcgaReplayResearchActive = false;
+let lastTcgaResearchCheckpointAt = 0;
+let tcgaResearchInteractionCheckpointPending = false;
 let lastDebugMutationAt = 0;
 let lastSnapshotPublishedAt = 0;
 let atlasInteractionQuietUntil = 0;
@@ -123,6 +165,11 @@ let atlasInteractionSettleTimer: number | undefined;
 let atlasDeferredMutationSnapshot = false;
 let atlasEmptyShellReported = false;
 let atlasShellReadyReported = false;
+let atlasShellChecksStartedAt = 0;
+let atlasShellMutationCheckTimer: number | undefined;
+let atlasLocalPlayerSeat: AtlasPlayerSeat | null = null;
+let atlasBattlefieldSeatRoomCode = "";
+let atlasBattlefieldSeatSocketId = "";
 
 type CounterPlayer = {
   name: string;
@@ -181,6 +228,19 @@ function send(kind: CaptureKind, payload: Record<string, unknown>): void {
   };
   ipcRenderer.send("capture:event", event);
   ipcRenderer.sendToHost("capture:event", event);
+}
+
+function sendTcgaReplayResearch(kind: "dom-checkpoint" | "interaction", payload: Record<string, unknown>): void {
+  if (platform !== "tcga" || !tcgaReplayResearchActive) return;
+  ipcRenderer.send("capture:tcga-research-event", {
+    schema: "riftlite-tcga-preload-research",
+    version: 1,
+    id: eventId(),
+    kind,
+    capturedAt: now(),
+    url: location.href,
+    payload
+  });
 }
 
 function sendDebug(reason: string, payload: Record<string, unknown> = {}): void {
@@ -1175,8 +1235,10 @@ function readAtlasSnapshot(): Record<string, unknown> {
   const myLegendCard = atlasCardByZone(zoneCards, "self", "legend");
   const opponentLegendCard = atlasCardByZone(zoneCards, "opponent", "legend");
   const battlefieldCards = readAtlasBattlefieldCards(zoneCards);
-  const myBattlefieldCard = battlefieldCards.find((card) => card.zone === "battlefieldB") ?? emptyAtlasCard();
-  const opponentBattlefieldCard = battlefieldCards.find((card) => card.zone === "battlefieldA") ?? emptyAtlasCard();
+  const battlefieldZones = atlasBattlefieldZonesForSeat(atlasLocalPlayerSeat);
+  const ownedBattlefields = atlasBattlefieldCardsByOwner(battlefieldCards, atlasLocalPlayerSeat);
+  const myBattlefieldCard = ownedBattlefields.me ?? emptyAtlasCard();
+  const opponentBattlefieldCard = ownedBattlefields.opponent ?? emptyAtlasCard();
   return {
     active,
     score,
@@ -1190,7 +1252,7 @@ function readAtlasSnapshot(): Record<string, unknown> {
       left: candidate.left
     })).slice(0, 10),
     rows: logRows,
-    roomCode: readRoomCode(bodyText),
+    roomCode: readRoomCode(bodyText) || atlasBattlefieldSeatRoomCode,
     format: readAtlasFormat(bodyText),
     atlasSideboarding: sideboarding,
     atlasBo3Queue,
@@ -1213,10 +1275,15 @@ function readAtlasSnapshot(): Record<string, unknown> {
     opponentBattlefieldCode: riftboundCardCodeFromValue(opponentBattlefieldCard.code),
     myBattlefieldImage: myBattlefieldCard.image,
     opponentBattlefieldImage: opponentBattlefieldCard.image,
-    battlefieldCandidates: [
-      atlasBattlefieldCandidate("me", myBattlefieldCard),
-      atlasBattlefieldCandidate("opponent", opponentBattlefieldCard)
-    ].filter((candidate) => candidate.image || candidate.code || candidate.text),
+    atlasLocalPlayerSeat: atlasLocalPlayerSeat ?? "",
+    atlasLocalBattlefieldZone: battlefieldZones?.me ?? "",
+    atlasOpponentBattlefieldZone: battlefieldZones?.opponent ?? "",
+    battlefieldCandidates: atlasLocalPlayerSeat === null
+      ? []
+      : [
+          atlasBattlefieldCandidate("me", myBattlefieldCard),
+          atlasBattlefieldCandidate("opponent", opponentBattlefieldCard)
+        ].filter((candidate) => candidate.image || candidate.code || candidate.text),
     ...(DECK_TRACKER_FEATURE_ENABLED ? { deckTrackerCards: collectAtlasDeckTrackerCards(zoneCards) } : {}),
     endText: terminalText
   };
@@ -1249,6 +1316,198 @@ function collectTcgaVisibleCards(): Array<Record<string, string>> {
       includeClasses: true
     }
   );
+}
+
+function tcgaResearchAttributes(element: Element): Record<string, string> {
+  const attributes: Record<string, string> = {};
+  for (const attribute of Array.from(element.attributes).slice(0, 48)) {
+    if (!/^(?:id|class|role|title|aria-[\w-]+|data-[\w-]+)$/i.test(attribute.name)) {
+      continue;
+    }
+    attributes[attribute.name] = attribute.value.slice(0, 500);
+  }
+  return attributes;
+}
+
+function tcgaResearchRect(element: Element): Record<string, number> {
+  const rect = element.getBoundingClientRect();
+  return {
+    x: Math.round(rect.x),
+    y: Math.round(rect.y),
+    width: Math.round(rect.width),
+    height: Math.round(rect.height)
+  };
+}
+
+function tcgaResearchElement(element: Element, includeImages = false): Record<string, unknown> {
+  const editable = element.matches("input, textarea, [contenteditable='true']") || Boolean(element.closest("[contenteditable='true']"));
+  const images = includeImages
+    ? Array.from(element.matches("img") ? [element] : element.querySelectorAll("img")).slice(0, 4).map((candidate) => {
+        const image = candidate as HTMLImageElement;
+        return {
+          src: (image.currentSrc || image.src || attr(image, "data-src")).slice(0, 2_000),
+          alt: attr(image, "alt").slice(0, 300),
+          classes: attr(image, "class").slice(0, 300)
+        };
+      })
+    : [];
+  const parentPath: Array<Record<string, string>> = [];
+  let parent = element.parentElement;
+  for (let depth = 0; parent && depth < 4; depth += 1, parent = parent.parentElement) {
+    parentPath.push({
+      tag: parent.tagName.toLowerCase(),
+      id: attr(parent, "id").slice(0, 160),
+      classes: attr(parent, "class").slice(0, 500),
+      dropZone: attr(parent, "data-drop-zone").slice(0, 160),
+      zoneOwner: attr(parent, "data-zone-owner").slice(0, 160)
+    });
+  }
+  return {
+    tag: element.tagName.toLowerCase(),
+    text: editable ? "" : textOf(element).slice(0, 800),
+    attributes: tcgaResearchAttributes(element),
+    rect: tcgaResearchRect(element),
+    parentPath,
+    ...(images.length ? { images } : {})
+  };
+}
+
+function collectTcgaResearchCards(): Array<Record<string, unknown>> {
+  const seen = new Set<Element>();
+  const cards: Array<Record<string, unknown>> = [];
+  const candidates = document.querySelectorAll([
+    ".game-card",
+    "[data-card-id]",
+    "[data-drop-zone] img[src*='/cards/']",
+    "img[src*='game_data_live']"
+  ].join(", "));
+  for (const candidate of Array.from(candidates)) {
+    const element = candidate instanceof HTMLImageElement
+      ? candidate.closest(".game-card, [data-card-id], [class*='card' i]") ?? candidate
+      : candidate;
+    if (seen.has(element)) continue;
+    seen.add(element);
+    const image = element instanceof HTMLImageElement ? element : element.querySelector("img") as HTMLImageElement | null;
+    const imageUrl = image?.currentSrc || image?.src || attr(image, "data-src");
+    const classes = attr(element, "class");
+    cards.push({
+      ...tcgaResearchElement(element, true),
+      cardId: attr(element, "data-card-id") || attr(image, "data-card-id"),
+      code: cardCodeFromImage(imageUrl),
+      imageUrl: imageUrl.slice(0, 2_000),
+      zone: attr(element, "data-drop-zone") || attr(element.closest("[data-drop-zone]"), "data-drop-zone"),
+      zoneOwner: attr(element, "data-zone-owner") || attr(element.closest("[data-zone-owner]"), "data-zone-owner"),
+      opponent: /opponent/i.test(`${classes} ${attr(element.parentElement, "class")}`),
+      hidden: isCardBackImage(imageUrl) || /hidden|card-back|face-down/i.test(classes)
+    });
+    if (cards.length >= 180) break;
+  }
+  return cards;
+}
+
+function collectTcgaResearchElements(selector: string, limit: number): Array<Record<string, unknown>> {
+  const results: Array<Record<string, unknown>> = [];
+  const seen = new Set<Element>();
+  for (const element of Array.from(document.querySelectorAll(selector))) {
+    if (seen.has(element)) continue;
+    seen.add(element);
+    const rect = element.getBoundingClientRect();
+    if (rect.width <= 0 && rect.height <= 0) continue;
+    results.push(tcgaResearchElement(element));
+    if (results.length >= limit) break;
+  }
+  return results;
+}
+
+function collectTcgaResearchState(): Record<string, unknown> {
+  return {
+    schema: "riftlite-tcga-dom-checkpoint",
+    version: 1,
+    path: location.pathname,
+    viewport: {
+      width: Math.round(window.innerWidth),
+      height: Math.round(window.innerHeight),
+      devicePixelRatio: window.devicePixelRatio
+    },
+    cards: collectTcgaResearchCards(),
+    zones: collectTcgaResearchElements("[data-drop-zone], [data-zone-owner], [class*='play-zone' i], [class*='battlefield-zone' i], [class*='base-zone' i]", 120),
+    logs: collectTcgaResearchElements("[role='log'] li, [class*='matchLog' i] li, [class*='game-log' i] li, [class*='history' i] li", 120),
+    dialogs: collectTcgaResearchElements("[role='dialog'], [class*='modal' i], [class*='dialog' i]", 30),
+    controls: collectTcgaResearchElements("button, [role='button']", 100),
+    storageKeys: safeStorageKeys()
+  };
+}
+
+function tcgaResearchByteLength(value: unknown): number {
+  try {
+    return new TextEncoder().encode(JSON.stringify(value)).byteLength;
+  } catch {
+    return Number.POSITIVE_INFINITY;
+  }
+}
+
+function boundedTcgaResearchState(state: Record<string, unknown>): Record<string, unknown> {
+  const arrayKeys = ["controls", "logs", "zones", "dialogs", "cards"] as const;
+  const originalCounts = Object.fromEntries(arrayKeys.map((key) => [
+    key,
+    Array.isArray(state[key]) ? state[key].length : 0
+  ]));
+  let candidate = { ...state };
+  let truncated = false;
+  while (tcgaResearchByteLength(candidate) > TCGA_RESEARCH_MAX_IPC_BYTES) {
+    let reduced = false;
+    for (const key of arrayKeys) {
+      const values = candidate[key];
+      if (!Array.isArray(values) || values.length <= 8) continue;
+      candidate = {
+        ...candidate,
+        [key]: values.slice(0, Math.max(8, Math.floor(values.length / 2)))
+      };
+      truncated = true;
+      reduced = true;
+      if (tcgaResearchByteLength(candidate) <= TCGA_RESEARCH_MAX_IPC_BYTES) break;
+    }
+    if (!reduced) break;
+  }
+  if (tcgaResearchByteLength(candidate) > TCGA_RESEARCH_MAX_IPC_BYTES) {
+    return {
+      schema: state.schema,
+      version: state.version,
+      path: state.path,
+      viewport: state.viewport,
+      storageKeys: state.storageKeys,
+      truncatedForIpc: true,
+      originalCounts
+    };
+  }
+  return truncated ? { ...candidate, truncatedForIpc: true, originalCounts } : candidate;
+}
+
+function tcgaResearchInteractionTarget(value: EventTarget | null): Record<string, unknown> {
+  return value instanceof Element ? tcgaResearchElement(value.closest("button, [role='button'], .game-card, [data-card-id], [data-drop-zone]") ?? value, true) : {};
+}
+
+function installTcgaResearchInteractionCapture(): void {
+  if (platform !== "tcga") return;
+  const record = (event: Event) => {
+    if (!tcgaReplayResearchActive) return;
+    const pointer = event as MouseEvent;
+    sendTcgaReplayResearch("interaction", {
+      reason: "tcga-replay-research-interaction",
+      schema: "riftlite-tcga-interaction",
+      version: 1,
+      interaction: event.type,
+      target: tcgaResearchInteractionTarget(event.target),
+      x: Number.isFinite(pointer.clientX) ? Math.round(pointer.clientX) : undefined,
+      y: Number.isFinite(pointer.clientY) ? Math.round(pointer.clientY) : undefined,
+      button: Number.isFinite(pointer.button) ? pointer.button : undefined
+    });
+    tcgaResearchInteractionCheckpointPending = true;
+    scheduleSnapshot("tcga-replay-research-interaction");
+  };
+  for (const eventName of ["click", "dragstart", "drop"]) {
+    window.addEventListener(eventName, record, { capture: true, passive: true });
+  }
 }
 
 function collectTcgaDeckTrackerCards(cards: Array<Record<string, string>> = collectTcgaVisibleCards()): Array<Record<string, unknown>> {
@@ -1770,6 +2029,9 @@ function isLikelyAtlasPlayerName(value: string): boolean {
   if (!name || name.length > 36 || /^\d+$/.test(name)) {
     return false;
   }
+  if (isLikelyAtlasPlayerActionText(name)) {
+    return false;
+  }
   const key = normalizeNameKey(name);
   if (isAtlasGenericName(name) || BATTLEFIELD_NAMES.some((item) => normalizeNameKey(item.name) === key || normalizeNameKey(item.canonical) === key)) {
     return false;
@@ -1781,6 +2043,18 @@ function isLikelyAtlasPlayerName(value: string): boolean {
     return false;
   }
   return true;
+}
+
+function isLikelyAtlasPlayerActionText(value: string): boolean {
+  const normalized = normalizeNameKey(value);
+  const withoutClockPrefix = normalized.replace(/^[\d\s:.-]+/, "");
+  if (!withoutClockPrefix) {
+    return false;
+  }
+  return /^(locked|chose|auto[-\s]?selected|selected|both players|finalized|rolled|(?:wins?|won) initiative|played|moved|drew|ended|conquered|scored|set your score)\b/.test(withoutClockPrefix) ||
+    /^must choose\b/.test(withoutClockPrefix) ||
+    (/^\d/.test(normalized) && /^must\b/.test(withoutClockPrefix)) ||
+    /\b(take the first|decides who plays first|locked in|locked a battlefield|mulligan|sideboarding|sideboard|their turn|your turn)\b/.test(withoutClockPrefix);
 }
 
 function chooseAtlasOpponentName(candidates: AtlasPlayerCandidate[], localName: string): string {
@@ -1837,13 +2111,16 @@ function readAtlasBattlefieldCard(owner: "player" | "opponent"): { text: string;
   return { text: "", image: "", code: "" };
 }
 
-function atlasBattlefieldCandidate(side: BattlefieldCandidate["side"], card: { text: string; image: string; code: string }): BattlefieldCandidate {
+function atlasBattlefieldCandidate(
+  side: BattlefieldCandidate["side"],
+  card: { text: string; image: string; code: string; zone?: string }
+): BattlefieldCandidate {
   return {
     side,
     image: card.image,
     code: card.code,
     text: card.text.slice(0, 180),
-    classes: "atlas-battlefield",
+    classes: `atlas-battlefield ${card.zone ?? ""}`.trim(),
     hidden: false,
     capturedAt: now()
   };
@@ -1941,34 +2218,108 @@ function reportAtlasShellStatusIfNeeded(allowEmpty = false): void {
     .filter(isVisibleShellElement);
   const gameSurfaceElements = Array.from(document.querySelectorAll("canvas, [data-card-id], [data-drop-zone], [data-zone-owner]"))
     .filter(isVisibleShellElement);
-  const visibleText = Array.from(document.querySelectorAll("h1, h2, h3, p, li, label, button, a, [role='button'], [role='dialog']"))
-    .filter(isVisibleShellElement)
-    .map((element) => textOf(element))
+  const visibleTextElements = Array.from(document.querySelectorAll("h1, h2, h3, p, li, label, button, a, [role='button'], [role='dialog']"))
+    .filter(isVisibleShellElement);
+  const visibleText = visibleTextElements
+    .map((element) => shellElementText(element))
     .filter(Boolean)
     .join(" ")
     .slice(0, 5_000);
-  const hasAtlasAppText = /\blobby\b|host room|join room|find random match|quick match|choose deck|import deck|new deck|match history|sign in|log in/i.test(visibleText);
-  const hasAtlasApp = hasAtlasAppText || interactiveElements.length >= 4 || gameSurfaceElements.length > 0;
-  if (hasAtlasApp) {
+  const interactiveText = interactiveElements
+    .map((element) => shellElementText(element))
+    .filter(Boolean)
+    .join(" ")
+    .slice(0, 5_000);
+  const headingElements = Array.from(document.querySelectorAll("h1, h2, h3")).filter(isVisibleShellElement);
+  const assessment = assessAtlasShell({
+    hostname: location.hostname,
+    pathname: location.pathname,
+    visibleText,
+    interactiveText,
+    interactiveCount: interactiveElements.length,
+    gameSurfaceCount: gameSurfaceElements.length,
+    lobbyHeadingCount: headingElements.filter((element) => /^lobby$/i.test(shellElementText(element))).length,
+    authHeadingCount: headingElements.filter((element) => /^(?:sign in|log in|sign up|create account)$/i.test(shellElementText(element))).length,
+    authFormCount: Array.from(document.querySelectorAll("form, [data-clerk-component], [class*='cl-rootBox'], [class*='cl-card']"))
+      .filter(isVisibleShellElement)
+      .filter(isAtlasAuthSurface)
+      .length
+  });
+  const shellEvidence = {
+    interactiveCount: interactiveElements.length,
+    gameSurfaceCount: gameSurfaceElements.length,
+    visibleTextLength: visibleText.length,
+    routeKind: assessment.routeKind,
+    readyReason: assessment.readyReason,
+    lobbyActionCount: assessment.lobbyActionCount,
+    authMarkerCount: assessment.authMarkerCount,
+    gameMarkerCount: assessment.gameMarkerCount
+  };
+  if (assessment.ready) {
     atlasShellReadyReported = true;
     send("debug", {
       reason: "atlas-app-shell-ready",
-      interactiveCount: interactiveElements.length,
-      gameSurfaceCount: gameSurfaceElements.length,
-      visibleTextLength: visibleText.length
+      ...shellEvidence
     });
     return;
   }
-  if (allowEmpty && !atlasEmptyShellReported && interactiveElements.length <= 3) {
+  if (shouldReportAtlasEmptyShell(assessment, allowEmpty, atlasEmptyShellReported)) {
     atlasEmptyShellReported = true;
     send("debug", {
       reason: "atlas-app-shell-empty",
       ...debugSnapshot(),
-      interactiveCount: interactiveElements.length,
-      visibleTextLength: visibleText.length,
+      ...shellEvidence,
       visibleText: visibleText.slice(0, 800)
     });
   }
+}
+
+function isAtlasAuthSurface(element: Element): boolean {
+  return isAtlasAuthSurfaceEvidence({
+    isClerkSurface: element.matches("[data-clerk-component], [class*='cl-rootBox'], [class*='cl-card']"),
+    hasPasswordInput: Boolean(element.querySelector("input[type='password'], input[autocomplete='current-password']")),
+    hasOneTimeCodeInput: Boolean(element.querySelector("input[autocomplete='one-time-code']")),
+    hasIdentifierInput: Boolean(element.querySelector(
+      "input[autocomplete='username'], input[autocomplete='email'], input[name*='identifier' i], input[name*='email' i]"
+    )),
+    text: shellElementText(element)
+  });
+}
+
+function shellElementText(element: Element): string {
+  return [
+    textOf(element),
+    element.getAttribute("aria-label") ?? "",
+    element.getAttribute("title") ?? "",
+    element.getAttribute("placeholder") ?? ""
+  ].filter(Boolean).join(" ");
+}
+
+function scheduleAtlasShellMutationCheck(): void {
+  if (
+    platform !== "atlas" ||
+    atlasShellReadyReported ||
+    atlasEmptyShellReported ||
+    atlasShellMutationCheckTimer !== undefined
+  ) {
+    return;
+  }
+  atlasShellMutationCheckTimer = window.setTimeout(() => {
+    atlasShellMutationCheckTimer = undefined;
+    reportAtlasShellStatusIfNeeded(false);
+  }, 250);
+}
+
+function checkAtlasShellAfterBecomingVisible(): void {
+  if (platform !== "atlas" || document.visibilityState === "hidden" || atlasShellReadyReported) {
+    return;
+  }
+  reportAtlasShellStatusIfNeeded(false);
+  const elapsed = Date.now() - atlasShellChecksStartedAt;
+  window.setTimeout(
+    () => reportAtlasShellStatusIfNeeded(true),
+    atlasVisibleEmptyCheckDelay(elapsed)
+  );
 }
 
 function snapshot(): Record<string, unknown> {
@@ -1991,6 +2342,31 @@ function publishSnapshot(reason: string): void {
   }
   lastSnapshotPublishedAt = current;
   const data = snapshot();
+  if (platform === "tcga" && tcgaReplayResearchActive) {
+    const forceResearchCheckpoint = reason === "initial" ||
+      reason === "tcga-replay-research-enabled" ||
+      tcgaResearchInteractionCheckpointPending;
+    if (shouldCaptureTcgaResearchCheckpoint({
+      reason,
+      currentTime: current,
+      lastCheckpointAt: lastTcgaResearchCheckpointAt,
+      interactionPending: tcgaResearchInteractionCheckpointPending,
+      minimumIntervalMs: TCGA_RESEARCH_DOM_CHECKPOINT_MIN_INTERVAL_MS
+    })) {
+      lastTcgaResearchCheckpointAt = current;
+      tcgaResearchInteractionCheckpointPending = false;
+      const researchState = boundedTcgaResearchState(collectTcgaResearchState());
+      const researchSignature = JSON.stringify(researchState);
+      if (forceResearchCheckpoint || researchSignature !== lastTcgaResearchSignature) {
+        lastTcgaResearchSignature = researchSignature;
+        sendTcgaReplayResearch("dom-checkpoint", {
+          reason,
+          matchSnapshot: data,
+          state: researchState
+        });
+      }
+    }
+  }
   const active = Boolean(data.active);
   const endText = typeof data.endText === "string" ? data.endText.trim() : "";
   const visibleResultKey = endText ? normalizeVisibleResultKey(endText) : "";
@@ -2145,6 +2521,7 @@ function installDomObserver(): void {
     }
     installAtlasInteractionThrottle();
     const observer = new MutationObserver((mutations) => {
+      scheduleAtlasShellMutationCheck();
       if (platform === "atlas" && atlasInteractionIsQuiet()) {
         const critical = mutations.some((mutation) =>
           /modal|dialog|result|winner|victory|defeat|concede|report|toast|log|history|score|track|counter|mulligan|sideboard|turn|battlefield/i.test(mutationText(mutation))
@@ -2180,10 +2557,12 @@ function installDomObserver(): void {
     sendDebug("capture-ready-debug");
     publishSnapshot("initial");
     if (platform === "atlas") {
+      atlasShellChecksStartedAt = Date.now();
+      document.addEventListener("visibilitychange", checkAtlasShellAfterBecomingVisible);
       for (const delay of [250, 750, 1_500, 3_000, 5_000]) {
         window.setTimeout(() => reportAtlasShellStatusIfNeeded(false), delay);
       }
-      window.setTimeout(() => reportAtlasShellStatusIfNeeded(true), 8_000);
+      window.setTimeout(() => reportAtlasShellStatusIfNeeded(true), ATLAS_EMPTY_SHELL_MIN_AGE_MS);
       window.setTimeout(() => reportAtlasShellStatusIfNeeded(true), 18_000);
     }
     const heartbeat = () => {
@@ -2256,6 +2635,7 @@ function installNetworkHooks(): void {
       } else {
         super(url, protocols);
       }
+      prepareAtlasBattlefieldSeatSocket(requestUrl, rawCaptureSocketId);
       this.addEventListener("message", (message) => {
         readWebSocketMessageText(message.data, (raw) => {
           handleWebSocketMessageText(requestUrl, raw, "in", rawCaptureSocketId);
@@ -2273,6 +2653,7 @@ function installNetworkHooks(): void {
 }
 
 function handleWebSocketMessageText(requestUrl: string, raw: string, dir: "in" | "out", socketId = ""): void {
+  updateAtlasBattlefieldSeatFromFrame(requestUrl, raw, dir, socketId);
   captureRawAtlasFrame(requestUrl, raw, dir, socketId);
   const shouldCapture = raw && (
     INTERESTING_URL.test(requestUrl + raw.slice(0, 500)) ||
@@ -2289,6 +2670,116 @@ function handleWebSocketMessageText(requestUrl: string, raw: string, dir: "in" |
   });
   sendDebug("network-websocket-debug", { requestUrl });
   scheduleSnapshot("websocket");
+}
+
+function prepareAtlasBattlefieldSeatSocket(requestUrl: string, socketId: string): void {
+  if (platform !== "atlas" || !socketId) {
+    return;
+  }
+  const roomCode = atlasRoomCodeFromUrl(requestUrl);
+  const localPlayerId = atlasPlayerIdFromUrl(requestUrl);
+  if (!roomCode || !localPlayerId) {
+    return;
+  }
+  const previousRoomCode = atlasBattlefieldSeatRoomCode;
+  const roomChanged = Boolean(previousRoomCode && previousRoomCode !== roomCode);
+  atlasBattlefieldSeatRoomCode = roomCode;
+  atlasBattlefieldSeatSocketId = socketId;
+  if (!roomChanged) {
+    return;
+  }
+  atlasLocalPlayerSeat = null;
+  send("debug", {
+    reason: "atlas-battlefield-seat-reset",
+    roomCode,
+    previousRoomCode,
+    atlasLocalPlayerSeat: "",
+    atlasLocalBattlefieldZone: "",
+    atlasOpponentBattlefieldZone: ""
+  });
+}
+
+function updateAtlasBattlefieldSeatFromFrame(
+  requestUrl: string,
+  raw: string,
+  dir: "in" | "out",
+  socketId: string
+): void {
+  if (
+    platform !== "atlas" ||
+    dir !== "in" ||
+    !socketId ||
+    (atlasBattlefieldSeatSocketId && socketId !== atlasBattlefieldSeatSocketId)
+  ) {
+    return;
+  }
+  const evidence = parseAtlasPlayerSeatFrame({
+    platform: "atlas",
+    requestUrl,
+    frame: {
+      seq: rawCaptureSeq,
+      ts: Date.now(),
+      dir,
+      socketId,
+      raw
+    }
+  });
+  if (
+    !evidence ||
+    (atlasBattlefieldSeatRoomCode && evidence.roomCode && evidence.roomCode !== atlasBattlefieldSeatRoomCode)
+  ) {
+    return;
+  }
+  applyAtlasBattlefieldSeatEvidence(evidence, "preload-websocket");
+}
+
+function applyAtlasBattlefieldSeatEvidence(
+  evidence: AtlasPlayerSeatEvidence | AtlasBattlefieldSeatSignal,
+  source: "preload-websocket" | "main-debugger-bridge"
+): void {
+  const previousRoomCode = atlasBattlefieldSeatRoomCode;
+  if (previousRoomCode && evidence.roomCode && evidence.roomCode !== previousRoomCode) {
+    atlasLocalPlayerSeat = null;
+    send("debug", {
+      reason: "atlas-battlefield-seat-reset",
+      source,
+      roomCode: evidence.roomCode,
+      previousRoomCode,
+      atlasLocalPlayerSeat: "",
+      atlasLocalBattlefieldZone: "",
+      atlasOpponentBattlefieldZone: ""
+    });
+  }
+  atlasBattlefieldSeatRoomCode = evidence.roomCode || atlasBattlefieldSeatRoomCode;
+  if (atlasLocalPlayerSeat === evidence.localSeat) {
+    return;
+  }
+  atlasLocalPlayerSeat = evidence.localSeat;
+  lastSnapshotSignature = "";
+  const zones = atlasBattlefieldZonesForSeat(evidence.localSeat);
+  send("debug", {
+    reason: "atlas-battlefield-seat-resolved",
+    source,
+    roomCode: atlasBattlefieldSeatRoomCode,
+    atlasGameInstanceId: evidence.gameInstanceId,
+    atlasLocalPlayerSeat: evidence.localSeat,
+    atlasLocalBattlefieldZone: zones?.me ?? "",
+    atlasOpponentBattlefieldZone: zones?.opponent ?? ""
+  });
+  scheduleSnapshot("atlas-battlefield-seat-resolved");
+}
+
+function installAtlasBattlefieldSeatBridge(): void {
+  if (platform !== "atlas") {
+    return;
+  }
+  ipcRenderer.on(ATLAS_BATTLEFIELD_SEAT_IPC_CHANNEL, (_event, value: unknown) => {
+    const evidence = validatedAtlasBattlefieldSeatSignal(value);
+    if (!evidence) {
+      return;
+    }
+    applyAtlasBattlefieldSeatEvidence(evidence, "main-debugger-bridge");
+  });
 }
 
 function captureRawAtlasFrame(requestUrl: string, raw: string, dir: "in" | "out", socketId = ""): void {
@@ -2373,6 +2864,24 @@ function installDebugCapture(): void {
   refreshDebugMode();
   window.setInterval(refreshDebugMode, DEBUG_MODE_REFRESH_MS);
 
+  const refreshTcgaReplayResearchMode = () => {
+    if (platform !== "tcga") return;
+    void ipcRenderer.invoke("capture:tcga-replay-research-active")
+      .then((enabled) => {
+        const next = enabled === true;
+        if (next === tcgaReplayResearchActive) return;
+        tcgaReplayResearchActive = next;
+        lastTcgaResearchSignature = "";
+        lastTcgaResearchCheckpointAt = 0;
+        tcgaResearchInteractionCheckpointPending = false;
+        send("debug", { reason: next ? "tcga-replay-research-enabled" : "tcga-replay-research-disabled" });
+        if (next) publishSnapshot("tcga-replay-research-enabled");
+      })
+      .catch(() => undefined);
+  };
+  refreshTcgaReplayResearchMode();
+  window.setInterval(refreshTcgaReplayResearchMode, TCGA_RESEARCH_MODE_REFRESH_MS);
+
   window.addEventListener("error", (event) => {
     sendDebug("window-error", {
       message: event.message,
@@ -2410,6 +2919,8 @@ declare global {
   }
 }
 
+installAtlasBattlefieldSeatBridge();
 installNetworkHooks();
 installDebugCapture();
+installTcgaResearchInteractionCapture();
 installDomObserver();

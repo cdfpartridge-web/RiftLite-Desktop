@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   getRiftLiteAccountState,
   hasCompleteAccountProfile,
+  hasVerifiedRiftLiteAccount,
   isGenericAccountDisplayName,
   linkedAccountAuthUidMatches,
   verifiedAccountConnectionUid,
@@ -53,6 +54,19 @@ describe("account identity", () => {
     expect(resolveCompletedAccountLinkUid("", "account-1")).toBe("account-1");
     expect(resolveCompletedAccountLinkUid("account-1", "account-2")).toBe("");
     expect(resolveCompletedAccountLinkUid("account-1", "")).toBe("");
+  });
+
+  it("requires a completed connection check before account-bound uploads", () => {
+    const verified = {
+      accountUid: "account-1",
+      firebaseRefreshToken: "refresh-token",
+      accountLastVerifiedAt: "2026-07-21T14:00:00.000Z",
+      accountLastVerificationError: ""
+    };
+    expect(hasVerifiedRiftLiteAccount(verified)).toBe(true);
+    expect(hasVerifiedRiftLiteAccount({ ...verified, accountLastVerifiedAt: "" })).toBe(false);
+    expect(hasVerifiedRiftLiteAccount({ ...verified, accountLastVerificationError: "Account needs attention." })).toBe(false);
+    expect(hasVerifiedRiftLiteAccount({ ...verified, firebaseRefreshToken: "" })).toBe(false);
   });
 
   it("accepts a server-verified Firebase alias without accepting unrelated accounts", () => {

@@ -44,7 +44,7 @@ describe("Atlas shell cover visibility", () => {
       "atlas-shell-ready",
       "empty-shell-recovery-started"
     ]);
-    expect(recovering).toBe("covered");
+    expect(recovering).toBe("recovering");
     expect(shouldCoverAtlasShell(recovering)).toBe(true);
 
     const recovered = updateAtlasShellVisibility(recovering, "atlas-shell-ready");
@@ -68,5 +68,20 @@ describe("Atlas shell cover visibility", () => {
 
   it("keeps duplicate entry events from covering an already-ready shell", () => {
     expect(transition(["atlas-entered", "atlas-shell-ready", "atlas-entered"])).toBe("ready");
+  });
+
+  it("reveals an unrecognized shell after a bounded wait and still accepts a late ready signal", () => {
+    const fallback = transition(["atlas-entered", "shell-ready-timeout"]);
+    expect(fallback).toBe("fallback-visible");
+    expect(shouldCoverAtlasShell(fallback)).toBe(false);
+    expect(updateAtlasShellVisibility(fallback, "atlas-shell-ready")).toBe("ready");
+
+    const recoveryFallback = transition([
+      "atlas-entered",
+      "empty-shell-recovery-started",
+      "shell-ready-timeout"
+    ]);
+    expect(recoveryFallback).toBe("fallback-visible");
+    expect(shouldCoverAtlasShell(recoveryFallback)).toBe(false);
   });
 });

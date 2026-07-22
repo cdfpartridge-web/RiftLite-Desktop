@@ -1824,6 +1824,81 @@ describe("MatchSessionTracker", () => {
     ]);
   });
 
+  it("keeps one Atlas session through same-room clock-prefixed setup labels", () => {
+    const tracker = new MatchSessionTracker();
+    const roomCode = "ELNHM";
+    const capturedAt = "2026-07-22T09:22:30.000Z";
+    const start = event("match-start", {
+      active: true,
+      roomCode,
+      myName: "BMU",
+      opponentName: "waffles",
+      myChampion: "Akali",
+      opponentChampion: "Irelia",
+      rows: [{ text: "BMU mulliganed 1 card" }],
+      score: { me: "0", opp: "0", source: "atlas-score-track" }
+    }, capturedAt, "atlas");
+
+    expect(tracker.shouldFinalizeBeforeNewSession(start)).toBe(false);
+    tracker.ingest(start);
+
+    const opponentSequence = [
+      ["22Locked in a", "2026-07-22T09:22:32.000Z"],
+      ["22Must", "2026-07-22T09:22:34.000Z"],
+      ["22Chose waffles to take the first", "2026-07-22T09:22:36.000Z"],
+      ["10Wins initiative (11 vs 1) and decides who plays first", "2026-07-22T09:22:38.000Z"],
+      ["waffles", "2026-07-22T09:22:40.518Z"]
+    ] as const;
+
+    for (const [opponentName, at] of opponentSequence) {
+      const snapshot = event("match-snapshot", {
+        active: true,
+        roomCode,
+        myName: "BMU",
+        opponentName,
+        myChampion: "Akali",
+        opponentChampion: "Irelia",
+        score: { me: "0", opp: "0", source: "atlas-score-track" }
+      }, at, "atlas");
+      expect(tracker.shouldFinalizeBeforeNewSession(snapshot)).toBe(false);
+      tracker.ingest(snapshot);
+    }
+
+    expect(tracker.get("atlas")).toMatchObject({
+      startedAt: capturedAt,
+      sticky: {
+        roomCode,
+        opponentName: "waffles"
+      }
+    });
+    expect(tracker.get("atlas")?.evidence).toHaveLength(7);
+  });
+
+  it("starts a fresh Atlas session for a real replacement opponent in a reused room", () => {
+    const tracker = new MatchSessionTracker();
+    const roomCode = "REUSED";
+    tracker.ingest(event("match-start", {
+      active: true,
+      roomCode,
+      opponentName: "First Rival",
+      score: { me: "4", opp: "2", source: "atlas-score-track" }
+    }, "2026-07-22T10:00:00.000Z", "atlas"));
+
+    const replacement = event("match-start", {
+      active: true,
+      roomCode,
+      opponentName: "Replacement Rival",
+      score: { me: "0", opp: "0", source: "atlas-score-track" }
+    }, "2026-07-22T10:05:00.000Z", "atlas");
+
+    expect(tracker.shouldFinalizeBeforeNewSession(replacement)).toBe(true);
+    tracker.ingest(replacement);
+    expect(tracker.get("atlas")).toMatchObject({
+      startedAt: replacement.capturedAt,
+      sticky: { roomCode, opponentName: "Replacement Rival" }
+    });
+  });
+
   it("freezes Atlas game battlefields before BO3 score resets can overwrite them", () => {
     const tracker = new MatchSessionTracker();
     const bmuSettings = { ...settings, username: "BMU" };
@@ -2325,12 +2400,13 @@ describe("MatchSessionTracker", () => {
       .toEqual(["1:Loss:3-10"]);
   });
 
-  it("asks the coordinator to review a held Atlas BO3 before a different opponent is absorbed", () => {
+  it("asks the coordinator to review a held Atlas BO3 before a different opponent in a new room is absorbed", () => {
     const tracker = new MatchSessionTracker();
 
     tracker.ingest(event("match-start", {
       active: true,
       format: "Auto",
+      roomCode: "FIRSTROOM",
       opponentName: "Bliss",
       score: { me: "0", opp: "0", source: "atlas-score-track" }
     }, "2026-05-06T19:22:11.537Z", "atlas"));
@@ -2338,6 +2414,7 @@ describe("MatchSessionTracker", () => {
       active: true,
       reason: "result-text-detected",
       format: "Auto",
+      roomCode: "FIRSTROOM",
       atlasResultKind: "game-result",
       endText: "Confirm Game 1 Winner",
       opponentName: "Bliss",
@@ -2352,6 +2429,7 @@ describe("MatchSessionTracker", () => {
     tracker.ingest(event("match-start", {
       active: true,
       format: "Auto",
+      roomCode: "FIRSTROOM",
       opponentName: "Bliss",
       score: { me: "5", opp: "6", source: "atlas-score-track" },
       myBattlefieldImage: "https://assets.riftatlas-workers.com/riftbound/cards/original/SFD-218.webp",
@@ -2362,6 +2440,7 @@ describe("MatchSessionTracker", () => {
       active: true,
       reason: "result-text-detected",
       format: "Auto",
+      roomCode: "SECONDROOM",
       atlasResultKind: "game-result",
       endText: "Confirm Game 1 Winner",
       opponentName: "CurlyNuke",
@@ -2377,6 +2456,7 @@ describe("MatchSessionTracker", () => {
     tracker.ingest(event("match-start", {
       active: true,
       format: "Auto",
+      roomCode: "REUSEDROOM",
       opponentName: "Azir",
       score: { me: "0", opp: "0", source: "atlas-score-track" }
     }, "2026-05-13T04:02:14.393Z", "atlas"));
@@ -2385,6 +2465,7 @@ describe("MatchSessionTracker", () => {
       active: true,
       reason: "result-text-detected",
       format: "Auto",
+      roomCode: "REUSEDROOM",
       atlasResultKind: "game-result",
       endText: "Confirm Game 1 Winner",
       opponentName: "Azir",
@@ -2397,6 +2478,7 @@ describe("MatchSessionTracker", () => {
     tracker.ingest(event("match-start", {
       active: true,
       format: "Auto",
+      roomCode: "REUSEDROOM",
       opponentName: "Azir",
       score: { me: "0", opp: "0", source: "atlas-score-track" }
     }, "2026-05-13T04:26:41.337Z", "atlas"));
@@ -2404,6 +2486,7 @@ describe("MatchSessionTracker", () => {
       active: true,
       reason: "result-text-detected",
       format: "Auto",
+      roomCode: "REUSEDROOM",
       atlasResultKind: "game-result",
       endText: "Confirm Game 2 Winner",
       opponentName: "Azir",
@@ -2416,6 +2499,7 @@ describe("MatchSessionTracker", () => {
     tracker.ingest(event("match-start", {
       active: true,
       format: "Auto",
+      roomCode: "REUSEDROOM",
       opponentName: "Azir",
       score: { me: "0", opp: "0", source: "atlas-score-track" }
     }, "2026-05-13T04:58:43.966Z", "atlas"));
@@ -2423,6 +2507,7 @@ describe("MatchSessionTracker", () => {
       active: true,
       reason: "result-text-detected",
       format: "Auto",
+      roomCode: "REUSEDROOM",
       atlasResultKind: "game-result",
       endText: "Confirm Game 3 Winner",
       opponentName: "Azir",
@@ -2434,6 +2519,7 @@ describe("MatchSessionTracker", () => {
     const nextMatchStart = event("match-start", {
       active: true,
       format: "Auto",
+      roomCode: "REUSEDROOM",
       opponentName: "Azir",
       score: { me: "0", opp: "0", source: "atlas-score-track" }
     }, "2026-05-13T05:53:04.779Z", "atlas");

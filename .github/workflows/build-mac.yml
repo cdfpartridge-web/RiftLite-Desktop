@@ -25,6 +25,23 @@ jobs:
           node-version: "24"
           cache: npm
 
+      - name: Verify release tag matches package version
+        if: github.ref_type == 'tag'
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          node <<'NODE'
+          const fs = require("fs");
+          const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+          const expectedTag = `mac-v${pkg.version}`;
+          if (process.env.RELEASE_TAG !== expectedTag) {
+            console.error(`Release tag ${process.env.RELEASE_TAG} does not match package version ${pkg.version}; expected ${expectedTag}.`);
+            process.exit(1);
+          }
+          console.log(`Release tag ${expectedTag} matches package version.`);
+          NODE
+
       - name: Install dependencies
         run: npm ci
 
@@ -55,17 +72,92 @@ jobs:
       - name: Build desktop source
         run: npm run build
 
-      - name: Use Mac update feed
-        run: |
-          node <<'NODE'
-          const fs = require("fs");
-          const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
-          pkg.build.publish = [{ provider: "github", owner: "cdfpartridge-web", repo: "RiftLite-Desktop-Mac" }];
-          fs.writeFileSync("package.json", `${JSON.stringify(pkg, null, 2)}\n`);
-          NODE
+      - name: Prepare architecture-specific FFmpeg binaries
+        run: npm run package:prepare-mac-ffmpeg
 
       - name: Package macOS installers
-        run: npx electron-builder --mac dmg zip --x64 --arm64 --publish never
+        run: npm run package:mac
+
+      - name: Verify macOS release artifacts
+        run: npm run release:verify:mac
+
+      - name: Verify packaged macOS applications
+        shell: bash
+        run: |
+          set -euo pipefail
+          product_name="$(node -p "require('./package.json').build.productName")"
+          expected_version="$(node -p "require('./package.json').version")"
+          x64_app="release/mac/${product_name}.app"
+          arm64_app="release/mac-arm64/${product_name}.app"
+          x64_executable="${x64_app}/Contents/MacOS/${product_name}"
+          arm64_executable="${arm64_app}/Contents/MacOS/${product_name}"
+          x64_ffmpeg="${x64_app}/Contents/Resources/ffmpeg/ffmpeg"
+          arm64_ffmpeg="${arm64_app}/Contents/Resources/ffmpeg/ffmpeg"
+          for path in "$x64_executable" "$arm64_executable" "$x64_ffmpeg" "$arm64_ffmpeg"; do
+            test -x "$path"
+          done
+          [[ " $(lipo -archs "$x64_executable") " == *" x86_64 "* ]]
+          [[ " $(lipo -archs "$x64_ffmpeg") " == *" x86_64 "* ]]
+          [[ " $(lipo -archs "$arm64_executable") " == *" arm64 "* ]]
+          [[ " $(lipo -archs "$arm64_ffmpeg") " == *" arm64 "* ]]
+          test -f "${x64_ffmpeg}.LICENSE"
+          test -f "${arm64_ffmpeg}.LICENSE"
+          codesign --verify --deep --strict --verbose=2 "$x64_app"
+          codesign --verify --deep --strict --verbose=2 "$arm64_app"
+
+          python3 - "$expected_version" "$x64_app" "$arm64_app" <<'PY'
+          import plistlib
+          import re
+          import sys
+          from pathlib import Path
+
+          expected_version = sys.argv[1]
+          app_paths = [Path(value) for value in sys.argv[2:]]
+
+          def updater_value(source, key):
+              match = re.search(rf"^{re.escape(key)}:\s*['\"]?([^'\"\r\n]+)['\"]?\s*$", source, re.MULTILINE)
+              if not match:
+                  raise SystemExit(f"Embedded app-update.yml is missing {key}.")
+              return match.group(1).strip()
+
+          for app_path in app_paths:
+              plist_path = app_path / "Contents" / "Info.plist"
+              update_path = app_path / "Contents" / "Resources" / "app-update.yml"
+              if not plist_path.is_file():
+                  raise SystemExit(f"Missing Info.plist: {plist_path}")
+              if not update_path.is_file():
+                  raise SystemExit(f"Missing embedded updater configuration: {update_path}")
+
+              with plist_path.open("rb") as input_file:
+                  info = plistlib.load(input_file)
+              if info.get("CFBundleIdentifier") != "com.riftlite.desktop.beta06":
+                  raise SystemExit(f"Unexpected CFBundleIdentifier in {plist_path}")
+              if info.get("CFBundleShortVersionString") != expected_version:
+                  raise SystemExit(f"Unexpected CFBundleShortVersionString in {plist_path}")
+              if info.get("CFBundleVersion") != expected_version:
+                  raise SystemExit(f"Unexpected CFBundleVersion in {plist_path}")
+              schemes = {
+                  scheme
+                  for url_type in info.get("CFBundleURLTypes", [])
+                  for scheme in url_type.get("CFBundleURLSchemes", [])
+              }
+              if "riftlite" not in schemes:
+                  raise SystemExit(f"The riftlite URL scheme is missing from {plist_path}")
+
+              updater = update_path.read_text(encoding="utf-8")
+              if updater_value(updater, "provider") != "github":
+                  raise SystemExit(f"Unexpected updater provider in {update_path}")
+              if updater_value(updater, "owner") != "cdfpartridge-web":
+                  raise SystemExit(f"Unexpected updater owner in {update_path}")
+              if updater_value(updater, "repo") != "RiftLite-Desktop-Mac":
+                  raise SystemExit(f"Unexpected updater repository in {update_path}")
+          PY
+
+          hdiutil verify "release/RiftLiteBetaInstall-x64.dmg"
+          hdiutil verify "release/RiftLiteBetaInstall-arm64.dmg"
+
+      - name: Smoke-test packaged macOS application
+        run: npm run release:smoke:packaged
 
       - name: Upload macOS installers
         uses: actions/upload-artifact@v7

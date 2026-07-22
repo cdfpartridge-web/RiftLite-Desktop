@@ -30,6 +30,7 @@ interface RegistryCardPayload {
   tags?: unknown;
   imageUrl?: unknown;
   imageHash?: unknown;
+  imageHashAliases?: unknown;
   hashes?: unknown;
   codeAliases?: unknown;
 }
@@ -292,7 +293,7 @@ function normalizeRegistryCard(value: unknown, forcedKind?: RegistryCardKind): R
   if (!name && !champion) {
     return undefined;
   }
-  const hashes = stringValues(raw.imageHash, raw.hashes)
+  const hashes = stringValues(raw.imageHash, raw.imageHashAliases, raw.hashes)
     .flatMap((candidate) => candidate.match(HASH_RE)?.[1]?.toLowerCase() ?? [])
     .concat(firstString(raw.imageUrl).match(HASH_RE)?.[1]?.toLowerCase() ?? [])
     .filter(Boolean);
