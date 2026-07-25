@@ -221,6 +221,7 @@ import {
   GAME_WEBVIEW_PARTITIONS,
   gameWebviewIsReady,
   nextMountedGamePlatform,
+  shouldFocusGameWebviewInput,
   shouldRestoreGameWebviewFocus
 } from "../shared/gameWebview";
 import { communitySpotlightTheme } from "../shared/communitySpotlightThemes";
@@ -3256,6 +3257,9 @@ function App() {
     }
     const timers = [50, 280, 900].map((delay) => window.setTimeout(() => {
       refreshGamePresentation(mountedGamePlatform);
+      if (mountedGamePlatform === "atlas") {
+        focusGameWebviewInput("atlas");
+      }
     }, delay));
     return () => timers.forEach((timer) => window.clearTimeout(timer));
   }, [activePlatform, activeView, mountedGamePlatform, preloadUrl, sidebarCollapsed]);
@@ -3278,6 +3282,61 @@ function App() {
       focusGameWebviewInput("atlas");
     }, delay));
     return () => timers.forEach((timer) => window.clearTimeout(timer));
+  }, [activePlatform, activeView, mountedGamePlatform, preloadUrl, reviewDraft]);
+
+  useEffect(() => {
+    if (!shouldFocusGameWebviewInput(
+      activePlatform,
+      mountedGamePlatform,
+      preloadUrl,
+      activeView === "play",
+      Boolean(reviewDraft)
+    )) {
+      return;
+    }
+    const pendingTimers = new Set<number>();
+    let recoverySuppressedUntil = 0;
+    const canRecoverFocus = () => {
+      if (document.visibilityState === "hidden") {
+        return false;
+      }
+      const activeElement = document.activeElement;
+      const webview = gameRef.current;
+      return !activeElement ||
+        activeElement === document.body ||
+        activeElement === document.documentElement ||
+        activeElement === webview;
+    };
+    const scheduleFocusRecovery = () => {
+      const now = performance.now();
+      if (!canRecoverFocus() || now < recoverySuppressedUntil) {
+        return;
+      }
+      // Focusing the native guest can itself surface a host focus event. The
+      // cooldown prevents that handoff from recursively scheduling more work.
+      recoverySuppressedUntil = now + 1_500;
+      for (const delay of [0, 120, 500]) {
+        const timer = window.setTimeout(() => {
+          pendingTimers.delete(timer);
+          if (canRecoverFocus()) {
+            focusGameWebviewInput("atlas");
+          }
+        }, delay);
+        pendingTimers.add(timer);
+      }
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        scheduleFocusRecovery();
+      }
+    };
+    window.addEventListener("focus", scheduleFocusRecovery);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      window.removeEventListener("focus", scheduleFocusRecovery);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      pendingTimers.forEach((timer) => window.clearTimeout(timer));
+    };
   }, [activePlatform, activeView, mountedGamePlatform, preloadUrl, reviewDraft]);
 
   useEffect(() => {
@@ -4462,7 +4521,7 @@ function App() {
 
   function focusNativeGameWebview(platform: GamePlatform): void {
     if (
-      !document.hasFocus() ||
+      document.visibilityState === "hidden" ||
       reviewDraft ||
       activeView !== "play" ||
       platform !== activePlatform ||
@@ -4477,7 +4536,7 @@ function App() {
     const webview = gameRef.current;
     if (
       !webview ||
-      !document.hasFocus() ||
+      document.visibilityState === "hidden" ||
       reviewDraft ||
       activeView !== "play" ||
       platform !== activePlatform ||

@@ -13,6 +13,7 @@ import {
 } from "../shared/atlasShellHealth.js";
 import { riftboundCardCodeFromValue } from "../shared/cardIdentity.js";
 import { gamePlatformForTrustedUrl } from "../shared/embeddedContentSecurity.js";
+import { GAME_WEBVIEW_EDITABLE_FOCUS_IPC_CHANNEL } from "../shared/gameWebview.js";
 import { resolveGameWebviewPlatformIdentity } from "../shared/gameWebviewIdentity.js";
 import {
   ATLAS_BATTLEFIELD_SEAT_IPC_CHANNEL,
@@ -142,6 +143,35 @@ const BATTLEFIELD_NAMES = [
   { name: "Void Gate", canonical: "Void Gate" },
   { name: "Brush", canonical: "Brush" }
 ];
+
+function isEditableElement(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) {
+    return false;
+  }
+  return Boolean(target.closest(
+    "input, textarea, [contenteditable]:not([contenteditable=\"false\"])"
+  ));
+}
+
+function installAtlasEditableFocusBridge(): void {
+  if (platform !== "atlas") {
+    return;
+  }
+  let lastFocusRequestAt = Number.NEGATIVE_INFINITY;
+  const requestNativeGuestFocus = (event: Event) => {
+    if (!isEditableElement(event.target)) {
+      return;
+    }
+    const now = performance.now();
+    if (now - lastFocusRequestAt < 100) {
+      return;
+    }
+    lastFocusRequestAt = now;
+    ipcRenderer.send(GAME_WEBVIEW_EDITABLE_FOCUS_IPC_CHANNEL);
+  };
+  window.addEventListener("pointerdown", requestNativeGuestFocus, { capture: true, passive: true });
+  window.addEventListener("focusin", requestNativeGuestFocus, true);
+}
 
 let previousActive = false;
 let endTimer: number | undefined;
@@ -2920,6 +2950,7 @@ declare global {
 }
 
 installAtlasBattlefieldSeatBridge();
+installAtlasEditableFocusBridge();
 installNetworkHooks();
 installDebugCapture();
 installTcgaResearchInteractionCapture();

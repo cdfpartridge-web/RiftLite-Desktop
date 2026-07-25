@@ -82,7 +82,10 @@ import {
   sameWebFrameIdentity,
   type EmbeddedWebviewPolicy
 } from "../shared/embeddedContentSecurity.js";
-import { GAME_WEBVIEW_PARTITIONS } from "../shared/gameWebview.js";
+import {
+  GAME_WEBVIEW_EDITABLE_FOCUS_IPC_CHANNEL,
+  GAME_WEBVIEW_PARTITIONS
+} from "../shared/gameWebview.js";
 import { gameWebviewPlatformArgument } from "../shared/gameWebviewIdentity.js";
 import {
   activeDiscordReplayHubIds,
@@ -7421,6 +7424,31 @@ function registerIpc(): void {
       throw new Error("Capture event is invalid.");
     }
     await capture.handleEvent(event);
+  });
+  ipcMain.on(GAME_WEBVIEW_EDITABLE_FOCUS_IPC_CHANNEL, (ipcEvent) => {
+    if (trustedGameIpcPlatform(ipcEvent) !== "atlas") {
+      return;
+    }
+    const contents = ipcEvent.sender;
+    if (
+      !mainWindow ||
+      mainWindow.isDestroyed() ||
+      !mainWindow.isFocused() ||
+      contents.isDestroyed()
+    ) {
+      return;
+    }
+    contents.focus();
+    setTimeout(() => {
+      if (
+        mainWindow &&
+        !mainWindow.isDestroyed() &&
+        mainWindow.isFocused() &&
+        !contents.isDestroyed()
+      ) {
+        contents.focus();
+      }
+    }, 40);
   });
   ipcMain.on("capture:tcga-research-event", (ipcEvent, value: unknown) => {
     if (

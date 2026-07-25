@@ -10,6 +10,8 @@ export const GAME_WEBVIEW_PARTITIONS: Record<GamePlatform, string> = {
   sim: "persist:riftlite-sim"
 };
 
+export const GAME_WEBVIEW_EDITABLE_FOCUS_IPC_CHANNEL = "game-webview:editable-focus";
+
 /**
  * A newly selected provider must first mount while Play has real dimensions.
  * Once mounted, it can remain alive behind another RiftLite view so an active
@@ -41,6 +43,23 @@ export function shouldRestoreGameWebviewFocus(
 ): boolean {
   return reviewWasOpen &&
     !reviewIsOpen &&
+    shouldFocusGameWebviewInput(
+      selected,
+      mounted,
+      preloadUrl,
+      playIsVisible,
+      reviewIsOpen
+    );
+}
+
+export function shouldFocusGameWebviewInput(
+  selected: GamePlatform,
+  mounted: GamePlatform | null,
+  preloadUrl: string,
+  playIsVisible: boolean,
+  hostInputBlocked: boolean
+): boolean {
+  return !hostInputBlocked &&
     playIsVisible &&
     selected === "atlas" &&
     gameWebviewIsReady(selected, mounted, preloadUrl);

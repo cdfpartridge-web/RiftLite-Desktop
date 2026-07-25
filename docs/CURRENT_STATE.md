@@ -1,8 +1,8 @@
 # RiftLite Current Engineering State
 
-> **Current release:** v0.9.11 supersedes the unpublished v0.9.10 release candidate. Read `docs/release-notes-v0.9.11.md` for the customer-facing summary and `docs/HANDOVER_2026-07-21_V0.9.10_RC.md` for the underlying account/Web Replay/match-reporting audit and artifact safeguards.
+> **Current Windows release:** v0.9.12 adds the expanded RiftAtlas input-focus repair to v0.9.11. Read `docs/release-notes-v0.9.12.md` for the customer-facing summary and `docs/HANDOVER_2026-07-21_V0.9.10_RC.md` for the underlying account/Web Replay/match-reporting audit and artifact safeguards.
 
-Last updated: 2026-07-22
+Last updated: 2026-07-25
 
 This is the durable handoff for continuing RiftLite work in a fresh Codex task. Read this file before changing code.
 
@@ -10,11 +10,11 @@ This is the durable handoff for continuing RiftLite work in a fresh Codex task. 
 
 - Active cross-platform release source repo:
   `C:\Users\cdfpa\OneDrive\Documents\Claude\Projects\Riftlite Beta 0.6\desktop-v06`
-- Current local package version: `0.9.11` (customer-facing build `v0.9.11`); fully built, validated, and published
-- Current branch: `windows-release-v0.8.03` (the branch name is older than the local build)
+- Current local package version: `0.9.12` (customer-facing build `v0.9.12`); Windows installer fully built, validated, and published
+- Current branch: `agent/release-v0.9.12`
 - Windows GitHub release repository (`windows` remote): `cdfpartridge-web/RiftLite-Desktop`
 - macOS GitHub release repository (`origin` remote): `cdfpartridge-web/RiftLite-Desktop-mac`
-- Current published Windows release: `v0.9.11` (2026-07-22)
+- Current published Windows release: `v0.9.12` (2026-07-25)
 - Current published macOS release: `mac-v0.9.11` (2026-07-22)
 - Windows installer output:
   `C:\Users\cdfpa\OneDrive\Documents\Claude\Projects\Riftlite Beta 0.6\desktop-v06\release\RiftLiteBetaInstall.exe`

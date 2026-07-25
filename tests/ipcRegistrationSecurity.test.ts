@@ -46,4 +46,16 @@ describe("IPC registration boundary", () => {
     expect(handler).toContain("recordTcgaReplayResearch");
     expect(handler).not.toContain("capture.handleEvent");
   });
+
+  it("accepts editable focus recovery only from the trusted Atlas guest", () => {
+    const start = registerIpcSource.indexOf("ipcMain.on(GAME_WEBVIEW_EDITABLE_FOCUS_IPC_CHANNEL");
+    const end = registerIpcSource.indexOf('ipcMain.on("capture:tcga-research-event"', start);
+    const handler = registerIpcSource.slice(start, end);
+
+    expect(start).toBeGreaterThan(-1);
+    expect(handler).toContain('trustedGameIpcPlatform(ipcEvent) !== "atlas"');
+    expect(handler).toContain("const contents = ipcEvent.sender");
+    expect(handler).toContain("mainWindow.isFocused()");
+    expect(handler).toContain("contents.focus()");
+  });
 });
