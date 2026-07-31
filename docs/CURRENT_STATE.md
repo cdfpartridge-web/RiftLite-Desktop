@@ -1,6 +1,6 @@
 # RiftLite Current Engineering State
 
-> **v0.9.20 release candidate:** the five tested post-v0.9.12 changes are now versioned and packaged together for publication: private-hub removal, Atlas match-boundary/ghost-match repair, Atlas empty-shell recovery, replay MP4 annotation burn-in, and a reveal-gated Atlas known-opponent-hand memory panel. Read `docs/release-notes-v0.9.20.md` and `docs/HANDOVER_2026-07-27_POST_V0.9.12.md` first.
+> **Current cross-platform release:** v0.9.20 publishes the five tested post-v0.9.12 changes: private-hub removal, Atlas match-boundary/ghost-match repair, Atlas empty-shell recovery, replay MP4 annotation burn-in, and a reveal-gated Atlas known-opponent-hand memory panel. Read `docs/release-notes-v0.9.20.md` and `docs/HANDOVER_2026-07-27_POST_V0.9.12.md` first.
 
 Last updated: 2026-07-31
 
@@ -10,12 +10,12 @@ This is the durable handoff for continuing RiftLite work in a fresh Codex task. 
 
 - Active cross-platform release source repo:
   `C:\Users\cdfpa\OneDrive\Documents\Claude\Projects\Riftlite Beta 0.6\desktop-v06`
-- Current local package version: `0.9.20` (customer-facing build `v0.9.20`); the release candidate is fully built and validated locally, while the published releases remain Windows v0.9.12 and macOS v0.9.11 until publication completes
+- Current local package version: `0.9.20` (customer-facing build `v0.9.20`); fully built, validated, and published for Windows, Intel macOS, and Apple Silicon macOS
 - Current branch: `agent/release-v0.9.12`
 - Windows GitHub release repository (`windows` remote): `cdfpartridge-web/RiftLite-Desktop`
 - macOS GitHub release repository (`origin` remote): `cdfpartridge-web/RiftLite-Desktop-mac`
-- Current published Windows release: `v0.9.12` (2026-07-25)
-- Current published macOS release: `mac-v0.9.11` (2026-07-22)
+- Current published Windows release: `v0.9.20` (2026-07-31)
+- Current published macOS release: `mac-v0.9.20` (2026-07-31)
 - Windows installer output:
   `C:\Users\cdfpa\OneDrive\Documents\Claude\Projects\Riftlite Beta 0.6\desktop-v06\release\RiftLiteBetaInstall.exe`
 
@@ -39,9 +39,9 @@ The active working tree is intentionally dirty and contains a large amount of cu
 6. Treat raw WebSocket replay data, account sync, hub ownership, Discord tokens, and API keys as security-sensitive.
 7. RiftReplay/Replay Lab and Vision work are parked or hidden. Do not expose them in menus or release notes unless explicitly requested.
 
-## v0.9.20 Release Candidate
+## 2026-07-31 v0.9.20 Release
 
-The desktop branch remains `agent/release-v0.9.12`, based on published commit/tag `50d6130`, and its v0.9.20 release candidate contains five intentional post-release changes:
+Release commit `54cfc2c` is tagged as Windows `v0.9.20` and macOS `mac-v0.9.20`. It contains five intentional post-v0.9.12 changes:
 
 1. private-hub owners can remove members/co-owners and co-owners can remove regular members, with the website remaining the permission authority;
 2. Atlas treats a reliable active room-code change as a new match boundary and ignores the finalized result echo that could seed a ghost `Unknown` match after flushing a BO3 review;
@@ -57,13 +57,26 @@ The combined local source passed:
 - the development Electron smoke test;
 - `git diff --check`.
 
-These changes are not yet published. They are packaged together in the local v0.9.20 release candidate built on 2026-07-31:
+These changes are published together in v0.9.20. The canonical Windows installer built on 2026-07-31 is:
 
 - `release\RiftLiteBetaInstall.exe`
 - 202,685,039 bytes
 - SHA-256 `CDDB33CF2AFBEA26CCD9E8771AADD6B8775A66805422809919039CA084B4CF3C`
 
-The installer, Windows artifact verification, and packaged smoke test passed. The executable is not Authenticode-signed. See `docs/HANDOVER_2026-07-27_POST_V0.9.12.md` for the exact file manifest, root causes, separate dirty website state, and validation history.
+The Windows release gate, installer verification, updater-manifest verification, and packaged smoke test passed. The public installer, blockmap, and `latest.yml` sizes and GitHub SHA-256 digests match the local artifacts. The executable is not Authenticode-signed.
+
+- Windows release: `https://github.com/cdfpartridge-web/RiftLite-Desktop/releases/tag/v0.9.20`
+- macOS release: `https://github.com/cdfpartridge-web/RiftLite-Desktop-mac/releases/tag/mac-v0.9.20`
+- native macOS workflow: `https://github.com/cdfpartridge-web/RiftLite-Desktop-mac/actions/runs/30637996277`
+- macOS Apple Silicon DMG: 172,422,733 bytes, SHA-256 `875A57108151760A2D1ED1A9EA19C0C41AFE902F2357647169C1F72FBA91760D`
+- macOS Apple Silicon ZIP: 165,049,547 bytes, SHA-256 `0D7DD6617C028A7AA98325DAC5528C8D748D6B93D7ABE4AAC7830A93E835B76E`
+- macOS Intel DMG: 187,589,401 bytes, SHA-256 `0BBAE1FB04F1831FAF4489660E88EB79234EAD7509E3DB221D15AE9335507D86`
+- macOS Intel ZIP: 179,949,873 bytes, SHA-256 `B1951EA9D7D23FAD935F4006D6910C94BE53EAE449294A64EE686C4BA101477F`
+- macOS updater manifest: 830 bytes, SHA-256 `D5FBEE5AB272CB5DE92C03760874573FAA9B35F65345C3CBA9E349331965B22E`
+
+The hosted Web Replay was also promoted through website PR 2 at merge commit `c949fa1`. Its new **Take control** action creates an in-memory what-if branch with card movement, attachment, chain/target, counter, score, undo/redo, reset, and conservative later-known-hand support. It never mutates the canonical replay. The clean Vercel build passed, and production interaction was verified at 1920 x 1080 on a current public Atlas replay.
+
+See `docs/HANDOVER_2026-07-27_POST_V0.9.12.md` for the exact desktop file manifest, root causes, separate preserved website worktree state, and earlier validation history.
 
 ## Current Product Shape
 
