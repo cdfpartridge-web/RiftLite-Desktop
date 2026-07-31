@@ -39,11 +39,11 @@ export function updateAtlasReloadStormState(
   };
 }
 
-export function shouldAutoRemountAtlasEmptyShell(
+export function shouldAutoRepairAtlasEmptyShell(
   event: Pick<CaptureEvent, "kind" | "platform" | "payload">,
-  alreadyRetried: boolean
+  alreadyRepaired: boolean
 ): boolean {
-  return !alreadyRetried &&
+  return !alreadyRepaired &&
     event.platform === "atlas" &&
     event.kind === "debug" &&
     event.payload.reason === "atlas-app-shell-empty";

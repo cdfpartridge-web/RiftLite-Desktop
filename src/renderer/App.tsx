@@ -18,6 +18,7 @@ import {
   Compass,
   Copy,
   ExternalLink,
+  Eye,
   FileText,
   Film,
   Flag,
@@ -65,6 +66,7 @@ import {
   ZoomOut
 } from "lucide-react";
 import type {
+  AtlasKnownOpponentHandState,
   BrowserInfo,
   BattlefieldOption,
   AccountConnectionStatus,
@@ -198,7 +200,7 @@ import { upsertReplayPreservingOrder } from "../shared/replayList";
 import { publicCommunitySyncEnabled, syncModePatch } from "../shared/syncPolicy";
 import {
   initialAtlasReloadStormState,
-  shouldAutoRemountAtlasEmptyShell,
+  shouldAutoRepairAtlasEmptyShell,
   updateAtlasReloadStormState
 } from "../shared/atlasWebviewRecovery";
 import { stopMediaRecorderSafely } from "../shared/mediaRecorderStop";
@@ -208,6 +210,7 @@ import {
   PRIVATE_HUB_DELETE_COUNTDOWN_SECONDS,
   canDeletePrivateHub,
   canLeavePrivateHub,
+  canRemovePrivateHubMember,
   normalizePrivateHubWebReplayId,
   privateHubMembershipsEqual,
   privateHubWebReplayUrl,
@@ -258,7 +261,7 @@ import {
   type NavigationTarget
 } from "../shared/navigationModel";
 import { GuidedTour } from "./GuidedTour";
-import { RiftLiteReplayViewer } from "./RiftLiteReplayViewer";
+import { resolveBundledReplayCardImage, RiftLiteReplayViewer } from "./RiftLiteReplayViewer";
 import { SettingsAccordionSection } from "./SettingsAccordionSection";
 import {
   ATLAS_SHELL_COVER_TIMEOUT_MS,
@@ -307,6 +310,16 @@ const DEFAULT_UPDATE_STATUS: UpdateStatus = {
   state: "idle",
   currentVersion: RIFTLITE_BUILD_IDENTITY.packageVersion,
   message: "Updater ready"
+};
+
+const EMPTY_ATLAS_KNOWN_OPPONENT_HAND: AtlasKnownOpponentHandState = {
+  roomCode: "",
+  opponentPlayerId: "",
+  activeReveal: false,
+  opponentHandCount: null,
+  revealedAt: "",
+  updatedAt: "",
+  cards: []
 };
 
 const FALLBACK_BOOT_SETTINGS: UserSettings = {
@@ -2695,6 +2708,8 @@ function App() {
   const [testingSessions, setTestingSessions] = useState<TestingSession[]>(() => readTestingSessions());
   const [activeTestingSessionId, setActiveTestingSessionId] = useState(() => readActiveTestingSessionId());
   const [deckTrackerState, setDeckTrackerState] = useState<DeckTrackerState | null>(null);
+  const [atlasKnownOpponentHand, setAtlasKnownOpponentHand] = useState<AtlasKnownOpponentHandState>(EMPTY_ATLAS_KNOWN_OPPONENT_HAND);
+  const [atlasKnownOpponentHandOpen, setAtlasKnownOpponentHandOpen] = useState(false);
   const [visionTrackerStatus, setVisionTrackerStatus] = useState<VisionDeckTrackerStatus | null>(null);
   const [prepNotebook, setPrepNotebook] = useState<DeckNotebook | null>(null);
   const [prepOpponentLegend, setPrepOpponentLegend] = useState("");
@@ -2756,7 +2771,7 @@ function App() {
   const captureNoticeTimerRef = useRef<number | undefined>(undefined);
   const capturePromptSignatureRef = useRef("");
   const atlasReloadStormRef = useRef(initialAtlasReloadStormState());
-  const atlasEmptyShellRemountedRef = useRef(false);
+  const atlasEmptyShellAutoRepairRef = useRef(false);
   const atlasRecoveryBusyRef = useRef(false);
   const pendingReviewFallbackTimerRef = useRef<number | undefined>(undefined);
   const diagnosticsRefreshTimerRef = useRef<number | undefined>(undefined);
@@ -2817,6 +2832,44 @@ function App() {
       ));
     }
     setActiveView(nextView);
+  }
+
+  function refocusAtlasAfterKnownHand(): void {
+    window.setTimeout(() => {
+      if (activeViewRef.current === "play" && activePlatformRef.current === "atlas") {
+        focusGameWebviewInput("atlas");
+      }
+    }, 0);
+  }
+
+  function closeAtlasKnownOpponentHand(): void {
+    setAtlasKnownOpponentHandOpen(false);
+    refocusAtlasAfterKnownHand();
+  }
+
+  function toggleAtlasKnownOpponentHand(): void {
+    setAtlasKnownOpponentHandOpen((current) => {
+      if (current) {
+        refocusAtlasAfterKnownHand();
+      }
+      return !current;
+    });
+  }
+
+  async function dismissAtlasKnownOpponentHandCard(instanceId: string): Promise<void> {
+    try {
+      setAtlasKnownOpponentHand(await window.riftlite.dismissAtlasKnownOpponentHandCard(instanceId));
+    } catch (error) {
+      showActionFeedback(error instanceof Error ? error.message : "RiftLite could not dismiss that known card.");
+    }
+  }
+
+  async function clearAtlasKnownOpponentHand(): Promise<void> {
+    try {
+      setAtlasKnownOpponentHand(await window.riftlite.clearAtlasKnownOpponentHand());
+    } catch (error) {
+      showActionFeedback(error instanceof Error ? error.message : "RiftLite could not clear the known hand.");
+    }
   }
 
   function openCommunity(tab: CommunityTab) {
@@ -3022,11 +3075,20 @@ function App() {
   }, [activePlatform]);
 
   useEffect(() => {
+    if (activeView !== "play" || activePlatform !== "atlas") {
+      setAtlasKnownOpponentHandOpen(false);
+    }
+  }, [activePlatform, activeView]);
+
+  useEffect(() => {
     mountedGamePlatformRef.current = mountedGamePlatform;
   }, [mountedGamePlatform]);
 
   useEffect(() => {
     void bootstrap().catch((error) => handleBootstrapFailure(error));
+    void window.riftlite.getAtlasKnownOpponentHand()
+      .then(setAtlasKnownOpponentHand)
+      .catch(() => setAtlasKnownOpponentHand(EMPTY_ATLAS_KNOWN_OPPONENT_HAND));
     const offEvent = window.riftlite.onCaptureEvent((event) => {
       void maybeStartReplayVideo(event);
       updatePrepFromCaptureEvent(event);
@@ -3089,6 +3151,14 @@ function App() {
     const offQuickFlagHotkey = window.riftlite.onReplayQuickFlagHotkey(() => {
       addReplayReviewFlagFromHotkey();
     });
+    const offAtlasKnownHand = window.riftlite.onAtlasKnownOpponentHandUpdated((state) => {
+      setAtlasKnownOpponentHand(state);
+    });
+    const offAtlasKnownHandShortcut = window.riftlite.onAtlasKnownOpponentHandShortcut(() => {
+      if (activeViewRef.current === "play" && activePlatformRef.current === "atlas") {
+        toggleAtlasKnownOpponentHand();
+      }
+    });
     const offUpdate = window.riftlite.onUpdateStatus((status) => {
       setUpdateStatus(status);
       if (status.state === "available" || status.state === "downloaded") {
@@ -3134,6 +3204,8 @@ function App() {
       offScreenshot();
       offShadowClipHotkey();
       offQuickFlagHotkey();
+      offAtlasKnownHand();
+      offAtlasKnownHandShortcut();
       offUpdate();
       offGameWebviewFailure();
       if (actionFeedbackTimerRef.current) {
@@ -3167,7 +3239,7 @@ function App() {
     if (activePlatform === "atlas") {
       setAtlasShellVisibility((current) => updateAtlasShellVisibility(current, "atlas-entered"));
     } else {
-      atlasEmptyShellRemountedRef.current = false;
+      atlasEmptyShellAutoRepairRef.current = false;
       setAtlasShellVisibility((current) => updateAtlasShellVisibility(current, "atlas-left"));
     }
   }, [activePlatform]);
@@ -4462,7 +4534,7 @@ function App() {
         return;
       }
       atlasReloadStormRef.current = initialAtlasReloadStormState();
-      atlasEmptyShellRemountedRef.current = false;
+      atlasEmptyShellAutoRepairRef.current = false;
       gameGuestAutoRecoveryRef.current.delete("atlas");
       setAtlasShellVisibility((current) => updateAtlasShellVisibility(current, "empty-shell-recovery-started"));
       setAtlasRecoverySuggested(false);
@@ -4577,12 +4649,12 @@ function App() {
       setAtlasRecoverySuggested(false);
     }
     const atlasMatchActive = healthRef.current.platform === "atlas" && healthRef.current.state === "match-detected";
-    const autoRemountEmptyShell = !atlasMatchActive && shouldAutoRemountAtlasEmptyShell(
+    const autoRepairEmptyShell = !atlasMatchActive && shouldAutoRepairAtlasEmptyShell(
       captureEvent,
-      atlasEmptyShellRemountedRef.current
+      atlasEmptyShellAutoRepairRef.current
     );
-    if (autoRemountEmptyShell) {
-      atlasEmptyShellRemountedRef.current = true;
+    if (autoRepairEmptyShell) {
+      atlasEmptyShellAutoRepairRef.current = true;
     } else if (!atlasShellReadyEvent) {
       const nextRecoveryState = updateAtlasReloadStormState(
         atlasReloadStormRef.current,
@@ -4592,10 +4664,9 @@ function App() {
       setAtlasRecoverySuggested(nextRecoveryState.suggested);
     }
     void window.riftlite.reportRendererEvent(captureEvent).catch(() => undefined);
-    if (autoRemountEmptyShell) {
+    if (autoRepairEmptyShell) {
       setAtlasShellVisibility((current) => updateAtlasShellVisibility(current, "empty-shell-recovery-started"));
-      setGameWebviewEpoch((current) => current + 1);
-      showActionFeedback("Atlas loaded without its lobby. Restarting the embedded page once...", 6_000);
+      showActionFeedback("Atlas loaded without its lobby. Repairing its embedded runtime and retrying once...", 8_000);
     }
   }
 
@@ -5992,6 +6063,23 @@ function App() {
     deckFocus: deckFocusTarget,
     communityTab: activeCommunityTab
   });
+  const atlasKnownHandShortcutAvailable = !(
+    (settings.screenshotHotkeyEnabled && settings.screenshotHotkey.trim().toUpperCase() === "F12")
+    || (
+      settings.replayVideoEnabled
+      && settings.replayShadowClipEnabled
+      && settings.replayShadowClipHotkeyEnabled
+      && settings.replayShadowClipHotkey.trim().toUpperCase() === "F12"
+    )
+    || (
+      settings.replayVideoEnabled
+      && settings.replayQuickFlagHotkeyEnabled
+      && settings.replayQuickFlagHotkey.trim().toUpperCase() === "F12"
+    )
+  );
+  const atlasKnownHandTitle = atlasKnownHandShortcutAvailable
+    ? "Known opponent hand (F12)"
+    : "Known opponent hand (F12 is assigned to another RiftLite shortcut)";
 
   return (
     <main
@@ -6120,15 +6208,34 @@ function App() {
               <RotateCcw size={16} />
             </button>
             {activePlatform === "atlas" ? (
-              <button
-                className="segmented icon-segment"
-                data-active={atlasRecoverySuggested}
-                disabled={atlasRecoveryBusy}
-                onClick={() => setAtlasRecoverySuggested(true)}
-                title="Open Atlas site-state repair"
-              >
-                <RotateCw size={16} />
-              </button>
+              <>
+                <button
+                  className="segmented icon-segment"
+                  data-active={atlasRecoverySuggested}
+                  disabled={atlasRecoveryBusy}
+                  onClick={() => setAtlasRecoverySuggested(true)}
+                  title="Open Atlas site-state repair"
+                >
+                  <RotateCw size={16} />
+                </button>
+                <button
+                  type="button"
+                  className="segmented icon-segment atlas-known-hand-action"
+                  data-active={atlasKnownOpponentHandOpen}
+                  onClick={toggleAtlasKnownOpponentHand}
+                  title={atlasKnownHandTitle}
+                  aria-label={`${atlasKnownHandTitle}${atlasKnownOpponentHand.cards.length ? `, ${atlasKnownOpponentHand.cards.length} known cards` : ""}`}
+                  aria-expanded={atlasKnownOpponentHandOpen}
+                  aria-controls="atlas-known-opponent-hand"
+                >
+                  <Eye size={16} />
+                  {atlasKnownOpponentHand.cards.length ? (
+                    <span className="atlas-known-hand-badge" aria-hidden="true">
+                      {atlasKnownOpponentHand.cards.length}
+                    </span>
+                  ) : null}
+                </button>
+              </>
             ) : null}
             <button
               className="segmented icon-segment"
@@ -6191,9 +6298,39 @@ function App() {
                 <div className="atlas-shell-loading-card">
                   <RefreshCw size={22} aria-hidden="true" />
                   <strong>Starting RiftAtlas</strong>
-                  <span>Waiting for the lobby. RiftLite will restart the embedded page once if Atlas returns an empty shell.</span>
+                  <span>{atlasShellVisibility === "recovering"
+                    ? "Atlas returned an empty shell. RiftLite is safely refreshing its site runtime and retrying once."
+                    : "Waiting for the lobby. If Atlas returns an empty shell, RiftLite will safely repair its site runtime and retry once."}</span>
+                  <div className="atlas-shell-loading-actions">
+                    <button
+                      type="button"
+                      className="secondary"
+                      disabled={atlasRecoveryBusy || atlasShellVisibility === "recovering"}
+                      onClick={() => void recoverAtlasWebview()}
+                    >
+                      {atlasRecoveryBusy || atlasShellVisibility === "recovering" ? "Repairing..." : "Repair now"}
+                    </button>
+                    <button
+                      type="button"
+                      className="secondary"
+                      onClick={() => {
+                        setAtlasShellVisibility((current) => updateAtlasShellVisibility(current, "shell-ready-timeout"));
+                        setAtlasRecoverySuggested(true);
+                      }}
+                    >
+                      Show Atlas now
+                    </button>
+                  </div>
                 </div>
               </div>
+            ) : null}
+            {activePlatform === "atlas" && atlasKnownOpponentHandOpen ? (
+              <AtlasKnownOpponentHandPanel
+                state={atlasKnownOpponentHand}
+                onDismiss={(instanceId) => void dismissAtlasKnownOpponentHandCard(instanceId)}
+                onClear={() => void clearAtlasKnownOpponentHand()}
+                onClose={closeAtlasKnownOpponentHand}
+              />
             ) : null}
           </div>
           {DECK_TRACKER_FEATURE_ENABLED && settings.deckTrackerEnabled ? (
@@ -6414,6 +6551,125 @@ function App() {
         </div>
       ) : null}
     </main>
+  );
+}
+
+function AtlasKnownOpponentHandPanel({
+  state,
+  onDismiss,
+  onClear,
+  onClose
+}: {
+  state: AtlasKnownOpponentHandState;
+  onDismiss: (instanceId: string) => void;
+  onClear: () => void;
+  onClose: () => void;
+}) {
+  const closeButtonRef = useRef<HTMLButtonElement | null>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  const knownCount = state.cards.length;
+  const handCount = state.opponentHandCount;
+  const hasAnonymousDeparture = !state.activeReveal
+    && handCount !== null
+    && knownCount > handCount;
+  const summary = state.activeReveal
+    ? `${knownCount} card${knownCount === 1 ? "" : "s"} revealed now`
+    : hasAnonymousDeparture
+      ? `${knownCount} remembered possibilities · ${handCount} card${handCount === 1 ? "" : "s"} currently in hand`
+    : handCount !== null
+      ? `${knownCount} known · ${handCount} card${handCount === 1 ? "" : "s"} currently in hand`
+      : `${knownCount} card${knownCount === 1 ? "" : "s"} remembered from the last reveal`;
+  const explanation = state.activeReveal
+    ? "Atlas is exposing these exact card instances to you."
+    : hasAnonymousDeparture
+      ? "Atlas hid which remembered card left. Treat these as possibilities and dismiss one when you can identify it."
+      : "Unknown draws are not added. Cards stay here only as a memory aid until played or dismissed.";
+
+  useEffect(() => {
+    closeButtonRef.current?.focus();
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onCloseRef.current();
+      }
+    };
+    window.addEventListener("keydown", closeOnEscape, true);
+    return () => window.removeEventListener("keydown", closeOnEscape, true);
+  }, []);
+
+  return (
+    <div className="atlas-known-hand-layer" onMouseDown={(event) => {
+      if (event.target === event.currentTarget) {
+        onClose();
+      }
+    }}>
+      <aside
+        id="atlas-known-opponent-hand"
+        className="atlas-known-hand-panel"
+        aria-labelledby="atlas-known-hand-title"
+      >
+        <header className="atlas-known-hand-header">
+          <div>
+            <span className="eyebrow">Atlas memory</span>
+            <h2 id="atlas-known-hand-title">Known opponent hand</h2>
+          </div>
+          <button
+            ref={closeButtonRef}
+            type="button"
+            className="icon-button"
+            onClick={onClose}
+            aria-label="Close known opponent hand"
+            title="Close"
+          >
+            <X size={16} />
+          </button>
+        </header>
+        <div className="atlas-known-hand-status" data-active={state.activeReveal}>
+          <Eye size={16} aria-hidden="true" />
+          <div>
+            <strong>{summary}</strong>
+            <span>{explanation}</span>
+          </div>
+        </div>
+        {state.cards.length ? (
+          <div className="atlas-known-hand-grid">
+            {state.cards.map((card) => {
+              const imageUrl = resolveBundledReplayCardImage(card.code || card.cardId)
+                || deckTrackerImageUrlFromId(card.code || card.cardId);
+              const cardName = card.name || card.code || "Known card";
+              return (
+                <button
+                  type="button"
+                  className="atlas-known-hand-card"
+                  key={card.instanceId}
+                  onClick={() => onDismiss(card.instanceId)}
+                  aria-label={`Mark ${cardName} as no longer in the opponent hand`}
+                  title={`Mark ${cardName} as gone`}
+                >
+                  <span className="atlas-known-hand-card-art">
+                    {imageUrl ? <img src={imageUrl} alt={cardName} draggable={false} /> : <strong>{cardName.slice(0, 2).toUpperCase()}</strong>}
+                    <span className="atlas-known-hand-card-remove" aria-hidden="true"><X size={13} /></span>
+                  </span>
+                  <strong>{cardName}</strong>
+                  {card.code ? <span>{card.code}</span> : null}
+                </button>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="atlas-known-hand-empty">
+            <Eye size={24} aria-hidden="true" />
+            <strong>No revealed cards remembered</strong>
+            <span>When Atlas legitimately reveals the opponent&apos;s hand, RiftLite will place the exact cards here automatically.</span>
+          </div>
+        )}
+        <footer className="atlas-known-hand-footer">
+          <span>Click a card when you know it has left their hand.</span>
+          <button type="button" className="secondary" disabled={!state.cards.length} onClick={onClear}>Clear all</button>
+        </footer>
+      </aside>
+    </div>
   );
 }
 
@@ -17603,7 +17859,7 @@ function ReplayExportDialog({
           <div className="replay-export-card replay-export-mp4">
             <Video size={24} />
             <strong>YouTube MP4</strong>
-            <span>Creates an MP4 video. Selected flags and drawings are burned into the video, and voice notes are mixed into the audio track.</span>
+            <span>Creates an MP4 video. Each selected flag and its note appear in the upper-left for about 4.5 seconds at that timestamp; drawings are burned in, and voice notes are mixed into the audio track.</span>
             <div className="replay-export-checks">
               <label>
                 <input type="checkbox" checked={options.includeFlags} disabled={!flags} onChange={() => update("includeFlags")} />
@@ -22613,6 +22869,26 @@ function HubsView({ settings, matches, replays, hubMatches, onSave, onHubResult,
     }
   }
 
+  async function removeHubMember(member: HubMember) {
+    if (!selectedHub || !canRemovePrivateHubMember(selectedHub.role, member.role)) return;
+    const memberName = member.displayName || member.handle || "this member";
+    if (!window.confirm(`Remove ${memberName} from ${selectedHub.name}? They will lose access to the hub and its shared match history.`)) {
+      return;
+    }
+    setHubRoleBusyUid(member.uid);
+    setHubRoleStatus(`Removing ${memberName}...`);
+    try {
+      await window.riftlite.removeHubMember(selectedHub.id, member.uid);
+      setHubMembers((current) => current.filter((item) => item.uid !== member.uid));
+      setHubRoleStatus(`${memberName} was removed from the hub.`);
+      void refreshHubHealth(selectedHub.id, false);
+    } catch (error) {
+      setHubRoleStatus(error instanceof Error ? error.message : "Could not remove the hub member.");
+    } finally {
+      setHubRoleBusyUid("");
+    }
+  }
+
   async function refreshHubHealth(hubId: string, showStatus = true) {
     if (!settings.accountUid || !hubId) {
       setHubHealth(null);
@@ -22997,9 +23273,10 @@ function HubsView({ settings, matches, replays, hubMatches, onSave, onHubResult,
             {inviteStatus ? <p className="muted">{inviteStatus}</p> : null}
             <div className="hub-member-list">
               <strong>Members</strong>
-              <p className="muted">Co-owners can manage invites, moderation, testing goals, and hub-authorized Discord commands. Discord setup also requires Manage Server permission in Discord.</p>
+              <p className="muted">Owners can remove members or co-owners. Co-owners can remove members, but cannot remove the owner or another co-owner. Regular members cannot manage anyone. Discord setup also requires Manage Server permission in Discord.</p>
               {visibleHubMembers.map((member) => {
                 const canChangeRole = selectedHub.role === "owner" && member.role !== "owner";
+                const canRemoveMember = canRemovePrivateHubMember(selectedHub.role, member.role);
                 const busy = hubRoleBusyUid === member.uid;
                 return (
                   <div className="event-row" key={member.id || member.uid}>
@@ -23014,6 +23291,11 @@ function HubsView({ settings, matches, replays, hubMatches, onSave, onHubResult,
                       {canChangeRole && member.role === "admin" ? (
                         <button className="secondary danger" disabled={Boolean(hubRoleBusyUid)} onClick={() => void updateHubMemberRole(member, "member")}>
                           {busy ? "Updating..." : "Remove co-owner"}
+                        </button>
+                      ) : null}
+                      {canRemoveMember ? (
+                        <button className="secondary danger" disabled={Boolean(hubRoleBusyUid)} onClick={() => void removeHubMember(member)}>
+                          <X size={14} /> {busy ? "Removing..." : "Remove from hub"}
                         </button>
                       ) : null}
                     </div>

@@ -4,6 +4,7 @@ import {
   atlasBattlefieldZonesForSeat,
   type AtlasPlayerSeat
 } from "../shared/atlasBattlefieldOwnership.js";
+import { isAtlasActiveRoomBoundary } from "../shared/atlasCaptureLifecycle.js";
 import {
   ATLAS_EMPTY_SHELL_MIN_AGE_MS,
   assessAtlasShell,
@@ -176,6 +177,7 @@ function installAtlasEditableFocusBridge(): void {
 let previousActive = false;
 let endTimer: number | undefined;
 let lastActiveSnapshot: Record<string, unknown> = {};
+let lastActiveRoomCode = "";
 let lastSnapshotSignature = "";
 let lastTcgaResearchSignature = "";
 let lastEndSignature = "";
@@ -2398,6 +2400,13 @@ function publishSnapshot(reason: string): void {
     }
   }
   const active = Boolean(data.active);
+  const activeRoomCode = typeof data.roomCode === "string" ? data.roomCode : "";
+  const atlasRoomBoundary = platform === "atlas" && isAtlasActiveRoomBoundary(
+    previousActive,
+    lastActiveRoomCode,
+    active,
+    activeRoomCode
+  );
   const endText = typeof data.endText === "string" ? data.endText.trim() : "";
   const visibleResultKey = endText ? normalizeVisibleResultKey(endText) : "";
   if (!active || !visibleResultKey) {
@@ -2425,13 +2434,24 @@ function publishSnapshot(reason: string): void {
     endText: data.endText
   });
 
-  if (active && !previousActive && !alreadyEndedVisibleResult && !visibleResultKey) {
+  if (
+    active &&
+    (!previousActive || atlasRoomBoundary) &&
+    !alreadyEndedVisibleResult &&
+    !visibleResultKey
+  ) {
     if (endTimer) {
       window.clearTimeout(endTimer);
       endTimer = undefined;
     }
+    if (atlasRoomBoundary) {
+      lastActiveSnapshot = {};
+    }
     previousActive = true;
-    send("match-start", { ...data, reason });
+    send("match-start", {
+      ...data,
+      reason: atlasRoomBoundary ? "atlas-room-changed" : reason
+    });
   }
 
   if (active && endTimer && !alreadyEndedVisibleResult) {
@@ -2441,6 +2461,9 @@ function publishSnapshot(reason: string): void {
   }
 
   if (active) {
+    if (activeRoomCode) {
+      lastActiveRoomCode = activeRoomCode;
+    }
     lastActiveSnapshot = { ...lastActiveSnapshot, ...data };
   }
 
@@ -2462,6 +2485,7 @@ function publishSnapshot(reason: string): void {
         previousActive = false;
         send("match-end", { ...lastActiveSnapshot, ...data, ...finalSnapshot, reason: "inactive-debounce" });
         lastActiveSnapshot = {};
+        lastActiveRoomCode = "";
       }
       endTimer = undefined;
     }, platform === "atlas" ? 1800 : 3000);

@@ -2332,6 +2332,117 @@ describe("CaptureCoordinator", () => {
     }));
   });
 
+  it("does not seed a ghost match from the active result snapshot that releases a BO3 review", async () => {
+    const { coordinator, saved, sent, diagnostics } = coordinatorHarness();
+    const base = {
+      active: true,
+      format: "Auto",
+      myName: "Mika",
+      configuredUsername: "Mika",
+      opponentName: "First Rival",
+      myChampionCode: "UNL-189",
+      opponentChampionCode: "SFD-195"
+    };
+    const score = (me: string, opp: string) => ({
+      me,
+      opp,
+      source: "atlas-score-track",
+      raw: [`me:active:${me}:Set your score to ${me}`, `unknown:active:${opp}:${opp}`]
+    });
+    const confirmGame = (
+      gameNumber: number,
+      me: string,
+      opp: string,
+      roomCode: string,
+      capturedAt: string
+    ) => event("match-end", {
+      ...base,
+      roomCode,
+      reason: "result-text-detected",
+      atlasResultKind: "game-result",
+      atlasBo3GameNumber: gameNumber,
+      endText: `Confirm Game ${gameNumber} Winner`,
+      score: score(me, opp)
+    }, capturedAt, "atlas");
+
+    await coordinator.handleEvent(event("match-start", {
+      ...base,
+      roomCode: "ROOM1",
+      score: score("0", "0")
+    }, "2026-07-27T05:00:00.000Z", "atlas"));
+    await coordinator.handleEvent(event("match-snapshot", {
+      ...base,
+      roomCode: "ROOM1",
+      score: score("4", "7")
+    }, "2026-07-27T05:08:00.000Z", "atlas"));
+    await coordinator.handleEvent(confirmGame(1, "4", "7", "ROOM1", "2026-07-27T05:08:05.000Z"));
+
+    await coordinator.handleEvent(event("match-start", {
+      ...base,
+      roomCode: "ROOM2",
+      score: score("0", "0")
+    }, "2026-07-27T05:08:10.000Z", "atlas"));
+    await coordinator.handleEvent(event("match-snapshot", {
+      ...base,
+      roomCode: "ROOM2",
+      score: score("7", "4")
+    }, "2026-07-27T05:16:00.000Z", "atlas"));
+    await coordinator.handleEvent(confirmGame(2, "7", "4", "ROOM2", "2026-07-27T05:16:05.000Z"));
+
+    await coordinator.handleEvent(event("match-start", {
+      ...base,
+      roomCode: "ROOM3",
+      score: score("0", "0")
+    }, "2026-07-27T05:16:10.000Z", "atlas"));
+    await coordinator.handleEvent(event("match-snapshot", {
+      ...base,
+      roomCode: "ROOM3",
+      score: score("7", "7")
+    }, "2026-07-27T05:25:00.000Z", "atlas"));
+    const gameThreeResult = confirmGame(
+      3,
+      "7",
+      "7",
+      "ROOM3",
+      "2026-07-27T05:25:05.000Z"
+    );
+    await coordinator.handleEvent(gameThreeResult);
+
+    expect(saved).toHaveLength(0);
+
+    await coordinator.handleEvent(event("match-snapshot", {
+      ...gameThreeResult.payload,
+      reason: "mutation"
+    }, "2026-07-27T05:25:05.001Z", "atlas"));
+
+    expect(saved).toHaveLength(1);
+    expect(sent.filter((item) => item.channel === "match:draft")).toHaveLength(1);
+    expect(coordinator.hasActiveCaptureSession("atlas")).toBe(false);
+
+    await coordinator.handleEvent(event("match-snapshot", {
+      active: true,
+      format: "Auto",
+      myName: "Mika",
+      configuredUsername: "Mika",
+      opponentName: "Second Rival",
+      myChampionCode: "UNL-189",
+      opponentChampionCode: "VEN-196",
+      roomCode: "NEXT1",
+      score: score("0", "0")
+    }, "2026-07-27T05:25:45.000Z", "atlas"));
+
+    expect(saved).toHaveLength(1);
+    expect(coordinator.hasActiveCaptureSession("atlas")).toBe(true);
+    expect(diagnostics.record).toHaveBeenCalledWith(expect.objectContaining({
+      kind: "debug",
+      payload: expect.objectContaining({
+        reason: "atlas-finalized-result-echo-ignored",
+        roomCode: "ROOM3",
+        opponentName: "First Rival"
+      })
+    }));
+  });
+
   it("keeps RiftAtlas BO3 together when Atlas blanks after game two before game three starts", async () => {
     const { coordinator, saved, sent } = coordinatorHarness();
     const base = {

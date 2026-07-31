@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   clearAtlasWebviewRuntime,
   initialAtlasReloadStormState,
-  shouldAutoRemountAtlasEmptyShell,
+  shouldAutoRepairAtlasEmptyShell,
   updateAtlasReloadStormState
 } from "../src/shared/atlasWebviewRecovery.js";
 
@@ -44,11 +44,11 @@ describe("Atlas embedded-browser recovery", () => {
     expect(state.suggested).toBe(true);
   });
 
-  it("automatically remounts the first empty Atlas shell only once", () => {
+  it("automatically repairs the first empty Atlas shell only once", () => {
     const emptyShell = { kind: "debug" as const, platform: "atlas" as const, payload: { reason: "atlas-app-shell-empty" } };
-    expect(shouldAutoRemountAtlasEmptyShell(emptyShell, false)).toBe(true);
-    expect(shouldAutoRemountAtlasEmptyShell(emptyShell, true)).toBe(false);
-    expect(shouldAutoRemountAtlasEmptyShell(atlasEvent("capture-ready"), false)).toBe(false);
+    expect(shouldAutoRepairAtlasEmptyShell(emptyShell, false)).toBe(true);
+    expect(shouldAutoRepairAtlasEmptyShell(emptyShell, true)).toBe(false);
+    expect(shouldAutoRepairAtlasEmptyShell(atlasEvent("capture-ready"), false)).toBe(false);
   });
 
   it("clears Atlas runtime caches without clearing sign-in or local deck data", async () => {

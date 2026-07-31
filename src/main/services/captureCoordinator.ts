@@ -259,9 +259,37 @@ export class CaptureCoordinator {
       this.emitHealth(true);
       return;
     }
-    await this.resolvePendingAtlasReviewBeforeEvent(trackedEvent, settings);
+    const ignoreFinalizedAtlasResultEcho = await this.resolvePendingAtlasReviewBeforeEvent(
+      trackedEvent,
+      settings
+    );
     void this.diagnostics.record(compactCaptureEvent(trackedEvent)).catch(() => undefined);
     const currentCount = this.health.eventCount + 1;
+    if (ignoreFinalizedAtlasResultEcho) {
+      void this.diagnostics.record({
+        id: randomUUID(),
+        platform: trackedEvent.platform,
+        kind: "debug",
+        capturedAt: trackedEvent.capturedAt,
+        url: trackedEvent.url,
+        payload: {
+          reason: "atlas-finalized-result-echo-ignored",
+          roomCode: readPayloadString(trackedEvent.payload.roomCode),
+          opponentName: readPayloadString(trackedEvent.payload.opponentName),
+          atlasResultKind: readPayloadString(trackedEvent.payload.atlasResultKind),
+          endText: readPayloadString(trackedEvent.payload.endText)
+        }
+      }).catch(() => undefined);
+      this.health = {
+        platform: trackedEvent.platform,
+        state: "watching",
+        message: "Atlas finalized result echo ignored",
+        lastEventAt: trackedEvent.capturedAt,
+        eventCount: currentCount
+      };
+      this.emitHealth(false);
+      return;
+    }
     if (this.shouldIgnoreFalseTcgaResultEnd(trackedEvent)) {
       this.health = {
         platform: trackedEvent.platform,
@@ -1500,13 +1528,13 @@ export class CaptureCoordinator {
   private async resolvePendingAtlasReviewBeforeEvent(
     event: CaptureEvent,
     settings: Awaited<ReturnType<RiftLiteStore["getSettings"]>> | null
-  ): Promise<void> {
+  ): Promise<boolean> {
     if (event.platform !== "atlas") {
-      return;
+      return false;
     }
     const pending = this.pendingAtlasReviews.get(event.platform);
     if (!pending || !readPayloadBoolean(event.payload.active)) {
-      return;
+      return false;
     }
     if (this.isPendingAtlasContinuation(pending.endEvent, event)) {
       clearTimeout(pending.timer);
@@ -1519,9 +1547,15 @@ export class CaptureCoordinator {
         lastEventAt: event.capturedAt
       };
       this.emitHealth(true);
-      return;
+      return false;
     }
     await this.flushPendingAtlasReview(event.platform, "new-atlas-match-started", settings);
+    return !this.pendingAtlasReviews.has(event.platform) &&
+      !this.tracker.get(event.platform) &&
+      (
+        readPayloadString(event.payload.atlasResultKind) === "game-result" ||
+        isAtlasConfirmWinnerText(event)
+      );
   }
 
   private deferAtlasReview(

@@ -1,8 +1,8 @@
 # RiftLite Current Engineering State
 
-> **Current Windows release:** v0.9.12 adds the expanded RiftAtlas input-focus repair to v0.9.11. Read `docs/release-notes-v0.9.12.md` for the customer-facing summary and `docs/HANDOVER_2026-07-21_V0.9.10_RC.md` for the underlying account/Web Replay/match-reporting audit and artifact safeguards.
+> **v0.9.20 release candidate:** the five tested post-v0.9.12 changes are now versioned and packaged together for publication: private-hub removal, Atlas match-boundary/ghost-match repair, Atlas empty-shell recovery, replay MP4 annotation burn-in, and a reveal-gated Atlas known-opponent-hand memory panel. Read `docs/release-notes-v0.9.20.md` and `docs/HANDOVER_2026-07-27_POST_V0.9.12.md` first.
 
-Last updated: 2026-07-25
+Last updated: 2026-07-31
 
 This is the durable handoff for continuing RiftLite work in a fresh Codex task. Read this file before changing code.
 
@@ -10,7 +10,7 @@ This is the durable handoff for continuing RiftLite work in a fresh Codex task. 
 
 - Active cross-platform release source repo:
   `C:\Users\cdfpa\OneDrive\Documents\Claude\Projects\Riftlite Beta 0.6\desktop-v06`
-- Current local package version: `0.9.12` (customer-facing build `v0.9.12`); Windows installer fully built, validated, and published
+- Current local package version: `0.9.20` (customer-facing build `v0.9.20`); the release candidate is fully built and validated locally, while the published releases remain Windows v0.9.12 and macOS v0.9.11 until publication completes
 - Current branch: `agent/release-v0.9.12`
 - Windows GitHub release repository (`windows` remote): `cdfpartridge-web/RiftLite-Desktop`
 - macOS GitHub release repository (`origin` remote): `cdfpartridge-web/RiftLite-Desktop-mac`
@@ -38,6 +38,32 @@ The active working tree is intentionally dirty and contains a large amount of cu
 5. Do not rebuild installers, publish releases, or deploy the website unless explicitly requested.
 6. Treat raw WebSocket replay data, account sync, hub ownership, Discord tokens, and API keys as security-sensitive.
 7. RiftReplay/Replay Lab and Vision work are parked or hidden. Do not expose them in menus or release notes unless explicitly requested.
+
+## v0.9.20 Release Candidate
+
+The desktop branch remains `agent/release-v0.9.12`, based on published commit/tag `50d6130`, and its v0.9.20 release candidate contains five intentional post-release changes:
+
+1. private-hub owners can remove members/co-owners and co-owners can remove regular members, with the website remaining the permission authority;
+2. Atlas treats a reliable active room-code change as a new match boundary and ignores the finalized result echo that could seed a ghost `Unknown` match after flushing a BO3 review;
+3. Atlas empty-shell recovery no longer races a renderer remount against the main process. The main process clears only Atlas code/HTTP caches, service workers, Cache Storage, and connections before reloading, while preserving sign-in and all local data. The startup cover now also offers **Repair now** and **Show Atlas now**;
+4. Windows replay MP4 export rasterizes selected flags, notes, and drawings through a hidden Chromium window, rather than silently dropping the SVG overlays;
+5. RiftAtlas now has an ephemeral known-opponent-hand panel. It accepts cards only from an incoming authoritative reveal patch that explicitly exposes a non-local player's hand, preserves exact duplicate instances after concealment, removes exact departures when Atlas proves they left the hand, and fails closed for spectators.
+
+The combined local source passed:
+
+- TypeScript lint;
+- 97 test files / 836 tests;
+- the full Electron/game-preload/Vite production build;
+- the development Electron smoke test;
+- `git diff --check`.
+
+These changes are not yet published. They are packaged together in the local v0.9.20 release candidate built on 2026-07-31:
+
+- `release\RiftLiteBetaInstall.exe`
+- 202,685,039 bytes
+- SHA-256 `CDDB33CF2AFBEA26CCD9E8771AADD6B8775A66805422809919039CA084B4CF3C`
+
+The installer, Windows artifact verification, and packaged smoke test passed. The executable is not Authenticode-signed. See `docs/HANDOVER_2026-07-27_POST_V0.9.12.md` for the exact file manifest, root causes, separate dirty website state, and validation history.
 
 ## Current Product Shape
 
@@ -80,6 +106,8 @@ RiftLite is an Electron desktop companion for Riftbound play on TCGA and RiftAtl
   - Atlas raw WebSocket sidecar capture and optional replay upload
 - `src/main/services/deckTrackerService.ts`
   - active deck and Atlas event-driven deck/opponent tracking
+- `src/main/services/replayMp4OverlayRasterizer.ts`
+  - sandboxed hidden Chromium rasterization for MP4 flag/note/drawing burn-in
 - `src/main/services/tcgaResolver.ts`
   - TCGA card/legend resolution and lookup fallback
 - `src/main/services/updaterService.ts`
@@ -112,6 +140,7 @@ This code runs close to the game page. Avoid expensive synchronous work, broad p
 - `src/shared/deckNotebook.ts`: local notebook/prep normalization and package shapes
 - `src/shared/deckTracker.ts`: tracker types and calculations
 - `src/shared/atlasEventDeckTracker.ts`: Atlas event-driven card tracking
+- `src/shared/atlasKnownOpponentHand.ts`: reveal-gated, exact-instance Atlas opponent-hand memory
 - `src/shared/riftLiteReplayEngine.ts`: parked raw replay reconstruction engine
 
 ### Preload API
@@ -167,9 +196,26 @@ User-facing replay features include:
 - original-audio volume and mute controls
 - Shadowplay-style rolling clips and a live review-flag hotkey
 
+The post-v0.9.12 worktree fixes Windows MP4 burn-in. Electron `nativeImage` could not decode the generated SVG overlays and the exporter silently continued without them. Export now renders exact-size transparent PNG overlays through one hidden sandboxed Chromium window, fails visibly if rasterization fails, and derives a timestamp for older frame/replay flags when possible.
+
 First-party **RiftLite Web Replay** now supports provider-isolated Atlas WebSocket capture and TCGA action capture. Each provider requires explicit account-bound consent before capture and automatic upload begin. Both use the authenticated website library/player; two-perspective combining remains Atlas-only. The old local reconstructed Replay Lab remains parked.
 
 Vision deck tracking was also paused. Keep its source and types, but do not start workers, sample frames, or show Vision UI while its feature flag is disabled.
+
+### Atlas Known Opponent Hand
+
+The local post-v0.9.12 source adds an Atlas-only memory aid driven by the existing WebSocket ingest:
+
+- the top play toolbar has an eye button and known-card count badge;
+- unmodified `F12` opens or closes the panel from the RiftLite renderer or focused Atlas guest, unless another registered RiftLite shortcut already owns `F12`;
+- the panel uses the real bundled card art, preserves duplicate copies by exact Atlas instance ID, and supports per-card dismissal plus **Clear all**;
+- cards remain remembered when Atlas conceals the hand again, while unknown draws affect only the current hand total;
+- exact moves out of hand, public inserts, and chain source IDs remove known instances automatically, while exact or unambiguous public/chain returns restore them;
+- room/game and accepted Atlas match-end boundaries, room-shell leave, current-guest destruction, and same-room spectator/seat changes clear the memory and local-seat authority.
+
+After Atlas hides the hand, an anonymous departure can leave more remembered possibilities than current hand slots. The panel labels that state explicitly instead of pretending every remembered card is still present, and lets the user dismiss the identified card manually.
+
+The tracker is separate from the optional deck tracker and runs only on already-validated Atlas frames. It does not inspect screenshots, infer hidden identities, persist raw packets, or expose spectator hands. The final local audit parsed 105 raw capture documents without error; ten contained qualifying player-view reveals and no spectator capture produced a remembered card.
 
 ## Decks, Prep, And Matchup Tools
 
@@ -937,3 +983,13 @@ The old task remains useful as an archive, but day-to-day engineering context sh
 - macOS arm64 DMG: 172,403,167 bytes, SHA-256 `C692AA9F4C36475B2BBCDFBD14806CC5835BF490237658A52AA4892713FADDE9`; arm64 ZIP: 165,031,100 bytes, SHA-256 `0DA1AFC046C2819A276E2129AF4F4D2ED19090B037A02F53073FE67390FEEB63`.
 - macOS x64 DMG: 187,561,677 bytes, SHA-256 `764F803758FE0E4E58F4AD4FE592E3E06B163936D05FDB5BCB182FA1389C7957`; x64 ZIP: 179,931,426 bytes, SHA-256 `2673F3D6B8C5C3396D5B2D376020D7FB9BFDEEA3D92B6B3F75F8EFCF8A6F7BF5`.
 - macOS updater manifest: 830 bytes, SHA-256 `81B182054C679F2356D3F5627DC0E292226F09C0AE0C69B162C6BD292FB3D060`.
+
+## 2026-07-28 replay MP4 annotation burn-in repair (local only)
+
+- A Windows v0.9.11 tester saved multiple replay flags/notes and received a valid MP4 containing only the clean game recording. The supplied diagnostics showed repeated successful replay saves followed by a long export, with no export failure.
+- The exporter generated flag and drawing overlays as SVG, but Electron 39 `nativeImage.createFromDataURL()` returned an empty `0x0` image for those SVG data URLs on Windows. The exporter caught and skipped every failure, then allowed FFmpeg to emit a plain MP4.
+- Export now reuses one hidden, focusless, sandboxed, JavaScript-disabled Chromium window to load each generated SVG and capture an exact-size transparent PNG. A direct Windows/Electron probe verified a nonempty `640x360` PNG, alpha `0` outside the overlay, and nonzero alpha within it.
+- Overlay failures now abort visibly and clean already-created temporary inputs. Older frame/replay flags can derive their video position from capture time rather than being filtered solely for an explicit numeric `timeMs`.
+- Validation passed the focused replay tests (8 files / 26 tests), all 95 desktop test files / 812 tests, TypeScript, the complete production build, the development Electron smoke test, and `git diff --check`.
+- Files: `src/main/main.ts`, new `src/main/services/replayMp4OverlayRasterizer.ts`, and new `tests/replayMp4OverlayRasterizer.test.ts`.
+- No installer was built or published. The existing v0.9.12 installer does not contain this fix, and no GitHub, website, Discord, or production-data action occurred.

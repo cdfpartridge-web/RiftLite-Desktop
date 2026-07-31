@@ -21,4 +21,13 @@ describe("UI Dev modern styles", () => {
     expect(declarationsForSelector(modernStyles, ".ui-dev-modern .replay-whiteboard").join("\n"))
       .not.toMatch(/(?:background|box-shadow)\s*:/);
   });
+
+  it("keeps the Atlas known-hand card panel above the game with a bounded scroll area", () => {
+    expect(declarationsForSelector(baseStyles, ".atlas-known-hand-layer").join("\n"))
+      .toMatch(/z-index\s*:\s*12/);
+    expect(declarationsForSelector(baseStyles, ".atlas-known-hand-panel").join("\n"))
+      .toMatch(/max-height\s*:/);
+    expect(declarationsForSelector(baseStyles, ".atlas-known-hand-grid").join("\n"))
+      .toMatch(/overflow-y\s*:\s*auto/);
+  });
 });

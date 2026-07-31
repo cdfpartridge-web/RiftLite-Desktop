@@ -3675,7 +3675,7 @@ textarea {
   background:
     radial-gradient(circle at 50% 48%, rgb(31 87 120 / 18%), transparent 28%),
     rgb(4 8 14 / 82%);
-  pointer-events: none;
+  pointer-events: auto;
 }
 
 .atlas-shell-loading-card {
@@ -3705,6 +3705,244 @@ textarea {
   color: var(--muted);
   font-size: 13px;
   line-height: 1.45;
+}
+
+.atlas-shell-loading-actions {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 5px;
+}
+
+.atlas-shell-loading-actions .secondary {
+  min-height: 34px;
+  padding: 7px 11px;
+}
+
+.atlas-known-hand-action {
+  position: relative;
+}
+
+.atlas-known-hand-badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  display: grid;
+  min-width: 17px;
+  height: 17px;
+  place-items: center;
+  padding: 0 4px;
+  border: 1px solid #07111e;
+  border-radius: 999px;
+  background: #55d9ff;
+  color: #04101b;
+  font-size: 10px;
+  font-weight: 950;
+  line-height: 1;
+  box-shadow: 0 3px 12px rgb(0 0 0 / 45%);
+}
+
+.atlas-known-hand-layer {
+  position: absolute;
+  z-index: 12;
+  inset: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  padding: 10px;
+  background: linear-gradient(90deg, transparent 45%, rgb(1 6 13 / 38%));
+  pointer-events: auto;
+}
+
+.atlas-known-hand-panel {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  gap: 12px;
+  width: min(470px, calc(100% - 12px));
+  max-height: calc(100% - 2px);
+  overflow: hidden;
+  padding: 16px;
+  border: 1px solid rgb(83 209 255 / 40%);
+  border-radius: 14px;
+  background:
+    radial-gradient(circle at 90% 0%, rgb(56 187 255 / 13%), transparent 34%),
+    rgb(7 16 28 / 97%);
+  box-shadow: 0 22px 80px rgb(0 0 0 / 62%), 0 0 0 1px rgb(42 126 184 / 12%);
+}
+
+.atlas-known-hand-header,
+.atlas-known-hand-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.atlas-known-hand-header h2 {
+  margin: 2px 0 0;
+  font-size: 19px;
+}
+
+.atlas-known-hand-header .eyebrow {
+  color: #77dcff;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+}
+
+.atlas-known-hand-status {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid rgb(88 135 174 / 30%);
+  border-radius: 10px;
+  background: rgb(13 31 49 / 72%);
+}
+
+.atlas-known-hand-status[data-active="true"] {
+  border-color: rgb(82 218 255 / 55%);
+  background: rgb(11 58 78 / 76%);
+}
+
+.atlas-known-hand-status > svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: #65dcff;
+}
+
+.atlas-known-hand-status div {
+  display: grid;
+  gap: 3px;
+}
+
+.atlas-known-hand-status strong {
+  color: #f1fbff;
+  font-size: 13px;
+}
+
+.atlas-known-hand-status span {
+  color: #aebfd0;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.atlas-known-hand-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(94px, 1fr));
+  gap: 10px;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 2px 3px 4px 1px;
+}
+
+.atlas-known-hand-card {
+  display: grid;
+  align-content: start;
+  gap: 5px;
+  min-width: 0;
+  padding: 7px;
+  border: 1px solid rgb(82 131 172 / 34%);
+  border-radius: 10px;
+  background: rgb(10 22 36 / 90%);
+  color: #eaf7ff;
+  text-align: left;
+  transition: border-color 120ms ease, transform 120ms ease, background 120ms ease;
+}
+
+.atlas-known-hand-card:hover,
+.atlas-known-hand-card:focus-visible {
+  border-color: rgb(89 220 255 / 72%);
+  background: rgb(13 39 58 / 96%);
+  transform: translateY(-2px);
+}
+
+.atlas-known-hand-card-art {
+  position: relative;
+  display: grid;
+  width: 100%;
+  overflow: hidden;
+  aspect-ratio: 5 / 7;
+  place-items: center;
+  border-radius: 7px;
+  background: linear-gradient(145deg, #17324a, #0b1726);
+}
+
+.atlas-known-hand-card-art img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.atlas-known-hand-card-remove {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  display: grid;
+  width: 21px;
+  height: 21px;
+  place-items: center;
+  border: 1px solid rgb(255 255 255 / 25%);
+  border-radius: 999px;
+  background: rgb(3 9 16 / 82%);
+  color: #fff;
+  box-shadow: 0 2px 9px rgb(0 0 0 / 48%);
+}
+
+.atlas-known-hand-card > strong,
+.atlas-known-hand-card > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.atlas-known-hand-card > strong {
+  font-size: 11px;
+}
+
+.atlas-known-hand-card > span {
+  color: #91a8bc;
+  font-size: 9px;
+}
+
+.atlas-known-hand-empty {
+  display: grid;
+  min-height: 190px;
+  place-content: center;
+  justify-items: center;
+  gap: 7px;
+  padding: 24px;
+  color: #8fb3c9;
+  text-align: center;
+}
+
+.atlas-known-hand-empty strong {
+  color: #e8f8ff;
+  font-size: 14px;
+}
+
+.atlas-known-hand-empty span {
+  max-width: 330px;
+  color: #98aebe;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.atlas-known-hand-footer {
+  padding-top: 2px;
+  border-top: 1px solid rgb(87 126 158 / 22%);
+}
+
+.atlas-known-hand-footer > span {
+  color: #91a6b8;
+  font-size: 10px;
+}
+
+.atlas-known-hand-footer .secondary {
+  flex: 0 0 auto;
+  min-height: 32px;
+  padding: 6px 10px;
 }
 
 @keyframes atlas-shell-loading-spin {

@@ -1,4 +1,4 @@
-import type { PrivateHub, ReplayRecord, UserSettings } from "./types.js";
+import type { HubMember, PrivateHub, ReplayRecord, UserSettings } from "./types.js";
 
 export const PRIVATE_HUB_DELETE_COUNTDOWN_SECONDS = 5;
 export const RIFTLITE_WEB_REPLAY_ORIGIN = "https://www.riftlite.com";
@@ -11,6 +11,15 @@ export function canLeavePrivateHub(hub: Pick<PrivateHub, "role" | "claimed">): b
 
 export function canDeletePrivateHub(hub: Pick<PrivateHub, "role" | "claimed">): boolean {
   return hub.claimed === true && hub.role === "owner";
+}
+
+export function canRemovePrivateHubMember(
+  actorRole: PrivateHub["role"],
+  targetRole: HubMember["role"]
+): boolean {
+  if (targetRole === "owner") return false;
+  if (actorRole === "owner") return true;
+  return actorRole === "admin" && targetRole === "member";
 }
 
 export function privateHubMembershipsEqual(

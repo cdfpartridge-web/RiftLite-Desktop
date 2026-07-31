@@ -13,10 +13,14 @@ describe("IPC registration boundary", () => {
     expect(guardedChannels).toContain("settings:get");
     expect(guardedChannels).toContain("matches:get");
     expect(guardedChannels).toContain("hubs:create");
+    expect(guardedChannels).toContain("hubs:member:remove");
     expect(guardedChannels).toContain("account:cloud-sync:restore");
     expect(guardedChannels).toContain("backup:restore");
     expect(guardedChannels).toContain("diagnostics:bundle");
     expect(guardedChannels).toContain("game-webview:focus");
+    expect(guardedChannels).toContain("atlas-known-hand:get");
+    expect(guardedChannels).toContain("atlas-known-hand:dismiss");
+    expect(guardedChannels).toContain("atlas-known-hand:clear");
   });
 
   it("keeps game-facing invoke channels on explicit sender validators", () => {

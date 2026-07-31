@@ -41,4 +41,22 @@ describe("desktop window lifecycle", () => {
     expect(handler).toContain("void simEventReceiver?.stop()");
     expect(handler).toContain("globalShortcut.unregisterAll()");
   });
+
+  it("routes unmodified F12 from the app or Atlas guest to the known-hand panel", () => {
+    const start = source.indexOf("function installFullscreenShortcut");
+    const end = source.indexOf("function getMainWindowBounds", start);
+    const handler = source.slice(start, end);
+
+    expect(start).toBeGreaterThan(-1);
+    expect(handler).toContain('input.key === "F12"');
+    expect(handler).toContain("!input.isAutoRepeat");
+    expect(handler).toContain("registeredScreenshotHotkey");
+    expect(handler).toContain("registeredShadowClipHotkey");
+    expect(handler).toContain("registeredReplayFlagHotkey");
+    expect(handler).toContain('hotkey.trim().toUpperCase() === "F12"');
+    expect(handler).toContain("isMainRenderer || isAtlasGame");
+    expect(handler).toContain("!mainWindow.webContents.isDestroyed()");
+    expect(handler).toContain('mainWindow.webContents.send("atlas-known-hand:shortcut")');
+    expect(handler).toContain("event.preventDefault()");
+  });
 });

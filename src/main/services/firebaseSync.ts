@@ -2673,6 +2673,12 @@ export class FirebaseSyncService {
     });
   }
 
+  async removeHubMember(hubId: string, uid: string): Promise<void> {
+    await this.authenticatedWebsiteRequest(`/api/hubs/${encodeURIComponent(hubId)}/members/${encodeURIComponent(uid)}`, {
+      method: "DELETE"
+    });
+  }
+
   async createHubInvite(hubId: string, targetHandle = ""): Promise<HubInvite> {
     const payload = await this.authenticatedWebsiteRequest(`/api/hubs/${encodeURIComponent(hubId)}/invites`, {
       method: "POST",

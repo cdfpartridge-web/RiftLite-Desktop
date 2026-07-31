@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type {
+  AtlasKnownOpponentHandState,
   BrowserInfo,
   BattlefieldOption,
   CommunityMatch,
@@ -83,6 +84,9 @@ const api: RiftLiteApi = {
   rejectVisionDeckTrackerSuggestion: (cardKey) => ipcRenderer.invoke("vision-deck-tracker:reject-suggestion", cardKey) as ReturnType<RiftLiteApi["rejectVisionDeckTrackerSuggestion"]>,
   reportVisionDeckTrackerObservations: (platform, observations, status) => ipcRenderer.invoke("vision-deck-tracker:observations", platform, observations, status) as Promise<DeckTrackerState>,
   recordVisionDeckTrackerDebug: (platform, payload) => ipcRenderer.invoke("vision-deck-tracker:debug", platform, payload) as Promise<void>,
+  getAtlasKnownOpponentHand: () => ipcRenderer.invoke("atlas-known-hand:get") as Promise<AtlasKnownOpponentHandState>,
+  dismissAtlasKnownOpponentHandCard: (instanceId) => ipcRenderer.invoke("atlas-known-hand:dismiss", instanceId) as Promise<AtlasKnownOpponentHandState>,
+  clearAtlasKnownOpponentHand: () => ipcRenderer.invoke("atlas-known-hand:clear") as Promise<AtlasKnownOpponentHandState>,
   getReplays: () => ipcRenderer.invoke("replays:get") as Promise<ReplayRecord[]>,
   getDeletedReplays: () => ipcRenderer.invoke("replays:deleted") as Promise<ReplayRecord[]>,
   saveReplay: (replay) => ipcRenderer.invoke("replays:save", replay) as Promise<ReplayRecord>,
@@ -158,6 +162,7 @@ const api: RiftLiteApi = {
   getHubMembers: (hubId) => ipcRenderer.invoke("hubs:members", hubId) as ReturnType<RiftLiteApi["getHubMembers"]>,
   getHubHealth: (hubId) => ipcRenderer.invoke("hubs:health", hubId) as ReturnType<RiftLiteApi["getHubHealth"]>,
   updateHubMemberRole: (hubId, uid, role) => ipcRenderer.invoke("hubs:member:update", hubId, uid, role) as ReturnType<RiftLiteApi["updateHubMemberRole"]>,
+  removeHubMember: (hubId, uid) => ipcRenderer.invoke("hubs:member:remove", hubId, uid) as ReturnType<RiftLiteApi["removeHubMember"]>,
   createHubInvite: (hubId, targetHandle) => ipcRenderer.invoke("hubs:invite", hubId, targetHandle) as ReturnType<RiftLiteApi["createHubInvite"]>,
   getHubMessages: (hubId) => ipcRenderer.invoke("hubs:messages", hubId) as ReturnType<RiftLiteApi["getHubMessages"]>,
   postHubMessage: (hubId, text) => ipcRenderer.invoke("hubs:message:post", hubId, text) as ReturnType<RiftLiteApi["postHubMessage"]>,
@@ -258,6 +263,16 @@ const api: RiftLiteApi = {
     const listener = () => callback();
     ipcRenderer.on("replay:quick-flag-hotkey", listener);
     return () => ipcRenderer.removeListener("replay:quick-flag-hotkey", listener);
+  },
+  onAtlasKnownOpponentHandUpdated: (callback) => {
+    const listener = (_event: Electron.IpcRendererEvent, state: AtlasKnownOpponentHandState) => callback(state);
+    ipcRenderer.on("atlas-known-hand:updated", listener);
+    return () => ipcRenderer.removeListener("atlas-known-hand:updated", listener);
+  },
+  onAtlasKnownOpponentHandShortcut: (callback) => {
+    const listener = () => callback();
+    ipcRenderer.on("atlas-known-hand:shortcut", listener);
+    return () => ipcRenderer.removeListener("atlas-known-hand:shortcut", listener);
   },
   onUpdateStatus: (callback) => {
     const listener = (_event: Electron.IpcRendererEvent, payload: UpdateStatus) => callback(payload);

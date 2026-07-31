@@ -495,6 +495,26 @@ export interface DeckTrackerSnapshot {
   state: DeckTrackerState;
 }
 
+export interface AtlasKnownOpponentHandCard {
+  instanceId: string;
+  cardKey: string;
+  name: string;
+  code: string;
+  cardId: string;
+  revealedAt: string;
+}
+
+export interface AtlasKnownOpponentHandState {
+  roomCode: string;
+  gameNumber?: number;
+  opponentPlayerId: string;
+  activeReveal: boolean;
+  opponentHandCount: number | null;
+  revealedAt: string;
+  updatedAt: string;
+  cards: AtlasKnownOpponentHandCard[];
+}
+
 export interface PrivateHub {
   id: string;
   name: string;
@@ -1971,6 +1991,9 @@ export interface RiftLiteApi {
     status?: Partial<VisionDeckTrackerStatus>
   ): Promise<DeckTrackerState>;
   recordVisionDeckTrackerDebug(platform: GamePlatform, payload: Record<string, unknown>): Promise<void>;
+  getAtlasKnownOpponentHand(): Promise<AtlasKnownOpponentHandState>;
+  dismissAtlasKnownOpponentHandCard(instanceId: string): Promise<AtlasKnownOpponentHandState>;
+  clearAtlasKnownOpponentHand(): Promise<AtlasKnownOpponentHandState>;
   getReplays(): Promise<ReplayRecord[]>;
   getDeletedReplays(): Promise<ReplayRecord[]>;
   saveReplay(replay: ReplayRecord): Promise<ReplayRecord>;
@@ -2043,6 +2066,7 @@ export interface RiftLiteApi {
   getHubMembers(hubId: string): Promise<HubMember[]>;
   getHubHealth(hubId: string): Promise<HubHealthStatus>;
   updateHubMemberRole(hubId: string, uid: string, role: "admin" | "member"): Promise<void>;
+  removeHubMember(hubId: string, uid: string): Promise<void>;
   createHubInvite(hubId: string, targetHandle?: string): Promise<HubInvite>;
   getHubMessages(hubId: string): Promise<HubMessage[]>;
   postHubMessage(hubId: string, text: string): Promise<HubMessage>;
@@ -2109,6 +2133,8 @@ export interface RiftLiteApi {
   onScreenshotSaved(callback: (result: ScreenshotResult) => void): () => void;
   onReplayShadowClipHotkey(callback: () => void): () => void;
   onReplayQuickFlagHotkey(callback: () => void): () => void;
+  onAtlasKnownOpponentHandUpdated(callback: (state: AtlasKnownOpponentHandState) => void): () => void;
+  onAtlasKnownOpponentHandShortcut(callback: () => void): () => void;
   onUpdateStatus(callback: (status: UpdateStatus) => void): () => void;
   reportRendererEvent(event: CaptureEvent): Promise<void>;
 }

@@ -3,6 +3,7 @@ import {
   PRIVATE_HUB_DELETE_COUNTDOWN_SECONDS,
   canDeletePrivateHub,
   canLeavePrivateHub,
+  canRemovePrivateHubMember,
   normalizePrivateHubWebReplayId,
   privateHubMembershipsEqual,
   privateHubWebReplayUrl,
@@ -56,6 +57,17 @@ describe("private hub UI policy", () => {
     expect(canLeavePrivateHub({ role: "member", claimed: false })).toBe(false);
     expect(canDeletePrivateHub({ role: "owner" })).toBe(false);
     expect(PRIVATE_HUB_DELETE_COUNTDOWN_SECONDS).toBeGreaterThan(0);
+  });
+
+  it("shows member removal only to owners and co-owners within their authority", () => {
+    expect(canRemovePrivateHubMember("owner", "member")).toBe(true);
+    expect(canRemovePrivateHubMember("owner", "admin")).toBe(true);
+    expect(canRemovePrivateHubMember("owner", "owner")).toBe(false);
+    expect(canRemovePrivateHubMember("admin", "member")).toBe(true);
+    expect(canRemovePrivateHubMember("admin", "admin")).toBe(false);
+    expect(canRemovePrivateHubMember("admin", "owner")).toBe(false);
+    expect(canRemovePrivateHubMember("member", "member")).toBe(false);
+    expect(canRemovePrivateHubMember(undefined, "member")).toBe(false);
   });
 
   it("recognizes an unchanged refreshed membership list without relying on object identity", () => {

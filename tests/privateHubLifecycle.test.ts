@@ -113,6 +113,17 @@ function uploadedReplay(matchId = "match-1", id = "local-replay-1", uploadId = "
 }
 
 describe("FirebaseSyncService private hub lifecycle", () => {
+  it("routes member removal through the account-authenticated private hub endpoint", async () => {
+    const { service, websiteRequest } = harness();
+
+    await service.removeHubMember("hub / one", "member / one");
+
+    expect(websiteRequest).toHaveBeenCalledWith(
+      "/api/hubs/hub%20%2F%20one/members/member%20%2F%20one",
+      { method: "DELETE" }
+    );
+  });
+
   it("leaves a member hub and cleans local destinations", async () => {
     const { service, websiteRequest, current } = harness();
 
