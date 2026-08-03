@@ -1,8 +1,17 @@
 import type { BrowserWindowConstructorOptions, Cookie, Session, WebContents } from "electron";
 
-const ATLAS_CLERK_ORIGIN = "https://clerk.riftatlas.com";
+const ATLAS_CLERK_ORIGINS = new Set([
+  "https://clerk.riftatlas.com",
+  "https://accounts.riftatlas.com"
+]);
 
 type AtlasClerkCookieSession = Pick<Session, "cookies" | "closeAllConnections" | "flushStorageData">;
+
+export interface AtlasClerkCookieClearResult {
+  found: number;
+  removed: number;
+  failed: number;
+}
 
 /**
  * OAuth providers return to a callback that depends on cookies created by the
@@ -34,7 +43,7 @@ export function gamePopupSharesParentSession(
 export function isAtlasClerkAuthorizationInvalidPage(urlValue: string, bodyText: string): boolean {
   try {
     const url = new URL(urlValue);
-    if (url.origin !== ATLAS_CLERK_ORIGIN) {
+    if (!ATLAS_CLERK_ORIGINS.has(url.origin)) {
       return false;
     }
     const payload = JSON.parse(bodyText) as { errors?: Array<{ code?: unknown }> };
@@ -48,7 +57,7 @@ export function isAtlasClerkAuthorizationFailureNavigation(urlValue: string, sta
   try {
     const url = new URL(urlValue);
     return statusCode === 403 &&
-      url.origin === ATLAS_CLERK_ORIGIN &&
+      ATLAS_CLERK_ORIGINS.has(url.origin) &&
       url.pathname === "/v1/oauth_callback";
   } catch {
     return false;
@@ -70,13 +79,18 @@ export function isAtlasClerkAuthCookie(cookie: Pick<Cookie, "domain" | "name">):
     cookie.name.startsWith("__clerk");
 }
 
-export async function clearAtlasClerkAuthCookies(session: AtlasClerkCookieSession): Promise<number> {
+export async function clearAtlasClerkAuthCookies(session: AtlasClerkCookieSession): Promise<AtlasClerkCookieClearResult> {
   const cookies = (await session.cookies.get({})).filter(isAtlasClerkAuthCookie);
-  await Promise.all(cookies.map((cookie) => {
+  const removals = await Promise.allSettled(cookies.map((cookie) => {
     const domain = (cookie.domain ?? "").trim().replace(/^\./, "");
     return session.cookies.remove(`https://${domain}/`, cookie.name);
   }));
   session.flushStorageData();
   await session.closeAllConnections();
-  return cookies.length;
+  const removed = removals.filter((result) => result.status === "fulfilled").length;
+  return {
+    found: cookies.length,
+    removed,
+    failed: cookies.length - removed
+  };
 }

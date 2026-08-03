@@ -1,10 +1,12 @@
 # Replay V2 desktop integration
 
-RiftLite Web Replay is user-facing. Atlas capture and first-party upload remain off until the user explicitly enables **Automatically upload Atlas replays** in Settings while a RiftLite account is linked. The old local reconstructed Replay Lab and third-party RiftReplay credentials remain separate from this first-party flow.
+RiftLite Web Replay is user-facing. Atlas and TCGA first-party upload remain off until the user links a RiftLite account and explicitly enables a provider in **Review > Web Replays**. The old local reconstructed Replay Lab and third-party RiftReplay credentials remain separate from this first-party flow.
 
 ## User-facing behaviour
 
-- The Settings opt-in enables Atlas raw capture and first-party automatic upload together.
+- **Review > Web Replays** is the single setup, status, and recovery centre. Account and Settings provide concise links back to it.
+- Atlas and TCGA have independent opt-ins. Enabling the first provider for an account starts at Private visibility; disabling one never silently changes the other.
+- Upload and Discord consent can always be revoked locally, including while website account verification is unavailable. Removing the final Discord destination returns future replays to Private visibility.
 - Consent is bound to the linked RiftLite account UID. Switching accounts requires a new opt-in, and unlinking revokes it.
 - First-party visibility defaults to private and may be changed to unlisted or public.
 - Unlisted replays are excluded from the public library but remain watchable without an account by anyone holding the permanent link.
@@ -22,6 +24,7 @@ RiftLite Web Replay is user-facing. Atlas capture and first-party upload remain 
 - Identity-free matchmaking/prelude frames start in a provisional transport session. A later authoritative series/previous-room signal merges a genuine BO3 continuation, while a new BO1 remains isolated from the completed capture.
 - Raw completion no longer depends on normal replay/video capture or the match's `keepReplay` choice.
 - A raw-only completion atomically writes the JSON payload plus an adjacent `*.riftlite-index.json` manifest before retiring the in-memory session. It does not create a `ReplayRecord`, so it cannot appear in the normal video replay library. If a `ReplayRecord` becomes available later, the service associates the matching manifest by capture, series, match, replay, then room identity.
+- During an active Atlas match, each retained frame is also appended to a bounded per-session `*.riftlite-active.jsonl` recovery journal through one persistent file handle. BO3 provisional-session merges replace that journal with one atomic checkpoint. After an unexpected desktop exit, complete JSONL rows are validated and promoted to the normal raw JSON plus index manifest; a truncated final row is ignored, the recovered capture is shown in the upload queue with an incomplete-capture warning, and capture-time account consent is preserved. Normal finalization writes the durable artifact and index before closing and deleting the journal, so recovery cannot replace or duplicate a completed capture.
 
 ## First-party upload
 
@@ -33,7 +36,13 @@ The first-party client uses the authenticated Replay V2 protocol:
 4. `POST` the returned completion endpoint;
 5. persist the processing state and canonical `/replays/:id` player URL in the adjacent manifest and, when present, the associated `ReplayRecord`.
 
-Init, upload, and completion calls retry transient failures. The deterministic capture ID plus checksum makes retry safe. Redirects and non-`https://www.riftlite.com` response origins are rejected. First-party upload requires a linked account UID that exactly matches both the opt-in account and the Secure Token response, rechecks that identity before each protocol step, enforces the website's 4 MiB gzip limit without retrying oversize captures, and reconciles an existing deterministic replay to the currently requested visibility. Visibility defaults to private. The separate RiftReplay API-key uploader has independent legacy consent and does not participate in the V2 protocol.
+Init, upload, and completion calls have bounded deadlines and retry transient failures. The deterministic capture ID plus checksum makes retry safe. Redirects and non-`https://www.riftlite.com` response origins are rejected. RiftLite persists the returned replay ID and same-origin status endpoint immediately after init, then reconciles interrupted or stale processing through the authenticated owner status route. HTTP 425 and `replay_processing` are active, retryable states rather than saved failures; server `Retry-After`/`retryAfterMs` controls the next check.
+
+First-party upload requires a linked account UID that exactly matches both the opt-in account and the Secure Token response, rechecks that identity before each protocol step, enforces the website's 4 MiB gzip limit without retrying oversize captures, and reconciles an existing deterministic replay to the currently requested visibility. Capture-time consent is pinned to the explicitly opted-in account even if a later health check temporarily fails; authentication health controls when the queued upload can run, not whether the already-consented capture is eligible. Visibility defaults to private. The separate RiftReplay API-key uploader has independent legacy consent and does not participate in the V2 protocol.
+
+Every persisted capture carries a durable delivery stage, attempt count, next retry, structured server error code/class, and partial warnings. Network calls cannot hold the global queue indefinitely, foreground retries requested during an automatic pass run in a following forced pass, and mutations of the same capture are serialized so a late failure cannot overwrite success. The desktop Web Replays page is the primary setup and recovery centre: it shows Atlas and TCGA opt-ins, visibility, live upload activity, account recovery, Retry, Upload anyway, Keep local only, latest replay, Discord sharing, and collapsed technical details. Account and Settings link to this centre rather than hiding separate recovery workflows.
+
+When the server reports only `replay_capture_missing_mulligan`, RiftLite retries completion with `{ "allowIncomplete": true }`. The published replay stays watchable and visibly warns that its opening mulligan was not captured. Every other capture-quality failure remains blocked and keeps the raw source locally.
 
 ## Embedded player security and authentication
 

@@ -13,6 +13,10 @@ import { deflateRawSync, inflateRawSync } from "node:zlib";
 import ffmpegStaticPath from "ffmpeg-static";
 import type {
   ActiveDeckPrep,
+  AtlasConnectionDiagnostics,
+  AtlasResourceFailureDiagnostic,
+  AtlasWebviewRecoveryMode,
+  AtlasWebviewRecoveryResult,
   AppNavigationRequest,
   BattlefieldOption,
   CaptureEvent,
@@ -71,7 +75,12 @@ import {
 } from "../shared/atlasSeatTracker.js";
 import { atlasCardRenderingCssForUrl } from "../shared/atlasCardRendering.js";
 import { AtlasKnownOpponentHandTracker } from "../shared/atlasKnownOpponentHand.js";
-import { clearAtlasWebviewRuntime } from "../shared/atlasWebviewRecovery.js";
+import {
+  atlasExplicitRepairUrl,
+  clearAtlasWebviewRuntime,
+  clearAtlasWebviewSiteData,
+  validAtlasWebviewRecoveryMode
+} from "../shared/atlasWebviewRecovery.js";
 import { RIFTLITE_BUILD_IDENTITY } from "../shared/buildIdentity.js";
 import { hasVerifiedRiftLiteAccount } from "../shared/accountIdentity.js";
 import {
@@ -120,6 +129,10 @@ import {
 import { detectBrowsers } from "./services/browserDetection.js";
 import { scheduleAppUsageHeartbeat } from "./services/appUsageAnalytics.js";
 import { AtlasEmptyShellMainRecoveryGuard } from "./services/atlasEmptyShellMainRecovery.js";
+import {
+  emptyAtlasConnectionDiagnostics,
+  runAtlasConnectionTest
+} from "./services/atlasConnectionDiagnostics.js";
 import { AccountCloudSyncQueue } from "./services/accountCloudSyncQueue.js";
 import { runAccountCloudRestore } from "./services/accountCloudRestoreCoordinator.js";
 import { CaptureCoordinator } from "./services/captureCoordinator.js";
@@ -151,6 +164,11 @@ import {
   type RawCaptureFinishIdentity
 } from "./services/rawCaptureService.js";
 import { attachReplayVideoToStore } from "./services/replayVideoAttachment.js";
+import {
+  clearReplayVideoRecoverySidecar,
+  interruptedReplayVideoCandidates,
+  writeReplayVideoRecoverySidecar
+} from "./services/replayVideoCrashRecovery.js";
 import {
   clearReplayEmbedCookies,
   prepareReplayEmbedSession,
@@ -315,7 +333,12 @@ let replayVideoDisplayTarget: ReplayVideoDisplayTarget | null = null;
 let rawCaptureUploadRetryTimer: ReturnType<typeof setInterval> | null = null;
 let tcgaResearchQuitFinalizationStarted = false;
 let tcgaResearchQuitAllowed = false;
-let atlasWebviewRecoveryInFlight: Promise<{ ok: boolean; message: string }> | null = null;
+type AtlasWebviewRecoveryTrigger = "automatic-empty-shell" | AtlasWebviewRecoveryMode;
+let atlasWebviewRecoveryInFlight: Promise<AtlasWebviewRecoveryResult> | null = null;
+let atlasWebviewRecoveryActiveTrigger: AtlasWebviewRecoveryTrigger | null = null;
+let atlasConnectionDiagnostics = emptyAtlasConnectionDiagnostics();
+const atlasRecentResourceFailures: AtlasResourceFailureDiagnostic[] = [];
+let atlasSessionDiagnosticsInstalled = false;
 const atlasEmptyShellMainRecovery = new AtlasEmptyShellMainRecoveryGuard();
 const ATLAS_EMPTY_SHELL_MAIN_RELOAD_DELAY_MS = 500;
 
@@ -364,15 +387,37 @@ async function logStartupIssue(label: string, error: unknown): Promise<void> {
 }
 
 function refreshAtlasWebviewRuntime(
-  trigger: "automatic-empty-shell" | "explicit-repair"
-): Promise<{ ok: boolean; message: string }> {
+  trigger: AtlasWebviewRecoveryTrigger
+): Promise<AtlasWebviewRecoveryResult> {
   if (atlasWebviewRecoveryInFlight) {
+    if (atlasRecoveryPriority(trigger) > atlasRecoveryPriority(atlasWebviewRecoveryActiveTrigger)) {
+      return atlasWebviewRecoveryInFlight.then(() => refreshAtlasWebviewRuntime(trigger));
+    }
     return atlasWebviewRecoveryInFlight;
   }
+  atlasWebviewRecoveryActiveTrigger = trigger;
   const capturedAt = new Date().toISOString();
   atlasWebviewRecoveryInFlight = (async () => {
+    const mode: AtlasWebviewRecoveryMode = trigger === "automatic-empty-shell" ? "runtime" : trigger;
+    const warnings: string[] = [];
     try {
-      await clearAtlasWebviewRuntime(electronSession.fromPartition(ATLAS_GAME_PARTITION));
+      const atlasSession = electronSession.fromPartition(ATLAS_GAME_PARTITION);
+      const resetAtlasSignIn = mode === "sign-in" || mode === "site-data";
+      const authCookies = resetAtlasSignIn
+        ? await atlasRecoveryStage(
+          "Atlas sign-in cookies",
+          () => clearAtlasClerkAuthCookies(atlasSession),
+          { found: 0, removed: 0, failed: 0 },
+          warnings
+        )
+        : { found: 0, removed: 0, failed: 0 };
+      if (authCookies.failed) {
+        warnings.push(`${authCookies.failed} Atlas sign-in cookie${authCookies.failed === 1 ? "" : "s"} could not be removed.`);
+      }
+      const cleanup = mode === "site-data"
+        ? await clearAtlasWebviewSiteData(atlasSession)
+        : await clearAtlasWebviewRuntime(atlasSession);
+      warnings.push(...cleanup.warnings);
       await capture.handleEvent({
         id: `atlas-webview-recovery-complete-${Date.now()}`,
         platform: "atlas",
@@ -382,13 +427,31 @@ function refreshAtlasWebviewRuntime(
         payload: {
           reason: "atlas-webview-recovery-complete",
           trigger,
-          cleared: ["http-cache", "code-cache", "serviceworkers", "cachestorage"],
-          preserved: ["cookies", "localstorage", "indexdb", "riftlite-account", "riftlite-local-data"]
+          mode,
+          cleared: [
+            ...cleanup.completed,
+            ...(authCookies.removed ? ["atlas-clerk-auth-cookies"] : [])
+          ],
+          removedAuthCookieCount: authCookies.removed,
+          failedAuthCookieCount: authCookies.failed,
+          warningCount: warnings.length,
+          preserved: mode === "site-data"
+            ? ["riftlite-account", "riftlite-matches", "riftlite-decks", "riftlite-replays"]
+            : [
+              ...(resetAtlasSignIn ? ["non-auth-cookies"] : ["cookies"]),
+              "localstorage",
+              "indexdb",
+              "atlas-local-decks",
+              "riftlite-account",
+              "riftlite-local-data"
+            ]
         }
-      });
+      }).catch((error) => logStartupIssue("Atlas recovery diagnostic write failed", error));
       return {
         ok: true,
-        message: "Atlas runtime cache refreshed. Reloading Atlas now."
+        mode,
+        message: atlasRecoveryMessage(mode, warnings.length),
+        ...(warnings.length ? { warnings } : {})
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -407,13 +470,195 @@ function refreshAtlasWebviewRuntime(
       }).catch(() => undefined);
       return {
         ok: false,
-        message: "RiftLite could not refresh the Atlas runtime cache. Restart RiftLite and try again."
+        mode,
+        message: "RiftLite could not repair the Atlas session. Restart RiftLite and try again.",
+        warnings: [message.slice(0, 240)]
       };
     } finally {
       atlasWebviewRecoveryInFlight = null;
+      atlasWebviewRecoveryActiveTrigger = null;
     }
   })();
   return atlasWebviewRecoveryInFlight;
+}
+
+function atlasRecoveryPriority(trigger: AtlasWebviewRecoveryTrigger | null): number {
+  if (trigger === "site-data") return 3;
+  if (trigger === "sign-in") return 2;
+  if (trigger === "runtime") return 1;
+  return 0;
+}
+
+async function atlasRecoveryStage<T>(
+  label: string,
+  operation: () => Promise<T>,
+  fallback: T,
+  warnings: string[],
+  timeoutMs = 10_000
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      operation(),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs} ms.`)), timeoutMs);
+      })
+    ]);
+  } catch (error) {
+    warnings.push(`${label}: ${error instanceof Error ? error.message : String(error)}`.slice(0, 240));
+    return fallback;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+function atlasRecoveryMessage(mode: AtlasWebviewRecoveryMode, warningCount: number): string {
+  const suffix = warningCount ? ` ${warningCount} cleanup warning${warningCount === 1 ? "" : "s"} will be included in diagnostics.` : "";
+  if (mode === "site-data") {
+    return `All embedded Atlas site data was reset. Atlas will open signed out with a fresh local profile.${suffix}`;
+  }
+  if (mode === "sign-in") {
+    return `Atlas sign-in and runtime caches were reset. Reloading a fresh Atlas page now.${suffix}`;
+  }
+  return `Atlas runtime caches were refreshed without signing you out. Reloading Atlas now.${suffix}`;
+}
+
+function atlasConnectionDiagnosticsSnapshot(): AtlasConnectionDiagnostics {
+  const guest = gameWebContentsByPlatform.get("atlas");
+  return {
+    ...atlasConnectionDiagnostics,
+    recentFailures: [...atlasRecentResourceFailures],
+    guestAttached: Boolean(guest && !guest.isDestroyed()),
+    guestUrl: guest && !guest.isDestroyed() ? atlasDiagnosticGuestUrl(guest.getURL()) : ""
+  };
+}
+
+async function diagnoseAtlasConnection(): Promise<AtlasConnectionDiagnostics> {
+  const atlasSession = electronSession.fromPartition(ATLAS_GAME_PARTITION);
+  atlasConnectionDiagnostics = await runAtlasConnectionTest((url, init) => atlasSession.fetch(url, init));
+  const snapshot = atlasConnectionDiagnosticsSnapshot();
+  void capture.handleEvent({
+    id: `atlas-connection-test-${Date.now()}-${randomUUID()}`,
+    platform: "atlas",
+    kind: "debug",
+    capturedAt: snapshot.testedAt,
+    url: "https://play.riftatlas.com/",
+    payload: {
+      reason: "atlas-connection-test",
+      state: snapshot.state,
+      checkCount: snapshot.checks.length,
+      failedCheckCount: snapshot.checks.filter((check) => !check.ok).length,
+      checks: snapshot.checks.map((check) => ({
+        id: check.id,
+        origin: check.origin,
+        ok: check.ok,
+        statusCode: check.statusCode,
+        durationMs: check.durationMs,
+        error: check.error
+      }))
+    }
+  }).catch(() => undefined);
+  return snapshot;
+}
+
+function installAtlasSessionDiagnostics(): void {
+  if (atlasSessionDiagnosticsInstalled) return;
+  atlasSessionDiagnosticsInstalled = true;
+  const atlasSession = electronSession.fromPartition(ATLAS_GAME_PARTITION);
+  atlasSession.webRequest.onErrorOccurred({ urls: ["<all_urls>"] }, (details) => {
+    if (!atlasDependencyOrigin(details.url)) return;
+    recordAtlasResourceFailure({
+      capturedAt: new Date().toISOString(),
+      reason: "network-error",
+      origin: atlasDependencyOrigin(details.url),
+      resourceType: String(details.resourceType || "unknown"),
+      error: String(details.error || "Network request failed.").slice(0, 240)
+    }, details.url);
+  });
+  atlasSession.webRequest.onCompleted({ urls: ["<all_urls>"] }, (details) => {
+    const origin = atlasDependencyOrigin(details.url);
+    if (!origin || details.statusCode < 400 || !atlasFailureResourceType(String(details.resourceType || ""))) return;
+    recordAtlasResourceFailure({
+      capturedAt: new Date().toISOString(),
+      reason: "http-error",
+      origin,
+      resourceType: String(details.resourceType || "unknown"),
+      statusCode: details.statusCode,
+      error: `HTTP ${details.statusCode}`
+    }, details.url);
+  });
+}
+
+function recordAtlasResourceFailure(failure: AtlasResourceFailureDiagnostic, requestUrl: string): void {
+  const duplicate = atlasRecentResourceFailures.find((candidate) =>
+    candidate.reason === failure.reason &&
+    candidate.origin === failure.origin &&
+    candidate.resourceType === failure.resourceType &&
+    candidate.statusCode === failure.statusCode &&
+    candidate.error === failure.error &&
+    Date.parse(failure.capturedAt) - Date.parse(candidate.capturedAt) < 15_000
+  );
+  if (duplicate) return;
+  atlasRecentResourceFailures.unshift(failure);
+  atlasRecentResourceFailures.splice(12);
+  void capture.handleEvent({
+    id: `atlas-resource-failure-${Date.now()}-${randomUUID()}`,
+    platform: "atlas",
+    kind: "debug",
+    capturedAt: failure.capturedAt,
+    url: `${failure.origin}/`,
+    payload: {
+      reason: failure.reason === "http-error" ? "atlas-resource-http-error" : "atlas-resource-load-failed",
+      resourceOrigin: failure.origin,
+      resourcePath: safeAtlasResourcePath(requestUrl),
+      resourceType: failure.resourceType,
+      statusCode: failure.statusCode,
+      errorDescription: failure.error
+    }
+  }).catch(() => undefined);
+}
+
+function atlasDependencyOrigin(value: string): string {
+  try {
+    const url = new URL(value);
+    const hostname = url.hostname.toLowerCase();
+    if (
+      hostname === "play.riftatlas.com" ||
+      hostname === "clerk.riftatlas.com" ||
+      hostname === "accounts.riftatlas.com" ||
+      hostname.endsWith(".riftatlas-workers.com") ||
+      hostname.endsWith(".convex.cloud")
+    ) {
+      return url.origin;
+    }
+  } catch {
+    // Ignore malformed request URLs.
+  }
+  return "";
+}
+
+function atlasFailureResourceType(value: string): boolean {
+  return ["mainFrame", "subFrame", "stylesheet", "script", "xhr", "fetch", "webSocket"].includes(value);
+}
+
+function safeAtlasResourcePath(value: string): string {
+  try {
+    const pathname = new URL(value).pathname;
+    return /^(?:\/_next\/|\/npm\/)/.test(pathname) ? pathname.slice(0, 300) : "";
+  } catch {
+    return "";
+  }
+}
+
+function atlasDiagnosticGuestUrl(value: string): string {
+  try {
+    const url = new URL(value);
+    if (/^\/(?:game|room|play)\//i.test(url.pathname)) return `${url.origin}/game`;
+    if (/^\/(?:sign-in|sign-up)/i.test(url.pathname)) return `${url.origin}/sign-in`;
+    return url.origin;
+  } catch {
+    return "";
+  }
 }
 
 function startRawCaptureUploadRetry(): void {
@@ -428,7 +673,7 @@ function startRawCaptureUploadRetry(): void {
   rawCaptureUploadRetryTimer.unref();
 }
 
-async function uploadPendingRawCapturesWithAccountRefresh(): Promise<number> {
+async function uploadPendingRawCapturesWithAccountRefresh(forceRetry = false): Promise<number> {
   const settings = await store.getSettings();
   const accountBoundUploadEnabled = settings.rawCapture.enabled && Boolean(
     (settings.rawCapture.webReplayAutoUploadEnabled &&
@@ -444,7 +689,7 @@ async function uploadPendingRawCapturesWithAccountRefresh(): Promise<number> {
   ) {
     await syncService.getAccountConnectionStatus();
   }
-  return rawCaptureService.uploadPendingRawCaptures();
+  return rawCaptureService.uploadPendingRawCaptures(5, forceRetry);
 }
 
 async function syncSettledMatchReports(): Promise<number> {
@@ -1246,6 +1491,7 @@ function secureGamePopup(
 ): void {
   webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:\/\//i.test(url) && !isAllowedGamePopupNavigation(policy, url)) {
+      reportBlockedGameNavigation(policy, url, "popup-window");
       void openExternalResource(url).catch(() => undefined);
     }
     return { action: "deny" };
@@ -1255,12 +1501,39 @@ function secureGamePopup(
       return;
     }
     event.preventDefault();
+    reportBlockedGameNavigation(policy, url, "popup-navigation");
     if (/^https?:\/\//i.test(url)) {
       void openExternalResource(url).catch(() => undefined);
     }
   };
   webContents.on("will-navigate", restrictPopupNavigation);
   webContents.on("will-redirect", restrictPopupNavigation);
+}
+
+function reportBlockedGameNavigation(
+  policy: Extract<EmbeddedWebviewPolicy, { kind: "game" }>,
+  value: string,
+  surface: "popup-window" | "popup-navigation" | "main-window" | "main-navigation"
+): void {
+  if (policy.platform !== "atlas") return;
+  let targetOrigin = "invalid-url";
+  try {
+    targetOrigin = new URL(value).origin;
+  } catch {
+    // Keep the non-sensitive invalid URL marker.
+  }
+  void capture.handleEvent({
+    id: `atlas-navigation-blocked-${Date.now()}-${randomUUID()}`,
+    platform: "atlas",
+    kind: "debug",
+    capturedAt: new Date().toISOString(),
+    url: "https://play.riftatlas.com/",
+    payload: {
+      reason: "atlas-navigation-blocked",
+      surface,
+      targetOrigin
+    }
+  }).catch(() => undefined);
 }
 
 function secureGameWebContents(webContents: WebContents, policy: Extract<EmbeddedWebviewPolicy, { kind: "game" }>): void {
@@ -1270,14 +1543,17 @@ function secureGameWebContents(webContents: WebContents, policy: Extract<Embedde
       return;
     }
     atlasClerkRepairAttempted = true;
-    const removedCookieCount = await clearAtlasClerkAuthCookies(webContents.session);
+    const cookieResult = await clearAtlasClerkAuthCookies(webContents.session);
     if (popup && !popup.isDestroyed()) {
       popup.destroy();
     }
     if (!webContents.isDestroyed()) {
       await webContents.loadURL("https://play.riftatlas.com/sign-in?redirect_url=%2F");
     }
-    void logStartupIssue("Atlas Clerk sign-in repaired", `Removed ${removedCookieCount} invalid authentication cookies.`);
+    void logStartupIssue(
+      "Atlas Clerk sign-in repaired",
+      `Removed ${cookieResult.removed} invalid authentication cookies; ${cookieResult.failed} removals failed.`
+    );
     if (mainWindow && !mainWindow.isDestroyed()) {
       await dialog.showMessageBox(mainWindow, {
         type: "info",
@@ -1294,7 +1570,10 @@ function secureGameWebContents(webContents: WebContents, policy: Extract<Embedde
       return;
     }
     const pageUrl = contents.getURL();
-    if (!pageUrl.startsWith("https://clerk.riftatlas.com/")) {
+    if (
+      !pageUrl.startsWith("https://clerk.riftatlas.com/") &&
+      !pageUrl.startsWith("https://accounts.riftatlas.com/")
+    ) {
       return;
     }
     const bodyText = await contents.executeJavaScript(
@@ -1313,6 +1592,7 @@ function secureGameWebContents(webContents: WebContents, policy: Extract<Embedde
   );
   webContents.setWindowOpenHandler(({ url }) => {
     if (!isAllowedGamePopupNavigation(policy, url)) {
+      reportBlockedGameNavigation(policy, url, "main-window");
       if (/^https?:\/\//i.test(url)) {
         void openExternalResource(url).catch(() => undefined);
       }
@@ -1356,6 +1636,7 @@ function secureGameWebContents(webContents: WebContents, policy: Extract<Embedde
       return;
     }
     event.preventDefault();
+    reportBlockedGameNavigation(policy, url, "main-navigation");
     if (/^https?:\/\//i.test(url)) {
       void openExternalResource(url).catch(() => undefined);
     }
@@ -2667,6 +2948,17 @@ async function startReplayVideoCaptureFile(options: ReplayVideoStartOptions): Pr
     startedAt
   };
   replayVideoSessions.set(session.id, session);
+  await writeReplayVideoRecoverySidecar(filePath, {
+    version: 1,
+    session,
+    platform: options.platform,
+    quality: options.quality,
+    mimeType: options.mimeType,
+    title: options.title,
+    createdAt: startedAt
+  }).catch((error) => {
+    void logStartupIssue("replay video recovery sidecar write failed", error);
+  });
   return session;
 }
 
@@ -2690,6 +2982,7 @@ async function finishReplayVideoCaptureFile(sessionId: string, options: ReplayVi
   let fileStats = await stat(session.path);
   if (fileStats.size <= 0) {
     await unlink(session.path).catch(() => undefined);
+    await clearReplayVideoRecoverySidecar(session.path).catch(() => undefined);
     throw new Error("Replay video finished with no media data.");
   }
   const containerFinalized = await makeReplayVideoSeekable(session.path, options.mimeType);
@@ -2925,6 +3218,10 @@ function configureDisplayMediaCapture(): void {
       const requestingContents = resolvedContents
         ? knownAppContents.find((candidate) => candidate.id === resolvedContents.id)
         : undefined;
+      const pendingTarget = replayVideoDisplayTarget;
+      const target = requestingContents
+        ? preparedDisplayMediaTargetForRequester(pendingTarget, requestingContents.id)
+        : null;
       const trustedRequest = displayMediaRequestIsTrusted({
         requesterWebContentsId: resolvedContents?.id ?? null,
         trustedAppWebContentsIds: knownAppContents.map((candidate) => candidate.id),
@@ -2934,21 +3231,22 @@ function configureDisplayMediaCapture(): void {
         ),
         originIsTrusted: isTrustedAppOrigin(request.securityOrigin),
         videoRequested: request.videoRequested,
-        audioRequested: request.audioRequested
+        audioRequested: request.audioRequested,
+        audioAllowed: target?.mode === "game-frame"
       });
 
       if (trustedRequest && requestingContents) {
-        const pendingTarget = replayVideoDisplayTarget;
         replayVideoDisplayTarget = null;
-        const target = preparedDisplayMediaTargetForRequester(
-          pendingTarget,
-          requestingContents.id
-        );
 
         if (target?.mode === "game-frame") {
           const contents = gameWebContentsByPlatform.get(target.platform);
           if (contents && !contents.isDestroyed() && platformFromUrl(contents.getURL()) === target.platform) {
-            streams = { video: contents.mainFrame };
+            streams = {
+              video: contents.mainFrame,
+              ...(request.audioRequested
+                ? { audio: contents.mainFrame, enableLocalEcho: true }
+                : {})
+            };
           }
         } else if (target?.mode === "system-window") {
           const source = await replayWindowCaptureSource();
@@ -2984,6 +3282,7 @@ async function attachReplayVideo(matchId: string, video: ReplayVideoAsset): Prom
     await discardReplayVideoAsset(video).catch(() => undefined);
     return result.replay;
   }
+  await clearReplayVideoRecoverySidecar(video.path).catch(() => undefined);
   return rawCaptureService.finishForReplay(result.replay);
 }
 
@@ -3030,6 +3329,7 @@ async function discardReplayVideoAsset(video: ReplayVideoAsset): Promise<void> {
     }
   });
   await unlink(replayVideoSeekableMarkerPath(resolve(filePath))).catch(() => undefined);
+  await clearReplayVideoRecoverySidecar(resolve(filePath)).catch(() => undefined);
 }
 
 async function deleteReplayVideoByMatch(matchId: string): Promise<void> {
@@ -6040,16 +6340,18 @@ async function importReplayMediaFromPath(sourcePath: string): Promise<ReplayReco
   const matchingReplayId = matchingMissingReplayIdForMedia(replays, platform, startedAt, endedAt, probe.durationMs);
   const matchingMissingReplay = replays.find((replay) => replay.id === matchingReplayId);
   if (matchingMissingReplay) {
-    return store.saveReplay({
+    const saved = await store.saveReplay({
       ...matchingMissingReplay,
       video,
       importedAt: new Date().toISOString(),
       importedFrom: sourcePath
     });
+    await clearReplayVideoRecoverySidecar(importedPath).catch(() => undefined);
+    return saved;
   }
 
   const title = `Recovered ${platform === "atlas" ? "Atlas" : "TCGA"} recording`;
-  return store.saveReplay({
+  const saved = await store.saveReplay({
     id: replayId,
     matchId: replayId,
     platform,
@@ -6074,6 +6376,50 @@ async function importReplayMediaFromPath(sourcePath: string): Promise<ReplayReco
       deckName: ""
     }
   });
+  await clearReplayVideoRecoverySidecar(importedPath).catch(() => undefined);
+  return saved;
+}
+
+async function recoverInterruptedReplayVideosOnStartup(): Promise<number> {
+  const settings = await store.getSettings();
+  const directory = replayVideoDirectory(settings);
+  const storedReplays = [...await store.getReplays(), ...await store.getDeletedReplays()];
+  const knownVideoPaths = storedReplays
+    .map((replay) => replay.video?.path?.trim())
+    .filter((filePath): filePath is string => Boolean(filePath));
+  const candidates = await interruptedReplayVideoCandidates(directory, knownVideoPaths);
+  let recovered = 0;
+
+  for (const filePath of candidates) {
+    try {
+      const replay = await importReplayMediaFromPath(filePath);
+      recovered += 1;
+      void diagnostics?.record({
+        id: `replay-video-crash-recovered-${Date.now()}-${randomUUID()}`,
+        platform: replay.platform,
+        kind: "debug",
+        capturedAt: new Date().toISOString(),
+        url: "",
+        payload: {
+          reason: "replay-video-crash-recovered",
+          replayId: replay.id,
+          filename: basename(filePath),
+          sizeBytes: replay.video?.sizeBytes ?? 0,
+          durationMs: replay.video?.durationMs ?? 0
+        }
+      }).catch(() => undefined);
+      const window = mainWindow;
+      if (window && !window.isDestroyed() && !window.webContents.isDestroyed()) {
+        window.webContents.send("replay:updated", replay);
+      }
+    } catch (error) {
+      await logStartupIssue(`interrupted replay video recovery failed (${basename(filePath)})`, error);
+    }
+  }
+  if (recovered) {
+    await logStartupIssue("interrupted replay videos recovered", String(recovered));
+  }
+  return recovered;
 }
 
 async function replayImportFiles(directory: string): Promise<string[]> {
@@ -6353,7 +6699,8 @@ function handleAtlasShellStatusEvent(sender: WebContents, event: CaptureEvent): 
         reason: "atlas-app-shell-main-reload",
         navigationKey,
         recoveryKey,
-        delayMs: ATLAS_EMPTY_SHELL_MAIN_RELOAD_DELAY_MS
+        delayMs: ATLAS_EMPTY_SHELL_MAIN_RELOAD_DELAY_MS,
+        cacheBustedNavigation: true
       }
     });
     void logStartupIssue("Atlas empty shell main fail-safe reload", JSON.stringify({
@@ -6375,7 +6722,7 @@ function handleAtlasShellStatusEvent(sender: WebContents, event: CaptureEvent): 
         return;
       }
       try {
-        sender.reloadIgnoringCache();
+        await sender.loadURL(atlasExplicitRepairUrl(Date.now()));
       } catch (error) {
         void logStartupIssue("Atlas empty shell main fail-safe reload failed", error);
       }
@@ -6514,6 +6861,7 @@ async function createWindow(): Promise<void> {
     let atlasCardRenderingGeneration = 0;
     let atlasCardRenderingCssKey = "";
     let atlasCardRenderingPendingGeneration: number | null = null;
+    let mainNavigationStartedAt = 0;
     const invalidateAtlasCardRendering = () => {
       atlasCardRenderingGeneration += 1;
       atlasCardRenderingCssKey = "";
@@ -6555,7 +6903,7 @@ async function createWindow(): Promise<void> {
       candidateUrl = webContents.getURL()
     ) => {
       const url = diagnosticPageUrl(candidateUrl || webContents.getURL());
-      const platform = platformFromUrl(url);
+      const platform = platformFromUrl(url) ?? policy.platform;
       if (!platform) {
         return;
       }
@@ -6590,6 +6938,7 @@ async function createWindow(): Promise<void> {
     };
     webContents.on("did-start-navigation", (_navigationEvent, url, isInPlace, isMainFrame) => {
       if (isMainFrame && !isInPlace) {
+        mainNavigationStartedAt = Date.now();
         if (policy.platform === "tcga" && tcgaWebReplayProductAccountUid) {
           tcgaWebReplayCaptureService?.beginDocument(webContents.id);
         }
@@ -6599,7 +6948,9 @@ async function createWindow(): Promise<void> {
       }
     });
     webContents.on("did-finish-load", () => {
-      reportGuestLifecycle("guest-main-load-finished");
+      reportGuestLifecycle("guest-main-load-finished", {
+        loadDurationMs: mainNavigationStartedAt ? Math.max(0, Date.now() - mainNavigationStartedAt) : 0
+      });
       installAtlasCardRendering();
       if (
         IS_PACKAGED_SMOKE_TEST &&
@@ -6619,7 +6970,11 @@ async function createWindow(): Promise<void> {
       if (!isMainFrame) {
         return;
       }
-      const payload = { errorCode, errorDescription };
+      const payload = {
+        errorCode,
+        errorDescription,
+        loadDurationMs: mainNavigationStartedAt ? Math.max(0, Date.now() - mainNavigationStartedAt) : 0
+      };
       reportGuestLifecycle("guest-main-load-failed", payload, validatedURL);
       void logStartupIssue("guest main load failed", JSON.stringify({ ...payload, url: diagnosticPageUrl(validatedURL) }));
       if (errorCode !== -3) {
@@ -6641,10 +6996,12 @@ async function createWindow(): Promise<void> {
       }
     });
     webContents.on("render-process-gone", (_goneEvent, details) => {
-      const platform = platformFromUrl(webContents.getURL());
+      const platform = platformFromUrl(webContents.getURL()) ?? policy.platform;
       const payload = {
         reason: "guest-render-process-gone",
         details,
+        processReason: details.reason,
+        exitCode: details.exitCode,
         url: webContents.getURL()
       };
       void logStartupIssue("guest render process gone", JSON.stringify(payload));
@@ -6661,7 +7018,7 @@ async function createWindow(): Promise<void> {
       }
     });
     webContents.on("unresponsive", () => {
-      const platform = platformFromUrl(webContents.getURL());
+      const platform = platformFromUrl(webContents.getURL()) ?? policy.platform;
       const payload = {
         reason: "guest-webview-unresponsive",
         url: webContents.getURL()
@@ -6680,7 +7037,7 @@ async function createWindow(): Promise<void> {
       }
     });
     webContents.on("responsive", () => {
-      const platform = platformFromUrl(webContents.getURL());
+      const platform = platformFromUrl(webContents.getURL()) ?? policy.platform;
       if (platform) {
         void capture.handleEvent({
           id: `guest-webview-responsive-${Date.now()}`,
@@ -7109,6 +7466,7 @@ function registerIpc(): void {
   handleTrustedAppIpc("replays:deleted", () => store.getDeletedReplays());
   handleTrustedAppIpc("replays:save", (_event, replay: ReplayRecord) => store.saveReplay(replay));
   handleTrustedAppIpc("replays:delete", (_event, id: string) => store.deleteReplay(id));
+  handleTrustedAppIpc("replays:delete-many", (_event, ids: string[]) => store.deleteReplays(ids));
   handleTrustedAppIpc("replays:restore", (_event, id: string) => store.restoreReplay(id));
   handleTrustedAppIpc("replays:purge", (_event, id: string) => store.purgeReplay(id));
   handleTrustedAppIpc("replays:export", (_event, replayId: string) => exportReplayBundle(replayId));
@@ -7122,6 +7480,22 @@ function registerIpc(): void {
   handleTrustedAppIpc("raw-capture:status", (event) => {
     assertTrustedAppIpcSender(event);
     return rawCaptureService.getStatus();
+  });
+  handleTrustedAppIpc("raw-capture:diagnostics", (event) => {
+    assertTrustedAppIpcSender(event);
+    return rawCaptureService.getWebReplayUploadDiagnostics();
+  });
+  handleTrustedAppIpc("raw-capture:retry-pending", (event) => {
+    assertTrustedAppIpcSender(event);
+    return uploadPendingRawCapturesWithAccountRefresh(true);
+  });
+  handleTrustedAppIpc("raw-capture:upload-incomplete", (event, captureSessionId: string) => {
+    assertTrustedAppIpcSender(event);
+    return rawCaptureService.uploadIncompleteWebReplay(captureSessionId);
+  });
+  handleTrustedAppIpc("raw-capture:remove-from-queue", (event, captureSessionId: string) => {
+    assertTrustedAppIpcSender(event);
+    return rawCaptureService.removeWebReplayUploadFromQueue(captureSessionId);
   });
   handleTrustedAppIpc("raw-capture:payload", (event, replayId: string) => {
     assertTrustedAppIpcSender(event);
@@ -7554,14 +7928,20 @@ function registerIpc(): void {
     }, 80);
     return true;
   });
-  handleTrustedAppIpc("atlas-webview:recover", async () => {
+  handleTrustedAppIpc("atlas-webview:recover", async (_event, requestedMode?: AtlasWebviewRecoveryMode) => {
+    const mode = requestedMode === undefined ? "runtime" : validAtlasWebviewRecoveryMode(requestedMode);
+    if (!mode) {
+      throw new Error("Atlas repair mode is invalid.");
+    }
     const switchStatus = capture.getGamePlatformSwitchStatus();
     if (!switchStatus.allowed) {
-      return { ok: false, message: switchStatus.message };
+      return { ok: false, mode, message: switchStatus.message };
     }
     atlasEmptyShellMainRecovery.resetAfterExplicitRepair();
-    return refreshAtlasWebviewRuntime("explicit-repair");
+    return refreshAtlasWebviewRuntime(mode);
   });
+  handleTrustedAppIpc("atlas-webview:diagnostics:get", () => atlasConnectionDiagnosticsSnapshot());
+  handleTrustedAppIpc("atlas-webview:diagnostics:run", () => diagnoseAtlasConnection());
   handleTrustedAppIpc("game-preload:url", (event, platform: GamePlatform) => {
     assertTrustedAppIpcSender(event);
     if (!["tcga", "atlas", "sim"].includes(platform) || (platform === "sim" && !isDev)) {
@@ -7831,6 +8211,7 @@ app.whenReady().then(async () => {
       }
     );
     capture.recordBuildMarker(app.getVersion());
+    installAtlasSessionDiagnostics();
     if (!IS_PACKAGED_SMOKE_TEST && simEventReceiverEnabled()) {
       simEventReceiver = new SimEventReceiver((event) => capture.handleEvent(event));
       await simEventReceiver.start().catch(async (error) => {
@@ -7840,6 +8221,11 @@ app.whenReady().then(async () => {
     }
     registerIpc();
     await createWindow();
+    if (!IS_PACKAGED_SMOKE_TEST) {
+      void recoverInterruptedReplayVideosOnStartup().catch((error) => {
+        void logStartupIssue("interrupted replay video startup recovery failed", error);
+      });
+    }
     if (UI_SNAPSHOT_PATH) {
       setTimeout(() => {
         void (async () => {

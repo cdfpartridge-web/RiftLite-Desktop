@@ -22,7 +22,7 @@ describe("release packaging continuity", () => {
       };
     };
 
-    expect(manifest.version).toBe("0.9.20");
+    expect(manifest.version).toBe("0.9.30");
     expect(manifest.build).toMatchObject({
       appId: "com.riftlite.desktop.beta06",
       productName: "RiftLite Beta 0.9",

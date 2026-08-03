@@ -62,7 +62,8 @@ describe("display-media requester policy", () => {
       requesterIsMainFrame: true,
       originIsTrusted: true,
       videoRequested: true,
-      audioRequested: false
+      audioRequested: false,
+      audioAllowed: false
     };
     expect(displayMediaRequestIsTrusted(valid)).toBe(true);
 
@@ -73,11 +74,16 @@ describe("display-media requester policy", () => {
       { ...valid, requesterIsMainFrame: false },
       { ...valid, originIsTrusted: false },
       { ...valid, videoRequested: false },
-      { ...valid, audioRequested: true }
+      { ...valid, audioRequested: true, audioAllowed: false }
     ];
     for (const evidence of rejected) {
       expect(displayMediaRequestIsTrusted(evidence)).toBe(false);
     }
+    expect(displayMediaRequestIsTrusted({
+      ...valid,
+      audioRequested: true,
+      audioAllowed: true
+    })).toBe(true);
   });
 
   it("binds a prepared target to the trusted IPC sender and expiry window", () => {
@@ -122,5 +128,10 @@ describe("display-media main-process integration", () => {
     expect(replayHandler).not.toBe("");
     expect(defaultHandler.match(/\brespond\(/g)).toHaveLength(1);
     expect(replayHandler.match(/\brespond\(/g)).toHaveLength(1);
+  });
+
+  it("captures audio from the prepared game frame without muting local playback", () => {
+    expect(mainSource).toContain('audioAllowed: target?.mode === "game-frame"');
+    expect(mainSource).toContain("audio: contents.mainFrame, enableLocalEcho: true");
   });
 });

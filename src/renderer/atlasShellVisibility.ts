@@ -8,7 +8,7 @@ export type AtlasShellVisibilityEvent =
   | "shell-ready-timeout"
   | "atlas-left";
 
-export const ATLAS_SHELL_COVER_TIMEOUT_MS = 12_000;
+export const ATLAS_SHELL_COVER_TIMEOUT_MS = 28_000;
 
 export const INITIAL_ATLAS_SHELL_VISIBILITY: AtlasShellVisibility = "inactive";
 

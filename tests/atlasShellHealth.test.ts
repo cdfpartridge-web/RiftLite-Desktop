@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  ATLAS_EMPTY_SHELL_MIN_AGE_MS,
+  ATLAS_STALLED_SHELL_MIN_AGE_MS,
   assessAtlasShell,
   atlasVisibleEmptyCheckDelay,
+  atlasVisibleStallCheckDelay,
   isAtlasAuthSurfaceEvidence,
   shouldReportAtlasEmptyShell,
   type AtlasShellEvidence
@@ -147,9 +150,16 @@ describe("RiftAtlas shell health", () => {
     })).toMatchObject({ ready: false, routeKind: "game", readyReason: "none" });
   });
 
-  it("waits for the original eight-second budget after becoming visible", () => {
-    expect(atlasVisibleEmptyCheckDelay(2_000)).toBe(6_000);
+  it("stages a warning at eight seconds before declaring the shell empty at eighteen", () => {
+    expect(ATLAS_STALLED_SHELL_MIN_AGE_MS).toBe(8_000);
+    expect(ATLAS_EMPTY_SHELL_MIN_AGE_MS).toBe(18_000);
+
+    expect(atlasVisibleStallCheckDelay(2_000)).toBe(6_000);
+    expect(atlasVisibleStallCheckDelay(8_000)).toBe(500);
+    expect(atlasVisibleStallCheckDelay(Number.NaN)).toBe(8_000);
+
+    expect(atlasVisibleEmptyCheckDelay(2_000)).toBe(16_000);
     expect(atlasVisibleEmptyCheckDelay(18_000)).toBe(500);
-    expect(atlasVisibleEmptyCheckDelay(Number.NaN)).toBe(8_000);
+    expect(atlasVisibleEmptyCheckDelay(Number.NaN)).toBe(18_000);
   });
 });

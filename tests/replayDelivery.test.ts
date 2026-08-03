@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { replayDeliveryErrorMessage, replayDeliveryStages, replayDeliverySummary } from "../src/shared/replayDelivery.js";
-import type { RawCaptureReplayMetadata } from "../src/shared/types.js";
+import { replayDeliveryErrorMessage, replayDeliveryStages, replayDeliverySummary, webReplayQueueItemCanBeKeptLocalOnly } from "../src/shared/replayDelivery.js";
+import type { RawCaptureReplayMetadata, WebReplayUploadQueueItem } from "../src/shared/types.js";
 
 function metadata(patch: Partial<RawCaptureReplayMetadata> = {}): RawCaptureReplayMetadata {
   return {
@@ -26,6 +26,35 @@ describe("replayDeliveryStages", () => {
       ["processing", "pending"],
       ["discord", "skipped"],
     ]);
+  });
+
+  it("keeps failed uploads removable after the server URL was reserved", () => {
+    const item = {
+      stage: "failed",
+      recommendedAction: "remove-from-queue",
+      uploadUrl: "https://riftlite.com/replays/reserved-shell"
+    } as WebReplayUploadQueueItem;
+
+    expect(webReplayQueueItemCanBeKeptLocalOnly(item)).toBe(true);
+    expect(webReplayQueueItemCanBeKeptLocalOnly({
+      ...item,
+      stage: "ready",
+      recommendedAction: "none"
+    })).toBe(false);
+    expect(webReplayQueueItemCanBeKeptLocalOnly({
+      ...item,
+      stage: "paused",
+      processingStatus: "ready",
+      recommendedAction: "retry"
+    })).toBe(false);
+    expect(webReplayQueueItemCanBeKeptLocalOnly({
+      ...item,
+      stage: "queued",
+      processingStatus: "pending",
+      recommendedAction: "wait",
+      locallyAvailable: true,
+      uploadUrl: undefined
+    })).toBe(true);
   });
 
   it("describes normal automatic delivery as preparation instead of failure", () => {
@@ -103,5 +132,44 @@ describe("replayDeliveryStages", () => {
       processingStatus: "failed",
       error: raw
     })).find((stage) => stage.id === "upload")?.detail).not.toContain("authentication_required");
+  });
+
+  it("treats website processing as a recoverable active state", () => {
+    const replay = metadata({
+      uploadStatus: "uploaded",
+      processingStatus: "processing",
+      deliveryStage: "processing",
+      lastHttpStatus: 425,
+      lastErrorCode: "replay_processing",
+      error: "RiftLite replay complete 425: replay_processing",
+    });
+
+    expect(replayDeliverySummary(replay).statusLabel).toBe("processing replay");
+    expect(replayDeliveryErrorMessage(replay.error, {
+      code: replay.lastErrorCode,
+      httpStatus: replay.lastHttpStatus,
+    })).toContain("check again automatically");
+  });
+
+  it("explains incomplete mulligan captures without presenting them as corrupt", () => {
+    expect(replayDeliveryErrorMessage("Replay capture is incomplete: The replay did not capture the opening mulligan.", {
+      code: "raw_capture_incomplete",
+      errorClass: "capture",
+    })).toContain("partial replay");
+  });
+
+  it("uses the durable delivery stage for upload progress and partial-ready results", () => {
+    expect(replayDeliverySummary(metadata({
+      webReplayAutoUploadEligible: true,
+      resultStatus: "resolved",
+      deliveryStage: "authenticating",
+    })).statusLabel).toBe("checking account");
+
+    expect(replayDeliverySummary(metadata({
+      uploadStatus: "uploaded",
+      processingStatus: "ready",
+      deliveryStage: "ready",
+      partialWarnings: ["Opening mulligan was not captured"],
+    })).statusLabel).toBe("ready with warning");
   });
 });

@@ -501,9 +501,29 @@ describe("RiftLiteStore database recovery", () => {
       expect(settings.syncMode).toBe("community-and-hubs");
       expect(settings.communitySyncEnabled).toBe(true);
       expect(settings.accountCloudSyncEnabled).toBe(false);
+      expect(settings.matchupPrepWidgetEnabled).toBe(true);
       expect(settings.rawCapture.webReplayAutoUploadEnabled).toBe(false);
       expect(settings.rawCapture.tcgaWebReplayAutoUploadEnabled).toBe(false);
       expect(legacyImport).toHaveBeenCalledTimes(1);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("defaults the Prep/Notes widget on and persists an explicit opt-out", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "riftlite-store-prep-widget-"));
+    const dbPath = join(directory, "riftlite-v06.sqlite");
+    const legacyPath = join(directory, "riftlite-v06-store.json");
+    try {
+      const store = new RiftLiteStore(dbPath, legacyPath);
+      await store.load();
+      expect((await store.getSettings()).matchupPrepWidgetEnabled).toBe(true);
+
+      await store.saveSettings({ matchupPrepWidgetEnabled: false });
+
+      const restarted = new RiftLiteStore(dbPath, legacyPath);
+      await restarted.load();
+      expect((await restarted.getSettings()).matchupPrepWidgetEnabled).toBe(false);
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

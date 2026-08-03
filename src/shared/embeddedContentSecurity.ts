@@ -167,6 +167,7 @@ export function isSecurePopupNavigation(value: string): boolean {
 
 const ATLAS_OAUTH_ORIGINS = new Set([
   "https://accounts.google.com",
+  "https://accounts.riftatlas.com",
   "https://clerk.riftatlas.com",
   "https://discord.com",
   "https://id.twitch.tv",

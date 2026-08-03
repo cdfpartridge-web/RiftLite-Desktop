@@ -84,4 +84,39 @@ describe("diagnostic privacy", () => {
     expect(value.note).not.toContain("Test Name");
     expect(value.note).not.toContain("abc123");
   });
+
+  it("preserves actionable Atlas failure metadata without exporting request secrets", () => {
+    const value = redactDiagnosticValue({
+      reason: "atlas-resource-failure",
+      routeKind: "sign-in",
+      readyReason: "static-introduction",
+      errorCode: -105,
+      errorDescription: "Failed https://assets.riftatlas-workers.com/chunk.js?token=asset-secret",
+      resourceOrigin: "https://assets.riftatlas-workers.com",
+      resourcePath: "/private/chunk.js?token=path-secret",
+      resourceType: "script",
+      statusCode: 503,
+      targetOrigin: "https://accounts.riftatlas.com/session/private-session?code=oauth-secret",
+      authorization: "Bearer header-secret"
+    });
+    const encoded = JSON.stringify(value);
+
+    expect(value).toMatchObject({
+      reason: "atlas-resource-failure",
+      routeKind: "sign-in",
+      readyReason: "static-introduction",
+      errorCode: -105,
+      resourceType: "script",
+      statusCode: 503,
+      resourcePath: "[REDACTED_LOCAL_PATH]"
+    });
+    expect(value.errorDescription).toBe("Failed https://assets.riftatlas-workers.com/chunk.js");
+    expect(value.targetOrigin).toBe("https://accounts.riftatlas.com/session/[REDACTED]");
+    expect(encoded).toContain("assets.riftatlas-workers.com");
+    expect(encoded).not.toContain("asset-secret");
+    expect(encoded).not.toContain("path-secret");
+    expect(encoded).not.toContain("private-session");
+    expect(encoded).not.toContain("oauth-secret");
+    expect(encoded).not.toContain("header-secret");
+  });
 });

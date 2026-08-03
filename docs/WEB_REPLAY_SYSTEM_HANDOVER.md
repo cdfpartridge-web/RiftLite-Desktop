@@ -737,7 +737,7 @@ For a missing upload, inspect in this order without restarting first:
 6. website owner library/status;
 7. server response/error code.
 
-A raw JSON plus valid index can be retried after restart. An in-memory session that was never persisted cannot be reconstructed after process exit.
+A raw JSON plus valid index can be retried after restart. Active Atlas sessions also append retained frames to bounded `*.riftlite-active.jsonl` journals. On restart, RiftLite ignores a possible truncated final row, validates the complete rows, and promotes the partial session to a normal raw artifact/index and visible upload-queue item with an unexpected-shutdown warning. Completed captures win by capture ID, so a journal left behind after successful atomic finalization is deleted instead of duplicated.
 
 ## 24. Testing commands
 

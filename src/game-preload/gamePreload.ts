@@ -7,8 +7,10 @@ import {
 import { isAtlasActiveRoomBoundary } from "../shared/atlasCaptureLifecycle.js";
 import {
   ATLAS_EMPTY_SHELL_MIN_AGE_MS,
+  ATLAS_STALLED_SHELL_MIN_AGE_MS,
   assessAtlasShell,
   atlasVisibleEmptyCheckDelay,
+  atlasVisibleStallCheckDelay,
   isAtlasAuthSurfaceEvidence,
   shouldReportAtlasEmptyShell
 } from "../shared/atlasShellHealth.js";
@@ -196,6 +198,7 @@ let atlasInteractionQuietUntil = 0;
 let atlasInteractionSettleTimer: number | undefined;
 let atlasDeferredMutationSnapshot = false;
 let atlasEmptyShellReported = false;
+let atlasStalledShellReported = false;
 let atlasShellReadyReported = false;
 let atlasShellChecksStartedAt = 0;
 let atlasShellMutationCheckTimer: number | undefined;
@@ -2230,7 +2233,7 @@ function safeStorageKeys(): string[] {
   }
 }
 
-function reportAtlasShellStatusIfNeeded(allowEmpty = false): void {
+function reportAtlasShellStatusIfNeeded(reportMode: "observe" | "stalled" | "empty" = "observe"): void {
   if (
     platform !== "atlas" ||
     atlasShellReadyReported ||
@@ -2295,7 +2298,16 @@ function reportAtlasShellStatusIfNeeded(allowEmpty = false): void {
     });
     return;
   }
-  if (shouldReportAtlasEmptyShell(assessment, allowEmpty, atlasEmptyShellReported)) {
+  if (reportMode === "stalled" && !atlasStalledShellReported) {
+    atlasStalledShellReported = true;
+    send("debug", {
+      reason: "atlas-app-shell-stalled",
+      ...debugSnapshot(),
+      ...shellEvidence
+    });
+    return;
+  }
+  if (shouldReportAtlasEmptyShell(assessment, reportMode === "empty", atlasEmptyShellReported)) {
     atlasEmptyShellReported = true;
     send("debug", {
       reason: "atlas-app-shell-empty",
@@ -2331,14 +2343,13 @@ function scheduleAtlasShellMutationCheck(): void {
   if (
     platform !== "atlas" ||
     atlasShellReadyReported ||
-    atlasEmptyShellReported ||
     atlasShellMutationCheckTimer !== undefined
   ) {
     return;
   }
   atlasShellMutationCheckTimer = window.setTimeout(() => {
     atlasShellMutationCheckTimer = undefined;
-    reportAtlasShellStatusIfNeeded(false);
+    reportAtlasShellStatusIfNeeded("observe");
   }, 250);
 }
 
@@ -2346,10 +2357,14 @@ function checkAtlasShellAfterBecomingVisible(): void {
   if (platform !== "atlas" || document.visibilityState === "hidden" || atlasShellReadyReported) {
     return;
   }
-  reportAtlasShellStatusIfNeeded(false);
+  reportAtlasShellStatusIfNeeded("observe");
   const elapsed = Date.now() - atlasShellChecksStartedAt;
   window.setTimeout(
-    () => reportAtlasShellStatusIfNeeded(true),
+    () => reportAtlasShellStatusIfNeeded("stalled"),
+    atlasVisibleStallCheckDelay(elapsed)
+  );
+  window.setTimeout(
+    () => reportAtlasShellStatusIfNeeded("empty"),
     atlasVisibleEmptyCheckDelay(elapsed)
   );
 }
@@ -2614,10 +2629,11 @@ function installDomObserver(): void {
       atlasShellChecksStartedAt = Date.now();
       document.addEventListener("visibilitychange", checkAtlasShellAfterBecomingVisible);
       for (const delay of [250, 750, 1_500, 3_000, 5_000]) {
-        window.setTimeout(() => reportAtlasShellStatusIfNeeded(false), delay);
+        window.setTimeout(() => reportAtlasShellStatusIfNeeded("observe"), delay);
       }
-      window.setTimeout(() => reportAtlasShellStatusIfNeeded(true), ATLAS_EMPTY_SHELL_MIN_AGE_MS);
-      window.setTimeout(() => reportAtlasShellStatusIfNeeded(true), 18_000);
+      window.setTimeout(() => reportAtlasShellStatusIfNeeded("stalled"), ATLAS_STALLED_SHELL_MIN_AGE_MS);
+      window.setTimeout(() => reportAtlasShellStatusIfNeeded("empty"), ATLAS_EMPTY_SHELL_MIN_AGE_MS);
+      window.setTimeout(() => reportAtlasShellStatusIfNeeded("empty"), 30_000);
     }
     const heartbeat = () => {
       publishSnapshot("safety-heartbeat");

@@ -28,6 +28,13 @@ describe("CaptureDiagnostics privacy exports", () => {
       capturedAt: "2026-07-19T12:00:00.000Z",
       url: "https://play.riftatlas.com/game/ROOM-1?token=url-secret",
       payload: {
+        reason: "atlas-resource-failure",
+        routeKind: "sign-in",
+        errorCode: -105,
+        errorDescription: "Failed https://assets.riftatlas-workers.com/chunk.js?token=asset-secret",
+        resourceOrigin: "https://assets.riftatlas-workers.com",
+        resourceType: "script",
+        statusCode: 503,
         myName: "Private Player",
         roomCode: "ROOM-1",
         raw: "raw-secret"
@@ -40,6 +47,11 @@ describe("CaptureDiagnostics privacy exports", () => {
     expect(redacted).not.toContain("Private Player");
     expect(redacted).not.toContain("ROOM-1");
     expect(redacted).not.toContain("raw-secret");
+    expect(redacted).not.toContain("asset-secret");
+    expect(redacted).toContain("atlas-resource-failure");
+    expect(redacted).toContain("assets.riftatlas-workers.com");
+    expect(redacted).toContain('"errorCode": -105');
+    expect(redacted).toContain('"statusCode": 503');
 
     await expect(diagnostics.createBundle({ includeSensitiveData: true }))
       .rejects.toThrow("explicit confirmation");
@@ -53,5 +65,6 @@ describe("CaptureDiagnostics privacy exports", () => {
     expect(sensitive).toContain("Private Player");
     expect(sensitive).toContain("ROOM-1");
     expect(sensitive).toContain("raw-secret");
+    expect(sensitive).toContain("asset-secret");
   });
 });

@@ -1,5 +1,6 @@
 import { app } from "electron";
-import { mkdir, readFile, readdir, rename, unlink, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises";
+import type { FileHandle } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -15,7 +16,14 @@ import type {
   ReplayRecord,
   RiftLiteReplayDiscordShareResult,
   RiftLiteReplayUploadResult,
-  UserSettings
+  UserSettings,
+  WebReplayDeliveryErrorClass,
+  WebReplayDeliveryStage,
+  WebReplayRecommendedAction,
+  WebReplayUploadDiagnostics,
+  WebReplayUploadFailureDiagnostic,
+  WebReplayUploadLaneDiagnostics,
+  WebReplayUploadQueueItem
 } from "../../shared/types.js";
 import { canonicalLegendName } from "../../shared/legendNames.js";
 import { hasVerifiedRiftLiteAccount } from "../../shared/accountIdentity.js";
@@ -100,13 +108,22 @@ const RAW_CAPTURE_UPLOAD_LANE_FIELDS = [
   "uploadStatus",
   "uploadUrl",
   "uploadId",
+  "statusEndpoint",
   "uploadedAt",
   "processingStatus",
   "checksumSha256",
   "compressedBytes",
   "error",
   "lastUploadAttemptAt",
-  "processingUpdatedAt"
+  "processingUpdatedAt",
+  "deliveryStage",
+  "attemptCount",
+  "nextRetryAt",
+  "lastHttpStatus",
+  "lastErrorCode",
+  "lastErrorClass",
+  "remoteStatusCheckedAt",
+  "partialWarnings"
 ] as const satisfies ReadonlyArray<keyof RawCaptureReplayMetadata>;
 
 const RAW_CAPTURE_DISCORD_LANE_FIELDS = [
@@ -411,6 +428,38 @@ type ActiveRawCaptureSession = {
   lastError: string;
 };
 
+type RawCaptureJournalConsent = {
+  webReplayAutoUploadAccountUid: string;
+  webReplayDiscordShareAccountUid: string;
+  webReplayDiscordShareHubIds: string[];
+  provisional: boolean;
+};
+
+type RawCaptureJournalFrameEntry = {
+  schema: "riftlite-active-raw-capture-journal";
+  version: 1;
+  kind: "frame";
+  captureSessionId: string;
+  requestUrl: string;
+  frame: RawCaptureFrame;
+  consent: RawCaptureJournalConsent;
+};
+
+type RawCaptureJournalCheckpointEntry = {
+  schema: "riftlite-active-raw-capture-journal";
+  version: 1;
+  kind: "checkpoint";
+  captureSessionId: string;
+  session: ActiveRawCaptureSession;
+};
+
+type RawCaptureJournalEntry = RawCaptureJournalFrameEntry | RawCaptureJournalCheckpointEntry;
+
+type PersistedRawCaptureJournal = {
+  path: string;
+  session: ActiveRawCaptureSession;
+};
+
 type RawCaptureRuntimeSettings = UserSettings["rawCapture"] & {
   uploadEnabled?: boolean;
 };
@@ -471,12 +520,47 @@ type PersistedRawCaptureManifest = {
   indexPath: string;
   /** Whether deletion/purge of a real local ReplayRecord is authoritative. */
   requiresLocalReplayParent?: boolean;
+  /** Present only when an active JSONL journal was promoted after process exit. */
+  recoveredFromJournalAt?: string;
   localReplayId?: string;
   localMatchId?: string;
   title?: string;
   match?: RawCaptureMatchSummary;
   identity: RawCaptureFinishIdentity;
   metadata: RawCaptureReplayMetadata;
+};
+
+type WebReplayDiagnosticEntry = {
+  platform: "atlas" | "tcga";
+  captureSessionId: string;
+  localReplayId?: string;
+  title: string;
+  capturedAt: string;
+  metadata: RawCaptureReplayMetadata;
+};
+
+type ReplayDeliveryError = Error & {
+  status?: number;
+  code?: string;
+  errorClass?: WebReplayDeliveryErrorClass;
+  retryable?: boolean;
+  recommendedAction?: WebReplayRecommendedAction;
+  retryAfterMs?: number;
+};
+
+type ReplayRemoteStatus = {
+  processingStatus: RawCaptureProcessingStatus;
+  deliveryStage: WebReplayDeliveryStage;
+  retryable: boolean;
+  recommendedAction: WebReplayRecommendedAction;
+  retryAfterMs?: number;
+  statusEndpoint?: string;
+  playerPath?: string;
+  visibility?: RawCaptureVisibility;
+  failureMessage?: string;
+  failureCode?: string;
+  failureClass?: WebReplayDeliveryErrorClass;
+  warnings: string[];
 };
 
 const RAW_CAPTURE_MAX_BYTES = 10 * 1024 * 1024;
@@ -495,12 +579,22 @@ const RIFTLITE_REPLAY_V2_MAX_GZIP_BYTES = 4 * 1024 * 1024;
 const RIFTLITE_REPLAY_V2_MAX_EXPANDED_BYTES = 32 * 1024 * 1024;
 const PILTOVER_DECK_PATH_RE = /^\/decks\/view\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/?$/i;
 const RAW_CAPTURE_INDEX_SUFFIX = ".riftlite-index.json";
+const RAW_CAPTURE_JOURNAL_SUFFIX = ".riftlite-active.jsonl";
+const RAW_CAPTURE_MAX_JOURNAL_BYTES = 32 * 1024 * 1024;
+const RAW_CAPTURE_JOURNAL_HANDLE_IDLE_MS = 250;
+const RAW_CAPTURE_RECOVERY_WARNING = "Recovered after an unexpected desktop shutdown. The final moments of this replay may be missing.";
 const FIREBASE_API_KEY = "AIzaSyBNqEY-i_CggjhDKVltoPQFrSOEfHF7fBA";
 const RAW_CAPTURE_TEMPORAL_MAX_PRELUDE_MS = 15 * 60 * 1000;
 const RAW_CAPTURE_TEMPORAL_MAX_END_GAP_MS = 3 * 60 * 1000;
 const RAW_CAPTURE_TEMPORAL_MAX_MATCH_MS = 6 * 60 * 60 * 1000;
 const RAW_CAPTURE_MAX_DATE_MS = 8_640_000_000_000_000;
 const RAW_CAPTURE_AUTO_UPLOAD_RETRY_COOLDOWN_MS = 2 * 60 * 1000;
+const RAW_CAPTURE_MAX_AUTO_UPLOAD_RETRY_DELAY_MS = 30 * 60 * 1000;
+const RAW_CAPTURE_STALE_PROCESSING_MS = 10 * 60 * 1000;
+const RIFTLITE_REPLAY_REQUEST_TIMEOUT_MS = 30_000;
+const RIFTLITE_REPLAY_UPLOAD_REQUEST_TIMEOUT_MS = 60_000;
+const RIFTLITE_REPLAY_AUTH_TIMEOUT_MS = 30_000;
+const RIFTLITE_REPLAY_MAX_IN_CALL_RETRY_DELAY_MS = 1_000;
 const RAW_CAPTURE_DISCORD_RESULT_INITIAL_WAIT_MS = 15_000;
 const RAW_CAPTURE_DISCORD_RESULT_POLL_MS = 2_500;
 const RAW_CAPTURE_DISCORD_RESULT_MAX_WAIT_MS = 30_000;
@@ -531,6 +625,17 @@ export class RawCaptureService {
   private lastUploadUrl = "";
   private lastAssociationError = "";
   private pendingUploadPromise: Promise<number> | null = null;
+  private pendingForcedUploadRequested = false;
+  private pendingForcedUploadLimit = 0;
+  private appendFrameTail: Promise<void> = Promise.resolve();
+  private readonly captureTaskTails = new Map<string, Promise<void>>();
+  private readonly journalPathsBySessionId = new Map<string, string>();
+  private readonly journalHandlesBySessionId = new Map<string, FileHandle>();
+  private readonly journalHandleCloseTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly ownedJournalPaths = new Set<string>();
+  private readonly journalRewriteSessionIds = new Set<string>();
+  private readonly journalCleanupPaths = new Set<string>();
+  private journalRecoveryPromise: Promise<void> | null = null;
 
   constructor(
     private readonly store: RiftLiteStore,
@@ -542,12 +647,19 @@ export class RawCaptureService {
   ) {}
 
   async appendFrame(payload: RawCaptureAppendFramePayload): Promise<void> {
+    const operation = this.appendFrameTail.then(() => this.appendFrameNow(payload));
+    this.appendFrameTail = operation.catch(() => undefined);
+    return operation;
+  }
+
+  private async appendFrameNow(payload: RawCaptureAppendFramePayload): Promise<void> {
     if (payload.platform !== "atlas") {
       return;
     }
     const settings = await this.store.getSettings();
+    await this.ensureInterruptedCaptureRecovery(settings);
     if (!settings.rawCapture.enabled) {
-      this.clearSessions();
+      await this.clearSessionsAndJournals();
       return;
     }
     const raw = payload.frame.raw;
@@ -644,6 +756,7 @@ export class RawCaptureService {
     } else {
       session.keptCount += 1;
     }
+    await this.checkpointActiveSession(session, frame, settings);
   }
 
   private sessionForFrame(
@@ -891,6 +1004,11 @@ export class RawCaptureService {
     for (const [socketId, socket] of Object.entries(provisional.sockets)) {
       target.sockets[socketId] = mergeRawCaptureSocket(target.sockets[socketId], socket);
     }
+    this.journalRewriteSessionIds.add(target.captureSessionId);
+    const provisionalJournalPath = this.journalPathsBySessionId.get(provisional.captureSessionId);
+    if (provisionalJournalPath) {
+      this.journalCleanupPaths.add(provisionalJournalPath);
+    }
     this.sessions.delete(provisional.captureSessionId);
     for (const [key, sessionId] of this.sessionIdByTransport) {
       if (sessionId === provisional.captureSessionId) {
@@ -918,9 +1036,11 @@ export class RawCaptureService {
     explicitIdentity: RawCaptureFinishIdentity,
     replay?: ReplayRecord
   ): Promise<ReplayRecord | null> {
+    await this.drainPendingFrames();
     const settings = await this.store.getSettings();
+    await this.ensureInterruptedCaptureRecovery(settings);
     if (!settings.rawCapture.enabled) {
-      this.clearSessions();
+      await this.clearSessionsAndJournals();
       return replay ?? null;
     }
     const platform = explicitIdentity.platform ?? replay?.platform;
@@ -951,6 +1071,7 @@ export class RawCaptureService {
       this.finalizingSessionIds.add(session.captureSessionId);
       try {
         manifest = await this.persistSession(session, explicitIdentity, replay, settings);
+        await this.discardSessionJournal(session.captureSessionId);
         this.removeSession(session.captureSessionId);
       } finally {
         this.finalizingSessionIds.delete(session.captureSessionId);
@@ -963,7 +1084,18 @@ export class RawCaptureService {
       return replay ?? null;
     }
     this.lastAssociationError = "";
+    return this.withCaptureTask(manifest.metadata.captureSessionId, () => (
+      this.finishPersistedCaptureUnlocked(manifest!, explicitIdentity, replay, settings)
+    ));
+  }
 
+  private async finishPersistedCaptureUnlocked(
+    initialManifest: PersistedRawCaptureManifest,
+    explicitIdentity: RawCaptureFinishIdentity,
+    replay: ReplayRecord | undefined,
+    settings: UserSettings
+  ): Promise<ReplayRecord | null> {
+    let manifest = await readRawCaptureManifest(initialManifest.indexPath) ?? initialManifest;
     const projectedMatch = explicitIdentity.match ?? rawCaptureMatchSummaryFromDraft(replay?.matchSnapshot);
     const match = manifest.match ?? (
       manifest.metadata.uploadStatus === "uploaded" ? undefined : projectedMatch
@@ -992,6 +1124,7 @@ export class RawCaptureService {
       manifest = {
         ...manifest,
         updatedAt: new Date().toISOString(),
+        requiresLocalReplayParent: true,
         localReplayId: replay.id,
         localMatchId: replay.matchId,
         title: replay.title,
@@ -1023,7 +1156,7 @@ export class RawCaptureService {
       }
       if (webReplayAutoUploadEnabled && webReplayAutoUploadEligible) {
         try {
-          manifest = await this.uploadPersistedCaptureToRiftLite(
+          manifest = await this.uploadPersistedCaptureToRiftLiteUnlocked(
             manifest,
             rawCaptureVisibility(settings),
             settings,
@@ -1044,8 +1177,7 @@ export class RawCaptureService {
               saved = await this.saveReplayRawCapture(saved, manifest.metadata);
             }
           } else if (!uploadedAnything) {
-            const message = error instanceof Error ? error.message : "RiftLite replay upload failed.";
-            manifest = persistedFailure ?? await this.saveManifestUploadFailure(manifest, message);
+            manifest = persistedFailure ?? await this.saveManifestUploadFailure(manifest, error);
             if (saved) {
               saved = await this.saveReplayRawCapture(saved, manifest.metadata);
             }
@@ -1111,6 +1243,8 @@ export class RawCaptureService {
       lastSeenAt: prepared.lastSeenAt,
       uploadStatus: "not-uploaded",
       processingStatus: "pending",
+      deliveryStage: "queued",
+      attemptCount: 0,
       captureCompletedAt: persistedAt,
       resultStatus: "resolved",
       resultFinalizedAt: persistedAt,
@@ -1172,10 +1306,7 @@ export class RawCaptureService {
     } catch (error) {
       let failed = await readRawCaptureManifest(indexPath);
       if (failed && !failed.metadata.error) {
-        failed = await this.saveManifestUploadFailure(
-          failed,
-          error instanceof Error ? error.message : "TCGA Web Replay upload failed."
-        );
+        failed = await this.saveManifestUploadFailure(failed, error);
       }
       if (failed && saved) {
         saved = await this.saveReplayRawCapture(saved, failed.metadata);
@@ -1280,7 +1411,7 @@ export class RawCaptureService {
       const raw = await readFile(replay.rawCapture.localPath, "utf8");
       const gzipped = await gzipAsync(Buffer.from(raw, "utf8"));
       const response = await postLegacyRiftReplayWithRetry(settings.rawCapture.endpoint || LEGACY_RIFTREPLAY_UPLOAD_ENDPOINT, apiKey, gzipped);
-      const text = await response.text();
+      const text = await readReplayResponseText(response, "RiftReplay upload");
       const body = parseJsonObject(text);
       if (!response.ok) {
         throw new Error(`RiftReplay API ${response.status}: ${truncateForUi(text || response.statusText, 260)}`);
@@ -1310,6 +1441,7 @@ export class RawCaptureService {
 
   async getStatus(): Promise<RawCaptureStatus> {
     const settings = await this.store.getSettings();
+    await this.ensureInterruptedCaptureRecovery(settings);
     const active = settings.rawCapture.enabled ? this.currentSession() : null;
     return {
       enabled: settings.rawCapture.enabled,
@@ -1327,19 +1459,243 @@ export class RawCaptureService {
     };
   }
 
-  async uploadPendingRawCaptures(limit = 5): Promise<number> {
+  async getWebReplayUploadDiagnostics(): Promise<WebReplayUploadDiagnostics> {
+    const settings = await this.store.getSettings();
+    await this.ensureInterruptedCaptureRecovery(settings);
+    const [replays, manifests, captureStatus] = await Promise.all([
+      this.store.getReplays(),
+      readRawCaptureManifests(settings),
+      this.getStatus()
+    ]);
+    const entries = new Map<string, WebReplayDiagnosticEntry>();
+    const remember = (entry: WebReplayDiagnosticEntry, fallbackKey: string) => {
+      if (
+        entry.metadata.provider !== "riftlite-v2" &&
+        entry.metadata.webReplayAutoUploadEligible !== true &&
+        !isRiftLiteReplayV2Url(entry.metadata.uploadUrl)
+      ) {
+        return;
+      }
+      const key = `${entry.platform}:${entry.captureSessionId || fallbackKey}`;
+      const current = entries.get(key);
+      if (!current || rawCaptureUploadUpdateWins(current.metadata, entry.metadata)) {
+        entries.set(key, entry);
+      }
+    };
+
+    for (const replay of replays) {
+      if ((replay.platform !== "atlas" && replay.platform !== "tcga") || !replay.rawCapture) continue;
+      remember({
+        platform: replay.platform,
+        captureSessionId: replay.rawCapture.captureSessionId,
+        localReplayId: replay.id,
+        title: replay.title,
+        capturedAt: replay.capturedAt,
+        metadata: replay.rawCapture
+      }, `replay:${replay.id}`);
+    }
+    for (const manifest of manifests) {
+      if (!await this.hasActiveManifestParent(manifest)) continue;
+      remember({
+        platform: manifest.platform,
+        captureSessionId: manifest.metadata.captureSessionId,
+        localReplayId: manifest.localReplayId || manifest.identity.localReplayId,
+        title: manifest.title || `${manifest.platform === "atlas" ? "Atlas" : "TCGA"} capture`,
+        capturedAt: rawCaptureUploadCapturedAt(manifest) || manifest.updatedAt,
+        metadata: manifest.metadata
+      }, `manifest:${manifest.indexPath}`);
+    }
+
+    const records = [...entries.values()];
+    const atlas = buildWebReplayUploadLaneDiagnostics("atlas", settings, records);
+    const tcga = buildWebReplayUploadLaneDiagnostics("tcga", settings, records);
+    const recentFailures = webReplayUploadFailureDiagnostics(records);
+    const queue = buildWebReplayUploadQueue(records);
+    const latestReadyReplayUrl = records
+      .filter((entry) => entry.metadata.processingStatus === "ready" && isRiftLiteReplayV2Url(entry.metadata.uploadUrl))
+      .sort((left, right) =>
+        webReplayDiagnosticTimestamp(right.metadata.uploadedAt) -
+        webReplayDiagnosticTimestamp(left.metadata.uploadedAt)
+      )[0]?.metadata.uploadUrl || "";
+    const accountLinked = Boolean(normalizeRiftLiteAccountUid(settings.accountUid));
+    const accountVerified = hasVerifiedRiftLiteAccount(settings);
+    const configuredLanes = [atlas, tcga].filter((lane) => lane.configured);
+    const accountMismatch = configuredLanes.some((lane) => !lane.accountMatches);
+    let state: WebReplayUploadDiagnostics["state"] = "healthy";
+    let summary = "Web replay capture and upload settings look ready.";
+
+    if (!settings.rawCapture.enabled) {
+      state = "blocked";
+      summary = "Web replay capture is disabled, so completed games cannot enter the upload queue.";
+    } else if (!accountLinked) {
+      state = "blocked";
+      summary = "No RiftLite account is linked. Link and verify an account before enabling web replay upload.";
+    } else if (!accountVerified) {
+      state = "blocked";
+      summary = "The linked RiftLite account is not currently verified. Check or reconnect the account, then retry pending uploads.";
+    } else if (!configuredLanes.length) {
+      state = "attention";
+      summary = "Automatic web replay upload is off for both Atlas and TCGA.";
+    } else if (accountMismatch) {
+      state = "blocked";
+      summary = "Replay upload consent belongs to a different account. Turn the affected platform off and on again to bind this account.";
+    } else if (recentFailures.length || captureStatus.lastError) {
+      state = "error";
+      summary = recentFailures[0]?.error || captureStatus.lastError || "A web replay upload failed.";
+    } else if (atlas.pending + atlas.inProgress + tcga.pending + tcga.inProgress > 0) {
+      state = "attention";
+      summary = "One or more web replays are waiting, uploading, or processing. Use Retry pending uploads if this does not clear.";
+    } else if (configuredLanes.every((lane) => lane.captured === 0)) {
+      state = "attention";
+      summary = "Upload is enabled, but no completed web replay captures are currently recorded on this device.";
+    }
+
+    return {
+      checkedAt: new Date().toISOString(),
+      state,
+      summary,
+      captureEnabled: settings.rawCapture.enabled,
+      accountLinked,
+      accountVerified,
+      retryInProgress: Boolean(this.pendingUploadPromise),
+      activeCapture: captureStatus.active,
+      captureError: captureStatus.lastError || "",
+      lanes: { atlas, tcga },
+      queue,
+      latestReadyReplayUrl,
+      recentFailures
+    };
+  }
+
+  async uploadPendingRawCaptures(limit = 5, forceRetry = false): Promise<number> {
     if (this.pendingUploadPromise) {
+      if (forceRetry) {
+        // Do not let a foreground retry disappear into an already-running
+        // automatic pass whose cooldown rules may have selected nothing.
+        this.pendingForcedUploadRequested = true;
+        this.pendingForcedUploadLimit = Math.max(this.pendingForcedUploadLimit, Math.max(1, limit));
+      }
       return this.pendingUploadPromise;
     }
-    this.pendingUploadPromise = this.uploadPendingRawCapturesNow(limit)
+    this.pendingUploadPromise = this.runPendingUploadPasses(limit, forceRetry)
       .finally(() => {
         this.pendingUploadPromise = null;
       });
     return this.pendingUploadPromise;
   }
 
-  private async uploadPendingRawCapturesNow(limit: number): Promise<number> {
+  private async runPendingUploadPasses(limit: number, forceRetry: boolean): Promise<number> {
+    let completed = await this.uploadPendingRawCapturesNow(limit, forceRetry);
+    while (this.pendingForcedUploadRequested) {
+      const forcedLimit = Math.max(1, this.pendingForcedUploadLimit || limit);
+      this.pendingForcedUploadRequested = false;
+      this.pendingForcedUploadLimit = 0;
+      completed += await this.uploadPendingRawCapturesNow(forcedLimit, true);
+    }
+    return completed;
+  }
+
+  async uploadIncompleteWebReplay(captureSessionId: string): Promise<RiftLiteReplayUploadResult> {
+    const normalizedCaptureSessionId = normalizeDiagnosticCaptureSessionId(captureSessionId);
     const settings = await this.store.getSettings();
+    if (!settings.rawCapture.enabled) {
+      throw new Error("Web Replay capture is disabled.");
+    }
+    const replays = await this.store.getReplays();
+    const matchingReplays = replays.filter((replay) => (
+      replay.rawCapture?.captureSessionId === normalizedCaptureSessionId
+    ));
+    if (matchingReplays.length > 1) {
+      throw new Error("More than one local replay matched this capture. Refresh diagnostics and try again.");
+    }
+    const replay = matchingReplays[0];
+    const matchingManifests = (await readRawCaptureManifests(settings)).filter((manifest) => (
+      manifest.metadata.captureSessionId === normalizedCaptureSessionId ||
+      manifest.identity.captureSessionId === normalizedCaptureSessionId
+    ));
+    if (matchingManifests.length > 1) {
+      throw new Error("More than one Web Replay source matched this capture. Refresh diagnostics and try again.");
+    }
+    let manifest = replay
+      ? await this.manifestForReplay(replay, settings)
+      : matchingManifests[0];
+    if (!manifest) {
+      throw new Error("The failed Web Replay source is no longer available on this device.");
+    }
+    if (
+      manifest.metadata.lastErrorCode !== "replay_capture_missing_mulligan" &&
+      !webReplayIncompleteOverrideAllowed(manifest.metadata.error || "")
+    ) {
+      throw new Error("Upload anyway is available only when the opening mulligan is the capture's sole missing section.");
+    }
+    const visibility = normalizeRawCaptureVisibility(
+      manifest.metadata.visibility ?? rawCaptureVisibility(settings)
+    );
+    manifest = await this.uploadPersistedCaptureToRiftLite(
+      manifest,
+      visibility,
+      settings,
+      { allowIncomplete: true }
+    );
+    if (replay) {
+      await this.saveReplayRawCapture(replay, manifest.metadata);
+    } else {
+      await this.publishManifestWithoutReplay(manifest);
+    }
+    return {
+      replayId: manifest.metadata.uploadId || "",
+      url: manifest.metadata.uploadUrl || "",
+      visibility,
+      status: manifest.metadata.processingStatus
+    };
+  }
+
+  async removeWebReplayUploadFromQueue(captureSessionId: string): Promise<void> {
+    const normalizedCaptureSessionId = normalizeDiagnosticCaptureSessionId(captureSessionId);
+    const settings = await this.store.getSettings();
+    const replays = await this.store.getReplays();
+    const matchingReplays = replays.filter((replay) => (
+      replay.rawCapture?.captureSessionId === normalizedCaptureSessionId
+    ));
+    const matchingManifests = (await readRawCaptureManifests(settings)).filter((manifest) => (
+      manifest.metadata.captureSessionId === normalizedCaptureSessionId ||
+      manifest.identity.captureSessionId === normalizedCaptureSessionId
+    ));
+    if (!matchingReplays.length && !matchingManifests.length) {
+      throw new Error("The Web Replay capture is no longer available on this device.");
+    }
+    if (matchingReplays.length > 1 || matchingManifests.length > 1) {
+      throw new Error("More than one Web Replay source matched this capture. Refresh diagnostics and try again.");
+    }
+    await this.withCaptureTask(normalizedCaptureSessionId, async () => {
+      const persistedManifest = matchingManifests[0]
+        ? await readRawCaptureManifest(matchingManifests[0].indexPath)
+        : null;
+      const currentMetadata = persistedManifest?.metadata ?? matchingReplays[0]?.rawCapture ?? matchingManifests[0]?.metadata;
+      if (!currentMetadata) {
+        throw new Error("The Web Replay upload record is incomplete.");
+      }
+      if (currentMetadata.processingStatus === "ready") {
+        throw new Error("This Web Replay already exists online and cannot be removed through the local upload queue.");
+      }
+      const removedMetadata = rawCaptureMetadataRemovedFromUploadQueue(currentMetadata);
+      const manifest = persistedManifest ?? matchingManifests[0];
+      if (manifest) {
+        await writeRawCaptureManifest({
+          ...manifest,
+          updatedAt: removedMetadata.processingUpdatedAt!,
+          metadata: removedMetadata
+        });
+      }
+      if (matchingReplays[0]) {
+        await this.saveReplayRawCapture(matchingReplays[0], removedMetadata);
+      }
+    });
+  }
+
+  private async uploadPendingRawCapturesNow(limit: number, forceRetry: boolean): Promise<number> {
+    const settings = await this.store.getSettings();
+    await this.ensureInterruptedCaptureRecovery(settings);
     const legacyAutoUploadEnabled = rawCaptureUploadEnabled(settings);
     const atlasWebReplayAutoUploadEnabled = riftLiteWebReplayAutoUploadEnabled(settings);
     const tcgaWebReplayAutoUploadEnabled = Boolean(riftLiteTcgaWebReplayAutoUploadAccountUid(settings));
@@ -1362,7 +1718,7 @@ export class RawCaptureService {
         const canAutoUploadToRiftLite = canUploadRiftLite &&
           Boolean(replay.rawCapture) &&
           rawCaptureWebReplayAutoUploadEligibleForPlatform(replay.platform, replay.rawCapture!, settings) &&
-          rawCaptureAutoUploadRetryReady(replay.rawCapture!);
+          (forceRetry || rawCaptureAutoUploadRetryReady(replay.rawCapture!));
         if (status === "too-large") {
           return false;
         }
@@ -1371,6 +1727,9 @@ export class RawCaptureService {
             retryableStatus ||
             !hasRiftLiteUpload ||
             replay.rawCapture?.processingStatus === "failed" ||
+            rawCaptureRemoteStatusCheckReady(replay.rawCapture!) ||
+            rawCaptureStaleProcessingReady(replay.rawCapture!, forceRetry) ||
+            rawCaptureReadyVisibilityNeedsReconciliation(replay.rawCapture!, settings) ||
             rawCaptureDiscordShareNeedsRetry(replay.rawCapture!, settings)
           ));
       })
@@ -1399,13 +1758,13 @@ export class RawCaptureService {
         canUploadRiftLite &&
         replay.rawCapture &&
         rawCaptureWebReplayAutoUploadEligibleForPlatform(replay.platform, replay.rawCapture, settings) &&
-        rawCaptureAutoUploadRetryReady(replay.rawCapture)
+        (forceRetry || rawCaptureAutoUploadRetryReady(replay.rawCapture))
       ) {
         try {
           await this.uploadRawCaptureToRiftLite(
             replay.id,
             rawCaptureVisibility(settings),
-            { automatic: true }
+            { automatic: true, forceRetry }
           );
           saved = await this.loadReplay(replay.id) ?? saved;
         } catch {
@@ -1421,11 +1780,14 @@ export class RawCaptureService {
       const candidateManifests = (await readRawCaptureManifests(settings))
         .filter((manifest) => !attemptedCaptureIds.has(manifest.metadata.captureSessionId))
         .filter((manifest) => rawCaptureWebReplayAutoUploadEligibleForPlatform(manifest.platform, manifest.metadata, settings))
-        .filter((manifest) => rawCaptureAutoUploadRetryReady(manifest.metadata))
+        .filter((manifest) => forceRetry || rawCaptureAutoUploadRetryReady(manifest.metadata))
         .filter((manifest) => manifest.metadata.uploadStatus !== "too-large")
         .filter((manifest) => (
           !isRiftLiteReplayV2Url(manifest.metadata.uploadUrl) ||
           manifest.metadata.processingStatus === "failed" ||
+          rawCaptureRemoteStatusCheckReady(manifest.metadata) ||
+          rawCaptureStaleProcessingReady(manifest.metadata, forceRetry) ||
+          rawCaptureReadyVisibilityNeedsReconciliation(manifest.metadata, settings) ||
           rawCaptureDiscordShareNeedsRetry(manifest.metadata, settings)
         ))
         .sort((a, b) => {
@@ -1449,7 +1811,7 @@ export class RawCaptureService {
             manifest,
             rawCaptureVisibility(settings),
             settings,
-            { automatic: true }
+            { automatic: true, forceRetry }
           );
           await this.publishManifestWithoutReplay(uploadedManifest);
           uploaded += 1;
@@ -1524,7 +1886,7 @@ export class RawCaptureService {
   async uploadRawCaptureToRiftLite(
     replayId: string,
     visibility: RawCaptureVisibility = "private",
-    options: { automatic?: boolean } = {}
+    options: { automatic?: boolean; allowIncomplete?: boolean; forceRetry?: boolean } = {}
   ): Promise<RiftLiteReplayUploadResult> {
     const settings = await this.store.getSettings();
     const replays = await this.store.getReplays();
@@ -1562,10 +1924,6 @@ export class RawCaptureService {
     if (!hubIds.length) {
       throw new Error("Select a private hub under Account > Automatically post future replay links first.");
     }
-    const accountUid = riftLiteWebReplayAutoUploadAccountUid(settings);
-    if (!accountUid) {
-      throw new Error("Verify the linked RiftLite account and enable web replay upload before sharing.");
-    }
     const replays = await this.store.getReplays();
     const replay = replays.find((item) => item.id === replayId);
     if (!replay?.rawCapture?.localPath) {
@@ -1573,6 +1931,13 @@ export class RawCaptureService {
     }
     if (replay.platform !== "atlas" && replay.platform !== "tcga") {
       throw new Error("Discord sharing is available only for Atlas and TCGA Web Replays.");
+    }
+    const replayPlatform: "atlas" | "tcga" = replay.platform;
+    const accountUid = replayPlatform === "tcga"
+      ? riftLiteTcgaWebReplayAutoUploadAccountUid(settings)
+      : riftLiteWebReplayAutoUploadAccountUid(settings);
+    if (!accountUid) {
+      throw new Error(`Verify the linked RiftLite account and enable ${replayPlatform === "tcga" ? "TCGA" : "Atlas"} web replay upload before sharing.`);
     }
 
     let manifest = await this.manifestForReplay(replay, settings);
@@ -1585,26 +1950,30 @@ export class RawCaptureService {
       throw new Error("The web replay is not ready to share yet.");
     }
 
-    const replayAuth = await this.canonicalReplayAuth(settings, manifest.metadata, false, replay.platform);
-    await this.assertRiftLiteReplayUploadAccountCurrent(replayAuth.settings, manifest.metadata, false, replay.platform);
-    manifest = {
-      ...manifest,
-      updatedAt: new Date().toISOString(),
-      metadata: {
-        ...manifest.metadata,
-        visibility: "unlisted",
-        webReplayAutoUploadEligible: true,
-        webReplayAutoUploadAccountUid: accountUid,
-        webReplayDiscordShareEligible: true,
-        webReplayDiscordShareAccountUid: accountUid,
-        webReplayDiscordShareHubIds: [...hubIds],
-        discordShareStatus: "pending",
-        discordSharedHubIds: undefined,
-        discordShareError: undefined
-      }
-    };
-    await writeRawCaptureManifest(manifest);
-    const shared = await this.sharePersistedReplayToDiscord(manifest, remoteReplayId, replayAuth.idToken);
+    const shared = await this.withCaptureTask(manifest.metadata.captureSessionId, async () => {
+      const persisted = await readRawCaptureManifest(manifest.indexPath);
+      manifest = persisted?.metadata.captureSessionId === manifest.metadata.captureSessionId ? persisted : manifest;
+      const replayAuth = await this.canonicalReplayAuth(settings, manifest.metadata, false, replayPlatform);
+      await this.assertRiftLiteReplayUploadAccountCurrent(replayAuth.settings, manifest.metadata, false, replayPlatform);
+      manifest = {
+        ...manifest,
+        updatedAt: new Date().toISOString(),
+        metadata: {
+          ...manifest.metadata,
+          visibility: "unlisted",
+          webReplayAutoUploadEligible: true,
+          webReplayAutoUploadAccountUid: accountUid,
+          webReplayDiscordShareEligible: true,
+          webReplayDiscordShareAccountUid: accountUid,
+          webReplayDiscordShareHubIds: [...hubIds],
+          discordShareStatus: "pending",
+          discordSharedHubIds: undefined,
+          discordShareError: undefined
+        }
+      };
+      await writeRawCaptureManifest(manifest);
+      return this.sharePersistedReplayToDiscord(manifest, remoteReplayId, replayAuth.idToken);
+    });
     await this.saveReplayRawCapture(replay, shared.metadata);
     return {
       replayId: remoteReplayId,
@@ -1673,7 +2042,8 @@ export class RawCaptureService {
     session: ActiveRawCaptureSession,
     explicitIdentity: RawCaptureFinishIdentity,
     replay: ReplayRecord | undefined,
-    settings: UserSettings
+    settings: UserSettings,
+    options: { recoveredFromJournalAt?: string } = {}
   ): Promise<PersistedRawCaptureManifest> {
     const match = explicitIdentity.match ?? rawCaptureMatchSummaryFromDraft(replay?.matchSnapshot);
     const persistedAt = new Date().toISOString();
@@ -1710,10 +2080,13 @@ export class RawCaptureService {
       matchIds: session.matchIds.slice(),
       uploadStatus: session.capped ? "too-large" : "not-uploaded",
       processingStatus: session.capped ? "failed" : "pending",
+      deliveryStage: session.capped ? "failed" : webReplayAutoUploadEligible ? "queued" : "captured",
+      attemptCount: 0,
       captureCompletedAt: persistedAt,
       resultStatus: rawCaptureMatchSummaryResolved(match) ? "resolved" : "pending",
       resultFinalizedAt: rawCaptureMatchSummaryResolved(match) ? persistedAt : undefined,
       processingUpdatedAt: persistedAt,
+      partialWarnings: options.recoveredFromJournalAt ? [RAW_CAPTURE_RECOVERY_WARNING] : undefined,
       error: session.lastError || undefined,
       localPath,
       visibility: webReplayDiscordShareEligible ? "unlisted" : rawCaptureVisibility(settings),
@@ -1741,6 +2114,7 @@ export class RawCaptureService {
       localPath,
       indexPath,
       requiresLocalReplayParent: Boolean(replay),
+      recoveredFromJournalAt: options.recoveredFromJournalAt,
       localReplayId: replay?.id || explicitIdentity.localReplayId,
       localMatchId: replay?.matchId || explicitIdentity.localMatchId,
       title,
@@ -1908,9 +2282,94 @@ export class RawCaptureService {
     manifest: PersistedRawCaptureManifest,
     visibility: RawCaptureVisibility,
     settings: UserSettings,
-    options: { automatic?: boolean } = {}
+    options: { automatic?: boolean; allowIncomplete?: boolean; forceRetry?: boolean } = {}
+  ): Promise<PersistedRawCaptureManifest> {
+    return this.withCaptureTask(manifest.metadata.captureSessionId, async () => {
+      const persisted = await readRawCaptureManifest(manifest.indexPath);
+      const current = persisted?.metadata.captureSessionId === manifest.metadata.captureSessionId
+        ? persisted
+        : manifest;
+      return this.uploadPersistedCaptureToRiftLiteUnlocked(current, visibility, settings, options);
+    });
+  }
+
+  private async uploadPersistedCaptureToRiftLiteUnlocked(
+    manifest: PersistedRawCaptureManifest,
+    visibility: RawCaptureVisibility,
+    settings: UserSettings,
+    options: { automatic?: boolean; allowIncomplete?: boolean; forceRetry?: boolean } = {}
   ): Promise<PersistedRawCaptureManifest> {
     await this.assertActiveManifestParent(manifest);
+    if (manifest.metadata.uploadId && manifest.metadata.processingStatus === "ready") {
+      return this.finalizeReadyRemoteReplay(
+        manifest,
+        visibility,
+        settings,
+        options.automatic === true
+      );
+    }
+    if (
+      manifest.metadata.uploadId &&
+      manifest.metadata.processingStatus !== "ready" &&
+      (
+        manifest.metadata.uploadStatus === "uploaded" ||
+        Boolean(manifest.metadata.statusEndpoint) ||
+        ["completing", "processing", "paused"].includes(manifest.metadata.deliveryStage || "")
+      )
+    ) {
+      const completionRetryWasReady = manifest.metadata.deliveryStage === "completing" &&
+        rawCaptureAutoUploadRetryReady(manifest.metadata);
+      try {
+        manifest = await this.reconcileRemoteReplayStatus(manifest, settings, options.automatic === true);
+      } catch (error) {
+        await this.saveManifestUploadFailure(manifest, error);
+        throw error;
+      }
+      if (manifest.metadata.processingStatus === "ready") {
+        return this.finalizeReadyRemoteReplay(
+          manifest,
+          visibility,
+          settings,
+          options.automatic === true
+        );
+      }
+      const remoteNeedsSource = manifest.metadata.processingStatus === "uploading" ||
+        ["initializing", "uploading"].includes(manifest.metadata.deliveryStage || "");
+      const remoteNeedsCompletion = manifest.metadata.deliveryStage === "completing";
+      const remoteRetryableFailure = manifest.metadata.processingStatus === "failed" &&
+        Boolean(manifest.metadata.nextRetryAt);
+      if (!remoteNeedsSource && !remoteNeedsCompletion && !remoteRetryableFailure) {
+        return manifest;
+      }
+      if (
+        options.automatic === true &&
+        options.forceRetry !== true &&
+        (
+          (remoteNeedsCompletion && !completionRetryWasReady) ||
+          (!remoteNeedsCompletion && remoteRetryableFailure)
+        ) &&
+        !rawCaptureAutoUploadRetryReady(manifest.metadata)
+      ) {
+        return manifest;
+      }
+      if (remoteNeedsCompletion) {
+        try {
+          return await this.retryRemoteReplayCompletion(
+            manifest,
+            visibility,
+            settings,
+            options
+          );
+        } catch (error) {
+          const durable = await readRawCaptureManifest(manifest.indexPath);
+          if (durable?.metadata.processingStatus === "ready") {
+            return durable;
+          }
+          await this.saveManifestUploadFailure(manifest, error);
+          throw error;
+        }
+      }
+    }
     if (
       options.automatic === true &&
       rawCaptureDiscordShareEligible(manifest.metadata, settings)
@@ -1971,6 +2430,9 @@ export class RawCaptureService {
         visibility,
         processingStatus: "uploading",
         processingUpdatedAt: uploadAttemptAt,
+        deliveryStage: "authenticating",
+        attemptCount: Math.max(0, manifest.metadata.attemptCount ?? 0) + 1,
+        nextRetryAt: undefined,
         checksumSha256: sha256,
         compressedBytes: bytes,
         lastUploadAttemptAt: uploadAttemptAt,
@@ -1979,6 +2441,7 @@ export class RawCaptureService {
     };
     await this.assertActiveManifestParent(uploading);
     await writeRawCaptureManifest(uploading);
+    let operationManifest = uploading;
 
     try {
       if (options.automatic === true) {
@@ -2001,6 +2464,20 @@ export class RawCaptureService {
         manifest.platform
       );
       await this.assertActiveManifestParent(uploading);
+      const assertUploadStillAuthorized = async () => {
+        await this.assertRiftLiteReplayUploadAccountCurrent(
+          authenticatedSettings,
+          uploading.metadata,
+          options.automatic === true,
+          manifest.platform
+        );
+        await this.assertActiveManifestParent(uploading);
+      };
+      await writeRawCaptureManifest({
+        ...uploading,
+        updatedAt: new Date().toISOString(),
+        metadata: { ...uploading.metadata, deliveryStage: "initializing" }
+      });
       const initResponse = await fetchRiftLiteReplayV2WithRetry(RIFTLITE_REPLAY_V2_INIT_ENDPOINT, {
         method: "POST",
         headers: {
@@ -2021,8 +2498,8 @@ export class RawCaptureService {
           messageCount: manifest.metadata.messageCount,
           capturedAt: rawCaptureUploadCapturedAt(manifest)
         })
-      }, () => this.assertActiveManifestParent(uploading));
-      const initText = await initResponse.text();
+      }, assertUploadStillAuthorized);
+      const initText = await readReplayResponseText(initResponse, "RiftLite replay init");
       await this.assertActiveManifestParent(uploading);
       const initBody = parseJsonObject(initText);
       if (!initResponse.ok) {
@@ -2033,7 +2510,33 @@ export class RawCaptureService {
       if (!replayId) {
         throw new Error("RiftLite replay init succeeded without a replay ID.");
       }
+      const statusEndpoint = riftLiteReplayStatusEndpoint(
+        readStringDeep(initBody, ["statusEndpoint"]),
+        replayId
+      );
+      const initPlayerPath = readStringDeep(initBody, ["playerPath"])
+        || `/replays/${encodeURIComponent(replayId)}`;
       let serverVisibility = rawCaptureVisibilityFromValue(initReplay?.visibility);
+      const uploadRequired = initBody?.uploadRequired === true;
+      // Persist the server recovery key before any visibility, raw-source, or
+      // completion request. A crash or timeout after init can then reconcile
+      // the exact remote shell instead of creating an opaque new attempt.
+      operationManifest = {
+        ...uploading,
+        updatedAt: new Date().toISOString(),
+        metadata: {
+          ...uploading.metadata,
+          uploadId: replayId,
+          uploadUrl: riftLiteReplayPlayerUrl(initPlayerPath, replayId),
+          statusEndpoint,
+          visibility: serverVisibility ?? visibility,
+          processingStatus: uploadRequired ? "uploading" : "processing",
+          processingUpdatedAt: new Date().toISOString(),
+          deliveryStage: uploadRequired ? "uploading" : "completing"
+        }
+      };
+      await this.assertActiveManifestParent(operationManifest);
+      await writeRawCaptureManifest(operationManifest);
       if (serverVisibility !== visibility) {
         await this.assertRiftLiteReplayUploadAccountCurrent(authenticatedSettings, uploading.metadata, options.automatic === true, manifest.platform);
         await this.assertActiveManifestParent(uploading);
@@ -2041,16 +2544,32 @@ export class RawCaptureService {
           replayId,
           visibility,
           idToken,
-          () => this.assertActiveManifestParent(uploading)
+          assertUploadStillAuthorized
         );
         await this.assertActiveManifestParent(uploading);
+        operationManifest = {
+          ...operationManifest,
+          updatedAt: new Date().toISOString(),
+          metadata: { ...operationManifest.metadata, visibility: serverVisibility }
+        };
+        await writeRawCaptureManifest(operationManifest);
       }
-      const uploadRequired = initBody?.uploadRequired === true;
       if (uploadRequired) {
         const upload = readObject(initBody?.upload);
         const uploadEndpoint = riftLiteReplayV2Endpoint(readStringDeep(upload, ["endpoint", "url"]));
         await this.assertRiftLiteReplayUploadAccountCurrent(authenticatedSettings, uploading.metadata, options.automatic === true, manifest.platform);
         await this.assertActiveManifestParent(uploading);
+        operationManifest = {
+          ...operationManifest,
+          updatedAt: new Date().toISOString(),
+          metadata: {
+            ...operationManifest.metadata,
+            processingStatus: "uploading",
+            processingUpdatedAt: new Date().toISOString(),
+            deliveryStage: "uploading"
+          }
+        };
+        await writeRawCaptureManifest(operationManifest);
         const uploadResponse = await fetchRiftLiteReplayV2WithRetry(uploadEndpoint, {
           method: "PUT",
           headers: {
@@ -2060,9 +2579,9 @@ export class RawCaptureService {
             "X-Replay-Bytes": String(bytes)
           },
           body: gzipped as unknown as BodyInit
-        }, () => this.assertActiveManifestParent(uploading));
+        }, assertUploadStillAuthorized);
         if (!uploadResponse.ok) {
-          const uploadText = await uploadResponse.text();
+          const uploadText = await readReplayResponseText(uploadResponse, "RiftLite replay raw upload");
           throw replayV2ApiError("raw upload", uploadResponse, parseJsonObject(uploadText), uploadText);
         }
         await this.assertActiveManifestParent(uploading);
@@ -2071,13 +2590,92 @@ export class RawCaptureService {
       const completeEndpoint = riftLiteReplayV2Endpoint(readStringDeep(initBody, ["completeEndpoint"]));
       await this.assertRiftLiteReplayUploadAccountCurrent(authenticatedSettings, uploading.metadata, options.automatic === true, manifest.platform);
       await this.assertActiveManifestParent(uploading);
-      const completeResponse = await fetchRiftLiteReplayV2WithRetry(completeEndpoint, {
+      operationManifest = {
+        ...operationManifest,
+        updatedAt: new Date().toISOString(),
+        metadata: {
+          ...operationManifest.metadata,
+          uploadStatus: "uploaded",
+          uploadedAt: operationManifest.metadata.uploadedAt || new Date().toISOString(),
+          processingStatus: "processing",
+          processingUpdatedAt: new Date().toISOString(),
+          deliveryStage: "completing"
+        }
+      };
+      await writeRawCaptureManifest(operationManifest);
+      let allowIncompleteUsed = options.allowIncomplete === true;
+      const completeRequest = (allowIncomplete: boolean) => fetchRiftLiteReplayV2WithRetry(completeEndpoint, {
         method: "POST",
-        headers: { "Authorization": `Bearer ${idToken}` }
-      }, () => this.assertActiveManifestParent(uploading));
-      const completeText = await completeResponse.text();
-      await this.assertActiveManifestParent(uploading);
-      const completeBody = parseJsonObject(completeText);
+        headers: {
+          "Authorization": `Bearer ${idToken}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(allowIncomplete ? { allowIncomplete: true } : {})
+      }, assertUploadStillAuthorized);
+      let completeResponse = await completeRequest(allowIncompleteUsed);
+      let completeText = await readReplayResponseText(completeResponse, "RiftLite replay complete");
+      await assertUploadStillAuthorized();
+      let completeBody = parseJsonObject(completeText);
+      if (!completeResponse.ok && !allowIncompleteUsed) {
+        const initialCompleteError = replayV2ApiError("complete", completeResponse, completeBody, completeText);
+        if (replayV2MissingOpeningMulligan(completeBody, initialCompleteError.message)) {
+          // The server still performs every essential capture validation. This
+          // narrow second request only accepts an absent opening mulligan and
+          // causes the published replay to retain its incomplete warning.
+          await this.assertRiftLiteReplayUploadAccountCurrent(
+            authenticatedSettings,
+            uploading.metadata,
+            options.automatic === true,
+            manifest.platform
+          );
+          await this.assertActiveManifestParent(uploading);
+          allowIncompleteUsed = true;
+          completeResponse = await completeRequest(true);
+          completeText = await readReplayResponseText(completeResponse, "RiftLite incomplete replay complete");
+          await assertUploadStillAuthorized();
+          completeBody = parseJsonObject(completeText);
+        }
+      }
+      if (completeResponse.status === 425) {
+        const processingError = replayV2ApiError("complete", completeResponse, completeBody, completeText);
+        const processingRetryAt = new Date(
+          Date.now() + Math.max(0, processingError.retryAfterMs ?? replayRetryAfterMs(completeResponse) ?? 5_000)
+        ).toISOString();
+        operationManifest = {
+          ...operationManifest,
+          updatedAt: new Date().toISOString(),
+          metadata: {
+            ...operationManifest.metadata,
+            uploadStatus: "uploaded",
+            processingStatus: "processing",
+            processingUpdatedAt: new Date().toISOString(),
+            deliveryStage: "processing",
+            nextRetryAt: processingRetryAt,
+            lastHttpStatus: processingError.status,
+            lastErrorCode: processingError.code,
+            lastErrorClass: processingError.errorClass,
+            error: undefined
+          }
+        };
+        await writeRawCaptureManifest(operationManifest);
+        let reconciled = await this.reconcileRemoteReplayStatus(
+          operationManifest,
+          authenticatedSettings,
+          options.automatic === true
+        );
+        if (reconciled.metadata.processingStatus === "ready") {
+          return this.finalizeReadyRemoteReplay(
+            reconciled,
+            visibility,
+            authenticatedSettings,
+            options.automatic === true,
+            replayAuth
+          );
+        }
+        if (reconciled.metadata.processingStatus !== "failed") {
+          return reconciled;
+        }
+      }
       if (!completeResponse.ok) {
         throw replayV2ApiError("complete", completeResponse, completeBody, completeText);
       }
@@ -2090,65 +2688,432 @@ export class RawCaptureService {
           replayId,
           visibility,
           idToken,
-          () => this.assertActiveManifestParent(uploading)
+          assertUploadStillAuthorized
         );
-        await this.assertActiveManifestParent(uploading);
+        await assertUploadStillAuthorized();
       } else {
         serverVisibility = completedVisibility;
       }
       const status = normalizeRawCaptureProcessingStatus(readStringDeep(completeReplay, ["status"]));
+      const completedStatusEndpoint = riftLiteReplayStatusEndpoint(
+        readStringDeep(completeBody, ["statusEndpoint"]) || statusEndpoint,
+        replayId
+      );
       const playerPath = readStringDeep(completeBody, ["playerPath"])
         || readStringDeep(initBody, ["playerPath"])
         || `/replays/${encodeURIComponent(replayId)}`;
       const uploadUrl = riftLiteReplayPlayerUrl(playerPath, replayId);
-      let completed: PersistedRawCaptureManifest = {
-        ...uploading,
+      const serverWarnings = readReplayWarnings(completeBody);
+      const incompleteFallbackWarning = "Opening mulligan was not captured; this replay starts at the first available game state.";
+      const completed: PersistedRawCaptureManifest = {
+        ...operationManifest,
         updatedAt: new Date().toISOString(),
         metadata: {
-          ...uploading.metadata,
+          ...operationManifest.metadata,
           uploadStatus: "uploaded",
           uploadUrl,
           uploadId: replayId,
+          statusEndpoint: completedStatusEndpoint,
           uploadedAt: new Date().toISOString(),
           processingStatus: status,
           processingUpdatedAt: new Date().toISOString(),
           visibility: serverVisibility,
+          deliveryStage: status === "ready" ? "ready" : status === "failed" ? "failed" : "processing",
+          remoteStatusCheckedAt: new Date().toISOString(),
+          nextRetryAt: status === "processing" || status === "uploading" || status === "pending"
+            ? new Date(Date.now() + 5_000).toISOString()
+            : undefined,
+          lastErrorCode: undefined,
+          lastErrorClass: undefined,
+          lastHttpStatus: undefined,
+          partialWarnings: serverWarnings.length
+            ? serverWarnings
+            : allowIncompleteUsed
+              ? [incompleteFallbackWarning]
+              : operationManifest.metadata.partialWarnings,
           error: undefined
         }
       };
       await this.assertActiveManifestParent(completed);
       await writeRawCaptureManifest(completed);
-      if (options.automatic === true) {
-        const currentDiscordSettings = await this.store.getSettings();
-        if (rawCaptureDiscordShareEligible(completed.metadata, currentDiscordSettings)) {
-          await this.assertActiveManifestParent(completed);
-          completed = await this.sharePersistedReplayToDiscord(
-            completed,
-            replayId,
-            idToken,
-            async () => {
-              const current = await this.store.getSettings();
-              if (!rawCaptureDiscordShareEligible(completed.metadata, current)) {
-                throw new RawCaptureDiscordConsentChangedError();
-              }
-              await this.assertRiftLiteReplayUploadAccountCurrent(
-                authenticatedSettings,
-                completed.metadata,
-                true,
-                manifest.platform
-              );
-            }
-          );
-        }
+      if (completed.metadata.processingStatus === "ready") {
+        return this.finalizeReadyRemoteReplay(
+          completed,
+          visibility,
+          authenticatedSettings,
+          options.automatic === true,
+          replayAuth
+        );
       }
       return completed;
     } catch (error) {
       if (!(error instanceof RawCaptureParentInactiveError)) {
-        await this.assertActiveManifestParent(uploading);
-        await this.saveManifestUploadFailure(uploading, error instanceof Error ? error.message : "RiftLite replay upload failed.");
+        await this.assertActiveManifestParent(operationManifest);
+        const durable = await readRawCaptureManifest(operationManifest.indexPath);
+        if (durable?.metadata.processingStatus === "ready") {
+          return durable;
+        }
+        await this.saveManifestUploadFailure(operationManifest, error);
       }
       throw error;
     }
+  }
+
+  private async retryRemoteReplayCompletion(
+    manifest: PersistedRawCaptureManifest,
+    requestedVisibility: RawCaptureVisibility,
+    settings: UserSettings,
+    options: { automatic?: boolean; allowIncomplete?: boolean; forceRetry?: boolean }
+  ): Promise<PersistedRawCaptureManifest> {
+    const replayId = manifest.metadata.uploadId || "";
+    if (!replayId) return manifest;
+    const automatic = options.automatic === true;
+    const replayAuth = await this.canonicalReplayAuth(settings, manifest.metadata, automatic, manifest.platform);
+    const assertStillAuthorized = async () => {
+      await this.assertRiftLiteReplayUploadAccountCurrent(
+        replayAuth.settings,
+        manifest.metadata,
+        automatic,
+        manifest.platform
+      );
+      await this.assertActiveManifestParent(manifest);
+    };
+    await assertStillAuthorized();
+    const completeEndpoint = riftLiteReplayV2Endpoint(
+      `/api/v2/replays/${encodeURIComponent(replayId)}/complete`
+    );
+    const completeRequest = (allowIncomplete: boolean) => fetchRiftLiteReplayV2WithRetry(
+      completeEndpoint,
+      {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${replayAuth.idToken}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(allowIncomplete ? { allowIncomplete: true } : {})
+      },
+      assertStillAuthorized
+    );
+    let allowIncompleteUsed = options.allowIncomplete === true;
+    let response = await completeRequest(allowIncompleteUsed);
+    let text = await readReplayResponseText(response, "RiftLite replay completion retry");
+    await assertStillAuthorized();
+    let body = parseJsonObject(text);
+    if (!response.ok && !allowIncompleteUsed) {
+      const initialError = replayV2ApiError("complete", response, body, text);
+      if (replayV2MissingOpeningMulligan(body, initialError.message)) {
+        allowIncompleteUsed = true;
+        response = await completeRequest(true);
+        text = await readReplayResponseText(response, "RiftLite incomplete replay completion retry");
+        await assertStillAuthorized();
+        body = parseJsonObject(text);
+      }
+    }
+    if (response.status === 425) {
+      const processingError = replayV2ApiError("complete", response, body, text);
+      const updatedAt = new Date().toISOString();
+      manifest = {
+        ...manifest,
+        updatedAt,
+        metadata: {
+          ...manifest.metadata,
+          uploadStatus: "uploaded",
+          processingStatus: "processing",
+          processingUpdatedAt: updatedAt,
+          deliveryStage: "processing",
+          nextRetryAt: new Date(
+            Date.now() + Math.max(0, processingError.retryAfterMs ?? replayRetryAfterMs(response) ?? 5_000)
+          ).toISOString(),
+          lastHttpStatus: processingError.status,
+          lastErrorCode: processingError.code,
+          lastErrorClass: processingError.errorClass,
+          error: undefined
+        }
+      };
+      await writeRawCaptureManifest(manifest);
+      const reconciled = await this.reconcileRemoteReplayStatus(manifest, replayAuth.settings, automatic);
+      return reconciled.metadata.processingStatus === "ready"
+        ? this.finalizeReadyRemoteReplay(
+            reconciled,
+            requestedVisibility,
+            replayAuth.settings,
+            automatic,
+            replayAuth
+          )
+        : reconciled;
+    }
+    if (!response.ok) {
+      throw replayV2ApiError("complete", response, body, text);
+    }
+    const remoteReplay = readObject(body?.replay);
+    const status = normalizeRawCaptureProcessingStatus(readStringDeep(remoteReplay, ["status"]));
+    const statusEndpoint = riftLiteReplayStatusEndpoint(
+      readStringDeep(body, ["statusEndpoint"]) || manifest.metadata.statusEndpoint,
+      replayId
+    );
+    const uploadUrl = riftLiteReplayPlayerUrl(
+      readStringDeep(body, ["playerPath"]) || manifest.metadata.uploadUrl || "",
+      replayId
+    );
+    const warnings = readReplayWarnings(body);
+    const updatedAt = new Date().toISOString();
+    const incompleteFallbackWarning = "Opening mulligan was not captured; this replay starts at the first available game state.";
+    manifest = {
+      ...manifest,
+      updatedAt,
+      metadata: {
+        ...manifest.metadata,
+        uploadStatus: "uploaded",
+        uploadId: replayId,
+        uploadUrl,
+        statusEndpoint,
+        uploadedAt: manifest.metadata.uploadedAt || updatedAt,
+        processingStatus: status,
+        processingUpdatedAt: updatedAt,
+        visibility: rawCaptureVisibilityFromValue(remoteReplay?.visibility) ?? manifest.metadata.visibility,
+        deliveryStage: status === "ready" ? "ready" : status === "failed" ? "failed" : "processing",
+        remoteStatusCheckedAt: updatedAt,
+        nextRetryAt: ["pending", "uploading", "processing"].includes(status)
+          ? new Date(Date.now() + 5_000).toISOString()
+          : undefined,
+        lastHttpStatus: undefined,
+        lastErrorCode: undefined,
+        lastErrorClass: undefined,
+        partialWarnings: warnings.length
+          ? warnings
+          : allowIncompleteUsed
+            ? [incompleteFallbackWarning]
+            : manifest.metadata.partialWarnings,
+        error: undefined
+      }
+    };
+    await this.assertActiveManifestParent(manifest);
+    await writeRawCaptureManifest(manifest);
+    return status === "ready"
+      ? this.finalizeReadyRemoteReplay(
+          manifest,
+          requestedVisibility,
+          replayAuth.settings,
+          automatic,
+          replayAuth
+        )
+      : manifest;
+  }
+
+  private async finalizeReadyRemoteReplay(
+    manifest: PersistedRawCaptureManifest,
+    requestedVisibility: RawCaptureVisibility,
+    settings: UserSettings,
+    automatic: boolean,
+    authenticatedReplayAuth?: { idToken: string; settings: UserSettings }
+  ): Promise<PersistedRawCaptureManifest> {
+    const replayId = manifest.metadata.uploadId || "";
+    if (!replayId || manifest.metadata.processingStatus !== "ready") {
+      return manifest;
+    }
+    const currentSettings = automatic ? await this.store.getSettings() : settings;
+    const discordEligible = automatic && rawCaptureDiscordShareEligible(manifest.metadata, currentSettings);
+    const targetVisibility: RawCaptureVisibility = automatic
+      ? rawCaptureAutomaticTargetVisibility(manifest.metadata, currentSettings)
+      : requestedVisibility;
+    let replayAuth: { idToken: string; settings: UserSettings } | null = authenticatedReplayAuth ?? null;
+    const authenticate = async () => {
+      if (!replayAuth) {
+        replayAuth = await this.canonicalReplayAuth(
+          currentSettings,
+          manifest.metadata,
+          automatic,
+          manifest.platform
+        );
+      }
+      await this.assertRiftLiteReplayUploadAccountCurrent(
+        replayAuth.settings,
+        manifest.metadata,
+        automatic,
+        manifest.platform
+      );
+      await this.assertActiveManifestParent(manifest);
+      return replayAuth;
+    };
+
+    if (normalizeRawCaptureVisibility(manifest.metadata.visibility) !== targetVisibility) {
+      let confirmedVisibility: RawCaptureVisibility;
+      try {
+        const authenticated = await authenticate();
+        confirmedVisibility = await updateRiftLiteReplayV2Visibility(
+          replayId,
+          targetVisibility,
+          authenticated.idToken,
+          async () => { await authenticate(); }
+        );
+      } catch (error) {
+        await this.saveReadyVisibilityReconciliationFailure(manifest, targetVisibility, error);
+        throw error;
+      }
+      const updatedAt = new Date().toISOString();
+      manifest = {
+        ...manifest,
+        updatedAt,
+        metadata: {
+          ...manifest.metadata,
+          uploadStatus: "uploaded",
+          processingStatus: "ready",
+          processingUpdatedAt: updatedAt,
+          deliveryStage: "ready",
+          visibility: confirmedVisibility,
+          nextRetryAt: undefined,
+          lastHttpStatus: undefined,
+          lastErrorCode: undefined,
+          lastErrorClass: undefined,
+          error: undefined
+        }
+      };
+      await this.assertActiveManifestParent(manifest);
+      await writeRawCaptureManifest(manifest);
+    }
+
+    if (discordEligible && rawCaptureDiscordShareNeedsRetry(manifest.metadata, currentSettings)) {
+      const authenticated = await authenticate();
+      manifest = await this.sharePersistedReplayToDiscord(
+        manifest,
+        replayId,
+        authenticated.idToken,
+        async () => {
+          const latest = await this.store.getSettings();
+          if (!rawCaptureDiscordShareEligible(manifest.metadata, latest)) {
+            throw new RawCaptureDiscordConsentChangedError();
+          }
+          await this.assertRiftLiteReplayUploadAccountCurrent(
+            authenticated.settings,
+            manifest.metadata,
+            true,
+            manifest.platform
+          );
+        }
+      );
+    }
+    return manifest;
+  }
+
+  private async saveReadyVisibilityReconciliationFailure(
+    manifest: PersistedRawCaptureManifest,
+    targetVisibility: RawCaptureVisibility,
+    error: unknown
+  ): Promise<PersistedRawCaptureManifest> {
+    const failure = replayDeliveryFailureDetails(error);
+    const attemptCount = Math.max(1, manifest.metadata.attemptCount ?? 1);
+    const retryDelayMs = failure.retryable
+      ? failure.retryAfterMs !== undefined
+        ? Math.min(RAW_CAPTURE_MAX_AUTO_UPLOAD_RETRY_DELAY_MS, Math.max(0, failure.retryAfterMs))
+        : Math.min(
+            RAW_CAPTURE_MAX_AUTO_UPLOAD_RETRY_DELAY_MS,
+            RAW_CAPTURE_AUTO_UPLOAD_RETRY_COOLDOWN_MS * (2 ** Math.min(4, attemptCount - 1))
+          )
+      : undefined;
+    const updatedAt = new Date().toISOString();
+    const pending: PersistedRawCaptureManifest = {
+      ...manifest,
+      updatedAt,
+      metadata: {
+        ...manifest.metadata,
+        uploadStatus: "uploaded",
+        processingStatus: "ready",
+        processingUpdatedAt: updatedAt,
+        deliveryStage: "paused",
+        attemptCount,
+        nextRetryAt: retryDelayMs !== undefined
+          ? new Date(Date.now() + retryDelayMs).toISOString()
+          : undefined,
+        lastHttpStatus: failure.status,
+        lastErrorCode: failure.code,
+        lastErrorClass: failure.errorClass,
+        error: truncateForUi(
+          `Replay is online, but RiftLite could not set its visibility to ${targetVisibility}: ${failure.message}`,
+          300
+        )
+      }
+    };
+    await this.assertActiveManifestParent(pending);
+    await writeRawCaptureManifest(pending);
+    return pending;
+  }
+
+  private async reconcileRemoteReplayStatus(
+    manifest: PersistedRawCaptureManifest,
+    settings: UserSettings,
+    automatic: boolean
+  ): Promise<PersistedRawCaptureManifest> {
+    const replayId = manifest.metadata.uploadId || "";
+    if (!replayId) {
+      return manifest;
+    }
+    const statusEndpoint = riftLiteReplayStatusEndpoint(manifest.metadata.statusEndpoint, replayId);
+    const replayAuth = await this.canonicalReplayAuth(settings, manifest.metadata, automatic, manifest.platform);
+    await this.assertRiftLiteReplayUploadAccountCurrent(
+      replayAuth.settings,
+      manifest.metadata,
+      automatic,
+      manifest.platform
+    );
+    await this.assertActiveManifestParent(manifest);
+    const response = await fetchRiftLiteReplayV2WithRetry(statusEndpoint, {
+      method: "GET",
+      headers: { "Authorization": `Bearer ${replayAuth.idToken}` }
+    }, async () => {
+      await this.assertRiftLiteReplayUploadAccountCurrent(
+        replayAuth.settings,
+        manifest.metadata,
+        automatic,
+        manifest.platform
+      );
+      await this.assertActiveManifestParent(manifest);
+    });
+    const text = await readReplayResponseText(response, "RiftLite replay status");
+    const body = parseJsonObject(text);
+    if (!response.ok) {
+      throw replayV2ApiError("status", response, body, text);
+    }
+    const remote = readReplayRemoteStatus(body, replayId, statusEndpoint);
+    const checkedAt = new Date().toISOString();
+    const uploadUrl = riftLiteReplayPlayerUrl(
+      remote.playerPath || manifest.metadata.uploadUrl || "",
+      replayId
+    );
+    const nextRetryAt = remote.retryable
+      ? new Date(Date.now() + Math.max(0, remote.retryAfterMs ?? 5_000)).toISOString()
+      : ["pending", "processing", "uploading"].includes(remote.processingStatus)
+        ? new Date(Date.now() + 5_000).toISOString()
+        : undefined;
+    const updated: PersistedRawCaptureManifest = {
+      ...manifest,
+      updatedAt: checkedAt,
+      metadata: {
+        ...manifest.metadata,
+        uploadStatus: remote.processingStatus === "uploading"
+          ? manifest.metadata.uploadStatus
+          : "uploaded",
+        uploadId: replayId,
+        uploadUrl,
+        statusEndpoint: remote.statusEndpoint || statusEndpoint,
+        uploadedAt: manifest.metadata.uploadedAt || (
+          remote.processingStatus === "uploading" ? undefined : checkedAt
+        ),
+        processingStatus: remote.processingStatus,
+        processingUpdatedAt: checkedAt,
+        visibility: remote.visibility ?? manifest.metadata.visibility,
+        deliveryStage: remote.deliveryStage,
+        remoteStatusCheckedAt: checkedAt,
+        nextRetryAt,
+        lastHttpStatus: remote.processingStatus === "failed" ? manifest.metadata.lastHttpStatus : undefined,
+        lastErrorCode: remote.failureCode,
+        lastErrorClass: remote.failureClass,
+        partialWarnings: remote.warnings.length ? remote.warnings : manifest.metadata.partialWarnings,
+        error: remote.failureMessage
+      }
+    };
+    await this.assertActiveManifestParent(updated);
+    await writeRawCaptureManifest(updated);
+    return updated;
   }
 
   private async assertRiftLiteReplayUploadAccountCurrent(
@@ -2183,7 +3148,11 @@ export class RawCaptureService {
     if (!expectedAccountUid || !settings.firebaseRefreshToken || !hasVerifiedRiftLiteAccount(settings)) {
       throw new Error("Verify or reconnect your RiftLite account from Account before uploading to RiftLite Web Replay. The local replay capture is safe.");
     }
-    const idToken = await this.linkedAccountIdTokenProvider(expectedAccountUid);
+    const idToken = await withReplayDeadline(
+      Promise.resolve(this.linkedAccountIdTokenProvider(expectedAccountUid)),
+      RIFTLITE_REPLAY_AUTH_TIMEOUT_MS,
+      "RiftLite replay authentication"
+    );
     if (!idToken) {
       throw new Error("Could not refresh the canonical RiftLite account token.");
     }
@@ -2325,7 +3294,7 @@ export class RawCaptureService {
         await this.assertActiveManifestParent(manifest);
         await beforeAttempt?.();
       });
-      const text = await response.text();
+      const text = await readReplayResponseText(response, "Discord replay share");
       await this.assertActiveManifestParent(manifest);
       const body = parseJsonObject(text);
       if (!response.ok) {
@@ -2383,21 +3352,399 @@ export class RawCaptureService {
 
   private async saveManifestUploadFailure(
     manifest: PersistedRawCaptureManifest,
-    error: string
+    error: unknown
   ): Promise<PersistedRawCaptureManifest> {
+    const failure = replayDeliveryFailureDetails(error);
+    const attemptCount = Math.max(1, manifest.metadata.attemptCount ?? 1);
+    const retryDelayMs = failure.retryable
+      ? failure.retryAfterMs !== undefined
+        ? Math.min(RAW_CAPTURE_MAX_AUTO_UPLOAD_RETRY_DELAY_MS, Math.max(0, failure.retryAfterMs))
+        : Math.min(
+            RAW_CAPTURE_MAX_AUTO_UPLOAD_RETRY_DELAY_MS,
+            RAW_CAPTURE_AUTO_UPLOAD_RETRY_COOLDOWN_MS * (2 ** Math.min(4, attemptCount - 1))
+          )
+      : undefined;
+    const remoteSourceExists = Boolean(
+      manifest.metadata.uploadId &&
+      (
+        manifest.metadata.uploadStatus === "uploaded" ||
+        ["completing", "processing", "ready"].includes(manifest.metadata.deliveryStage || "")
+      )
+    );
     const failed: PersistedRawCaptureManifest = {
       ...manifest,
       updatedAt: new Date().toISOString(),
       metadata: {
         ...manifest.metadata,
-        uploadStatus: "failed",
+        uploadStatus: remoteSourceExists ? "uploaded" : "failed",
         processingStatus: "failed",
         processingUpdatedAt: new Date().toISOString(),
-        error: truncateForUi(error, 300)
+        deliveryStage: failure.retryable ? "paused" : "failed",
+        attemptCount,
+        nextRetryAt: retryDelayMs !== undefined
+          ? new Date(Date.now() + retryDelayMs).toISOString()
+          : undefined,
+        lastHttpStatus: failure.status,
+        lastErrorCode: failure.code,
+        lastErrorClass: failure.errorClass,
+        error: truncateForUi(failure.message, 300)
       }
     };
     await writeRawCaptureManifest(failed);
     return failed;
+  }
+
+  private ensureInterruptedCaptureRecovery(settings: UserSettings): Promise<void> {
+    if (!this.journalRecoveryPromise) {
+      this.journalRecoveryPromise = this.recoverInterruptedCaptureJournals(settings).catch((error) => {
+        this.lastAssociationError = `RiftLite could not recover an interrupted Web Replay capture: ${
+          truncateForUi(error instanceof Error ? error.message : String(error), 220)
+        }`;
+        // A temporarily unavailable replay folder must not disable recovery
+        // for the rest of this desktop process.
+        this.journalRecoveryPromise = null;
+      });
+    }
+    return this.journalRecoveryPromise;
+  }
+
+  private async recoverInterruptedCaptureJournals(settings: UserSettings): Promise<void> {
+    const directory = await rawCaptureDirectory(settings);
+    const entries = await readdir(directory, { withFileTypes: true }).catch(() => []);
+    const journalPaths = entries
+      .filter((entry) => entry.isFile() && entry.name.endsWith(RAW_CAPTURE_JOURNAL_SUFFIX))
+      .map((entry) => join(directory, entry.name))
+      .filter((journalPath) => !this.ownedJournalPaths.has(journalPath));
+    if (!journalPaths.length) {
+      return;
+    }
+    const existingCaptureSessionIds = new Set(
+      (await readRawCaptureManifests(settings)).map((manifest) => manifest.metadata.captureSessionId)
+    );
+    const recoveredJournals = await Promise.all(journalPaths.map(async (journalPath) => ({
+      journalPath,
+      journal: await this.readActiveCaptureJournal(journalPath)
+    })));
+    const journalCaptureSessionIds = new Set(recoveredJournals
+      .map(({ journal }) => journal?.session.captureSessionId)
+      .filter((captureSessionId): captureSessionId is string => Boolean(captureSessionId)));
+    const incorporatedJournalIds = new Set<string>();
+    for (const { journal } of recoveredJournals) {
+      for (const sourceCaptureSessionId of journal?.session.sourceCaptureSessionIds ?? []) {
+        if (
+          sourceCaptureSessionId !== journal?.session.captureSessionId &&
+          journalCaptureSessionIds.has(sourceCaptureSessionId)
+        ) {
+          incorporatedJournalIds.add(sourceCaptureSessionId);
+        }
+      }
+    }
+    let transientRecoveryFailure: Error | null = null;
+    for (const { journalPath, journal } of recoveredJournals) {
+      if (!journal) {
+        this.lastAssociationError = "RiftLite found an interrupted Web Replay journal, but it was incomplete or invalid and was left in place for diagnostics.";
+        continue;
+      }
+      if (incorporatedJournalIds.has(journal.session.captureSessionId)) {
+        await unlink(journalPath).catch(() => undefined);
+        continue;
+      }
+      if (existingCaptureSessionIds.has(journal.session.captureSessionId)) {
+        await unlink(journalPath).catch(() => undefined);
+        continue;
+      }
+      const recoveredAt = Date.now();
+      journal.session.boundaries.push({ at: journal.session.lastSeenAt, reason: "desktop-restart-recovery" });
+      journal.session.diagnostics.push({
+        ts: recoveredAt,
+        severity: "warn",
+        code: "recovered_after_unexpected_shutdown",
+        message: RAW_CAPTURE_RECOVERY_WARNING
+      });
+      try {
+        const recoveredAtIso = new Date(recoveredAt).toISOString();
+        const manifest = await this.persistSession(journal.session, {
+          platform: "atlas",
+          title: "Recovered Atlas capture",
+          completedAt: recoveredAtIso
+        }, undefined, settings, { recoveredFromJournalAt: recoveredAtIso });
+        existingCaptureSessionIds.add(manifest.metadata.captureSessionId);
+        await unlink(journalPath).catch(() => undefined);
+        this.lastAssociationError = "";
+      } catch (error) {
+        transientRecoveryFailure = error instanceof Error ? error : new Error(String(error));
+        this.lastAssociationError = `RiftLite kept an interrupted Web Replay journal for a later recovery attempt: ${
+          truncateForUi(transientRecoveryFailure.message, 220)
+        }`;
+      }
+    }
+    if (transientRecoveryFailure) {
+      throw transientRecoveryFailure;
+    }
+  }
+
+  private async readActiveCaptureJournal(journalPath: string): Promise<PersistedRawCaptureJournal | null> {
+    const journalStat = await stat(journalPath).catch(() => null);
+    if (!journalStat || !journalStat.isFile() || journalStat.size <= 0 || journalStat.size > RAW_CAPTURE_MAX_JOURNAL_BYTES) {
+      return null;
+    }
+    const contents = await readFile(journalPath, "utf8").catch(() => "");
+    let session: ActiveRawCaptureSession | null = null;
+    for (const line of contents.split(/\r?\n/)) {
+      if (!line.trim()) continue;
+      const entry = parseRawCaptureJournalEntry(line);
+      if (!entry) {
+        // A process can stop between writing the final bytes of one JSONL row.
+        // Earlier complete rows remain a valid recovery checkpoint.
+        continue;
+      }
+      if (entry.kind === "checkpoint") {
+        session = normalizeRecoveredRawCaptureSession(entry.session, entry.captureSessionId);
+        continue;
+      }
+      if (session && session.captureSessionId !== entry.captureSessionId) {
+        continue;
+      }
+      session = this.applyRecoveredJournalFrame(session, entry);
+    }
+    if (!session?.frames.length) {
+      return null;
+    }
+    session.frames = session.frames.slice(0, RAW_CAPTURE_MAX_MESSAGES).map((frame, index) => ({
+      ...frame,
+      seq: index
+    }));
+    session.nextSeq = session.frames.length;
+    session.byteSize = session.frames.reduce((total, frame) => total + Buffer.byteLength(frame.raw, "utf8"), 0);
+    session.capped = session.capped ||
+      session.frames.length >= RAW_CAPTURE_MAX_MESSAGES ||
+      session.byteSize >= RAW_CAPTURE_MAX_BYTES;
+    return { path: journalPath, session };
+  }
+
+  private applyRecoveredJournalFrame(
+    current: ActiveRawCaptureSession | null,
+    entry: RawCaptureJournalFrameEntry
+  ): ActiveRawCaptureSession {
+    const sourceFrame = entry.frame;
+    const ts = sourceFrame.ts;
+    const socketId = sourceFrame.socketId || "ws-1";
+    const session = current ?? {
+      captureSessionId: entry.captureSessionId,
+      platform: "atlas",
+      requestUrl: entry.requestUrl,
+      frames: [],
+      sockets: {},
+      boundaries: [{ at: ts, reason: "session-start" }],
+      diagnostics: [],
+      nextSeq: 0,
+      byteSize: 0,
+      capped: false,
+      firstSeenAt: ts,
+      lastSeenAt: ts,
+      roomCode: "",
+      roomCodes: [],
+      seriesId: "",
+      matchId: "",
+      matchIds: [],
+      replayId: "",
+      replayIds: [],
+      sourceCaptureSessionIds: [],
+      matchFormat: "",
+      webReplayAutoUploadAccountUid: entry.consent.webReplayAutoUploadAccountUid,
+      webReplayDiscordShareAccountUid: entry.consent.webReplayDiscordShareAccountUid,
+      webReplayDiscordShareHubIds: [...entry.consent.webReplayDiscordShareHubIds],
+      provisional: entry.consent.provisional,
+      lastPhase: "",
+      phases: [],
+      games: [],
+      keptCount: 0,
+      droppedCount: 0,
+      droppedBytes: 0,
+      lastFrameType: "",
+      lastError: ""
+    };
+    if (session.frames.length >= RAW_CAPTURE_MAX_MESSAGES || session.byteSize >= RAW_CAPTURE_MAX_BYTES) {
+      session.capped = true;
+      return session;
+    }
+    const details = extractRawCaptureDetails(sourceFrame.raw);
+    if (
+      details.roomCode &&
+      session.roomCode &&
+      !identityEquals(details.roomCode, session.roomCode) &&
+      !session.roomCodes.some((roomCode) => identityEquals(roomCode, details.roomCode))
+    ) {
+      session.boundaries.push({
+        at: ts,
+        reason: `room-code-change:${session.roomCode}->${details.roomCode}`
+      });
+    }
+    if (!session.sockets[socketId]) {
+      session.sockets[socketId] = {
+        socketId,
+        url: entry.requestUrl,
+        openedAt: ts,
+        closedAt: null,
+        close: { code: null, reason: "", wasClean: null }
+      };
+    }
+    this.updateLifecycle(session, details, ts, session.nextSeq);
+    const frame: RawCaptureFrame = {
+      ...sourceFrame,
+      seq: session.nextSeq,
+      socketId,
+      type: sourceFrame.type || details.type || null,
+      drop: Boolean(sourceFrame.drop),
+      dropReason: sourceFrame.dropReason || null
+    };
+    session.nextSeq += 1;
+    session.frames.push(frame);
+    const frameBytes = Buffer.byteLength(frame.raw, "utf8");
+    session.byteSize += frameBytes;
+    session.lastSeenAt = Math.max(session.lastSeenAt, ts);
+    session.requestUrl = entry.requestUrl || session.requestUrl;
+    session.roomCode = details.roomCode || session.roomCode;
+    rememberRoomCode(session, details.roomCode);
+    session.seriesId = details.seriesId || session.seriesId;
+    session.matchId = details.matchId || session.matchId;
+    rememberRawCaptureIdentity(session.matchIds, details.matchId);
+    session.replayId = details.replayId || session.replayId;
+    rememberRawCaptureIdentity(session.replayIds, details.replayId);
+    rememberRawCaptureIdentity(session.sourceCaptureSessionIds, details.captureSessionId);
+    session.matchFormat = details.matchFormat || session.matchFormat;
+    session.webReplayAutoUploadAccountUid = entry.consent.webReplayAutoUploadAccountUid;
+    session.webReplayDiscordShareAccountUid = entry.consent.webReplayDiscordShareAccountUid;
+    session.webReplayDiscordShareHubIds = [...entry.consent.webReplayDiscordShareHubIds];
+    session.provisional = entry.consent.provisional;
+    session.lastPhase = details.phase || session.lastPhase;
+    session.lastGameNumber = details.gameNumber ?? session.lastGameNumber;
+    session.lastFrameType = details.type || session.lastFrameType;
+    if (frame.drop) {
+      session.droppedCount += 1;
+      session.droppedBytes += frameBytes;
+    } else {
+      session.keptCount += 1;
+    }
+    return session;
+  }
+
+  private async checkpointActiveSession(
+    session: ActiveRawCaptureSession,
+    frame: RawCaptureFrame,
+    settings: UserSettings
+  ): Promise<void> {
+    try {
+      let journalPath = this.journalPathsBySessionId.get(session.captureSessionId);
+      const expectedJournalPath = join(
+        rawCaptureDirectoryPath(settings),
+        `${session.captureSessionId}${RAW_CAPTURE_JOURNAL_SUFFIX}`
+      );
+      if (journalPath && resolve(journalPath) !== resolve(expectedJournalPath)) {
+        await this.closeSessionJournalHandle(session.captureSessionId);
+        this.ownedJournalPaths.delete(journalPath);
+        this.journalCleanupPaths.add(journalPath);
+        journalPath = undefined;
+        this.journalRewriteSessionIds.add(session.captureSessionId);
+      }
+      if (!journalPath) {
+        journalPath = join(await rawCaptureDirectory(settings), `${session.captureSessionId}${RAW_CAPTURE_JOURNAL_SUFFIX}`);
+        this.journalPathsBySessionId.set(session.captureSessionId, journalPath);
+      }
+      this.ownedJournalPaths.add(journalPath);
+      if (this.journalRewriteSessionIds.delete(session.captureSessionId)) {
+        await this.closeSessionJournalHandle(session.captureSessionId);
+        const checkpoint: RawCaptureJournalCheckpointEntry = {
+          schema: "riftlite-active-raw-capture-journal",
+          version: 1,
+          kind: "checkpoint",
+          captureSessionId: session.captureSessionId,
+          session
+        };
+        await writeUtf8FileAtomically(journalPath, `${JSON.stringify(checkpoint)}\n`);
+        const cleanupPaths = [...this.journalCleanupPaths];
+        this.journalCleanupPaths.clear();
+        await Promise.all(cleanupPaths.map(async (cleanupPath) => {
+          const cleanupSessionId = [...this.journalPathsBySessionId.entries()]
+            .find(([, candidatePath]) => candidatePath === cleanupPath)?.[0];
+          if (cleanupSessionId) {
+            await this.closeSessionJournalHandle(cleanupSessionId);
+            this.journalPathsBySessionId.delete(cleanupSessionId);
+          }
+          this.ownedJournalPaths.delete(cleanupPath);
+          await unlink(cleanupPath).catch(() => undefined);
+        }));
+        return;
+      }
+      const entry: RawCaptureJournalFrameEntry = {
+        schema: "riftlite-active-raw-capture-journal",
+        version: 1,
+        kind: "frame",
+        captureSessionId: session.captureSessionId,
+        requestUrl: session.requestUrl,
+        frame,
+        consent: {
+          webReplayAutoUploadAccountUid: session.webReplayAutoUploadAccountUid,
+          webReplayDiscordShareAccountUid: session.webReplayDiscordShareAccountUid,
+          webReplayDiscordShareHubIds: [...session.webReplayDiscordShareHubIds],
+          provisional: session.provisional
+        }
+      };
+      this.cancelSessionJournalHandleClose(session.captureSessionId);
+      let journalHandle = this.journalHandlesBySessionId.get(session.captureSessionId);
+      if (!journalHandle) {
+        journalHandle = await open(journalPath, "a");
+        this.journalHandlesBySessionId.set(session.captureSessionId, journalHandle);
+      }
+      await journalHandle.appendFile(`${JSON.stringify(entry)}\n`, "utf8");
+      this.scheduleSessionJournalHandleClose(session.captureSessionId);
+    } catch {
+      await this.closeSessionJournalHandle(session.captureSessionId);
+      if (!session.diagnostics.some((diagnostic) => diagnostic.code === "active_journal_write_failed")) {
+        session.diagnostics.push({
+          ts: Date.now(),
+          severity: "warn",
+          code: "active_journal_write_failed",
+          message: "RiftLite could not checkpoint this active Web Replay capture to disk. In-memory capture continued."
+        });
+      }
+    }
+  }
+
+  private async discardSessionJournal(captureSessionId: string): Promise<void> {
+    const journalPath = this.journalPathsBySessionId.get(captureSessionId);
+    await this.closeSessionJournalHandle(captureSessionId);
+    this.journalPathsBySessionId.delete(captureSessionId);
+    this.journalRewriteSessionIds.delete(captureSessionId);
+    if (!journalPath) {
+      return;
+    }
+    this.ownedJournalPaths.delete(journalPath);
+    this.journalCleanupPaths.delete(journalPath);
+    await unlink(journalPath).catch(() => undefined);
+  }
+
+  private async closeSessionJournalHandle(captureSessionId: string): Promise<void> {
+    this.cancelSessionJournalHandleClose(captureSessionId);
+    const journalHandle = this.journalHandlesBySessionId.get(captureSessionId);
+    this.journalHandlesBySessionId.delete(captureSessionId);
+    await journalHandle?.close().catch(() => undefined);
+  }
+
+  private scheduleSessionJournalHandleClose(captureSessionId: string): void {
+    this.cancelSessionJournalHandleClose(captureSessionId);
+    const timer = setTimeout(() => {
+      this.journalHandleCloseTimers.delete(captureSessionId);
+      void this.closeSessionJournalHandle(captureSessionId);
+    }, RAW_CAPTURE_JOURNAL_HANDLE_IDLE_MS);
+    timer.unref?.();
+    this.journalHandleCloseTimers.set(captureSessionId, timer);
+  }
+
+  private cancelSessionJournalHandleClose(captureSessionId: string): void {
+    const timer = this.journalHandleCloseTimers.get(captureSessionId);
+    if (timer) clearTimeout(timer);
+    this.journalHandleCloseTimers.delete(captureSessionId);
   }
 
   private currentSession(): ActiveRawCaptureSession | null {
@@ -2408,6 +3755,7 @@ export class RawCaptureService {
 
   private removeSession(captureSessionId: string): void {
     this.sessions.delete(captureSessionId);
+    void this.discardSessionJournal(captureSessionId);
     for (const [key, routedSessionId] of this.sessionIdByTransport) {
       if (routedSessionId === captureSessionId) {
         this.sessionIdByTransport.delete(key);
@@ -2418,6 +3766,42 @@ export class RawCaptureService {
   private clearSessions(): void {
     this.sessions.clear();
     this.sessionIdByTransport.clear();
+  }
+
+  private async clearSessionsAndJournals(): Promise<void> {
+    const captureSessionIds = [...this.sessions.keys()];
+    this.clearSessions();
+    await Promise.all(captureSessionIds.map((captureSessionId) => this.discardSessionJournal(captureSessionId)));
+    this.journalRewriteSessionIds.clear();
+    this.journalCleanupPaths.clear();
+  }
+
+  private async drainPendingFrames(): Promise<void> {
+    // Frame ingress is fire-and-forget in the Electron IPC bridge. Follow the
+    // tail until it stops changing so match finalization cannot overtake an
+    // earlier frame that was still waiting on the async settings lookup.
+    while (true) {
+      const tail = this.appendFrameTail;
+      await tail;
+      if (tail === this.appendFrameTail) {
+        return;
+      }
+    }
+  }
+
+  private async withCaptureTask<T>(captureSessionId: string, operation: () => Promise<T>): Promise<T> {
+    const key = normalizeDiagnosticCaptureSessionId(captureSessionId);
+    const previous = this.captureTaskTails.get(key) ?? Promise.resolve();
+    const result = previous.catch(() => undefined).then(operation);
+    const tail = result.then(() => undefined, () => undefined);
+    this.captureTaskTails.set(key, tail);
+    try {
+      return await result;
+    } finally {
+      if (this.captureTaskTails.get(key) === tail) {
+        this.captureTaskTails.delete(key);
+      }
+    }
   }
 
   private buildPayload(
@@ -2648,11 +4032,18 @@ export class RawCaptureService {
   }
 
   private hasActiveManifestParent(manifest: PersistedRawCaptureManifest): Promise<boolean> {
+    const localMatchId = manifest.localMatchId || manifest.identity.localMatchId;
+    if (manifest.requiresLocalReplayParent === false && manifest.recoveredFromJournalAt && !localMatchId) {
+      // Crash-recovered journals can predate the local match row. Their
+      // capture-time account consent remains authoritative, and the upload
+      // centre provides the explicit Keep local only removal action.
+      return Promise.resolve(true);
+    }
     return this.store.hasActiveRawCaptureParent(
       manifest.requiresLocalReplayParent === false
         ? undefined
         : manifest.localReplayId || manifest.identity.localReplayId,
-      manifest.localMatchId || manifest.identity.localMatchId
+      localMatchId
     );
   }
 
@@ -2871,6 +4262,255 @@ async function writeRawCaptureManifest(manifest: PersistedRawCaptureManifest): P
   await writeUtf8FileAtomically(manifest.indexPath, JSON.stringify(manifest));
 }
 
+function parseRawCaptureJournalEntry(line: string): RawCaptureJournalEntry | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(line) as unknown;
+  } catch {
+    return null;
+  }
+  const object = readObject(parsed);
+  const captureSessionId = boundedJournalString(object?.captureSessionId, 128);
+  if (
+    object?.schema !== "riftlite-active-raw-capture-journal" ||
+    object.version !== 1 ||
+    !captureSessionId
+  ) {
+    return null;
+  }
+  if (object.kind === "checkpoint") {
+    const session = readObject(object.session);
+    return session ? {
+      schema: "riftlite-active-raw-capture-journal",
+      version: 1,
+      kind: "checkpoint",
+      captureSessionId,
+      session: session as unknown as ActiveRawCaptureSession
+    } : null;
+  }
+  if (object.kind !== "frame") {
+    return null;
+  }
+  const frame = normalizeRawCaptureJournalFrame(object.frame);
+  const consent = readObject(object.consent);
+  if (!frame || !consent) {
+    return null;
+  }
+  return {
+    schema: "riftlite-active-raw-capture-journal",
+    version: 1,
+    kind: "frame",
+    captureSessionId,
+    requestUrl: boundedJournalString(object.requestUrl, 4096),
+    frame,
+    consent: {
+      webReplayAutoUploadAccountUid: boundedJournalString(consent.webReplayAutoUploadAccountUid, 256),
+      webReplayDiscordShareAccountUid: boundedJournalString(consent.webReplayDiscordShareAccountUid, 256),
+      webReplayDiscordShareHubIds: normalizedJournalStrings(consent.webReplayDiscordShareHubIds, 10, 256),
+      provisional: consent.provisional === true
+    }
+  };
+}
+
+function normalizeRawCaptureJournalFrame(value: unknown): RawCaptureFrame | null {
+  const object = readObject(value);
+  if (
+    !object ||
+    (object.dir !== "in" && object.dir !== "out") ||
+    typeof object.raw !== "string" ||
+    Buffer.byteLength(object.raw, "utf8") > 1_500_000 ||
+    !Number.isFinite(Number(object.ts)) ||
+    Math.abs(Number(object.ts)) > RAW_CAPTURE_MAX_DATE_MS
+  ) {
+    return null;
+  }
+  return {
+    seq: Number.isFinite(Number(object.seq)) ? Math.max(0, Math.trunc(Number(object.seq))) : 0,
+    ts: Number(object.ts),
+    dir: object.dir,
+    socketId: boundedJournalString(object.socketId, 256) || null,
+    type: boundedJournalString(object.type, 256) || null,
+    raw: object.raw,
+    drop: object.drop === true,
+    dropReason: boundedJournalString(object.dropReason, 256) || null
+  };
+}
+
+function normalizeRecoveredRawCaptureSession(
+  value: unknown,
+  expectedCaptureSessionId: string
+): ActiveRawCaptureSession | null {
+  const object = readObject(value);
+  const captureSessionId = boundedJournalString(object?.captureSessionId, 128);
+  if (!object || object.platform !== "atlas" || captureSessionId !== expectedCaptureSessionId) {
+    return null;
+  }
+  const sourceFrames = Array.isArray(object.frames) ? object.frames.slice(0, RAW_CAPTURE_MAX_MESSAGES) : [];
+  const frames: RawCaptureFrame[] = [];
+  let byteSize = 0;
+  for (const sourceFrame of sourceFrames) {
+    const frame = normalizeRawCaptureJournalFrame(sourceFrame);
+    if (!frame) return null;
+    const frameBytes = Buffer.byteLength(frame.raw, "utf8");
+    if (byteSize + frameBytes > RAW_CAPTURE_MAX_BYTES) break;
+    frames.push({ ...frame, seq: frames.length });
+    byteSize += frameBytes;
+  }
+  if (!frames.length) {
+    return null;
+  }
+  const firstSeenAt = normalizedJournalTimestamp(object.firstSeenAt, frames[0].ts);
+  const lastSeenAt = normalizedJournalTimestamp(object.lastSeenAt, frames.at(-1)?.ts ?? firstSeenAt);
+  const sockets: Record<string, RawCaptureSocket> = {};
+  for (const [key, candidate] of Object.entries(readObject(object.sockets) ?? {})) {
+    const socket = readObject(candidate);
+    const socketId = boundedJournalString(socket?.socketId, 256) || boundedJournalString(key, 256);
+    if (!socket || !socketId) continue;
+    const close = readObject(socket.close);
+    sockets[socketId] = {
+      socketId,
+      url: boundedJournalString(socket.url, 4096),
+      openedAt: normalizedNullableJournalTimestamp(socket.openedAt),
+      closedAt: normalizedNullableJournalTimestamp(socket.closedAt),
+      close: {
+        code: Number.isFinite(Number(close?.code)) ? Math.trunc(Number(close?.code)) : null,
+        reason: boundedJournalString(close?.reason, 512),
+        wasClean: typeof close?.wasClean === "boolean" ? close.wasClean : null
+      }
+    };
+  }
+  const phases = normalizedRecoveredPhaseSegments(object.phases);
+  const games = normalizedRecoveredGameSegments(object.games);
+  const boundaries = (Array.isArray(object.boundaries) ? object.boundaries : [])
+    .map((value) => {
+      const boundary = readObject(value);
+      const reason = boundedJournalString(boundary?.reason, 512);
+      return boundary && reason
+        ? { at: normalizedJournalTimestamp(boundary.at, firstSeenAt), reason }
+        : null;
+    })
+    .filter((value): value is { at: number; reason: string } => Boolean(value));
+  const diagnostics = (Array.isArray(object.diagnostics) ? object.diagnostics : [])
+    .slice(-200)
+    .map((value): RawCaptureDiagnostic | null => {
+      const diagnostic = readObject(value);
+      const severity = diagnostic?.severity;
+      const code = boundedJournalString(diagnostic?.code, 256);
+      const message = boundedJournalString(diagnostic?.message, 1000);
+      return diagnostic && (severity === "info" || severity === "warn" || severity === "error") && code && message
+        ? {
+            ts: normalizedJournalTimestamp(diagnostic.ts, lastSeenAt),
+            severity,
+            code,
+            message,
+            context: readObject(diagnostic.context)
+          }
+        : null;
+    })
+    .filter((value): value is RawCaptureDiagnostic => value !== null);
+  const droppedCount = frames.filter((frame) => frame.drop).length;
+  const droppedBytes = frames.reduce((total, frame) => total + (frame.drop ? Buffer.byteLength(frame.raw, "utf8") : 0), 0);
+  return {
+    captureSessionId,
+    platform: "atlas",
+    requestUrl: boundedJournalString(object.requestUrl, 4096),
+    frames,
+    sockets,
+    boundaries: boundaries.length ? boundaries : [{ at: firstSeenAt, reason: "session-start" }],
+    diagnostics,
+    nextSeq: frames.length,
+    byteSize,
+    capped: object.capped === true || frames.length >= RAW_CAPTURE_MAX_MESSAGES || byteSize >= RAW_CAPTURE_MAX_BYTES,
+    firstSeenAt,
+    lastSeenAt,
+    roomCode: boundedJournalString(object.roomCode, 512),
+    roomCodes: normalizedJournalStrings(object.roomCodes, 32, 512),
+    seriesId: boundedJournalString(object.seriesId, 512),
+    matchId: boundedJournalString(object.matchId, 512),
+    matchIds: normalizedJournalStrings(object.matchIds, 64, 512),
+    replayId: boundedJournalString(object.replayId, 512),
+    replayIds: normalizedJournalStrings(object.replayIds, 64, 512),
+    sourceCaptureSessionIds: normalizedJournalStrings(object.sourceCaptureSessionIds, 64, 512),
+    matchFormat: boundedJournalString(object.matchFormat, 64),
+    webReplayAutoUploadAccountUid: boundedJournalString(object.webReplayAutoUploadAccountUid, 256),
+    webReplayDiscordShareAccountUid: boundedJournalString(object.webReplayDiscordShareAccountUid, 256),
+    webReplayDiscordShareHubIds: normalizedJournalStrings(object.webReplayDiscordShareHubIds, 10, 256),
+    provisional: object.provisional === true,
+    continuationSessionId: boundedJournalString(object.continuationSessionId, 128) || undefined,
+    lastPhase: boundedJournalString(object.lastPhase, 256),
+    lastGameNumber: Number.isFinite(Number(object.lastGameNumber)) ? Math.trunc(Number(object.lastGameNumber)) : undefined,
+    phases,
+    games,
+    keptCount: frames.length - droppedCount,
+    droppedCount,
+    droppedBytes,
+    lastFrameType: boundedJournalString(object.lastFrameType, 256),
+    lastError: boundedJournalString(object.lastError, 1000)
+  };
+}
+
+function normalizedRecoveredPhaseSegments(value: unknown): RawCapturePhaseSegment[] {
+  return (Array.isArray(value) ? value : []).slice(-500).map((candidate) => {
+    const phase = readObject(candidate);
+    const source = readObject(phase?.source);
+    if (!phase || !source) return null;
+    const exactPhase = boundedJournalString(phase.phase, 256);
+    if (!exactPhase) return null;
+    return {
+      phase: exactPhase,
+      normalizedPhase: boundedJournalString(phase.normalizedPhase, 256) || normalizeAtlasReplayPhase(exactPhase),
+      gameNumber: Number.isFinite(Number(phase.gameNumber)) ? Math.trunc(Number(phase.gameNumber)) : null,
+      roomCode: boundedJournalString(phase.roomCode, 512) || null,
+      startedAt: normalizedJournalTimestamp(phase.startedAt, 0),
+      endedAt: normalizedJournalTimestamp(phase.endedAt, 0),
+      source: {
+        fromSeq: Math.max(0, Math.trunc(Number(source.fromSeq) || 0)),
+        toSeq: Math.max(0, Math.trunc(Number(source.toSeq) || 0))
+      }
+    } satisfies RawCapturePhaseSegment;
+  }).filter((candidate): candidate is RawCapturePhaseSegment => Boolean(candidate));
+}
+
+function normalizedRecoveredGameSegments(value: unknown): RawCaptureGameSegment[] {
+  return (Array.isArray(value) ? value : []).slice(-100).map((candidate) => {
+    const game = readObject(candidate);
+    const source = readObject(game?.source);
+    if (!game || !source || !Number.isFinite(Number(game.gameNumber))) return null;
+    return {
+      gameNumber: Math.trunc(Number(game.gameNumber)),
+      startedAt: normalizedJournalTimestamp(game.startedAt, 0),
+      endedAt: normalizedJournalTimestamp(game.endedAt, 0),
+      roomCodes: normalizedJournalStrings(game.roomCodes, 32, 512),
+      matchIds: normalizedJournalStrings(game.matchIds, 64, 512),
+      source: {
+        fromSeq: Math.max(0, Math.trunc(Number(source.fromSeq) || 0)),
+        toSeq: Math.max(0, Math.trunc(Number(source.toSeq) || 0))
+      },
+      phases: normalizedRecoveredPhaseSegments(game.phases)
+    } satisfies RawCaptureGameSegment;
+  }).filter((candidate): candidate is RawCaptureGameSegment => Boolean(candidate));
+}
+
+function normalizedJournalStrings(value: unknown, limit: number, maxLength: number): string[] {
+  if (!Array.isArray(value)) return [];
+  return Array.from(new Set(value.map((item) => boundedJournalString(item, maxLength)).filter(Boolean))).slice(0, limit);
+}
+
+function boundedJournalString(value: unknown, maxLength: number): string {
+  return typeof value === "string" ? value.slice(0, maxLength) : "";
+}
+
+function normalizedJournalTimestamp(value: unknown, fallback: number): number {
+  const candidate = Number(value);
+  return Number.isFinite(candidate) && Math.abs(candidate) <= RAW_CAPTURE_MAX_DATE_MS ? candidate : fallback;
+}
+
+function normalizedNullableJournalTimestamp(value: unknown): number | null {
+  if (value === null || value === undefined) return null;
+  const candidate = Number(value);
+  return Number.isFinite(candidate) && Math.abs(candidate) <= RAW_CAPTURE_MAX_DATE_MS ? candidate : null;
+}
+
 async function validatePreparedTcgaCapture(
   compressed: Buffer,
   prepared: PreparedTcgaWebReplayCapture
@@ -3001,6 +4641,57 @@ function hasLinkedRiftLiteReplayAccount(settings: UserSettings): boolean {
   return hasVerifiedRiftLiteAccount(settings);
 }
 
+async function withReplayDeadline<T>(
+  operation: Promise<T>,
+  timeoutMs: number,
+  label: string,
+  onTimeout?: () => void
+): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | null = null;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timeout = setTimeout(() => {
+      onTimeout?.();
+      reject(new Error(`${label} timed out after ${Math.ceil(timeoutMs / 1000)} seconds.`));
+    }, timeoutMs);
+    timeout.unref?.();
+  });
+  try {
+    return await Promise.race([operation, deadline]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
+async function fetchWithReplayDeadline(
+  endpoint: string,
+  init: RequestInit,
+  timeoutMs: number,
+  label: string
+): Promise<Response> {
+  const controller = new AbortController();
+  const upstreamSignal = init.signal;
+  const abortFromUpstream = () => controller.abort(upstreamSignal?.reason);
+  if (upstreamSignal?.aborted) {
+    abortFromUpstream();
+  } else {
+    upstreamSignal?.addEventListener("abort", abortFromUpstream, { once: true });
+  }
+  try {
+    return await withReplayDeadline(
+      fetch(endpoint, { ...init, signal: controller.signal }),
+      timeoutMs,
+      label,
+      () => controller.abort()
+    );
+  } finally {
+    upstreamSignal?.removeEventListener("abort", abortFromUpstream);
+  }
+}
+
+function readReplayResponseText(response: Response, label: string): Promise<string> {
+  return withReplayDeadline(response.text(), RIFTLITE_REPLAY_REQUEST_TIMEOUT_MS, `${label} response`);
+}
+
 async function firebaseIdTokenFromSettings(store: RiftLiteStore, expectedAccountUid: string): Promise<string> {
   const settings = await store.getSettings();
   if (!hasLinkedRiftLiteReplayAccount(settings)) {
@@ -3009,12 +4700,12 @@ async function firebaseIdTokenFromSettings(store: RiftLiteStore, expectedAccount
   if (!riftLiteAccountUidEquals(settings.accountUid, expectedAccountUid)) {
     throw new Error("The linked RiftLite account changed during replay authentication.");
   }
-  const response = await fetch(`https://securetoken.googleapis.com/v1/token?key=${FIREBASE_API_KEY}`, {
+  const response = await fetchWithReplayDeadline(`https://securetoken.googleapis.com/v1/token?key=${FIREBASE_API_KEY}`, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({ grant_type: "refresh_token", refresh_token: settings.firebaseRefreshToken })
-  });
-  const text = await response.text();
+  }, RIFTLITE_REPLAY_AUTH_TIMEOUT_MS, "RiftLite account token refresh");
+  const text = await readReplayResponseText(response, "RiftLite account token refresh");
   const payload = parseJsonObject(text);
   if (!response.ok) {
     throw new Error(`Could not refresh RiftLite account token: ${truncateForUi(text || response.statusText, 220)}`);
@@ -3031,7 +4722,7 @@ async function postLegacyRiftReplayWithRetry(endpoint: string, apiKey: string, b
   let lastError: unknown;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     try {
-      return await fetch(endpoint, {
+      return await fetchWithReplayDeadline(endpoint, {
         method: "POST",
         headers: {
           "Authorization": `Bearer ${apiKey}`,
@@ -3039,7 +4730,7 @@ async function postLegacyRiftReplayWithRetry(endpoint: string, apiKey: string, b
           "Content-Encoding": "gzip"
         },
         body: body as unknown as BodyInit
-      });
+      }, RIFTLITE_REPLAY_UPLOAD_REQUEST_TIMEOUT_MS, "RiftReplay upload");
     } catch (error) {
       lastError = error;
       if (attempt < 3) {
@@ -3058,9 +4749,18 @@ async function fetchRiftLiteReplayV2WithRetry(
   let lastError: unknown;
   const trustedEndpoint = riftLiteReplayV2Endpoint(endpoint);
   for (let attempt = 1; attempt <= 3; attempt += 1) {
+    let retryDelayMs = 250 * attempt;
     await beforeAttempt?.();
     try {
-      const response = await fetch(trustedEndpoint, { ...init, redirect: "error" });
+      const requestTimeoutMs = init.method === "PUT"
+        ? RIFTLITE_REPLAY_UPLOAD_REQUEST_TIMEOUT_MS
+        : RIFTLITE_REPLAY_REQUEST_TIMEOUT_MS;
+      const response = await fetchWithReplayDeadline(
+        trustedEndpoint,
+        { ...init, redirect: "error" },
+        requestTimeoutMs,
+        "RiftLite replay request"
+      );
       if (response.redirected) {
         throw new Error("RiftLite replay API unexpectedly redirected the request.");
       }
@@ -3070,14 +4770,21 @@ async function fetchRiftLiteReplayV2WithRetry(
       if (!isRetryableReplayV2Status(response.status) || attempt === 3) {
         return response;
       }
-      await response.arrayBuffer().catch(() => undefined);
+      retryDelayMs = replayRetryAfterMs(response) ?? retryDelayMs;
+      await withReplayDeadline(
+        response.arrayBuffer(),
+        RIFTLITE_REPLAY_REQUEST_TIMEOUT_MS,
+        "RiftLite replay retry response"
+      ).catch(() => undefined);
     } catch (error) {
       lastError = error;
       if (attempt === 3) {
         break;
       }
     }
-    await delay(250 * attempt);
+    // Long server backoffs belong in durable nextRetryAt metadata. Holding the
+    // shared desktop queue here would block every replay and a foreground Retry.
+    await delay(Math.min(RIFTLITE_REPLAY_MAX_IN_CALL_RETRY_DELAY_MS, Math.max(0, retryDelayMs)));
   }
   throw new Error(`RiftLite replay network error after 3 attempts: ${describeFetchError(lastError)}`);
 }
@@ -3097,7 +4804,7 @@ async function updateRiftLiteReplayV2Visibility(
     },
     body: JSON.stringify({ visibility })
   }, beforeAttempt);
-  const text = await response.text();
+  const text = await readReplayResponseText(response, "RiftLite replay visibility update");
   const body = parseJsonObject(text);
   if (!response.ok) {
     throw replayV2ApiError("visibility update", response, body, text);
@@ -3111,6 +4818,15 @@ async function updateRiftLiteReplayV2Visibility(
 
 function isRetryableReplayV2Status(status: number): boolean {
   return status === 408 || status === 425 || status === 429 || status >= 500;
+}
+
+function replayRetryAfterMs(response: Response): number | undefined {
+  const value = response.headers.get("retry-after")?.trim();
+  if (!value) return undefined;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? Math.max(0, timestamp - Date.now()) : undefined;
 }
 
 function riftLiteReplayV2Endpoint(value: string): string {
@@ -3145,6 +4861,115 @@ function isRiftLiteReplayV2Url(value: string | undefined): boolean {
   }
 }
 
+function riftLiteReplayStatusEndpoint(value: string | undefined, replayId: string): string {
+  const fallback = `/api/v2/replays/${encodeURIComponent(replayId)}/status`;
+  const endpoint = riftLiteReplayV2Endpoint(value || fallback);
+  const url = new URL(endpoint);
+  if (
+    url.origin !== RIFTLITE_REPLAY_ORIGIN ||
+    url.username ||
+    url.password ||
+    url.pathname !== fallback ||
+    url.search ||
+    url.hash
+  ) {
+    throw new Error("RiftLite replay API returned an untrusted status endpoint.");
+  }
+  return url.toString();
+}
+
+function readReplayWarnings(value: unknown): string[] {
+  const object = readObject(value);
+  const replay = readObject(object?.replay);
+  const candidates = [object?.warnings, replay?.warnings, object?.partialWarnings, replay?.partialWarnings];
+  const warnings: string[] = [];
+  for (const candidate of candidates) {
+    if (!Array.isArray(candidate)) continue;
+    for (const warning of candidate) {
+      const text = typeof warning === "string"
+        ? warning.trim()
+        : readStringDeep(warning, ["message", "detail", "code"]);
+      if (text && !warnings.includes(text)) warnings.push(truncateForUi(text, 300));
+    }
+  }
+  return warnings.slice(0, 12);
+}
+
+function readReplayRemoteStatus(
+  body: Record<string, unknown> | null,
+  replayId: string,
+  fallbackStatusEndpoint: string
+): ReplayRemoteStatus {
+  const replay = readObject(body?.replay) ?? body;
+  const failure = readObject(replay?.failure) ?? readObject(body?.failure) ?? readObject(body?.error);
+  const rawStatus = String(replay?.status ?? body?.status ?? "").trim().toLowerCase();
+  const rawStage = String(replay?.stage ?? body?.stage ?? "").trim().toLowerCase();
+  const rawAction = String(
+    failure?.recommendedAction ?? replay?.recommendedAction ?? body?.recommendedAction ?? ""
+  ).trim().toLowerCase();
+  let processingStatus = normalizeRawCaptureProcessingStatus(rawStatus);
+  if (/upload|source/.test(rawStage) || rawAction === "upload-source") {
+    processingStatus = "uploading";
+  } else if (/process|complete/.test(rawStage) && processingStatus === "pending") {
+    processingStatus = "processing";
+  }
+  const failureCode = readStringDeep(failure, ["code"])
+    || readStringDeep(body, ["errorCode", "failureCode"]);
+  const failureMessage = readStringDeep(failure, ["message", "detail"])
+    || (typeof body?.error === "string" ? body.error.trim() : "");
+  const suppliedClass = readStringDeep(failure, ["errorClass", "class"])
+    || readStringDeep(body, ["errorClass"]);
+  const failureClass = failureMessage || failureCode
+    ? normalizeReplayDeliveryErrorClass(suppliedClass) || (
+      ["replay_processing", "processing_superseded"].includes(failureCode)
+        ? "server"
+        : replayDeliveryErrorClass(0, failureCode, failureMessage)
+    )
+    : undefined;
+  const retryableValue = failure?.retryable ?? replay?.retryable ?? body?.retryable;
+  const retryable = typeof retryableValue === "boolean"
+    ? retryableValue
+    : processingStatus === "processing" || processingStatus === "uploading" || (
+      processingStatus === "failed" && replayDeliveryErrorRetryable(422, failureClass || "unknown", failureCode)
+    );
+  const recommendedAction = normalizeReplayRecommendedAction(rawAction)
+    || (processingStatus === "ready"
+      ? "open-replay"
+      : processingStatus === "processing" || processingStatus === "uploading"
+        ? "wait"
+        : replayDeliveryRecommendedAction(failureClass || "unknown", failureCode, retryable));
+  const retryAfterValue = Number(failure?.retryAfterMs ?? replay?.retryAfterMs ?? body?.retryAfterMs);
+  const retryAfterMs = Number.isFinite(retryAfterValue) && retryAfterValue >= 0
+    ? retryAfterValue
+    : undefined;
+  const statusEndpointValue = readStringDeep(body, ["statusEndpoint"]);
+  const visibility = rawCaptureVisibilityFromValue(replay?.visibility);
+  const retryProcessing = rawAction === "retry-processing" || /processing-required/.test(rawStage);
+  const deliveryStage: WebReplayDeliveryStage = processingStatus === "ready"
+    ? "ready"
+    : retryProcessing
+      ? "completing"
+    : processingStatus === "failed"
+      ? retryable ? "paused" : "failed"
+      : processingStatus === "uploading"
+        ? "uploading"
+        : "processing";
+  return {
+    processingStatus,
+    deliveryStage,
+    retryable,
+    recommendedAction,
+    retryAfterMs,
+    statusEndpoint: riftLiteReplayStatusEndpoint(statusEndpointValue || fallbackStatusEndpoint, replayId),
+    playerPath: readStringDeep(body, ["playerPath"]),
+    visibility: visibility ?? undefined,
+    failureMessage: failureMessage || undefined,
+    failureCode: failureCode || undefined,
+    failureClass,
+    warnings: readReplayWarnings(body)
+  };
+}
+
 function normalizeRawCaptureProcessingStatus(value: string): RawCaptureProcessingStatus {
   const status = value.trim().toLowerCase();
   if (status === "ready") return "ready";
@@ -3159,18 +4984,138 @@ function replayV2ApiError(
   response: Response,
   body: Record<string, unknown> | null,
   rawText: string
-): Error {
+): ReplayDeliveryError {
   const errorObject = readObject(body?.error);
   const message = readStringDeep(errorObject, ["message"])
     || (typeof body?.error === "string" ? body.error.trim() : "")
     || readStringDeep(body, ["message"])
     || rawText
     || response.statusText;
-  const code = readStringDeep(body, ["code"]);
+  const code = readStringDeep(errorObject, ["code"]) || readStringDeep(body, ["code"]);
+  const suppliedClass = readStringDeep(errorObject, ["errorClass"]) || readStringDeep(body, ["errorClass"]);
+  const errorClass = normalizeReplayDeliveryErrorClass(suppliedClass) || replayDeliveryErrorClass(response.status, code, message);
+  const retryableValue = errorObject?.retryable ?? body?.retryable;
+  const retryable = typeof retryableValue === "boolean"
+    ? retryableValue
+    : replayDeliveryErrorRetryable(response.status, errorClass, code);
+  const recommendedAction = normalizeReplayRecommendedAction(
+    readStringDeep(errorObject, ["recommendedAction"]) || readStringDeep(body, ["recommendedAction"])
+  ) || replayDeliveryRecommendedAction(errorClass, code, retryable);
+  const suppliedRetryAfterMs = Number(errorObject?.retryAfterMs ?? body?.retryAfterMs);
+  const retryAfterMs = Number.isFinite(suppliedRetryAfterMs) && suppliedRetryAfterMs >= 0
+    ? suppliedRetryAfterMs
+    : replayRetryAfterMs(response);
   const actionableMessage = response.status === 401 && code === "authentication_required"
     ? "Your linked RiftLite account was not accepted. Open Account, finish verification or reconnect the same account, then retry. The local replay capture is safe."
     : message;
-  return new Error(`RiftLite replay ${operation} ${response.status}: ${truncateForUi(actionableMessage, 260)}`);
+  return Object.assign(
+    new Error(`RiftLite replay ${operation} ${response.status}: ${truncateForUi(actionableMessage, 260)}`),
+    {
+      status: response.status,
+      code: code || undefined,
+      errorClass,
+      retryable,
+      recommendedAction,
+      retryAfterMs
+    }
+  );
+}
+
+function normalizeReplayDeliveryErrorClass(value: unknown): WebReplayDeliveryErrorClass | undefined {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (["network", "authentication", "server", "capture", "validation", "storage", "unknown"].includes(normalized)) {
+    return normalized as WebReplayDeliveryErrorClass;
+  }
+  if (["processing", "service", "upload", "rate-limit", "rate_limit"].includes(normalized)) return "server";
+  if (["auth", "permission", "account"].includes(normalized)) return "authentication";
+  if (["source", "incomplete", "replay-capture"].includes(normalized)) return "capture";
+  if (["request", "schema", "input"].includes(normalized)) return "validation";
+  return undefined;
+}
+
+function normalizeReplayRecommendedAction(value: unknown): WebReplayRecommendedAction | undefined {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if ([
+    "none", "wait", "retry", "link-account", "verify-account", "reconnect-account",
+    "upload-incomplete", "remove-from-queue", "open-replay"
+  ].includes(normalized)) return normalized as WebReplayRecommendedAction;
+  if (["retry-processing", "retry-later", "upload-source"].includes(normalized)) return "retry";
+  if (normalized === "check-permission") return "verify-account";
+  if (normalized === "contact-support") return "none";
+  return undefined;
+}
+
+function replayDeliveryFailureDetails(error: unknown): {
+  message: string;
+  status?: number;
+  code?: string;
+  errorClass: WebReplayDeliveryErrorClass;
+  retryable: boolean;
+  recommendedAction: WebReplayRecommendedAction;
+  retryAfterMs?: number;
+} {
+  const candidate = error instanceof Error ? error as ReplayDeliveryError : null;
+  const message = candidate?.message || String(error || "RiftLite replay upload failed.");
+  const parsedStatus = Number(message.match(/RiftLite replay \S+(?: \S+)* (\d{3}):/i)?.[1]);
+  const status = Number.isFinite(candidate?.status) ? candidate?.status
+    : Number.isFinite(parsedStatus) ? parsedStatus : undefined;
+  const code = candidate?.code;
+  const errorClass = candidate?.errorClass || (
+    /timed out|network error|fetch failed|econn|enotfound|dns/i.test(message)
+      ? "network"
+      : /auth|account|token|sign.?in|reconnect/i.test(message)
+        ? "authentication"
+        : /capture|mulligan|gameplay/i.test(message)
+          ? "capture"
+          : /enoent|file|directory|storage/i.test(message)
+            ? "storage"
+            : status
+              ? replayDeliveryErrorClass(status, code || "", message)
+              : "unknown"
+  );
+  const retryable = typeof candidate?.retryable === "boolean"
+    ? candidate.retryable
+    : status
+      ? replayDeliveryErrorRetryable(status, errorClass, code || "")
+      : errorClass === "network" || errorClass === "authentication" || errorClass === "server" || errorClass === "unknown";
+  const recommendedAction = candidate?.recommendedAction || replayDeliveryRecommendedAction(errorClass, code || "", retryable);
+  return {
+    message,
+    status,
+    code,
+    errorClass,
+    retryable,
+    recommendedAction,
+    retryAfterMs: candidate?.retryAfterMs
+  };
+}
+
+function replayDeliveryErrorClass(status: number, code: string, message: string): WebReplayDeliveryErrorClass {
+  if (status === 401 || /auth|account|token/i.test(`${code} ${message}`)) return "authentication";
+  if (status === 422 || /capture|mulligan|gameplay/i.test(`${code} ${message}`)) return "capture";
+  if (status >= 500 || status === 425 || status === 429) return "server";
+  if (status >= 400) return "validation";
+  return "unknown";
+}
+
+function replayDeliveryErrorRetryable(
+  status: number,
+  errorClass: WebReplayDeliveryErrorClass,
+  code: string
+): boolean {
+  if ([408, 425, 429].includes(status) || status >= 500) return true;
+  if (["replay_processing", "processing_superseded"].includes(code)) return true;
+  return errorClass === "network" || errorClass === "authentication" || errorClass === "server";
+}
+
+function replayDeliveryRecommendedAction(
+  errorClass: WebReplayDeliveryErrorClass,
+  code: string,
+  retryable: boolean
+): WebReplayRecommendedAction {
+  if (code === "replay_capture_missing_mulligan") return "upload-incomplete";
+  if (errorClass === "authentication") return "reconnect-account";
+  return retryable ? "retry" : "remove-from-queue";
 }
 
 function delay(ms: number): Promise<void> {
@@ -3419,27 +5364,33 @@ function riftLiteWebReplayAutoUploadEnabled(settings: UserSettings): boolean {
 }
 
 function riftLiteWebReplayAutoUploadAccountUid(settings: UserSettings): string {
+  return riftLiteWebReplayConsentedAccountUid(settings, "atlas");
+}
+
+function riftLiteWebReplayConsentedAccountUid(
+  settings: UserSettings,
+  platform: "atlas" | "tcga"
+): string {
+  const enabled = platform === "tcga"
+    ? settings.rawCapture.tcgaWebReplayAutoUploadEnabled === true
+    : settings.rawCapture.webReplayAutoUploadEnabled === true;
   const consentUid = normalizeRiftLiteAccountUid(settings.rawCapture.webReplayAutoUploadAccountUid);
+  const platformConsentUid = normalizeRiftLiteAccountUid(platform === "tcga"
+    ? settings.rawCapture.tcgaWebReplayAutoUploadAccountUid
+    : consentUid);
   const accountUid = normalizeRiftLiteAccountUid(settings.accountUid);
   return settings.rawCapture.enabled === true &&
-    settings.rawCapture.webReplayAutoUploadEnabled === true &&
-    Boolean(consentUid) &&
-    consentUid === accountUid &&
-    hasLinkedRiftLiteReplayAccount(settings)
-    ? consentUid
+    enabled &&
+    Boolean(platformConsentUid) &&
+    platformConsentUid === accountUid &&
+    Boolean(String(settings.firebaseRefreshToken ?? "").trim()) &&
+    Boolean(String(settings.accountLastVerifiedAt ?? "").trim())
+    ? platformConsentUid
     : "";
 }
 
 export function riftLiteTcgaWebReplayAutoUploadAccountUid(settings: UserSettings): string {
-  const consentUid = normalizeRiftLiteAccountUid(settings.rawCapture.tcgaWebReplayAutoUploadAccountUid);
-  const accountUid = normalizeRiftLiteAccountUid(settings.accountUid);
-  return settings.rawCapture.enabled === true &&
-    settings.rawCapture.tcgaWebReplayAutoUploadEnabled === true &&
-    Boolean(consentUid) &&
-    consentUid === accountUid &&
-    hasLinkedRiftLiteReplayAccount(settings)
-    ? consentUid
-    : "";
+  return riftLiteWebReplayConsentedAccountUid(settings, "tcga");
 }
 
 function rawCaptureWebReplayAutoUploadEligible(
@@ -3468,7 +5419,11 @@ function rawCaptureWebReplayAutoUploadEligibleForPlatform(
 }
 
 function riftLiteWebReplayDiscordShareHubIds(settings: UserSettings): string[] {
-  const accountUid = riftLiteWebReplayAutoUploadAccountUid(settings);
+  const currentAccountUid = normalizeRiftLiteAccountUid(settings.accountUid);
+  const atlasAccountUid = riftLiteWebReplayAutoUploadAccountUid(settings);
+  const tcgaAccountUid = riftLiteTcgaWebReplayAutoUploadAccountUid(settings);
+  const accountUid = [atlasAccountUid, tcgaAccountUid]
+    .find((uid) => riftLiteAccountUidEquals(uid, currentAccountUid)) || "";
   const consentUid = normalizeRiftLiteAccountUid(settings.rawCapture.webReplayDiscordShareAccountUid);
   if (
     settings.rawCapture.webReplayDiscordShareEnabled !== true ||
@@ -3501,6 +5456,25 @@ function rawCaptureDiscordShareNeedsRetry(
   settings: UserSettings
 ): boolean {
   return rawCaptureDiscordShareEligible(metadata, settings) && metadata.discordShareStatus !== "shared";
+}
+
+function rawCaptureAutomaticTargetVisibility(
+  metadata: RawCaptureReplayMetadata,
+  settings: UserSettings
+): RawCaptureVisibility {
+  return rawCaptureDiscordShareEligible(metadata, settings)
+    ? "unlisted"
+    : normalizeRawCaptureVisibility(settings.rawCapture.visibility);
+}
+
+function rawCaptureReadyVisibilityNeedsReconciliation(
+  metadata: RawCaptureReplayMetadata,
+  settings: UserSettings
+): boolean {
+  return metadata.provider === "riftlite-v2" &&
+    metadata.processingStatus === "ready" &&
+    Boolean(metadata.uploadId) &&
+    normalizeRawCaptureVisibility(metadata.visibility) !== rawCaptureAutomaticTargetVisibility(metadata, settings);
 }
 
 function normalizeRiftLiteAccountUid(value: unknown): string {
@@ -3632,14 +5606,319 @@ function rawCaptureUploadCapturedAt(manifest: PersistedRawCaptureManifest): stri
   return normalizedRawCaptureTimestamp(manifest.metadata.firstSeenAt);
 }
 
+function webReplayDiagnosticTimestamp(value: string | undefined): number {
+  const parsed = Date.parse(value ?? "");
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function webReplayDiagnosticAttemptAt(entry: WebReplayDiagnosticEntry): string {
+  return entry.metadata.lastUploadAttemptAt ||
+    entry.metadata.processingUpdatedAt ||
+    entry.metadata.uploadedAt ||
+    entry.metadata.captureCompletedAt ||
+    entry.capturedAt ||
+    "";
+}
+
+function buildWebReplayUploadLaneDiagnostics(
+  platform: "atlas" | "tcga",
+  settings: UserSettings,
+  entries: WebReplayDiagnosticEntry[]
+): WebReplayUploadLaneDiagnostics {
+  const configured = platform === "tcga"
+    ? settings.rawCapture.tcgaWebReplayAutoUploadEnabled === true
+    : settings.rawCapture.webReplayAutoUploadEnabled === true;
+  const consentUid = normalizeRiftLiteAccountUid(platform === "tcga"
+    ? settings.rawCapture.tcgaWebReplayAutoUploadAccountUid
+    : settings.rawCapture.webReplayAutoUploadAccountUid);
+  const accountUid = normalizeRiftLiteAccountUid(settings.accountUid);
+  const accountMatches = Boolean(
+    configured &&
+    accountUid &&
+    consentUid &&
+    riftLiteAccountUidEquals(consentUid, accountUid)
+  );
+  const enabled = Boolean(settings.rawCapture.enabled && accountMatches);
+  const records = entries.filter((entry) => entry.platform === platform);
+  const eligibleRecords = records.filter((entry) =>
+    entry.metadata.webReplayAutoUploadEligible === true &&
+    riftLiteAccountUidEquals(entry.metadata.webReplayAutoUploadAccountUid, consentUid)
+  );
+  const failedRecords = records.filter((entry) =>
+    entry.metadata.uploadStatus === "failed" ||
+    entry.metadata.processingStatus === "failed" ||
+    entry.metadata.deliveryStage === "paused" ||
+    Boolean(entry.metadata.error)
+  );
+  const latestError = failedRecords
+    .filter((entry) => Boolean(entry.metadata.error))
+    .sort((left, right) =>
+      webReplayDiagnosticTimestamp(webReplayDiagnosticAttemptAt(right)) -
+      webReplayDiagnosticTimestamp(webReplayDiagnosticAttemptAt(left))
+    )[0];
+  const latestAttemptAt = records
+    .map(webReplayDiagnosticAttemptAt)
+    .filter(Boolean)
+    .sort((left, right) => webReplayDiagnosticTimestamp(right) - webReplayDiagnosticTimestamp(left))[0] || "";
+  const latestUploadedAt = records
+    .map((entry) => entry.metadata.uploadedAt || "")
+    .filter(Boolean)
+    .sort((left, right) => webReplayDiagnosticTimestamp(right) - webReplayDiagnosticTimestamp(left))[0] || "";
+
+  return {
+    platform,
+    configured,
+    enabled,
+    accountMatches,
+    captured: records.length,
+    eligible: eligibleRecords.length,
+    pending: eligibleRecords.filter((entry) =>
+      (entry.metadata.uploadStatus === "not-uploaded" || entry.metadata.uploadStatus === "disabled") &&
+      entry.metadata.processingStatus !== "failed"
+    ).length,
+    inProgress: records.filter((entry) =>
+      entry.metadata.processingStatus === "uploading" || entry.metadata.processingStatus === "processing"
+    ).length,
+    uploaded: records.filter((entry) => entry.metadata.uploadStatus === "uploaded").length,
+    failed: failedRecords.length,
+    tooLarge: records.filter((entry) => entry.metadata.uploadStatus === "too-large").length,
+    latestAttemptAt,
+    latestUploadedAt,
+    lastError: latestError?.metadata.error || ""
+  };
+}
+
+function webReplayUploadFailureDiagnostics(
+  entries: WebReplayDiagnosticEntry[]
+): WebReplayUploadFailureDiagnostic[] {
+  return entries
+    .filter((entry) =>
+      entry.metadata.uploadStatus === "failed" ||
+      entry.metadata.uploadStatus === "too-large" ||
+      entry.metadata.processingStatus === "failed" ||
+      Boolean(entry.metadata.error)
+    )
+    .sort((left, right) =>
+      webReplayDiagnosticTimestamp(webReplayDiagnosticAttemptAt(right)) -
+      webReplayDiagnosticTimestamp(webReplayDiagnosticAttemptAt(left))
+    )
+    .slice(0, 6)
+    .map((entry) => ({
+      platform: entry.platform,
+      captureSessionId: entry.captureSessionId,
+      title: entry.title,
+      capturedAt: entry.capturedAt,
+      attemptedAt: webReplayDiagnosticAttemptAt(entry),
+      status: entry.metadata.uploadStatus,
+      processingStatus: entry.metadata.processingStatus,
+      error: entry.metadata.error || (entry.metadata.uploadStatus === "too-large"
+        ? "The captured replay exceeded the Web Replay upload limit."
+        : "Web replay processing failed without an additional server message."),
+      canUploadAnyway: entry.metadata.lastErrorCode === "replay_capture_missing_mulligan" ||
+        webReplayIncompleteOverrideAllowed(entry.metadata.error || ""),
+      lastHttpStatus: entry.metadata.lastHttpStatus,
+      errorCode: entry.metadata.lastErrorCode,
+      errorClass: entry.metadata.lastErrorClass,
+      recommendedAction: webReplayRecommendedAction(entry.metadata),
+      nextRetryAt: entry.metadata.nextRetryAt
+    }));
+}
+
+function buildWebReplayUploadQueue(entries: WebReplayDiagnosticEntry[]): WebReplayUploadQueueItem[] {
+  const stagePriority: Record<WebReplayDeliveryStage, number> = {
+    failed: 0,
+    paused: 1,
+    authenticating: 2,
+    initializing: 2,
+    uploading: 2,
+    completing: 2,
+    processing: 3,
+    queued: 4,
+    captured: 5,
+    ready: 6
+  };
+  return entries
+    .filter((entry) => {
+      const metadata = entry.metadata;
+      if (metadata.uploadStatus === "disabled" && metadata.webReplayAutoUploadEligible !== true) {
+        return false;
+      }
+      return metadata.webReplayAutoUploadEligible === true ||
+        Boolean(metadata.uploadId || metadata.uploadUrl || metadata.lastUploadAttemptAt || metadata.error) ||
+        metadata.uploadStatus === "uploaded" ||
+        metadata.uploadStatus === "failed" ||
+        metadata.uploadStatus === "too-large" ||
+        metadata.processingStatus === "uploading" ||
+        metadata.processingStatus === "processing" ||
+        metadata.processingStatus === "failed";
+    })
+    .map((entry): WebReplayUploadQueueItem => {
+      const stage = webReplayDeliveryStage(entry.metadata);
+      return {
+        platform: entry.platform,
+        captureSessionId: entry.captureSessionId,
+        localReplayId: entry.localReplayId,
+        title: entry.title,
+        capturedAt: entry.capturedAt,
+        stage,
+        uploadStatus: entry.metadata.uploadStatus,
+        processingStatus: entry.metadata.processingStatus,
+        visibility: normalizeRawCaptureVisibility(entry.metadata.visibility),
+        uploadUrl: isRiftLiteReplayV2Url(entry.metadata.uploadUrl) ? entry.metadata.uploadUrl : undefined,
+        locallyAvailable: Boolean(entry.localReplayId || entry.metadata.localPath),
+        attemptCount: Math.max(0, entry.metadata.attemptCount ?? (entry.metadata.lastUploadAttemptAt ? 1 : 0)),
+        nextRetryAt: entry.metadata.nextRetryAt,
+        lastAttemptAt: webReplayDiagnosticAttemptAt(entry) || undefined,
+        error: entry.metadata.error,
+        lastHttpStatus: entry.metadata.lastHttpStatus,
+        errorCode: entry.metadata.lastErrorCode,
+        errorClass: entry.metadata.lastErrorClass,
+        recommendedAction: webReplayRecommendedAction(entry.metadata),
+        canUploadAnyway: entry.metadata.lastErrorCode === "replay_capture_missing_mulligan" ||
+          webReplayIncompleteOverrideAllowed(entry.metadata.error || ""),
+        partialWarnings: entry.metadata.partialWarnings
+      };
+    })
+    .sort((left, right) => {
+      const stageDifference = stagePriority[left.stage] - stagePriority[right.stage];
+      if (stageDifference) return stageDifference;
+      return webReplayDiagnosticTimestamp(right.lastAttemptAt || right.capturedAt) -
+        webReplayDiagnosticTimestamp(left.lastAttemptAt || left.capturedAt);
+    })
+    .slice(0, 100);
+}
+
+function webReplayDeliveryStage(metadata: RawCaptureReplayMetadata): WebReplayDeliveryStage {
+  if (metadata.deliveryStage) return metadata.deliveryStage;
+  if (metadata.processingStatus === "ready") return "ready";
+  if (metadata.processingStatus === "failed" || metadata.uploadStatus === "too-large") return "failed";
+  if (metadata.processingStatus === "processing") return "processing";
+  if (metadata.processingStatus === "uploading") return "uploading";
+  if (metadata.webReplayAutoUploadEligible === true) return "queued";
+  return "captured";
+}
+
+function webReplayRecommendedAction(metadata: RawCaptureReplayMetadata): WebReplayRecommendedAction {
+  if (
+    metadata.lastErrorCode === "replay_capture_missing_mulligan" ||
+    webReplayIncompleteOverrideAllowed(metadata.error || "")
+  ) {
+    return "upload-incomplete";
+  }
+  if (metadata.lastErrorClass === "authentication") return "reconnect-account";
+  if (
+    metadata.deliveryStage === "paused" &&
+    (Boolean(metadata.nextRetryAt) || Boolean(metadata.error))
+  ) {
+    return "retry";
+  }
+  if (metadata.processingStatus === "ready" && isRiftLiteReplayV2Url(metadata.uploadUrl)) {
+    return "open-replay";
+  }
+  if (
+    metadata.deliveryStage === "completing" &&
+    metadata.processingStatus === "processing" &&
+    metadata.nextRetryAt
+  ) {
+    return "retry";
+  }
+  if (["authenticating", "initializing", "uploading", "completing", "processing"].includes(
+    webReplayDeliveryStage(metadata)
+  )) {
+    return "wait";
+  }
+  if (metadata.nextRetryAt || ["network", "server", "unknown"].includes(metadata.lastErrorClass || "")) {
+    return "retry";
+  }
+  if (metadata.processingStatus === "failed" || metadata.uploadStatus === "failed" || metadata.uploadStatus === "too-large") {
+    return "remove-from-queue";
+  }
+  return metadata.webReplayAutoUploadEligible === true ? "wait" : "none";
+}
+
+export function webReplayIncompleteOverrideAllowed(error: string): boolean {
+  const normalized = error.trim().replace(/\s+/g, " ");
+  return /^RiftLite replay complete 422: Replay capture is incomplete: The replay did not capture the opening mulligan\.$/i
+    .test(normalized);
+}
+
+function replayV2MissingOpeningMulligan(body: Record<string, unknown> | null, fallbackMessage: string): boolean {
+  const errorObject = readObject(body?.error);
+  const code = readStringDeep(errorObject, ["code"]) || readStringDeep(body, ["code"]);
+  return code === "replay_capture_missing_mulligan" || webReplayIncompleteOverrideAllowed(fallbackMessage);
+}
+
+function normalizeDiagnosticCaptureSessionId(value: string): string {
+  const normalized = typeof value === "string" ? value.trim() : "";
+  if (!normalized || normalized.length > 160 || /[\u0000-\u001f\u007f/\\]/.test(normalized)) {
+    throw new Error("The Web Replay capture identifier is invalid.");
+  }
+  return normalized;
+}
+
+function rawCaptureMetadataRemovedFromUploadQueue(
+  metadata: RawCaptureReplayMetadata
+): RawCaptureReplayMetadata {
+  const updatedAt = new Date().toISOString();
+  return {
+    ...metadata,
+    uploadStatus: "disabled",
+    uploadUrl: undefined,
+    uploadId: undefined,
+    statusEndpoint: undefined,
+    uploadedAt: undefined,
+    processingStatus: "pending",
+    processingUpdatedAt: updatedAt,
+    deliveryStage: "captured",
+    attemptCount: 0,
+    lastUploadAttemptAt: undefined,
+    nextRetryAt: undefined,
+    lastHttpStatus: undefined,
+    lastErrorCode: undefined,
+    lastErrorClass: undefined,
+    remoteStatusCheckedAt: undefined,
+    partialWarnings: undefined,
+    error: undefined,
+    webReplayAutoUploadEligible: false,
+    webReplayDiscordShareEligible: false,
+    webReplayDiscordShareHubIds: undefined,
+    discordShareStatus: undefined,
+    discordShareError: undefined
+  };
+}
+
 function rawCaptureUploadAttemptAt(metadata: RawCaptureReplayMetadata | undefined): number {
   return rawCaptureTimestamp(metadata?.lastUploadAttemptAt) ?? 0;
 }
 
 function rawCaptureAutoUploadRetryReady(metadata: RawCaptureReplayMetadata): boolean {
+  const nextRetryAt = rawCaptureTimestamp(metadata.nextRetryAt);
+  if (nextRetryAt !== null) {
+    return Date.now() >= nextRetryAt;
+  }
+  if (["capture", "validation", "storage"].includes(metadata.lastErrorClass || "")) {
+    return false;
+  }
   const lastAttemptAt = rawCaptureTimestamp(metadata.lastUploadAttemptAt);
   return lastAttemptAt === null ||
     Date.now() - lastAttemptAt >= RAW_CAPTURE_AUTO_UPLOAD_RETRY_COOLDOWN_MS;
+}
+
+function rawCaptureRemoteStatusCheckReady(metadata: RawCaptureReplayMetadata): boolean {
+  if (!metadata.uploadId || !["pending", "uploading", "processing"].includes(metadata.processingStatus || "")) {
+    return false;
+  }
+  const nextRetryAt = rawCaptureTimestamp(metadata.nextRetryAt);
+  return nextRetryAt !== null && Date.now() >= nextRetryAt;
+}
+
+function rawCaptureStaleProcessingReady(metadata: RawCaptureReplayMetadata, forceRetry: boolean): boolean {
+  if (!metadata.processingStatus || !["uploading", "processing", "pending"].includes(metadata.processingStatus)) {
+    return false;
+  }
+  if (forceRetry) return true;
+  const updatedAt = rawCaptureTimestamp(metadata.processingUpdatedAt) ?? rawCaptureTimestamp(metadata.lastUploadAttemptAt);
+  return updatedAt !== null && Date.now() - updatedAt >= RAW_CAPTURE_STALE_PROCESSING_MS;
 }
 
 function rawCaptureMatchSummaryResolved(summary: RawCaptureMatchSummary | undefined): boolean {
@@ -3875,10 +6154,14 @@ function extractUploadId(body: Record<string, unknown> | null, uploadUrl: string
 }
 
 async function rawCaptureDirectory(settings: UserSettings): Promise<string> {
-  const base = settings.replayDirectory || join(app.getPath("documents"), "RiftLite", "Replay Bundles");
-  const directory = join(base, "Raw Capture");
+  const directory = rawCaptureDirectoryPath(settings);
   await mkdir(directory, { recursive: true });
   return directory;
+}
+
+function rawCaptureDirectoryPath(settings: UserSettings): string {
+  const base = settings.replayDirectory || join(app.getPath("documents"), "RiftLite", "Replay Bundles");
+  return join(base, "Raw Capture");
 }
 
 function safeFileComponent(value: string): string {

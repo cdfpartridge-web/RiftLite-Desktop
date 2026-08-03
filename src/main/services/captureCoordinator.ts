@@ -97,6 +97,7 @@ type CaptureFinalizeIdentity = RawCaptureFinishIdentity & {
 
 interface RecentAtlasDraftPublication {
   publishedAtMs: number;
+  roomCode: string;
   opponentName: string;
   myChampion: string;
   opponentChampion: string;
@@ -259,10 +260,12 @@ export class CaptureCoordinator {
       this.emitHealth(true);
       return;
     }
-    const ignoreFinalizedAtlasResultEcho = await this.resolvePendingAtlasReviewBeforeEvent(
+    const pendingReviewPublished = await this.resolvePendingAtlasReviewBeforeEvent(
       trackedEvent,
       settings
     );
+    const ignoreFinalizedAtlasResultEcho = pendingReviewPublished ||
+      this.isRecentAtlasDraftPublicationEcho(trackedEvent);
     void this.diagnostics.record(compactCaptureEvent(trackedEvent)).catch(() => undefined);
     const currentCount = this.health.eventCount + 1;
     if (ignoreFinalizedAtlasResultEcho) {
@@ -289,6 +292,14 @@ export class CaptureCoordinator {
       };
       this.emitHealth(false);
       return;
+    }
+    if (
+      trackedEvent.platform === "atlas" &&
+      trackedEvent.kind === "match-start" &&
+      !readPayloadString(trackedEvent.payload.atlasResultKind) &&
+      !readPayloadString(trackedEvent.payload.endText)
+    ) {
+      this.recentAtlasDraftPublications.delete("atlas");
     }
     if (this.shouldIgnoreFalseTcgaResultEnd(trackedEvent)) {
       this.health = {
@@ -680,6 +691,7 @@ export class CaptureCoordinator {
     const publishedAtMs = Date.parse(event.capturedAt);
     this.recentAtlasDraftPublications.set("atlas", {
       publishedAtMs: Number.isFinite(publishedAtMs) ? publishedAtMs : Date.now(),
+      roomCode: normalizeCaptureNameKey(readPayloadString(event.payload.roomCode)),
       opponentName: normalizeCaptureNameKey(draft.opponentName),
       myChampion: normalizeCaptureNameKey(draft.myChampion),
       opponentChampion: normalizeCaptureNameKey(draft.opponentChampion),
@@ -697,6 +709,22 @@ export class CaptureCoordinator {
     if (resultKind !== "match-terminal" && !/match complete/i.test(endText)) {
       return false;
     }
+    return this.isRecentAtlasDraftPublicationEcho(event, draft);
+  }
+
+  private isRecentAtlasDraftPublicationEcho(event: CaptureEvent, draft?: MatchDraft): boolean {
+    if (event.platform !== "atlas" && draft?.platform !== "atlas") {
+      return false;
+    }
+    const resultKind = readPayloadString(event.payload.atlasResultKind);
+    const endText = readPayloadString(event.payload.endText);
+    const isResultScreen = resultKind === "game-result" ||
+      resultKind === "match-terminal" ||
+      isAtlasConfirmWinnerText(event) ||
+      /match complete/i.test(endText);
+    if (!isResultScreen) {
+      return false;
+    }
     const recent = this.recentAtlasDraftPublications.get("atlas");
     if (!recent || recent.gameCount < 2) {
       return false;
@@ -706,9 +734,13 @@ export class CaptureCoordinator {
     if (currentAtMs - recent.publishedAtMs > RECENT_ATLAS_DRAFT_PUBLICATION_TTL_MS) {
       return false;
     }
-    const opponentName = normalizeCaptureNameKey(draft.opponentName || readPayloadString(event.payload.opponentName));
-    const myChampion = normalizeCaptureNameKey(draft.myChampion || readPayloadString(event.payload.myChampion));
-    const opponentChampion = normalizeCaptureNameKey(draft.opponentChampion || readPayloadString(event.payload.opponentChampion));
+    const roomCode = normalizeCaptureNameKey(readPayloadString(event.payload.roomCode));
+    if (recent.roomCode && roomCode && recent.roomCode !== roomCode) {
+      return false;
+    }
+    const opponentName = normalizeCaptureNameKey(draft?.opponentName || readPayloadString(event.payload.opponentName));
+    const myChampion = normalizeCaptureNameKey(draft?.myChampion || readPayloadString(event.payload.myChampion));
+    const opponentChampion = normalizeCaptureNameKey(draft?.opponentChampion || readPayloadString(event.payload.opponentChampion));
     const sameOpponent = !recent.opponentName || !opponentName || recent.opponentName === opponentName;
     const sameMyChampion = !recent.myChampion || !myChampion || recent.myChampion === myChampion;
     const sameOpponentChampion = !recent.opponentChampion || !opponentChampion || recent.opponentChampion === opponentChampion;
@@ -2517,6 +2549,36 @@ function uniqueCaptureIdentityValues(values: string[]): string[] {
 function compactPayload(payload: Record<string, unknown> = {}): Record<string, unknown> {
   const keepKeys = [
     "reason",
+    "routeKind",
+    "readyReason",
+    "readyState",
+    "visibility",
+    "focused",
+    "interactiveCount",
+    "gameSurfaceCount",
+    "visibleTextLength",
+    "bodyTextLength",
+    "lobbyActionCount",
+    "authMarkerCount",
+    "gameMarkerCount",
+    "errorCode",
+    "errorDescription",
+    "loadDurationMs",
+    "resourceOrigin",
+    "resourcePath",
+    "resourceType",
+    "statusCode",
+    "surface",
+    "targetOrigin",
+    "trigger",
+    "state",
+    "checkCount",
+    "failedCheckCount",
+    "warningCount",
+    "failedAuthCookieCount",
+    "removedAuthCookieCount",
+    "processReason",
+    "exitCode",
     "active",
     "format",
     "atlasResultKind",
@@ -2633,6 +2695,15 @@ function compactPayload(payload: Record<string, unknown> = {}): Record<string, u
   }
   if (Array.isArray(payload.games)) {
     next.games = payload.games.slice(0, 3).map(compactValue);
+  }
+  if (Array.isArray(payload.cleared)) {
+    next.cleared = payload.cleared.slice(0, 30).map(compactValue);
+  }
+  if (Array.isArray(payload.preserved)) {
+    next.preserved = payload.preserved.slice(0, 30).map(compactValue);
+  }
+  if (Array.isArray(payload.checks)) {
+    next.checks = payload.checks.slice(0, 8).map(compactValue);
   }
   return next;
 }

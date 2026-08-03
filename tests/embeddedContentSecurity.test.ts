@@ -99,12 +99,15 @@ describe("embedded content security", () => {
 
     expect(isAllowedGamePopupNavigation(atlas, "about:blank")).toBe(true);
     expect(isAllowedGamePopupNavigation(atlas, "https://accounts.google.com/o/oauth2/v2/auth")).toBe(true);
+    expect(isAllowedGamePopupNavigation(atlas, "https://accounts.riftatlas.com/v1/oauth_callback")).toBe(true);
     expect(isAllowedGamePopupNavigation(atlas, "https://clerk.riftatlas.com/v1/oauth_callback")).toBe(true);
     expect(isAllowedGamePopupNavigation(atlas, "https://play.riftatlas.com/sign-in/sso-callback")).toBe(true);
     expect(isAllowedGamePopupNavigation(atlas, "https://attacker.example/phish")).toBe(false);
     expect(isAllowedGamePopupNavigation(atlas, "https://accounts.google.com:8443/phish")).toBe(false);
+    expect(isAllowedGamePopupNavigation(atlas, "https://accounts.riftatlas.com:8443/v1/oauth_callback")).toBe(false);
 
     expect(isAllowedGamePopupNavigation(tcga, "https://tcg-arena-62f15.firebaseapp.com/__/auth/handler")).toBe(true);
+    expect(isAllowedGamePopupNavigation(tcga, "https://accounts.riftatlas.com/v1/oauth_callback")).toBe(false);
     expect(isAllowedGamePopupNavigation(tcga, "https://clerk.riftatlas.com/v1/oauth_callback")).toBe(false);
   });
 
@@ -117,12 +120,15 @@ describe("embedded content security", () => {
 
     expect(isAllowedGameMainFrameNavigation(atlas, "https://play.riftatlas.com/sign-in")).toBe(true);
     expect(isAllowedGameMainFrameNavigation(atlas, "https://accounts.google.com/o/oauth2/auth")).toBe(true);
+    expect(isAllowedGameMainFrameNavigation(atlas, "https://accounts.riftatlas.com/v1/oauth_callback")).toBe(true);
     expect(isAllowedGameMainFrameNavigation(atlas, "https://clerk.riftatlas.com/v1/oauth_callback")).toBe(true);
     expect(isAllowedGameMainFrameNavigation(atlas, "https://attacker.example/phish")).toBe(false);
     expect(isAllowedGameMainFrameNavigation(atlas, "https://accounts.google.com:8443/phish")).toBe(false);
+    expect(isAllowedGameMainFrameNavigation(atlas, "https://accounts.riftatlas.com:8443/v1/oauth_callback")).toBe(false);
     expect(isAllowedGameMainFrameNavigation(atlas, "about:blank")).toBe(false);
 
     expect(isAllowedGameMainFrameNavigation(tcga, "https://tcg-arena-62f15.firebaseapp.com/__/auth/handler")).toBe(true);
+    expect(isAllowedGameMainFrameNavigation(tcga, "https://accounts.riftatlas.com/v1/oauth_callback")).toBe(false);
     expect(isAllowedGameMainFrameNavigation(tcga, "https://clerk.riftatlas.com/v1/oauth_callback")).toBe(false);
   });
 });

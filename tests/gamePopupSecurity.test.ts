@@ -50,6 +50,10 @@ describe("game popup security", () => {
       "https://clerk.riftatlas.com/v1/oauth_callback?state=redacted",
       response
     )).toBe(true);
+    expect(isAtlasClerkAuthorizationInvalidPage(
+      "https://accounts.riftatlas.com/v1/oauth_callback?state=redacted",
+      response
+    )).toBe(true);
     expect(isAtlasClerkAuthorizationInvalidPage("https://attacker.example/", response)).toBe(false);
     expect(isAtlasClerkAuthorizationInvalidPage(
       "https://clerk.riftatlas.com/v1/oauth_callback",
@@ -62,6 +66,10 @@ describe("game popup security", () => {
   it("recognizes the failed Atlas Clerk OAuth callback from its main-frame HTTP status", () => {
     expect(isAtlasClerkAuthorizationFailureNavigation(
       "https://clerk.riftatlas.com/v1/oauth_callback?state=redacted",
+      403
+    )).toBe(true);
+    expect(isAtlasClerkAuthorizationFailureNavigation(
+      "https://accounts.riftatlas.com/v1/oauth_callback?state=redacted",
       403
     )).toBe(true);
     expect(isAtlasClerkAuthorizationFailureNavigation(
@@ -80,6 +88,7 @@ describe("game popup security", () => {
 
   it("limits sign-in repair to Clerk authentication cookies on RiftAtlas domains", () => {
     expect(isAtlasClerkAuthCookie({ domain: ".clerk.riftatlas.com", name: "__client" })).toBe(true);
+    expect(isAtlasClerkAuthCookie({ domain: "accounts.riftatlas.com", name: "__session" })).toBe(true);
     expect(isAtlasClerkAuthCookie({ domain: ".riftatlas.com", name: "__client_uat_Zp57a2iF" })).toBe(true);
     expect(isAtlasClerkAuthCookie({ domain: "play.riftatlas.com", name: "__session" })).toBe(true);
     expect(isAtlasClerkAuthCookie({ domain: "play.riftatlas.com", name: "__session_Zp57a2iF" })).toBe(true);
@@ -108,12 +117,49 @@ describe("game popup security", () => {
       closeAllConnections
     };
 
-    await expect(clearAtlasClerkAuthCookies(session as never)).resolves.toBe(4);
+    await expect(clearAtlasClerkAuthCookies(session as never)).resolves.toEqual({
+      found: 4,
+      removed: 4,
+      failed: 0
+    });
     expect(remove).toHaveBeenCalledTimes(4);
     expect(remove).toHaveBeenCalledWith("https://clerk.riftatlas.com/", "__client");
     expect(remove).toHaveBeenCalledWith("https://riftatlas.com/", "__client_uat");
     expect(remove).toHaveBeenCalledWith("https://play.riftatlas.com/", "__session_Zp57a2iF");
     expect(remove).toHaveBeenCalledWith("https://play.riftatlas.com/", "__refresh_Zp57a2iF");
+    expect(flushStorageData).toHaveBeenCalledOnce();
+    expect(closeAllConnections).toHaveBeenCalledOnce();
+  });
+
+  it("continues sign-in repair when one targeted cookie cannot be removed", async () => {
+    const remove = vi.fn((url: string, name: string) => name === "__session_broken"
+      ? Promise.reject(new Error("cookie locked"))
+      : Promise.resolve());
+    const flushStorageData = vi.fn();
+    const closeAllConnections = vi.fn().mockResolvedValue(undefined);
+    const session = {
+      cookies: {
+        get: vi.fn().mockResolvedValue([
+          { domain: ".clerk.riftatlas.com", name: "__client" },
+          { domain: "accounts.riftatlas.com", name: "__session_broken" },
+          { domain: "play.riftatlas.com", name: "__refresh_working" },
+          { domain: ".example.com", name: "__client" }
+        ]),
+        remove
+      },
+      flushStorageData,
+      closeAllConnections
+    };
+
+    await expect(clearAtlasClerkAuthCookies(session as never)).resolves.toEqual({
+      found: 3,
+      removed: 2,
+      failed: 1
+    });
+    expect(remove).toHaveBeenCalledTimes(3);
+    expect(remove).toHaveBeenCalledWith("https://clerk.riftatlas.com/", "__client");
+    expect(remove).toHaveBeenCalledWith("https://accounts.riftatlas.com/", "__session_broken");
+    expect(remove).toHaveBeenCalledWith("https://play.riftatlas.com/", "__refresh_working");
     expect(flushStorageData).toHaveBeenCalledOnce();
     expect(closeAllConnections).toHaveBeenCalledOnce();
   });

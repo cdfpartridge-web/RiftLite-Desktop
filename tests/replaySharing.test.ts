@@ -2,12 +2,13 @@ import { describe, expect, it } from "vitest";
 
 import {
   activeDiscordReplayHubIds,
-  rawCaptureSettingsForDiscordHubSelection
+  rawCaptureSettingsForDiscordHubSelection,
+  rawCaptureSettingsForPlatformUpload
 } from "../src/shared/replaySharing.js";
 import type { UserSettings } from "../src/shared/types.js";
 
 describe("replay Discord sharing consent", () => {
-  it("turns selecting the first hub into one atomic account-bound opt-in", () => {
+  it("binds the first hub to an already-consented upload lane without changing lane consent", () => {
     const settings = replaySettings({
       webReplayDiscordShareEnabled: false,
       webReplayDiscordShareAccountUid: "",
@@ -26,6 +27,43 @@ describe("replay Discord sharing consent", () => {
       webReplayDiscordShareHubIds: ["teamuk"],
       visibility: "unlisted"
     });
+  });
+
+  it("supports TCGA-only sharing without silently enabling Atlas", () => {
+    const settings = replaySettings({
+      webReplayAutoUploadEnabled: false,
+      webReplayAutoUploadAccountUid: "",
+      tcgaWebReplayAutoUploadEnabled: true,
+      tcgaWebReplayAutoUploadAccountUid: "account-1"
+    });
+
+    const rawCapture = rawCaptureSettingsForDiscordHubSelection(settings, "tcga-hub", true);
+
+    expect(rawCapture).toMatchObject({
+      webReplayAutoUploadEnabled: false,
+      webReplayAutoUploadAccountUid: "",
+      tcgaWebReplayAutoUploadEnabled: true,
+      tcgaWebReplayAutoUploadAccountUid: "account-1",
+      webReplayDiscordShareEnabled: true,
+      webReplayDiscordShareHubIds: ["tcga-hub"],
+      visibility: "unlisted"
+    });
+  });
+
+  it("does not let Discord selection create upload consent when every lane is off", () => {
+    const settings = replaySettings({
+      webReplayAutoUploadEnabled: false,
+      webReplayAutoUploadAccountUid: "",
+      tcgaWebReplayAutoUploadEnabled: false,
+      tcgaWebReplayAutoUploadAccountUid: ""
+    });
+
+    const rawCapture = rawCaptureSettingsForDiscordHubSelection(settings, "teamuk", true);
+
+    expect(rawCapture.webReplayAutoUploadEnabled).toBe(false);
+    expect(rawCapture.tcgaWebReplayAutoUploadEnabled).toBe(false);
+    expect(rawCapture.webReplayDiscordShareEnabled).toBe(false);
+    expect(rawCapture.webReplayDiscordShareHubIds).toEqual([]);
   });
 
   it("does not render stale destination selections as active consent", () => {
@@ -50,6 +88,7 @@ describe("replay Discord sharing consent", () => {
     expect(noneRemaining.rawCapture.webReplayDiscordShareEnabled).toBe(false);
     expect(noneRemaining.rawCapture.webReplayDiscordShareAccountUid).toBe("");
     expect(noneRemaining.rawCapture.webReplayDiscordShareHubIds).toEqual([]);
+    expect(noneRemaining.rawCapture.visibility).toBe("private");
   });
 
   it("rejects consent inherited from another account", () => {
@@ -62,6 +101,111 @@ describe("replay Discord sharing consent", () => {
   });
 });
 
+describe("platform Web Replay consent", () => {
+  it("enables the first lane privately without reviving inherited sharing", () => {
+    const settings = replaySettings({
+      webReplayAutoUploadEnabled: false,
+      webReplayAutoUploadAccountUid: "old-account",
+      visibility: "public",
+      webReplayDiscordShareEnabled: true,
+      webReplayDiscordShareAccountUid: "account-1",
+      webReplayDiscordShareHubIds: ["old-hub"]
+    });
+
+    const rawCapture = rawCaptureSettingsForPlatformUpload(settings, "atlas", true);
+
+    expect(rawCapture).toMatchObject({
+      enabled: true,
+      webReplayAutoUploadEnabled: true,
+      webReplayAutoUploadAccountUid: "account-1",
+      tcgaWebReplayAutoUploadEnabled: false,
+      visibility: "private",
+      webReplayDiscordShareEnabled: false,
+      webReplayDiscordShareAccountUid: "",
+      webReplayDiscordShareHubIds: []
+    });
+  });
+
+  it("preserves Atlas and Discord consent when TCGA is added", () => {
+    const settings = replaySettings({
+      visibility: "unlisted",
+      webReplayDiscordShareEnabled: true,
+      webReplayDiscordShareAccountUid: "account-1",
+      webReplayDiscordShareHubIds: ["hub-a"]
+    });
+
+    const rawCapture = rawCaptureSettingsForPlatformUpload(settings, "tcga", true);
+
+    expect(rawCapture).toMatchObject({
+      webReplayAutoUploadEnabled: true,
+      webReplayAutoUploadAccountUid: "account-1",
+      tcgaWebReplayAutoUploadEnabled: true,
+      tcgaWebReplayAutoUploadAccountUid: "account-1",
+      visibility: "unlisted",
+      webReplayDiscordShareEnabled: true,
+      webReplayDiscordShareHubIds: ["hub-a"]
+    });
+  });
+
+  it("keeps sharing when one lane is revoked and clears it with the final lane", () => {
+    const both = replaySettings({
+      tcgaWebReplayAutoUploadEnabled: true,
+      tcgaWebReplayAutoUploadAccountUid: "account-1",
+      visibility: "unlisted",
+      webReplayDiscordShareEnabled: true,
+      webReplayDiscordShareAccountUid: "account-1",
+      webReplayDiscordShareHubIds: ["hub-a"]
+    });
+
+    const tcgaOnly = replaySettings(rawCaptureSettingsForPlatformUpload(both, "atlas", false));
+    expect(tcgaOnly.rawCapture.tcgaWebReplayAutoUploadEnabled).toBe(true);
+    expect(tcgaOnly.rawCapture.webReplayDiscordShareEnabled).toBe(true);
+
+    const none = rawCaptureSettingsForPlatformUpload(tcgaOnly, "tcga", false);
+    expect(none.webReplayAutoUploadEnabled).toBe(false);
+    expect(none.tcgaWebReplayAutoUploadEnabled).toBe(false);
+    expect(none.webReplayDiscordShareEnabled).toBe(false);
+    expect(none.webReplayDiscordShareAccountUid).toBe("");
+    expect(none.webReplayDiscordShareHubIds).toEqual([]);
+    expect(none.visibility).toBe("private");
+  });
+
+  it("allows dormant consent to be revoked while global capture is off", () => {
+    const settings = replaySettings({
+      enabled: false,
+      webReplayDiscordShareEnabled: true,
+      webReplayDiscordShareAccountUid: "account-1",
+      webReplayDiscordShareHubIds: ["hub-a"]
+    });
+
+    expect(activeDiscordReplayHubIds(settings)).toEqual(["hub-a"]);
+    const none = rawCaptureSettingsForPlatformUpload(settings, "atlas", false);
+    expect(none.enabled).toBe(false);
+    expect(none.webReplayAutoUploadEnabled).toBe(false);
+    expect(none.webReplayDiscordShareEnabled).toBe(false);
+    expect(none.webReplayDiscordShareHubIds).toEqual([]);
+    expect(none.visibility).toBe("private");
+  });
+
+  it("resumes dormant capture without changing its provider or sharing choices", () => {
+    const settings = replaySettings({
+      enabled: false,
+      visibility: "unlisted",
+      webReplayDiscordShareEnabled: true,
+      webReplayDiscordShareAccountUid: "account-1",
+      webReplayDiscordShareHubIds: ["hub-a"]
+    });
+
+    const resumed = rawCaptureSettingsForPlatformUpload(settings, "atlas", true);
+    expect(resumed.enabled).toBe(true);
+    expect(resumed.webReplayAutoUploadEnabled).toBe(true);
+    expect(resumed.tcgaWebReplayAutoUploadEnabled).toBe(false);
+    expect(resumed.webReplayDiscordShareEnabled).toBe(true);
+    expect(resumed.webReplayDiscordShareHubIds).toEqual(["hub-a"]);
+    expect(resumed.visibility).toBe("unlisted");
+  });
+});
+
 function replaySettings(rawCapture: Partial<UserSettings["rawCapture"]> = {}): UserSettings {
   return {
     accountUid: "account-1",
@@ -69,6 +213,8 @@ function replaySettings(rawCapture: Partial<UserSettings["rawCapture"]> = {}): U
       enabled: true,
       webReplayAutoUploadEnabled: true,
       webReplayAutoUploadAccountUid: "account-1",
+      tcgaWebReplayAutoUploadEnabled: false,
+      tcgaWebReplayAutoUploadAccountUid: "",
       webReplayDiscordShareEnabled: false,
       webReplayDiscordShareAccountUid: "",
       webReplayDiscordShareHubIds: [],

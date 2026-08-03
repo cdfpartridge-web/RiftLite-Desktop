@@ -49,7 +49,7 @@ export type PrimaryNavigationEntry =
 export const REVIEW_NAVIGATION_ITEMS = [
   { id: "match-history", label: "Matches", target: { view: "matches" } },
   { id: "local-replays", label: "Replays", target: { view: "replays" } },
-  { id: "web-replays", label: "RiftLite web replay", target: { view: "web-replay" } },
+  { id: "web-replays", label: "Web Replays", target: { view: "web-replay" } },
   { id: "my-stats", label: "Stats", target: { view: "stats" } }
 ] as const satisfies readonly NavigationItem[];
 

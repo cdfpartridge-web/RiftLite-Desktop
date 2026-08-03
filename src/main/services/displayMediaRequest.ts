@@ -15,6 +15,7 @@ export interface DisplayMediaRequestEvidence {
   originIsTrusted: boolean;
   videoRequested: boolean;
   audioRequested: boolean;
+  audioAllowed: boolean;
 }
 
 /**
@@ -63,7 +64,7 @@ export function displayMediaRequestIsTrusted(evidence: DisplayMediaRequestEviden
     evidence.requesterIsMainFrame &&
     evidence.originIsTrusted &&
     evidence.videoRequested &&
-    !evidence.audioRequested;
+    (!evidence.audioRequested || evidence.audioAllowed);
 }
 
 export function preparedDisplayMediaTargetForRequester(

@@ -1,8 +1,8 @@
 # RiftLite Current Engineering State
 
-> **Current cross-platform release:** v0.9.20 publishes the five tested post-v0.9.12 changes: private-hub removal, Atlas match-boundary/ghost-match repair, Atlas empty-shell recovery, replay MP4 annotation burn-in, and a reveal-gated Atlas known-opponent-hand memory panel. Read `docs/release-notes-v0.9.20.md` and `docs/HANDOVER_2026-07-27_POST_V0.9.12.md` first.
+> **Release target:** v0.9.30 brings the accumulated post-v0.9.20 replay-library, recording, Atlas recovery, season-filter, Prep/Notes, and Web Replay reliability work together. Read `docs/release-notes-v0.9.30.md` first.
 
-Last updated: 2026-07-31
+Last updated: 2026-08-03
 
 This is the durable handoff for continuing RiftLite work in a fresh Codex task. Read this file before changing code.
 
@@ -10,7 +10,7 @@ This is the durable handoff for continuing RiftLite work in a fresh Codex task. 
 
 - Active cross-platform release source repo:
   `C:\Users\cdfpa\OneDrive\Documents\Claude\Projects\Riftlite Beta 0.6\desktop-v06`
-- Current local package version: `0.9.20` (customer-facing build `v0.9.20`); fully built, validated, and published for Windows, Intel macOS, and Apple Silicon macOS
+- Current local package version: `0.9.30` (customer-facing build `v0.9.30`); release validation and publication are in progress
 - Current branch: `agent/release-v0.9.12`
 - Windows GitHub release repository (`windows` remote): `cdfpartridge-web/RiftLite-Desktop`
 - macOS GitHub release repository (`origin` remote): `cdfpartridge-web/RiftLite-Desktop-mac`
@@ -18,6 +18,7 @@ This is the durable handoff for continuing RiftLite work in a fresh Codex task. 
 - Current published macOS release: `mac-v0.9.20` (2026-07-31)
 - Windows installer output:
   `C:\Users\cdfpa\OneDrive\Documents\Claude\Projects\Riftlite Beta 0.6\desktop-v06\release\RiftLiteBetaInstall.exe`
+- The current published installers remain v0.9.20 until the v0.9.30 release gates and native platform builds complete.
 
 Always name the remote explicitly when pushing: Windows source/tags go to `windows`; macOS source/tags go to `origin`. The repositories and release tags are deliberately separate.
 
@@ -38,6 +39,16 @@ The active working tree is intentionally dirty and contains a large amount of cu
 5. Do not rebuild installers, publish releases, or deploy the website unless explicitly requested.
 6. Treat raw WebSocket replay data, account sync, hub ownership, Discord tokens, and API keys as security-sensitive.
 7. RiftReplay/Replay Lab and Vision work are parked or hidden. Do not expose them in menus or release notes unless explicitly requested.
+
+## 2026-08-03 Web Replay reliability deployment and local rebuild
+
+- **Review > Web Replays** is now the desktop setup, live status, and recovery centre for independently consented Atlas and TCGA uploads. It exposes account recovery, Private-first visibility, queue state, Retry, Upload anyway, Keep local only, partial warnings, optional Discord delivery, and collapsed technical details.
+- The desktop Replay V2 client now has bounded requests, durable retry/backoff and owner-status reconciliation, serialized per-capture mutations, ready-state protection, prompt pending polling, privacy reconciliation, structured diagnostics, and crash-resilient Atlas JSONL journals. Interrupted captures recover into the normal local queue with a visible partial warning.
+- Website Replay V2 now provides an authenticated owner status route, structured error/action fields, stable missing-mulligan handling, stale-processing recovery, and persisted partial-capture warnings in the replay library.
+- Production deployment `dpl_DHVxpRn2ZXcTbKMHRmoEE5shjnPf` is Ready and aliased to `https://www.riftlite.com`. Live checks returned 200 for the website, replay library, home API, and public replay API; the new status route returned structured JSON 400 for an invalid ID and structured JSON 401 for a valid-shaped unauthenticated ID.
+- Final source verification passed 104 desktop test files / 913 tests, the 85-test raw-capture suite, TypeScript, the full Electron/game-preload/Vite build, 83 runnable website test files / 572 tests with nine skipped, website lint with zero errors, and the Next production build.
+- Local Windows installer: `release\RiftLiteBetaInstall.exe`, 207,034,144 bytes, SHA-256 `09713F39C622C0BFEBC5E5CFFFB9FD8FA353311BFD0754C01DEE1520F6312781`. Blockmap SHA-256: `D42599E7E7051BD75EC4BC60ADAF104CAB1F0A9DB5D09F3412A478B319E85008`. `latest.yml` SHA-256: `C49952555C84C566782A50B07EF8B0A580FEB66D8C322D8D367F7FB3D27F8DF0`; its installer size and SHA-512 match exactly. Packaged ASAR/build identity, updater feed, FFmpeg, NSIS integrity, and packaged smoke checks passed.
+- The website was deployed directly from the validated local tree. No GitHub commit, push, tag, desktop release publish, updater publish, macOS rebuild, Discord message, or production replay mutation was performed.
 
 ## 2026-07-31 v0.9.20 Release
 

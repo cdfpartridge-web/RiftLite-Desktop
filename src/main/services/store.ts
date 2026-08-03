@@ -9,7 +9,7 @@ import initSqlJs, { type Database, type SqlJsStatic } from "sql.js";
 import { deckNotebookWithCurrentVersion, deckSnapshotHash, emptyDeckNotebook, normalizeDeckNotebook, sanitizeDeckNotebookForDeck } from "../../shared/deckNotebook.js";
 import { normalizeLegendName } from "../../shared/legendNames.js";
 import { buildCombinedBo3Match, buildMatchCombinePreview, markOriginalAsCombined, restoreCombinedOriginal, type MatchCombinePreview, type MatchCombineSavePayload } from "../../shared/matchCombine.js";
-import type { CaptureEvent, DeckNotebook, ImportSummary, MatchDraft, OverlayDisplayOptions, ReplayRecord, RiftLiteBackupFile, RiftLiteBackupOptions, SavedDeck, UserSettings } from "../../shared/types.js";
+import type { CaptureEvent, DeckNotebook, ImportSummary, MatchDraft, OverlayDisplayOptions, ReplayFolder, ReplayRecord, RiftLiteBackupFile, RiftLiteBackupOptions, SavedDeck, UserSettings } from "../../shared/types.js";
 import { sanitizeBackupFile } from "./backupSanitizer.js";
 import { redactCorruptSettingsText, redactSensitiveSettings, sensitiveCredentialPatch, stripLegacyHubSecrets, type SecureCredentialVault } from "./secureCredentialVault.js";
 import {
@@ -85,6 +85,7 @@ const DEFAULT_SETTINGS: UserSettings = {
   replayVideoQuality: "sharp",
   replayMicAudioEnabled: false,
   replayCustomFlagTypes: ["Mistake Consequence", "Question", "Alternative Line"],
+  replayFolders: [],
   replayShadowClipEnabled: false,
   replayShadowClipSeconds: 60,
   replayShadowClipHotkey: "CommandOrControl+Shift+C",
@@ -110,6 +111,7 @@ const DEFAULT_SETTINGS: UserSettings = {
   deckTrackerSaveToReplay: false,
   deckTrackerPerformanceMode: "balanced",
   deckTrackerPinnedCards: {},
+  matchupPrepWidgetEnabled: true,
   microphoneDeviceId: "",
   gameZoomFactor: 1,
   autoSaveAfterSeconds: 45,
@@ -152,6 +154,40 @@ function uniqueReplayCustomFlagTypes(value: unknown): string[] {
     result.push(label.slice(0, 48));
   }
   return result.slice(0, 24);
+}
+
+function normalizeReplayFolders(value: unknown): ReplayFolder[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const ids = new Set<string>();
+  const names = new Set<string>();
+  const normalized: ReplayFolder[] = [];
+  for (const candidate of value) {
+    if (!candidate || typeof candidate !== "object") {
+      continue;
+    }
+    const folder = candidate as Partial<ReplayFolder>;
+    const id = typeof folder.id === "string" ? folder.id.trim().slice(0, 120) : "";
+    const name = typeof folder.name === "string" ? folder.name.trim().replace(/\s+/g, " ").slice(0, 64) : "";
+    const nameKey = name.toLocaleLowerCase();
+    if (!id || !name || ids.has(id) || names.has(nameKey)) {
+      continue;
+    }
+    const createdAt = typeof folder.createdAt === "string" && Number.isFinite(Date.parse(folder.createdAt))
+      ? folder.createdAt
+      : new Date().toISOString();
+    const updatedAt = typeof folder.updatedAt === "string" && Number.isFinite(Date.parse(folder.updatedAt))
+      ? folder.updatedAt
+      : createdAt;
+    ids.add(id);
+    names.add(nameKey);
+    normalized.push({ id, name, createdAt, updatedAt });
+    if (normalized.length >= 100) {
+      break;
+    }
+  }
+  return normalized;
 }
 
 function normalizeRawCaptureSettings(value: unknown, fallback = DEFAULT_SETTINGS.rawCapture): UserSettings["rawCapture"] {
@@ -357,6 +393,7 @@ export class RiftLiteStore {
       replayCustomFlagTypes: Array.isArray(parsed.replayCustomFlagTypes)
         ? uniqueReplayCustomFlagTypes(parsed.replayCustomFlagTypes)
         : DEFAULT_SETTINGS.replayCustomFlagTypes,
+      replayFolders: normalizeReplayFolders(parsed.replayFolders),
       rawCapture: normalizeRawCaptureSettings((parsed as { rawCapture?: unknown }).rawCapture),
       deckTrackerPinnedCards: parsed.deckTrackerPinnedCards && typeof parsed.deckTrackerPinnedCards === "object" && !Array.isArray(parsed.deckTrackerPinnedCards)
         ? parsed.deckTrackerPinnedCards
@@ -453,6 +490,9 @@ export class RiftLiteStore {
       replayCustomFlagTypes: Object.prototype.hasOwnProperty.call(patch, "replayCustomFlagTypes")
         ? uniqueReplayCustomFlagTypes(patch.replayCustomFlagTypes)
         : current.replayCustomFlagTypes,
+      replayFolders: Object.prototype.hasOwnProperty.call(patch, "replayFolders")
+        ? normalizeReplayFolders(patch.replayFolders)
+        : current.replayFolders ?? [],
       rawCapture: Object.prototype.hasOwnProperty.call(patch, "rawCapture")
         ? normalizeRawCaptureSettings((patch as { rawCapture?: unknown }).rawCapture, current.rawCapture)
         : current.rawCapture,
@@ -1101,14 +1141,27 @@ export class RiftLiteStore {
   }
 
   async deleteReplay(id: string): Promise<void> {
-    await this.enqueueAtomicDatabaseMutation("delete-replay", (db) => {
-      const row = db.exec("SELECT data_json FROM replays WHERE id=?", [id])[0]?.values[0]?.[0];
-      if (typeof row !== "string") {
-        return;
+    await this.deleteReplays([id]);
+  }
+
+  async deleteReplays(ids: string[]): Promise<void> {
+    const replayIds = [...new Set((Array.isArray(ids) ? ids : [])
+      .filter((id): id is string => typeof id === "string")
+      .map((id) => id.trim())
+      .filter(Boolean))].slice(0, 10_000);
+    if (!replayIds.length) {
+      return;
+    }
+    await this.enqueueAtomicDatabaseMutation("delete-replays", (db) => {
+      const deletedAt = new Date().toISOString();
+      for (const id of replayIds) {
+        const row = db.exec("SELECT data_json FROM replays WHERE id=?", [id])[0]?.values[0]?.[0];
+        if (typeof row !== "string") {
+          continue;
+        }
+        const replay = { ...JSON.parse(row) as StoredReplayRecord, deletedAt };
+        db.run("UPDATE replays SET data_json=? WHERE id=?", [JSON.stringify(replay), id]);
       }
-      const now = new Date().toISOString();
-      const replay = { ...JSON.parse(row) as StoredReplayRecord, deletedAt: now };
-      db.run("UPDATE replays SET data_json=? WHERE id=?", [JSON.stringify(replay), id]);
     }, { invalidateReplays: true });
   }
 

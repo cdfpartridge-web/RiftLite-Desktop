@@ -213,6 +213,91 @@ function coordinatorHarness(options: {
 }
 
 describe("CaptureCoordinator", () => {
+  it("keeps useful Atlas loading diagnostics while compacting raw page data", async () => {
+    const { coordinator, diagnostics } = coordinatorHarness();
+
+    await coordinator.handleEvent(event("debug", {
+      reason: "atlas-resource-failure",
+      routeKind: "sign-in",
+      readyReason: "static-introduction",
+      readyState: "loading",
+      visibility: "visible",
+      focused: false,
+      interactiveCount: 4,
+      gameSurfaceCount: 0,
+      visibleTextLength: 180,
+      bodyTextLength: 490,
+      lobbyActionCount: 0,
+      authMarkerCount: 2,
+      gameMarkerCount: 0,
+      errorCode: -105,
+      errorDescription: "net::ERR_NAME_NOT_RESOLVED",
+      loadDurationMs: 8_200,
+      resourceOrigin: "https://assets.riftatlas-workers.com",
+      resourcePath: "/cards/OGN-001.webp",
+      resourceType: "image",
+      statusCode: 503,
+      surface: "atlas-webview",
+      targetOrigin: "https://accounts.riftatlas.com",
+      trigger: "did-fail-load",
+      state: "failed",
+      checkCount: 4,
+      failedCheckCount: 2,
+      warningCount: 1,
+      failedAuthCookieCount: 3,
+      removedAuthCookieCount: 2,
+      processReason: "crashed",
+      exitCode: 9,
+      visibleText: "Private text rendered by the Atlas page",
+      documentHtml: "<html>private page content</html>",
+      cookies: [{ name: "session", value: "private-cookie" }],
+      accessToken: "private-access-token"
+    }, "2026-08-03T09:00:00.000Z", "atlas", "https://play.riftatlas.com/"));
+
+    const recorded = diagnostics.record.mock.calls
+      .map(([entry]) => entry as CaptureEvent)
+      .find((entry) => entry.payload.reason === "atlas-resource-failure");
+
+    expect(recorded?.payload).toMatchObject({
+      reason: "atlas-resource-failure",
+      routeKind: "sign-in",
+      readyReason: "static-introduction",
+      readyState: "loading",
+      visibility: "visible",
+      focused: false,
+      interactiveCount: 4,
+      gameSurfaceCount: 0,
+      visibleTextLength: 180,
+      bodyTextLength: 490,
+      errorCode: -105,
+      errorDescription: "net::ERR_NAME_NOT_RESOLVED",
+      loadDurationMs: 8_200,
+      resourceOrigin: "https://assets.riftatlas-workers.com",
+      resourcePath: "/cards/OGN-001.webp",
+      resourceType: "image",
+      statusCode: 503,
+      targetOrigin: "https://accounts.riftatlas.com",
+      state: "failed",
+      checkCount: 4,
+      failedCheckCount: 2,
+      failedAuthCookieCount: 3,
+      removedAuthCookieCount: 2,
+      processReason: "crashed",
+      exitCode: 9
+    });
+    expect(recorded?.payload).not.toHaveProperty("visibleText");
+    expect(recorded?.payload).not.toHaveProperty("documentHtml");
+    expect(recorded?.payload).not.toHaveProperty("cookies");
+    expect(recorded?.payload).not.toHaveProperty("accessToken");
+    expect(recorded?.payload.payloadKeys).toEqual(expect.arrayContaining([
+      "accessToken",
+      "cookies",
+      "documentHtml",
+      "resourceOrigin",
+      "visibleText"
+    ]));
+  });
+
   it("keeps BO3 popup decisions closed during sideboarding and in-progress games", () => {
     expect(shouldOpenMatchCapturePopup({
       format: "bo3",
@@ -2419,7 +2504,27 @@ describe("CaptureCoordinator", () => {
     expect(sent.filter((item) => item.channel === "match:draft")).toHaveLength(1);
     expect(coordinator.hasActiveCaptureSession("atlas")).toBe(false);
 
+    const terminalResult = {
+      ...base,
+      roomCode: "ROOM3",
+      reason: "result-text-detected",
+      atlasResultKind: "match-terminal",
+      atlasBo3GameNumber: 0,
+      endText: "Match Complete",
+      score: score("7", "7")
+    };
+    await coordinator.handleEvent(event(
+      "match-end",
+      terminalResult,
+      "2026-07-27T05:25:30.000Z",
+      "atlas"
+    ));
     await coordinator.handleEvent(event("match-snapshot", {
+      ...terminalResult,
+      reason: "safety-heartbeat"
+    }, "2026-07-27T05:25:30.001Z", "atlas"));
+
+    await coordinator.handleEvent(event("match-start", {
       active: true,
       format: "Auto",
       myName: "Mika",
@@ -3138,9 +3243,9 @@ describe("CaptureCoordinator", () => {
     expect(diagnostics.record).toHaveBeenCalledWith(expect.objectContaining({
       kind: "debug",
       payload: expect.objectContaining({
-        reason: "match-draft-final-guard-suppressed",
-        guardReason: "FINAL_GUARD_ATLAS_DUPLICATE_TERMINAL_ECHO",
-        emittedToRenderer: false
+        reason: "atlas-finalized-result-echo-ignored",
+        atlasResultKind: "match-terminal",
+        endText: "Match Complete"
       })
     }));
   });

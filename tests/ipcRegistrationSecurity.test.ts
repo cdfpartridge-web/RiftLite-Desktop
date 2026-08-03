@@ -21,6 +21,8 @@ describe("IPC registration boundary", () => {
     expect(guardedChannels).toContain("atlas-known-hand:get");
     expect(guardedChannels).toContain("atlas-known-hand:dismiss");
     expect(guardedChannels).toContain("atlas-known-hand:clear");
+    expect(guardedChannels).toContain("raw-capture:upload-incomplete");
+    expect(guardedChannels).toContain("raw-capture:remove-from-queue");
   });
 
   it("keeps game-facing invoke channels on explicit sender validators", () => {

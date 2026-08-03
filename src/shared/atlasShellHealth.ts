@@ -10,7 +10,8 @@ export interface AtlasShellEvidence {
   authFormCount: number;
 }
 
-export const ATLAS_EMPTY_SHELL_MIN_AGE_MS = 8_000;
+export const ATLAS_STALLED_SHELL_MIN_AGE_MS = 8_000;
+export const ATLAS_EMPTY_SHELL_MIN_AGE_MS = 18_000;
 export const ATLAS_VISIBLE_EMPTY_CHECK_MIN_DELAY_MS = 500;
 
 export type AtlasShellRouteKind = "lobby" | "auth" | "game" | "other";
@@ -143,6 +144,11 @@ export function shouldReportAtlasEmptyShell(
 export function atlasVisibleEmptyCheckDelay(elapsedMs: number): number {
   const safeElapsed = Number.isFinite(elapsedMs) ? Math.max(0, elapsedMs) : 0;
   return Math.max(ATLAS_VISIBLE_EMPTY_CHECK_MIN_DELAY_MS, ATLAS_EMPTY_SHELL_MIN_AGE_MS - safeElapsed);
+}
+
+export function atlasVisibleStallCheckDelay(elapsedMs: number): number {
+  const safeElapsed = Number.isFinite(elapsedMs) ? Math.max(0, elapsedMs) : 0;
+  return Math.max(ATLAS_VISIBLE_EMPTY_CHECK_MIN_DELAY_MS, ATLAS_STALLED_SHELL_MIN_AGE_MS - safeElapsed);
 }
 
 function assessment(

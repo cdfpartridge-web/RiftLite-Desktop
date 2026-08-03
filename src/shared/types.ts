@@ -763,6 +763,8 @@ export interface ReplayRecord {
   platform: GamePlatform;
   capturedAt: string;
   deletedAt?: string;
+  folderId?: string;
+  favourite?: boolean;
   schemaVersion?: 1 | 2 | 3 | 4;
   title: string;
   players: {
@@ -785,6 +787,13 @@ export interface ReplayRecord {
   search?: ReplaySearchMetadata;
   importedAt?: string;
   importedFrom?: string;
+}
+
+export interface ReplayFolder {
+  id: string;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface ReplayCoachingPackMetadata {
@@ -1214,6 +1223,35 @@ export interface OverlayDisplayOptions {
 export type RawCaptureVisibility = "private" | "unlisted" | "public";
 export type RawCaptureUploadStatus = "disabled" | "not-uploaded" | "uploaded" | "failed" | "too-large";
 export type RawCaptureProcessingStatus = "pending" | "uploading" | "processing" | "ready" | "failed";
+export type WebReplayDeliveryStage =
+  | "captured"
+  | "queued"
+  | "authenticating"
+  | "initializing"
+  | "uploading"
+  | "completing"
+  | "processing"
+  | "ready"
+  | "paused"
+  | "failed";
+export type WebReplayDeliveryErrorClass =
+  | "network"
+  | "authentication"
+  | "server"
+  | "capture"
+  | "validation"
+  | "storage"
+  | "unknown";
+export type WebReplayRecommendedAction =
+  | "none"
+  | "wait"
+  | "retry"
+  | "link-account"
+  | "verify-account"
+  | "reconnect-account"
+  | "upload-incomplete"
+  | "remove-from-queue"
+  | "open-replay";
 
 export interface RawCaptureSettings {
   enabled: boolean;
@@ -1260,6 +1298,7 @@ export interface RawCaptureReplayMetadata {
   uploadStatus: RawCaptureUploadStatus;
   uploadUrl?: string;
   uploadId?: string;
+  statusEndpoint?: string;
   uploadedAt?: string;
   processingStatus?: RawCaptureProcessingStatus;
   checksumSha256?: string;
@@ -1282,6 +1321,14 @@ export interface RawCaptureReplayMetadata {
   processingUpdatedAt?: string;
   discordLastAttemptAt?: string;
   discordSharedAt?: string;
+  deliveryStage?: WebReplayDeliveryStage;
+  attemptCount?: number;
+  nextRetryAt?: string;
+  lastHttpStatus?: number;
+  lastErrorCode?: string;
+  lastErrorClass?: WebReplayDeliveryErrorClass;
+  remoteStatusCheckedAt?: string;
+  partialWarnings?: string[];
 }
 
 export interface RawCaptureStatus {
@@ -1297,6 +1344,85 @@ export interface RawCaptureStatus {
   lastFrameType?: string;
   lastError?: string;
   lastUploadUrl?: string;
+}
+
+export type WebReplayUploadDiagnosticState = "healthy" | "attention" | "blocked" | "error";
+
+export interface WebReplayUploadLaneDiagnostics {
+  platform: "atlas" | "tcga";
+  configured: boolean;
+  enabled: boolean;
+  accountMatches: boolean;
+  captured: number;
+  eligible: number;
+  pending: number;
+  inProgress: number;
+  uploaded: number;
+  failed: number;
+  tooLarge: number;
+  latestAttemptAt: string;
+  latestUploadedAt: string;
+  lastError: string;
+}
+
+export interface WebReplayUploadFailureDiagnostic {
+  platform: "atlas" | "tcga";
+  captureSessionId: string;
+  title: string;
+  capturedAt: string;
+  attemptedAt: string;
+  status: RawCaptureUploadStatus;
+  processingStatus?: RawCaptureProcessingStatus;
+  error: string;
+  canUploadAnyway: boolean;
+  lastHttpStatus?: number;
+  errorCode?: string;
+  errorClass?: WebReplayDeliveryErrorClass;
+  recommendedAction?: WebReplayRecommendedAction;
+  nextRetryAt?: string;
+}
+
+export interface WebReplayUploadQueueItem {
+  platform: "atlas" | "tcga";
+  captureSessionId: string;
+  localReplayId?: string;
+  title: string;
+  capturedAt: string;
+  stage: WebReplayDeliveryStage;
+  uploadStatus: RawCaptureUploadStatus;
+  processingStatus?: RawCaptureProcessingStatus;
+  visibility: RawCaptureVisibility;
+  uploadUrl?: string;
+  locallyAvailable: boolean;
+  attemptCount: number;
+  nextRetryAt?: string;
+  lastAttemptAt?: string;
+  error?: string;
+  lastHttpStatus?: number;
+  errorCode?: string;
+  errorClass?: WebReplayDeliveryErrorClass;
+  recommendedAction: WebReplayRecommendedAction;
+  canUploadAnyway: boolean;
+  partialWarnings?: string[];
+}
+
+export interface WebReplayUploadDiagnostics {
+  checkedAt: string;
+  state: WebReplayUploadDiagnosticState;
+  summary: string;
+  captureEnabled: boolean;
+  accountLinked: boolean;
+  accountVerified: boolean;
+  retryInProgress: boolean;
+  activeCapture: boolean;
+  captureError: string;
+  lanes: {
+    atlas: WebReplayUploadLaneDiagnostics;
+    tcga: WebReplayUploadLaneDiagnostics;
+  };
+  queue: WebReplayUploadQueueItem[];
+  latestReadyReplayUrl: string;
+  recentFailures: WebReplayUploadFailureDiagnostic[];
 }
 
 export interface RiftLiteReplayUploadResult {
@@ -1359,6 +1485,7 @@ export interface UserSettings {
   replayVideoQuality: ReplayVideoQuality;
   replayMicAudioEnabled: boolean;
   replayCustomFlagTypes: string[];
+  replayFolders?: ReplayFolder[];
   replayShadowClipEnabled: boolean;
   replayShadowClipSeconds: number;
   replayShadowClipHotkey: string;
@@ -1371,6 +1498,7 @@ export interface UserSettings {
   deckTrackerSaveToReplay: boolean;
   deckTrackerPerformanceMode: DeckTrackerPerformanceMode;
   deckTrackerPinnedCards: Record<string, string[]>;
+  matchupPrepWidgetEnabled: boolean;
   microphoneDeviceId: string;
   gameZoomFactor: number;
   autoSaveAfterSeconds: number;
@@ -1930,9 +2058,42 @@ export interface ScreenshotResult {
   source: "manual" | "hotkey" | "replay-keyframe";
 }
 
+export type AtlasWebviewRecoveryMode = "runtime" | "sign-in" | "site-data";
+
 export interface AtlasWebviewRecoveryResult {
   ok: boolean;
   message: string;
+  mode: AtlasWebviewRecoveryMode;
+  warnings?: string[];
+}
+
+export interface AtlasConnectionCheck {
+  id: "page" | "app-script" | "auth-script" | "assets";
+  label: string;
+  origin: string;
+  ok: boolean;
+  statusCode?: number;
+  durationMs: number;
+  error?: string;
+}
+
+export interface AtlasResourceFailureDiagnostic {
+  capturedAt: string;
+  reason: "network-error" | "http-error";
+  origin: string;
+  resourceType: string;
+  statusCode?: number;
+  error?: string;
+}
+
+export interface AtlasConnectionDiagnostics {
+  state: "not-tested" | "ready" | "partial" | "failed";
+  message: string;
+  testedAt: string;
+  checks: AtlasConnectionCheck[];
+  recentFailures: AtlasResourceFailureDiagnostic[];
+  guestAttached: boolean;
+  guestUrl: string;
 }
 
 export interface RiftLiteApi {
@@ -1998,6 +2159,7 @@ export interface RiftLiteApi {
   getDeletedReplays(): Promise<ReplayRecord[]>;
   saveReplay(replay: ReplayRecord): Promise<ReplayRecord>;
   deleteReplay(id: string): Promise<void>;
+  deleteReplays(ids: string[]): Promise<void>;
   restoreReplay(id: string): Promise<ReplayRecord | null>;
   purgeReplay(id: string): Promise<void>;
   exportReplayBundle(replayId: string): Promise<string>;
@@ -2006,6 +2168,10 @@ export interface RiftLiteApi {
   exportReplayFlagsText(replayId: string): Promise<string>;
   uploadRawCapture(replayId: string): Promise<ReplayRecord | null>;
   getRawCaptureStatus(): Promise<RawCaptureStatus>;
+  getWebReplayUploadDiagnostics(): Promise<WebReplayUploadDiagnostics>;
+  retryPendingWebReplayUploads(): Promise<number>;
+  uploadIncompleteWebReplay(captureSessionId: string): Promise<RiftLiteReplayUploadResult>;
+  removeWebReplayUploadFromQueue(captureSessionId: string): Promise<void>;
   getRawCapturePayload(replayId: string): Promise<unknown | null>;
   uploadRawCaptureToRiftLite(replayId: string, visibility?: RawCaptureVisibility): Promise<RiftLiteReplayUploadResult>;
   shareRawCaptureToDiscord(replayId: string): Promise<RiftLiteReplayDiscordShareResult>;
@@ -2097,7 +2263,9 @@ export interface RiftLiteApi {
   checkForUpdates(): Promise<UpdateStatus>;
   downloadUpdate(): Promise<UpdateStatus>;
   installUpdate(): Promise<void>;
-  recoverAtlasWebview(): Promise<AtlasWebviewRecoveryResult>;
+  recoverAtlasWebview(mode?: AtlasWebviewRecoveryMode): Promise<AtlasWebviewRecoveryResult>;
+  getAtlasConnectionDiagnostics(): Promise<AtlasConnectionDiagnostics>;
+  runAtlasConnectionDiagnostics(): Promise<AtlasConnectionDiagnostics>;
   focusGameWebview(platform: GamePlatform): Promise<boolean>;
   getGamePreloadUrl(platform: GamePlatform): Promise<string>;
   getAssetUrl(relativePath: string): Promise<string>;
