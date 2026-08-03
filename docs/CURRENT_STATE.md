@@ -1,6 +1,6 @@
 # RiftLite Current Engineering State
 
-> **Release target:** v0.9.30 brings the accumulated post-v0.9.20 replay-library, recording, Atlas recovery, season-filter, Prep/Notes, and Web Replay reliability work together. Read `docs/release-notes-v0.9.30.md` first.
+> **Current cross-platform release:** v0.9.30 brings the accumulated replay-library, recording, Atlas recovery, season-filter, Prep/Notes, and Web Replay reliability work together. Read `docs/release-notes-v0.9.30.md` first.
 
 Last updated: 2026-08-03
 
@@ -10,15 +10,15 @@ This is the durable handoff for continuing RiftLite work in a fresh Codex task. 
 
 - Active cross-platform release source repo:
   `C:\Users\cdfpa\OneDrive\Documents\Claude\Projects\Riftlite Beta 0.6\desktop-v06`
-- Current local package version: `0.9.30` (customer-facing build `v0.9.30`); release validation and publication are in progress
+- Current local package version: `0.9.30` (customer-facing build `v0.9.30`); fully built, validated, and published for Windows, Intel macOS, and Apple Silicon macOS
 - Current branch: `agent/release-v0.9.12`
 - Windows GitHub release repository (`windows` remote): `cdfpartridge-web/RiftLite-Desktop`
 - macOS GitHub release repository (`origin` remote): `cdfpartridge-web/RiftLite-Desktop-mac`
-- Current published Windows release: `v0.9.20` (2026-07-31)
-- Current published macOS release: `mac-v0.9.20` (2026-07-31)
+- Current published Windows release: `v0.9.30` (2026-08-03)
+- Current published macOS release: `mac-v0.9.30` (2026-08-03)
 - Windows installer output:
   `C:\Users\cdfpa\OneDrive\Documents\Claude\Projects\Riftlite Beta 0.6\desktop-v06\release\RiftLiteBetaInstall.exe`
-- The current published installers remain v0.9.20 until the v0.9.30 release gates and native platform builds complete.
+- Current local Windows installer: `release\RiftLiteBetaInstall.exe`, 207,647,683 bytes, SHA-256 `5CDAE64E37857930795CD6FA332EABAF8FC28AA823F197F4BA60B017ADFDC8A7`.
 
 Always name the remote explicitly when pushing: Windows source/tags go to `windows`; macOS source/tags go to `origin`. The repositories and release tags are deliberately separate.
 
@@ -39,6 +39,19 @@ The active working tree is intentionally dirty and contains a large amount of cu
 5. Do not rebuild installers, publish releases, or deploy the website unless explicitly requested.
 6. Treat raw WebSocket replay data, account sync, hub ownership, Discord tokens, and API keys as security-sensitive.
 7. RiftReplay/Replay Lab and Vision work are parked or hidden. Do not expose them in menus or release notes unless explicitly requested.
+
+## 2026-08-03 v0.9.30 Release
+
+- Release commit `caf77605cd0812414fc9b1c61c5ebfe397d06284` is tagged as Windows `v0.9.30` and macOS `mac-v0.9.30`.
+- Windows release: `https://github.com/cdfpartridge-web/RiftLite-Desktop/releases/tag/v0.9.30`.
+- macOS release: `https://github.com/cdfpartridge-web/RiftLite-Desktop-mac/releases/tag/mac-v0.9.30`.
+- Native macOS workflow: `https://github.com/cdfpartridge-web/RiftLite-Desktop-mac/actions/runs/30846538743`.
+- Windows validation passed TypeScript, the 76-test account-sync gate, all 104 test files / 914 tests, the production build, installer/updater verification, NSIS integrity checks, and the packaged smoke test.
+- The Mac workflow passed the same release gate plus native x64/arm64 packaging, FFmpeg architecture checks, updater and bundle identity checks, strict ad-hoc signature verification, DMG verification, and the packaged smoke test.
+- Windows installer SHA-256: `5CDAE64E37857930795CD6FA332EABAF8FC28AA823F197F4BA60B017ADFDC8A7`; blockmap: `771450720FBE1216119B4B8A454A09FCA083CC96A2A92A870EECFA303A498CD3`; updater manifest: `FC016F6CDC483BD93D20F95AB278ADEF85F65387B985912E8F681CA90C30F451`.
+- macOS Apple Silicon DMG SHA-256: `CFDA1E9EE633B14FB7B42072D3FAE18B0707A93D638E1D3BE1451BC36052C941`; ZIP: `6C3989F74DC621EF165F2A9B609D99761CB7B26D3D1153A024B19968D452AF39`.
+- macOS Intel DMG SHA-256: `AD264BDA12C356D476A5196A392B46DFF9CA6F6C6FF94BC2DDB517FE650FE5EC`; ZIP: `0528A392932DF7330017CF4295B9D73E1F07B926EBFF26A98481C6D7F8103051`; updater manifest: `B6AD2F965ADFE108999B1AFF19BF46AB49F7805A013E9A2048ACEC3EA2B4395C`.
+- Both published updater manifests report version `0.9.30`; both release asset sets and GitHub SHA-256 digests were verified after publication.
 
 ## 2026-08-03 Web Replay reliability deployment and local rebuild
 
