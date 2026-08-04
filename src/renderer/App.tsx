@@ -2513,6 +2513,110 @@ const DAEMONXGG_SPOTLIGHT: CommunitySpotlight = {
   ]
 };
 
+const TRONISBAD_SPOTLIGHT: CommunitySpotlight = {
+  id: "tronisbad",
+  name: "TronIsBad",
+  kicker: "Creator spotlight",
+  location: "MERCgg competitive player",
+  description: "Ryan Nicholas, known as TronIsBad, is a Riftbound content creator and competitive player for MERCgg. Sponsored by Dragon Shield, TCGplayer, and Black Vault Gaming, Ryan focuses on community building and mental health across competitive and non-competitive TCG spaces through #BetterDaysMTG, the community initiative he founded within Magic: The Gathering.",
+  primaryCta: {
+    id: "youtube",
+    label: "Watch YouTube",
+    url: "https://www.youtube.com/@tronisbad",
+    description: "Watch TronIsBad's Riftbound videos, competitive content, and community-focused coverage.",
+    icon: Video,
+    featured: true
+  },
+  links: [
+    {
+      id: "youtube",
+      label: "YouTube",
+      url: "https://www.youtube.com/@tronisbad",
+      description: "Riftbound videos, competitive content, and community-focused coverage.",
+      icon: Video,
+      featured: true
+    },
+    {
+      id: "twitch",
+      label: "Twitch",
+      url: "https://www.twitch.tv/tronisbad",
+      description: "Watch TronIsBad live for Riftbound games and community streams.",
+      icon: Radio,
+      featured: true
+    },
+    {
+      id: "tiktok",
+      label: "TikTok",
+      url: "https://www.tiktok.com/@tronisbadnj",
+      description: "Short-form TCG content, competitive moments, and community updates.",
+      icon: Video,
+      featured: true
+    },
+    {
+      id: "instagram",
+      label: "Instagram",
+      url: "https://www.instagram.com/tronisbad/",
+      description: "Photos, event coverage, creator updates, and community posts.",
+      icon: Camera
+    },
+    {
+      id: "x",
+      label: "X",
+      url: "https://x.com/tronisbad",
+      description: "Follow Ryan's posts, competitive updates, and TCG community conversation.",
+      icon: X
+    }
+  ],
+  tags: ["MERCgg", "Competitive play", "Community building", "Mental health"],
+  highlights: [
+    {
+      title: "Competitive Riftbound",
+      text: "Ryan represents MERCgg as a competitive player while creating content for players who want to follow and improve at Riftbound."
+    },
+    {
+      title: "#BetterDaysMTG",
+      text: "Ryan founded #BetterDaysMTG within the Magic: The Gathering community to make mental health and community support part of the TCG conversation."
+    },
+    {
+      title: "Every kind of player",
+      text: "The community focus includes both competitive and non-competitive spaces, helping more players find a healthy place in TCGs."
+    },
+    {
+      title: "Supported creator",
+      text: "Ryan is sponsored by Dragon Shield, TCGplayer, and Black Vault Gaming."
+    }
+  ],
+  assets: {
+    logo: "community/tronisbad-profile.webp",
+    banner: "community/tronisbad-banner.webp",
+    tiktok: "community/tronisbad-banner.webp",
+    youtube: "community/tronisbad-banner.webp",
+    twitch: "community/tronisbad-banner.webp"
+  },
+  overviewBanner: "community/tronisbad-banner.webp",
+  overviewLogo: "community/tronisbad-profile.webp",
+  routes: [
+    {
+      key: "youtube",
+      title: "YouTube channel",
+      subtitle: "Watch Riftbound videos, competitive content, and community-focused coverage.",
+      linkId: "youtube"
+    },
+    {
+      key: "twitch",
+      title: "Twitch stream",
+      subtitle: "Catch live Riftbound games and community streams.",
+      linkId: "twitch"
+    },
+    {
+      key: "tiktok",
+      title: "TikTok shorts",
+      subtitle: "Follow short-form TCG content and community updates.",
+      linkId: "tiktok"
+    }
+  ]
+};
+
 const COMMUNITY_SPOTLIGHTS: CommunitySpotlight[] = [
   RIFTLAB_SPOTLIGHT,
   RUNESANDRIFT_SPOTLIGHT,
@@ -2525,7 +2629,8 @@ const COMMUNITY_SPOTLIGHTS: CommunitySpotlight[] = [
   MRTOOLSHED_SPOTLIGHT,
   DAEMONXGG_SPOTLIGHT,
   MASKEDSWAN_SPOTLIGHT,
-  ARG0NTCG_SPOTLIGHT
+  ARG0NTCG_SPOTLIGHT,
+  TRONISBAD_SPOTLIGHT
 ];
 
 interface CaptureNotice {
