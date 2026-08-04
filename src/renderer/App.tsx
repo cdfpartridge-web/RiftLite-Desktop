@@ -238,6 +238,7 @@ import {
 } from "../shared/gameWebview";
 import { communitySpotlightTheme } from "../shared/communitySpotlightThemes";
 import { communitySpotlightTarget } from "../shared/communitySpotlightNavigation";
+import { buildSymmetricMatchupMatrix } from "../shared/matchupMatrix";
 import {
   invalidateAccountRestoreCommunityCaches,
   loadAccountRestoreLocalData
@@ -279,6 +280,16 @@ import {
   updateAtlasShellVisibility
 } from "./atlasShellVisibility";
 import { bindGameWebviewEvents } from "./gameWebviewEvents";
+import {
+  DEFAULT_HOME_FEATURED_VIDEOS,
+  HOME_FEED_REFRESH_MS,
+  homeCreatorVideoDateLabel,
+  homeCreatorVideoFeedFromConfig,
+  nextHomeCreatorVideoIndex,
+  resolveHomeConfigUrl,
+  shouldAutoAdvanceHomeCreatorVideo,
+  type HomeCreatorVideoFeed
+} from "./homeCreatorVideos";
 import "./styles/app.css";
 import "./styles/ui-dev-modern.css";
 
@@ -442,14 +453,6 @@ const COMMUNITY_SEASONS = [
 ] as const;
 type CommunitySeasonId = (typeof COMMUNITY_SEASONS)[number]["id"];
 const CURRENT_COMMUNITY_SEASON: CommunitySeasonId = "vendetta-launch";
-type HomeFeaturedVideo = {
-  title: string;
-  embedUrl: string;
-  url: string;
-  thumbnailUrl?: string;
-  videoId: string;
-};
-
 type HomeFeaturedPartner = {
   title: string;
   eyebrow: string;
@@ -459,183 +462,23 @@ type HomeFeaturedPartner = {
   imageUrl?: string;
 };
 
-type HomeFeaturedStream = {
-  title: string;
-  channel: string;
-  url: string;
-  playerUrl: string;
-  thumbnailUrl?: string;
-  isLive?: boolean;
-};
-
-const DEFAULT_HOME_FEATURED_VIDEOS: HomeFeaturedVideo[] = [
-  {
-    title: "Featured RiftLite video",
-    embedUrl: youtubeEmbedUrlFromId("4n0x_t-wprg"),
-    url: "https://www.youtube.com/watch?v=4n0x_t-wprg",
-    thumbnailUrl: "https://img.youtube.com/vi/4n0x_t-wprg/hqdefault.jpg",
-    videoId: "4n0x_t-wprg"
-  },
-  {
-    title: "Featured RiftLite video",
-    embedUrl: youtubeEmbedUrlFromId("gUHFg8zSnSY"),
-    url: "https://www.youtube.com/watch?v=gUHFg8zSnSY",
-    thumbnailUrl: "https://img.youtube.com/vi/gUHFg8zSnSY/hqdefault.jpg",
-    videoId: "gUHFg8zSnSY"
-  }
-];
-const HOME_CONFIG_URL = "https://www.riftlite.com/api/app/home";
+const HOME_CONFIG_URL = resolveHomeConfigUrl(
+  (import.meta as ImportMeta & { readonly env?: Record<string, string | undefined> }).env?.VITE_RIFTLITE_HOME_CONFIG_URL
+);
 const RELEASE_NOTES = {
   version: APP_VERSION_META,
   title: `RiftLite v${APP_VERSION_META}`,
-  intro: "This release hardens the systems that connect accounts, capture matches, and publish Web Replays so they behave as one reliable workflow.",
+  intro: "This release makes the home page, Prep/Notes, and matchup statistics more useful while smoothing a few account and community rough edges.",
   items: [
-    "Account linking now recovers verified Google, email, and Discord identities consistently, while account switches cannot finish an upload or cloud restore under the wrong user.",
-    "Web Replay capture now finalizes and persists before match reporting, retries temporary processing conflicts, and keeps replay sharing and private-hub access aligned with the linked account.",
-    "Atlas and TCGA match reporting now rejects stale sessions, preserves queued reviews, and keeps battlefield ownership, grouped cards, counters, and scores attached to the correct side.",
-    "Deleting or restoring data now coordinates with active capture and replay work, preventing delayed writes from recreating removed matches or overwriting newer local changes.",
-    "The updater now completes installation reliably, including when TCGA capture is active, and the macOS app keeps its services alive when its last window closes.",
-    "Game-page recovery is bounded and capture-aware, so a failed embedded page can recover without silently interrupting an active match."
+    "The home page now automatically features recent Riftbound videos from participating creators, with smarter curation and clearer creator attribution.",
+    "The creator video card is larger and makes better use of the available home-page space.",
+    "Prep/Notes now starts at the bottom-left of the game view, can be dragged wherever it suits you, and remembers its position.",
+    "Matchup statistics now pool both captured directions of each matchup, so the matrix presents one consistent community result with transparent sample details.",
+    "Email verification recovery is more dependable, including a working resend action and clearer status messages."
   ]
 };
 const RIOT_LEGAL_NOTICE = `RiftLite was created under Riot Games' "Legal Jibber Jabber" policy using assets owned by Riot Games. Riot Games does not endorse or sponsor this project.`;
 const REVIEW_DISMISS_PREFIX = "riftlite-dismissed-review:";
-
-function normalizeYoutubeVideoId(value: string): string {
-  const trimmed = value.trim();
-  const id = trimmed.match(/^[A-Za-z0-9_-]{11}$/)?.[0] ?? "";
-  return id;
-}
-
-function youtubeVideoIdFromUrl(value: string): string {
-  const raw = value.trim();
-  if (!raw) {
-    return "";
-  }
-  const directId = normalizeYoutubeVideoId(raw);
-  if (directId) {
-    return directId;
-  }
-  try {
-    const url = new URL(raw);
-    const host = url.hostname.replace(/^www\./, "");
-    if (host === "youtu.be") {
-      const id = url.pathname.split("/").filter(Boolean)[0] ?? "";
-      return normalizeYoutubeVideoId(id);
-    }
-    if (host === "youtube.com" || host === "youtube-nocookie.com" || host === "m.youtube.com") {
-      const embedParts = url.pathname.split("/").filter(Boolean);
-      const embedIndex = embedParts.indexOf("embed");
-      const shortsIndex = embedParts.indexOf("shorts");
-      const liveIndex = embedParts.indexOf("live");
-      const id = embedIndex >= 0
-        ? embedParts[embedIndex + 1]
-        : shortsIndex >= 0
-          ? embedParts[shortsIndex + 1]
-          : liveIndex >= 0
-            ? embedParts[liveIndex + 1]
-            : url.searchParams.get("v") ?? "";
-      return normalizeYoutubeVideoId(id);
-    }
-  } catch {
-    return "";
-  }
-  return "";
-}
-
-function youtubeEmbedUrlFromId(id: string): string {
-  const params = new URLSearchParams({
-    rel: "0",
-    modestbranding: "1",
-    playsinline: "1",
-    autoplay: "0",
-    enablejsapi: "0",
-    origin: "https://www.riftlite.com",
-    widget_referrer: "https://www.riftlite.com"
-  });
-  return `https://www.youtube.com/embed/${id}?${params.toString()}`;
-}
-
-function twitchChannelFromUrl(value: string): string {
-  const raw = value.trim();
-  if (!raw) {
-    return "";
-  }
-  const direct = raw.match(/^[A-Za-z0-9_]{3,30}$/)?.[0] ?? "";
-  if (direct) {
-    return direct;
-  }
-  try {
-    const url = new URL(raw);
-    const host = url.hostname.replace(/^www\./, "").toLowerCase();
-    if (host !== "twitch.tv") {
-      return "";
-    }
-    const parts = url.pathname.split("/").filter(Boolean);
-    return parts[0]?.match(/^[A-Za-z0-9_]{3,30}$/)?.[0] ?? "";
-  } catch {
-    return "";
-  }
-}
-
-function twitchPlayerUrl(channel: string): string {
-  const params = new URLSearchParams({
-    channel,
-    parent: "www.riftlite.com",
-    muted: "true",
-    autoplay: "false"
-  });
-  return `https://player.twitch.tv/?${params.toString()}`;
-}
-
-function homeFeaturedVideoFromRecord(video: Record<string, unknown>): HomeFeaturedVideo | null {
-  const url = typeof video.url === "string" ? video.url.trim() : "";
-  const embedSource = typeof video.embedUrl === "string" ? video.embedUrl.trim() : url;
-  const videoId = youtubeVideoIdFromUrl(embedSource) || youtubeVideoIdFromUrl(url);
-  if (!videoId) {
-    return null;
-  }
-  return {
-    title: typeof video.title === "string" && video.title.trim() ? video.title.trim() : "Featured RiftLite video",
-    embedUrl: youtubeEmbedUrlFromId(videoId),
-    url: url || `https://www.youtube.com/watch?v=${videoId}`,
-    thumbnailUrl: `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`,
-    videoId
-  };
-}
-
-function homeFeaturedVideosFromConfig(value: unknown): HomeFeaturedVideo[] {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return [];
-  }
-  const payload = value as Record<string, unknown>;
-  const rawVideos = Array.isArray(payload.featuredVideos)
-    ? payload.featuredVideos
-    : payload.featuredVideo
-      ? [payload.featuredVideo]
-      : [payload];
-  const seen = new Set<string>();
-  return rawVideos
-    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item))
-    .map(homeFeaturedVideoFromRecord)
-    .filter((item): item is HomeFeaturedVideo => Boolean(item))
-    .filter((video) => {
-      if (seen.has(video.videoId)) {
-        return false;
-      }
-      seen.add(video.videoId);
-      return true;
-    })
-    .slice(0, 2);
-}
-
-function fillHomeFeaturedVideos(videos: HomeFeaturedVideo[]): HomeFeaturedVideo[] {
-  const seen = new Set(videos.map((video) => video.videoId));
-  return [
-    ...videos,
-    ...DEFAULT_HOME_FEATURED_VIDEOS.filter((video) => !seen.has(video.videoId))
-  ].slice(0, 2);
-}
 
 function homeFeaturedPartnersFromConfig(value: unknown): HomeFeaturedPartner[] {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -672,44 +515,6 @@ function homeFeaturedPartnersFromConfig(value: unknown): HomeFeaturedPartner[] {
       return featuredPartner;
     })
     .filter((item): item is HomeFeaturedPartner => item !== null);
-}
-
-function homeFeaturedStreamsFromConfig(value: unknown): HomeFeaturedStream[] {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return [];
-  }
-  const payload = value as Record<string, unknown>;
-  const rawStreams: unknown[] = Array.isArray(payload.featuredStreams)
-    ? payload.featuredStreams
-    : payload.featuredStream
-      ? [payload.featuredStream]
-      : [];
-  return rawStreams
-    .map((item) => {
-      if (!item || typeof item !== "object" || Array.isArray(item)) {
-        return null;
-      }
-      const stream = item as Record<string, unknown>;
-      const url = typeof stream.url === "string" ? stream.url.trim() : "";
-      const channel = twitchChannelFromUrl(typeof stream.channel === "string" ? stream.channel : url);
-      if (!channel) {
-        return null;
-      }
-      const featuredStream: HomeFeaturedStream = {
-        title: typeof stream.title === "string" && stream.title.trim() ? stream.title.trim() : `${channel} live`,
-        channel,
-        url: url || `https://www.twitch.tv/${channel}`,
-        playerUrl: twitchPlayerUrl(channel),
-        isLive: stream.isLive === true || stream.live === true || stream.online === true || stream.status === "live"
-      };
-      const thumbnailUrl = typeof stream.thumbnailUrl === "string" ? stream.thumbnailUrl.trim() : "";
-      if (thumbnailUrl) {
-        featuredStream.thumbnailUrl = thumbnailUrl;
-      }
-      return featuredStream;
-    })
-    .filter((item): item is HomeFeaturedStream => item !== null)
-    .sort((a, b) => Number(Boolean(b.isLive)) - Number(Boolean(a.isLive)) || a.title.localeCompare(b.title));
 }
 const DIRECT_REPLAY_MODE_MIGRATION_KEY = "riftlite-direct-replay-mode-v2";
 const VIDEO_REPLAY_DEFAULTS_MIGRATION_KEY = "riftlite-video-replay-defaults-v070";
@@ -1050,6 +855,16 @@ type MatrixCell = {
   draws: number;
   total: number;
   winRate: number;
+  matches: AnalyticsMatch[];
+  direct?: MatrixCohort;
+  reverse?: MatrixCohort;
+};
+
+type MatrixCohort = {
+  wins: number;
+  losses: number;
+  draws: number;
+  total: number;
   matches: AnalyticsMatch[];
 };
 
@@ -8371,35 +8186,22 @@ function HomeView({
   const [featuredCreatorInteracting, setFeaturedCreatorInteracting] = useState(false);
   const [creatorMotionAllowed, setCreatorMotionAllowed] = useState(true);
   const featuredCreator = featuredCreators[featuredCreatorIndex % Math.max(1, featuredCreators.length)] ?? RIFTLAB_SPOTLIGHT;
-  const [featuredVideos, setFeaturedVideos] = useState<HomeFeaturedVideo[]>(DEFAULT_HOME_FEATURED_VIDEOS);
-  const [playingHomeVideos, setPlayingHomeVideos] = useState<Record<string, boolean>>({});
+  const [homeVideoFeed, setHomeVideoFeed] = useState<HomeCreatorVideoFeed>(() => homeCreatorVideoFeedFromConfig({
+    featuredVideos: DEFAULT_HOME_FEATURED_VIDEOS
+  }));
+  const [featuredVideoIndex, setFeaturedVideoIndex] = useState(0);
+  const [featuredVideoPaused, setFeaturedVideoPaused] = useState(false);
+  const [featuredVideoHovering, setFeaturedVideoHovering] = useState(false);
+  const [featuredVideoFocusWithin, setFeaturedVideoFocusWithin] = useState(false);
+  const [playingHomeVideoId, setPlayingHomeVideoId] = useState("");
+  const featuredVideo = homeVideoFeed.videos[featuredVideoIndex % Math.max(1, homeVideoFeed.videos.length)] ?? DEFAULT_HOME_FEATURED_VIDEOS[0];
+  const featuredVideoPlaying = playingHomeVideoId === featuredVideo?.videoId;
+  const featuredVideoInteracting = featuredVideoHovering || featuredVideoFocusWithin;
   const [featuredPartners, setFeaturedPartners] = useState<HomeFeaturedPartner[]>([]);
   const [featuredPartnerIndex, setFeaturedPartnerIndex] = useState(0);
-  const spotlightStreams = useMemo<HomeFeaturedStream[]>(() => COMMUNITY_SPOTLIGHTS.flatMap((item) => {
-    const twitchLink = item.links.find((link) => link.id === "twitch");
-    const channel = twitchLink ? twitchChannelFromUrl(twitchLink.url) : "";
-    if (!twitchLink || !channel) {
-      return [];
-    }
-    return [{
-      title: `${item.name} live`,
-      channel,
-      url: twitchLink.url,
-      playerUrl: twitchPlayerUrl(channel),
-      thumbnailUrl: item.assets.twitch,
-      isLive: false
-    }];
-  }), []);
-  const [featuredStreams, setFeaturedStreams] = useState<HomeFeaturedStream[]>([]);
-  const visibleFeaturedStreams = featuredStreams.length ? featuredStreams : spotlightStreams;
-  const [featuredStreamIndex, setFeaturedStreamIndex] = useState(0);
-  const [featuredStreamPlaying, setFeaturedStreamPlaying] = useState(false);
-  const featuredStream = visibleFeaturedStreams[featuredStreamIndex % Math.max(1, visibleFeaturedStreams.length)] ?? null;
-  const [featuredStreamThumbs, setFeaturedStreamThumbs] = useState<Record<string, string>>({});
   const discordResource = TOOLKIT_RESOURCES.find((item) => item.id === "discord") ?? TOOLKIT_RESOURCES[0];
   const FeaturedCreatorIcon = featuredCreator.primaryCta.icon;
   const [featuredAssets, setFeaturedAssets] = useState<Record<string, { logo?: string; banner?: string }>>({});
-  const [metafyLogoUrl, setMetafyLogoUrl] = useState("");
   const featuredAsset = featuredAssets[featuredCreator.id] ?? {};
   const featuredTheme = communitySpotlightTheme(featuredCreator.id);
   const featuredPartner = featuredPartners[featuredPartnerIndex % Math.max(1, featuredPartners.length)] ?? null;
@@ -8452,40 +8254,76 @@ function HomeView({
 
   useEffect(() => {
     let mounted = true;
-    fetch(HOME_CONFIG_URL, { cache: "no-store" })
-      .then((response) => response.ok ? response.json() as Promise<unknown> : null)
-      .then((payload) => {
-        const nextVideos = homeFeaturedVideosFromConfig(payload);
-        if (mounted) {
-          setFeaturedVideos(fillHomeFeaturedVideos(nextVideos));
+    let inFlight = false;
+    let controller: AbortController | null = null;
+
+    const refreshHomeFeed = async () => {
+      if (inFlight) {
+        return;
+      }
+      inFlight = true;
+      controller = new AbortController();
+      try {
+        const response = await fetch(HOME_CONFIG_URL, { cache: "no-store", signal: controller.signal });
+        if (!response.ok) {
+          return;
         }
-        if (mounted) {
-          const nextPartners = homeFeaturedPartnersFromConfig(payload);
-          setFeaturedPartners(nextPartners);
-          setFeaturedPartnerIndex((index) => nextPartners.length ? index % nextPartners.length : 0);
-          const nextStreams = homeFeaturedStreamsFromConfig(payload);
-          setFeaturedStreams(nextStreams);
-          setFeaturedStreamIndex((index) => {
-            const length = nextStreams.length || spotlightStreams.length;
-            return length ? index % length : 0;
-          });
+        const payload = await response.json() as unknown;
+        if (!mounted) {
+          return;
         }
-      })
-      .catch(() => undefined);
+        const nextFeed = homeCreatorVideoFeedFromConfig(payload);
+        const nextPartners = homeFeaturedPartnersFromConfig(payload);
+        setHomeVideoFeed(nextFeed);
+        setFeaturedVideoIndex((index) => nextHomeCreatorVideoIndex(index, 0, nextFeed.videos.length));
+        setPlayingHomeVideoId("");
+        setFeaturedPartners(nextPartners);
+        setFeaturedPartnerIndex((index) => nextPartners.length ? index % nextPartners.length : 0);
+      } catch (error) {
+        if (!(error instanceof DOMException && error.name === "AbortError")) {
+          // Keep the last successful feed and bundled fallback on transient failures.
+        }
+      } finally {
+        inFlight = false;
+        controller = null;
+      }
+    };
+
+    void refreshHomeFeed();
+    const timer = window.setInterval(() => void refreshHomeFeed(), HOME_FEED_REFRESH_MS);
     return () => {
       mounted = false;
+      window.clearInterval(timer);
+      controller?.abort();
     };
   }, []);
 
   useEffect(() => {
-    if (featuredStreamPlaying || visibleFeaturedStreams.length <= 1) {
+    if (!shouldAutoAdvanceHomeCreatorVideo({
+      enabled: homeVideoFeed.carousel.enabled,
+      explicitlyPaused: featuredVideoPaused,
+      interacting: featuredVideoInteracting,
+      playing: featuredVideoPlaying,
+      motionAllowed: creatorMotionAllowed,
+      itemCount: homeVideoFeed.videos.length
+    })) {
       return;
     }
     const timer = window.setInterval(() => {
-      setFeaturedStreamIndex((index) => (index + 1) % visibleFeaturedStreams.length);
-    }, 10_000);
+      setPlayingHomeVideoId("");
+      setFeaturedVideoIndex((index) => nextHomeCreatorVideoIndex(index, 1, homeVideoFeed.videos.length));
+    }, homeVideoFeed.carousel.rotationSeconds * 1_000);
     return () => window.clearInterval(timer);
-  }, [featuredStreamPlaying, visibleFeaturedStreams.length]);
+  }, [
+    creatorMotionAllowed,
+    featuredVideoInteracting,
+    featuredVideoIndex,
+    featuredVideoPaused,
+    featuredVideoPlaying,
+    homeVideoFeed.carousel.enabled,
+    homeVideoFeed.carousel.rotationSeconds,
+    homeVideoFeed.videos.length
+  ]);
 
   useEffect(() => {
     let mounted = true;
@@ -8503,40 +8341,6 @@ function HomeView({
         setFeaturedAssets(Object.fromEntries(entries));
       }
     }).catch(() => undefined);
-    return () => {
-      mounted = false;
-    };
-  }, []);
-
-  useEffect(() => {
-    const localThumbs = Array.from(new Set(visibleFeaturedStreams
-      .map((item) => item.thumbnailUrl?.trim() ?? "")
-      .filter((url) => url && !/^(https?:|file:|data:)/i.test(url))));
-    if (!localThumbs.length) {
-      return;
-    }
-    let mounted = true;
-    void Promise.all(localThumbs.map(async (path) => [path, await window.riftlite.getAssetUrl(path)] as const))
-      .then((entries) => {
-        if (mounted) {
-          setFeaturedStreamThumbs((current) => ({ ...current, ...Object.fromEntries(entries) }));
-        }
-      })
-      .catch(() => undefined);
-    return () => {
-      mounted = false;
-    };
-  }, [visibleFeaturedStreams]);
-
-  useEffect(() => {
-    let mounted = true;
-    void window.riftlite.getAssetUrl("metafy-symbol.png")
-      .then((url) => {
-        if (mounted) {
-          setMetafyLogoUrl(url);
-        }
-      })
-      .catch(() => undefined);
     return () => {
       mounted = false;
     };
@@ -8568,9 +8372,9 @@ function HomeView({
     setFeaturedPartnerIndex((index) => featuredPartners.length ? (index + delta + featuredPartners.length) % featuredPartners.length : 0);
   }
 
-  function setStreamCarouselOffset(delta: number) {
-    setFeaturedStreamPlaying(false);
-    setFeaturedStreamIndex((index) => visibleFeaturedStreams.length ? (index + delta + visibleFeaturedStreams.length) % visibleFeaturedStreams.length : 0);
+  function setFeaturedVideoCarouselOffset(delta: number) {
+    setPlayingHomeVideoId("");
+    setFeaturedVideoIndex((index) => nextHomeCreatorVideoIndex(index, delta, homeVideoFeed.videos.length));
   }
 
   return (
@@ -8768,54 +8572,88 @@ function HomeView({
             </div>
           </article>
 
-          <nav className="modern-marketing-strip" aria-label="RiftLite community links">
-            <button onClick={() => document.getElementById("home-featured-videos")?.scrollIntoView({ behavior: "smooth", block: "start" })}><Video size={18} /><span><strong>Featured videos</strong><small>Watch and learn</small></span></button>
-            <button onClick={() => document.getElementById("home-featured-stream")?.scrollIntoView({ behavior: "smooth", block: "start" })}><Radio size={18} /><span><strong>Live streams</strong><small>Top creators live</small></span></button>
-            <button onClick={openDiscord}><MessageCircle size={18} /><span><strong>Discord</strong><small>Join the community</small></span></button>
-            <button onClick={openMetafySupport}><Shield size={18} /><span><strong>Support RiftLite</strong><small>Help keep us live</small></span></button>
-          </nav>
+          <article
+            id="home-creator-videos"
+            className="modern-panel modern-creator-video-card"
+            role="region"
+            aria-roledescription="carousel"
+            aria-label={`Creator video ${featuredVideoIndex + 1} of ${homeVideoFeed.videos.length}: ${featuredVideo.title}`}
+            data-source={homeVideoFeed.source}
+            onMouseEnter={() => setFeaturedVideoHovering(true)}
+            onMouseLeave={() => setFeaturedVideoHovering(false)}
+            onFocusCapture={() => setFeaturedVideoFocusWithin(true)}
+            onBlurCapture={(event) => {
+              if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+                setFeaturedVideoFocusWithin(false);
+              }
+            }}
+          >
+            <div className="modern-creator-video-media">
+              {featuredVideoPlaying ? (
+                <div className="home-video-frame">
+                  <EmbedWebview
+                    key={featuredVideo.videoId}
+                    className="home-embed-webview"
+                    src={featuredVideo.embedUrl}
+                    allow="accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                    allowpopups="true"
+                    httpreferrer="https://www.riftlite.com/"
+                    partition={`persist:riftlite-home-video-${featuredVideo.videoId}`}
+                    webpreferences="backgroundThrottling=false"
+                  />
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  className="home-video-frame home-video-preview"
+                  onClick={() => setPlayingHomeVideoId(featuredVideo.videoId)}
+                  aria-label={`Play ${featuredVideo.title}`}
+                >
+                  {featuredVideo.thumbnailUrl ? (
+                    <img
+                      key={featuredVideo.videoId}
+                      src={featuredVideo.thumbnailUrl}
+                      alt=""
+                      draggable={false}
+                      onError={(event) => {
+                        event.currentTarget.hidden = true;
+                      }}
+                    />
+                  ) : null}
+                  <span><Play size={15} /> Play</span>
+                </button>
+              )}
+            </div>
+            <div className="modern-creator-video-copy" role="group" aria-roledescription="slide">
+              <span className="modern-kicker">Creator videos</span>
+              <h2 title={featuredVideo.title}>{featuredVideo.title}</h2>
+              <p><strong>{featuredVideo.creatorName || "RiftLite"}</strong><span>{homeCreatorVideoDateLabel(featuredVideo.publishedAt)}</span></p>
+              <div className="modern-creator-video-actions">
+                {featuredVideo.channelUrl ? (
+                  <button className="modern-text-action" onClick={() => void window.riftlite.openExternalResource(featuredVideo.channelUrl!)}><Compass size={14} /> Creator</button>
+                ) : null}
+                <button className="modern-text-action" onClick={() => void window.riftlite.openExternalResource(featuredVideo.url)}><ExternalLink size={14} /> YouTube</button>
+              </div>
+              <div className="modern-video-controls" aria-label="Creator video carousel controls">
+                <button type="button" onClick={() => setFeaturedVideoCarouselOffset(-1)} disabled={homeVideoFeed.videos.length <= 1} aria-label="Previous creator video"><ChevronLeft size={16} /></button>
+                <span>{featuredVideoIndex + 1} / {homeVideoFeed.videos.length}</span>
+                <button
+                  type="button"
+                  onClick={() => setFeaturedVideoPaused((paused) => !paused)}
+                  disabled={!homeVideoFeed.carousel.enabled || homeVideoFeed.videos.length <= 1}
+                  aria-label={featuredVideoPaused ? "Resume creator video carousel" : "Pause creator video carousel"}
+                  aria-pressed={featuredVideoPaused}
+                >
+                  {featuredVideoPaused ? <Play size={15} /> : <Pause size={15} />}
+                </button>
+                <button type="button" onClick={() => setFeaturedVideoCarouselOffset(1)} disabled={homeVideoFeed.videos.length <= 1} aria-label="Next creator video"><ChevronRight size={16} /></button>
+              </div>
+            </div>
+          </article>
         </aside>
       </section>
 
       <section className="modern-discover-grid" aria-label="More from RiftLite">
-        <article id="home-featured-videos" className="home-card home-video-card home-card-wide">
-          <div className="home-card-heading"><Video size={18} /><div><h3>Featured RiftLite videos</h3><span>Community guides and matches</span></div></div>
-          <div className="home-featured-video-grid">
-            {featuredVideos.map((video) => (
-              <div className="home-video-cell" key={video.videoId}>
-                <strong className="home-video-title" title={video.title}>{video.title}</strong>
-                {playingHomeVideos[video.videoId] ? (
-                  <div className="home-video-frame">
-                    <EmbedWebview className="home-embed-webview" src={video.embedUrl} allow="accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowpopups="true" httpreferrer="https://www.riftlite.com/" partition={`persist:riftlite-home-video-${video.videoId}`} webpreferences="backgroundThrottling=false" />
-                  </div>
-                ) : (
-                  <button type="button" className="home-video-frame home-video-preview" onClick={() => setPlayingHomeVideos((current) => ({ ...current, [video.videoId]: true }))} aria-label={`Play ${video.title}`}>
-                    {video.thumbnailUrl ? <img src={video.thumbnailUrl} alt="" draggable={false} /> : null}<span><Play size={15} /> Play</span>
-                  </button>
-                )}
-              </div>
-            ))}
-          </div>
-          <button type="button" className="home-metafy-support" onClick={openMetafySupport} aria-label="Support RiftLite on Metafy">
-            <span className="home-metafy-logo">{metafyLogoUrl ? <img src={metafyLogoUrl} alt="" /> : "M"}</span>
-            <span className="home-metafy-copy"><strong>Support RiftLite on Metafy</strong><span>Tips help cover servers, development time, and community tools.</span></span>
-            <span className="home-metafy-cta"><ExternalLink size={14} /> Support</span>
-          </button>
-        </article>
-
-        <article id="home-featured-stream" className="home-card home-stream-card home-card-wide">
-          <div className="home-card-heading"><Radio size={18} /><div><h3>{featuredStream?.title ?? "Featured stream"}</h3><span>{featuredStream ? `${featuredStream.isLive ? "Live now · " : ""}twitch.tv/${featuredStream.channel}` : "Community streams"}</span></div></div>
-          {featuredStream ? featuredStreamPlaying ? (
-            <div className="home-video-frame"><EmbedWebview key={featuredStream.playerUrl} className="home-embed-webview" src={featuredStream.playerUrl} allowpopups="true" partition={`persist:riftlite-twitch-${featuredStream.channel}`} webpreferences="backgroundThrottling=false" /></div>
-          ) : (
-            <button type="button" className="home-video-frame home-video-preview home-stream-preview" onClick={() => setFeaturedStreamPlaying(true)} aria-label={`Play ${featuredStream.title}`}>
-              {featuredStream.thumbnailUrl ? <img src={featuredStreamThumbs[featuredStream.thumbnailUrl] ?? featuredStream.thumbnailUrl} alt="" draggable={false} /> : null}
-              <strong className="home-stream-status">{featuredStream.isLive ? "Live now" : "Featured stream"}</strong><em>{featuredStream.title}</em><span><Play size={15} /> {featuredStream.isLive ? "Watch live" : "Play"}</span>
-            </button>
-          ) : <div className="home-video-frame"><div className="home-stream-empty">No featured streams configured.</div></div>}
-          {visibleFeaturedStreams.length > 1 ? <div className="home-carousel-controls" aria-label="Featured streamer carousel controls"><button type="button" className="secondary icon-button" onClick={() => setStreamCarouselOffset(-1)} aria-label="Previous stream"><ChevronLeft size={15} /></button><span>{featuredStreamIndex + 1} / {visibleFeaturedStreams.length}</span><button type="button" className="secondary icon-button" onClick={() => setStreamCarouselOffset(1)} aria-label="Next stream"><ChevronRight size={15} /></button></div> : null}
-        </article>
-
         <article className="home-card">
           <div className="home-card-heading"><Globe2 size={18} /><div><h3>Community decks</h3><span>{communityDeckSummary.label}</span></div></div>
           <div className="home-legend-strip" aria-label="Community deck legend preview">{communityDeckVisualLegends.map((legend) => <button type="button" key={legend} className="home-legend-token" title={`Open ${legend} decks`} onClick={() => onNavigate("community", { communityTab: "community-decks", communityDeckLegend: legend })}><img src={legendImageUrl(legend)} alt="" /></button>)}</div>
@@ -8832,6 +8670,12 @@ function HomeView({
           <div className="home-card-heading"><Radio size={18} /><div><h3>Find matches & teams</h3><span>{activeTestingSession ? `Testing: ${activeTestingSession.label}` : "Social and private play"}</span></div></div>
           <p className="muted">Post an LFG room, manage teams, or sync selected matches to private groups.</p>
           <div className="home-card-actions"><button className="primary" onClick={() => onNavigate("social")}><Radio size={16} /> Find Match</button><button className="secondary" onClick={() => onNavigate("hubs")}><Users size={16} /> Private Hubs</button></div>
+        </article>
+
+        <article className="home-card home-support-card">
+          <div className="home-card-heading"><Shield size={18} /><div><h3>Support RiftLite</h3><span>Help keep community tools running</span></div></div>
+          <p className="muted">Tips help cover servers, development time, and the free tools used across RiftLite.</p>
+          <div className="home-card-actions"><button className="primary" onClick={openMetafySupport}><ExternalLink size={16} /> Support on Metafy</button></div>
         </article>
       </section>
     </section>
@@ -17364,7 +17208,7 @@ function defaultMatchupPrepPosition(): FloatingPrepPosition {
   }
   return {
     x: 16,
-    y: Math.max(72, Math.round(window.innerHeight * 0.44))
+    y: Math.max(72, window.innerHeight - 132)
   };
 }
 
@@ -17568,7 +17412,7 @@ function MatchupPrepOverlay({ deck, notebook, opponentLegend, sideboardSuggested
     clampAndSave();
     window.addEventListener("resize", clampAndSave);
     return () => window.removeEventListener("resize", clampAndSave);
-  }, [open]);
+  }, [hidden, open]);
 
   function clampPrepPosition(next: FloatingPrepPosition): FloatingPrepPosition {
     const parent = overlayRef.current?.parentElement;
@@ -17646,7 +17490,8 @@ function MatchupPrepOverlay({ deck, notebook, opponentLegend, sideboardSuggested
       }
       nativeEvent.preventDefault();
       clearPrepSelection();
-      const shouldOpenPill = !open && !drag.moved && target.classList.contains("matchup-prep-pill");
+      const shouldOpenPill = !open && !hidden && !drag.moved && target.classList.contains("matchup-prep-pill");
+      const shouldRestorePrep = hidden && !drag.moved && target.classList.contains("matchup-prep-restore");
       target.releasePointerCapture?.(nativeEvent.pointerId);
       window.removeEventListener("pointermove", onMove, true);
       window.removeEventListener("pointerup", onEnd, true);
@@ -17666,6 +17511,8 @@ function MatchupPrepOverlay({ deck, notebook, opponentLegend, sideboardSuggested
         }, 0);
       } else if (shouldOpenPill) {
         setOpen(true);
+      } else if (shouldRestorePrep) {
+        showPrep();
       }
     };
     window.addEventListener("pointermove", onMove, true);
@@ -17739,6 +17586,16 @@ function MatchupPrepOverlay({ deck, notebook, opponentLegend, sideboardSuggested
     setOpen(true);
   }
 
+  function openFromRestore(event: React.MouseEvent<HTMLButtonElement>) {
+    if (suppressNextClickRef.current) {
+      suppressNextClickRef.current = false;
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+    showPrep();
+  }
+
   function addLiveNote() {
     const text = liveNote.trim();
     if (!text) {
@@ -17775,8 +17632,23 @@ function MatchupPrepOverlay({ deck, notebook, opponentLegend, sideboardSuggested
 
   if (hidden) {
     return (
-      <div className="matchup-prep-overlay matchup-prep-restore-wrap" data-hidden="true">
-        <button type="button" className="secondary matchup-prep-restore" onClick={showPrep} title="Show matchup prep and notes">
+      <div
+        ref={overlayRef}
+        className="matchup-prep-overlay matchup-prep-restore-wrap"
+        data-open="false"
+        data-hidden="true"
+        data-dragging={dragging}
+        style={{ left: position.x, top: position.y }}
+        onDragStart={(event) => event.preventDefault()}
+        onPointerDownCapture={clearPrepSelection}
+      >
+        <button
+          type="button"
+          className="secondary matchup-prep-restore"
+          onClick={openFromRestore}
+          onPointerDown={startDrag}
+          title="Show or drag matchup prep and notes"
+        >
           <BookOpen size={15} />
           <span>Prep/Notes</span>
         </button>
@@ -24791,7 +24663,7 @@ function CommunityView({ matches, communityMatches, hubMatches, settings, status
         ))}
       </nav>
       {activeTab === "legend-meta" ? <LegendMetaPanel matches={filteredAnalytics} expanded showFlags={false} /> : null}
-      {activeTab === "match-matrix" ? <MatchupMatrixPanel matches={filteredAnalytics} emptyText="Community match data will appear here after Firebase sync returns rows." showFlags={false} /> : null}
+      {activeTab === "match-matrix" ? <MatchupMatrixPanel matches={filteredAnalytics} emptyText="Community match data will appear here after Firebase sync returns rows." showFlags={false} symmetric /> : null}
       {activeTab === "recent-matches" ? <RecentMatchesPanel matches={filteredAnalytics} showFlags={false} /> : null}
       {activeTab === "community-decks" ? <CommunityDecksPanel matches={communityDeckMatches} focusLegend={deckLegendTarget} /> : null}
     </section>
@@ -25564,6 +25436,7 @@ function MatchupMatrixPanel({
   emptyText,
   showFlags = true,
   showSeason = false,
+  symmetric = false,
   onFilterChange,
   onResetFilters
 }: {
@@ -25573,6 +25446,7 @@ function MatchupMatrixPanel({
   emptyText: string;
   showFlags?: boolean;
   showSeason?: boolean;
+  symmetric?: boolean;
   onFilterChange?: (key: keyof MatrixFilters, value: string) => void;
   onResetFilters?: () => void;
 }) {
@@ -25581,7 +25455,10 @@ function MatchupMatrixPanel({
   const activeFilters = filters ?? internalFilters;
   const internalFilteredMatches = useMemo(() => filterMatrixMatches(matches, activeFilters, showFlags), [matches, activeFilters, showFlags]);
   const visibleMatches = filteredMatches ?? internalFilteredMatches;
-  const matrix = useMemo(() => matchupMatrix(visibleMatches), [visibleMatches]);
+  const matrix = useMemo(
+    () => symmetric ? buildSymmetricMatchupMatrix(visibleMatches) : matchupMatrix(visibleMatches),
+    [visibleMatches, symmetric]
+  );
   const legends = useMemo(() => matrixLegendOptions(matches), [matches]);
   const showSourceFilter = matches.some((match) => match.source === "capture" || match.source === "scorepad" || match.source === "manual");
   const selectedCell = selectedKey ? matrix.lookup.get(selectedKey) : undefined;
@@ -25684,7 +25561,7 @@ function MatchupMatrixPanel({
   if (!matrix.rows.length || !matrix.cols.length) {
     return (
       <section className="rail-card matrix-card">
-        <MatrixHeader total={matches.length} filtered={visibleMatches.length} onReset={resetFilters} />
+        <MatrixHeader total={matches.length} filtered={visibleMatches.length} symmetric={symmetric} onReset={resetFilters} />
         <MatrixFiltersBar filters={activeFilters} legends={legends} showFlags={showFlags} showSource={showSourceFilter} showSeason={showSeason} onChange={setFilter} />
         <p className="muted">{emptyText}</p>
       </section>
@@ -25693,7 +25570,7 @@ function MatchupMatrixPanel({
   return (
     <>
       <section className="rail-card matrix-card">
-        <MatrixHeader total={matches.length} filtered={visibleMatches.length} onReset={resetFilters} />
+        <MatrixHeader total={matches.length} filtered={visibleMatches.length} symmetric={symmetric} onReset={resetFilters} />
         <MatrixFiltersBar filters={activeFilters} legends={legends} showFlags={showFlags} showSource={showSourceFilter} showSeason={showSeason} onChange={setFilter} />
         <div
           className="matrix-scroll"
@@ -25706,7 +25583,7 @@ function MatchupMatrixPanel({
           <table className="matchup-matrix">
             <thead>
               <tr>
-                <th className="matrix-corner"><span>My Legend</span><em>vs Opp Legend</em></th>
+                <th className="matrix-corner"><span>{symmetric ? "Legend" : "My Legend"}</span><em>vs Opp Legend</em></th>
                 {matrix.cols.map((col) => (
                   <th key={col} className="matrix-col-heading">
                     <LegendAvatar legend={col} size="large" />
@@ -25723,7 +25600,7 @@ function MatchupMatrixPanel({
                     <div className="matrix-row-copy" title={row}>
                       <strong>{row}</strong>
                       <em className="matrix-row-total">{matrix.rowTotals.get(row) ?? 0} match{(matrix.rowTotals.get(row) ?? 0) === 1 ? "" : "es"}</em>
-                      <span>{legendRecord(visibleMatches, row)}</span>
+                      <span>{symmetric ? pooledLegendRecord(visibleMatches, row) : legendRecord(visibleMatches, row)}</span>
                     </div>
                   </th>
                   {matrix.cols.map((col) => {
@@ -25739,12 +25616,10 @@ function MatchupMatrixPanel({
                             onClick={() => setSelectedKey((current) => current === `${row}|||${col}` ? "" : `${row}|||${col}`)}
                             data-active={selectedKey === `${row}|||${col}`}
                             aria-haspopup="dialog"
-                            title={mirror
-                              ? `${row} mirror: submitted perspective only, across ${cell.total} rows`
-                              : `${row} vs ${col}: ${cell.winRate}% across ${cell.total} matches`}
+                            title={matrixCellTitle(row, col, cell, symmetric, mirror)}
                           >
                             <strong>{mirror ? "Mirror" : `${cell.winRate}%`}</strong>
-                            <span>{cell.total} match{cell.total === 1 ? "" : "es"}</span>
+                            <span>{cell.total} {symmetric ? `row${cell.total === 1 ? "" : "s"}` : `match${cell.total === 1 ? "" : "es"}`}</span>
                             <em>{mirror ? "Submitted rows" : `${cell.wins}-${cell.losses}${cell.draws ? `-${cell.draws}` : ""}`}</em>
                           </button>
                         ) : (
@@ -25773,6 +25648,7 @@ function MatchupMatrixPanel({
             opponentLegend={selectedOpp}
             cell={selectedCell}
             showFlags={showFlags}
+            pooled={symmetric}
             onClose={() => setSelectedKey("")}
           />
         </div>
@@ -25781,12 +25657,12 @@ function MatchupMatrixPanel({
   );
 }
 
-function MatrixHeader({ total, filtered, onReset }: { total: number; filtered: number; onReset: () => void }) {
+function MatrixHeader({ total, filtered, symmetric = false, onReset }: { total: number; filtered: number; symmetric?: boolean; onReset: () => void }) {
   return (
     <div className="matrix-header">
       <div>
         <h2>Match matrix</h2>
-        <span>{filtered} of {total} matches analysed</span>
+        <span>{filtered} of {total} {symmetric ? "submitted rows pooled across both perspectives" : "matches analysed"}</span>
       </div>
       <button className="secondary" onClick={onReset}>Reset filters</button>
     </div>
@@ -25854,11 +25730,12 @@ function LegendAvatar({ legend, size = "normal" }: { legend: string; size?: "nor
   );
 }
 
-function MatrixDrilldown({ myLegend, opponentLegend, cell, showFlags = true, onClose }: {
+function MatrixDrilldown({ myLegend, opponentLegend, cell, showFlags = true, pooled = false, onClose }: {
   myLegend: string;
   opponentLegend: string;
   cell: MatrixCell;
   showFlags?: boolean;
+  pooled?: boolean;
   onClose: () => void;
 }) {
   const [selectedMatch, setSelectedMatch] = useState<AnalyticsMatch | null>(null);
@@ -25878,18 +25755,29 @@ function MatrixDrilldown({ myLegend, opponentLegend, cell, showFlags = true, onC
             <h3>{mirror ? `${myLegend} mirror` : `${myLegend} into ${opponentLegend}`}</h3>
             <span>{mirror
               ? `${cell.total} submitted mirror row${cell.total === 1 ? "" : "s"}; win rate is not treated as a balance signal`
-              : `${cell.wins}-${cell.losses}${cell.draws ? `-${cell.draws}` : ""} record across ${cell.total} matches`}</span>
+              : `${cell.wins}-${cell.losses}${cell.draws ? `-${cell.draws}` : ""} ${pooled ? "pooled record" : "record"} across ${cell.total} ${pooled ? "submitted rows" : "matches"}`}</span>
           </div>
           <LegendAvatar legend={opponentLegend} size="large" />
         </div>
         <button className="icon-button" onClick={onClose}>x</button>
       </header>
       <div className="drilldown-grid">
-        <Metric label={mirror ? "Mirror data" : "Win rate"} value={mirror ? "Submitted" : `${cell.winRate}%`} />
+        <Metric label={mirror ? "Mirror data" : pooled ? "Pooled win rate" : "Win rate"} value={mirror ? "Submitted" : `${cell.winRate}%`} />
         <Metric label="Wins" value={String(cell.wins)} />
         <Metric label="Losses" value={String(cell.losses)} />
         <Metric label="Draws" value={String(cell.draws)} />
       </div>
+      {pooled && !mirror && cell.direct && cell.reverse ? (
+        <>
+          <div className="drilldown-grid">
+            <Metric label={`${myLegend} submissions`} value={`${cell.direct.total} | ${matrixCohortRecord(cell.direct)}`} />
+            <Metric label={`${opponentLegend} submissions`} value={`${cell.reverse.total} | ${matrixCohortRecord(cell.reverse)}`} />
+          </div>
+          <p className="muted matrix-mirror-note">
+            Cohort records are shown from each submitting legend's native perspective. The {opponentLegend} wins and losses are inverted only when calculating the pooled {myLegend} matchup.
+          </p>
+        </>
+      ) : null}
       {mirror ? (
         <p className="muted matrix-mirror-note">
           Mirror records are shown as submitted rows only. They can drift from 50% when only one side of the match syncs to community data.
@@ -25908,7 +25796,7 @@ function MatrixDrilldown({ myLegend, opponentLegend, cell, showFlags = true, onC
             >
               <span>
                 <strong>{match.myName || "Unknown player"} vs {match.opponentName || "Unknown opponent"}</strong>
-                <em>{new Date(match.capturedAt).toLocaleDateString()} - {match.format} - {match.deckName || "No deck logged"}</em>
+                <em>{new Date(match.capturedAt).toLocaleDateString()} - {match.format} - {match.deckName || "No deck logged"}{pooled ? ` - ${match.myChampion} submission` : ""}</em>
               </span>
               <strong>{match.result}{match.score ? ` ${match.score}` : ""}</strong>
             </button>
@@ -26661,6 +26549,48 @@ function matchupMatrix(matches: AnalyticsMatch[]): {
   const rows = [...rowTotals.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([name]) => name);
   const cols = [...colTotals.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([name]) => name);
   return { rows, cols, lookup, rowTotals };
+}
+
+function matrixCohortRecord(cohort: Pick<MatrixCohort, "wins" | "losses" | "draws">): string {
+  return `${cohort.wins}-${cohort.losses}${cohort.draws ? `-${cohort.draws}` : ""}`;
+}
+
+function matrixCellTitle(myLegend: string, opponentLegend: string, cell: MatrixCell, symmetric: boolean, mirror: boolean): string {
+  if (mirror) {
+    return `${myLegend} mirror: submitted perspective only, across ${cell.total} rows`;
+  }
+  if (!symmetric || !cell.direct || !cell.reverse) {
+    return `${myLegend} vs ${opponentLegend}: ${cell.winRate}% across ${cell.total} matches`;
+  }
+  return [
+    `${myLegend} vs ${opponentLegend}: ${cell.winRate}% pooled across ${cell.total} submitted rows.`,
+    `${myLegend} submissions: ${matrixCohortRecord(cell.direct)} across ${cell.direct.total}.`,
+    `${opponentLegend} submissions: ${matrixCohortRecord(cell.reverse)} across ${cell.reverse.total} (inverted for the pooled result).`
+  ].join("\n");
+}
+
+function pooledLegendRecord(matches: AnalyticsMatch[], legend: string): string {
+  let wins = 0;
+  let losses = 0;
+  let draws = 0;
+  let games = 0;
+  for (const match of matches) {
+    if (match.result === "Incomplete") {
+      continue;
+    }
+    const direct = match.myChampion === legend;
+    const reverse = match.opponentChampion === legend && match.myChampion !== legend;
+    if (!direct && !reverse) {
+      continue;
+    }
+    games += 1;
+    if (match.result === "Draw") draws += 1;
+    if ((direct && match.result === "Win") || (reverse && match.result === "Loss")) wins += 1;
+    if ((direct && match.result === "Loss") || (reverse && match.result === "Win")) losses += 1;
+  }
+  const decisive = wins + losses;
+  const winRate = decisive ? Math.round((wins / decisive) * 1_000) / 10 : 0;
+  return `WR: ${formatOneDecimal(winRate)}% | Games: ${games} | ${wins}-${losses}${draws ? `-${draws}` : ""}`;
 }
 
 function legendRecord(matches: AnalyticsMatch[], legend: string): string {

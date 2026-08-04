@@ -22,4 +22,26 @@ describe("Prep/Notes widget integration", () => {
     expect(appSource).toContain("onSave({ matchupPrepWidgetEnabled: event.target.checked })");
     expect(appSource).toContain("over both Atlas and TCGA");
   });
+
+  it("defaults every launcher to the bottom-left and lets it remember a dragged position", () => {
+    expect(appSource).toContain("y: Math.max(72, window.innerHeight - 132)");
+    expect(appSource).toContain('const MATCHUP_PREP_POSITION_KEY = "riftlite-matchup-prep-position-v1";');
+    expect(appSource).toContain("saveMatchupPrepPosition(next);");
+    expect(appSource).toContain("}, [hidden, open]);");
+
+    const restoreStart = appSource.indexOf('className="matchup-prep-overlay matchup-prep-restore-wrap"');
+    const restoreMarkup = appSource.slice(restoreStart, restoreStart + 1_200);
+    expect(restoreStart).toBeGreaterThan(-1);
+    expect(restoreMarkup).toContain("ref={overlayRef}");
+    expect(restoreMarkup).toContain("style={{ left: position.x, top: position.y }}");
+    expect(restoreMarkup).toContain("onPointerDown={startDrag}");
+    expect(restoreMarkup).toContain('title="Show or drag matchup prep and notes"');
+
+    const restoreStylesStart = stylesSource.indexOf(".matchup-prep-restore-wrap {");
+    const restoreStylesEnd = stylesSource.indexOf("}", restoreStylesStart);
+    const restoreStyles = stylesSource.slice(restoreStylesStart, restoreStylesEnd);
+    expect(restoreStyles).not.toContain("right:");
+    expect(restoreStyles).not.toContain("bottom:");
+    expect(stylesSource).toContain('.matchup-prep-overlay[data-dragging="true"] .matchup-prep-restore');
+  });
 });
