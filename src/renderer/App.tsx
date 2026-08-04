@@ -2617,6 +2617,110 @@ const TRONISBAD_SPOTLIGHT: CommunitySpotlight = {
   ]
 };
 
+const BLOODY_SPOTLIGHT: CommunitySpotlight = {
+  id: "bloody",
+  name: "Bloody",
+  kicker: "Creator spotlight",
+  location: "Competitive Riftbound player",
+  description: "Long-time streamer, YouTuber, and competitor Bloody is now grinding Riftbound. Fresh from a Top 16 finish and Best Sivir performance in Hartford, she is training with her sights set on becoming the best in the world.",
+  primaryCta: {
+    id: "twitch",
+    label: "Watch Twitch",
+    url: "https://www.twitch.tv/bloody",
+    description: "Watch Bloody live for Riftbound practice, competitive play, and the climb to the top.",
+    icon: Radio,
+    featured: true
+  },
+  links: [
+    {
+      id: "twitch",
+      label: "Twitch",
+      url: "https://www.twitch.tv/bloody",
+      description: "Watch Bloody live for Riftbound practice, competitive play, and community streams.",
+      icon: Radio,
+      featured: true
+    },
+    {
+      id: "youtube",
+      label: "YouTube",
+      url: "https://www.youtube.com/@Blooby",
+      description: "Watch Bloody's videos, competitive highlights, and creator content.",
+      icon: Video,
+      featured: true
+    },
+    {
+      id: "tiktok",
+      label: "TikTok",
+      url: "https://www.tiktok.com/@bloobyclips",
+      description: "Follow Bloody's short-form clips, competitive moments, and stream highlights.",
+      icon: Video,
+      featured: true
+    },
+    {
+      id: "instagram",
+      label: "Instagram",
+      url: "https://www.instagram.com/bloodysnaps/",
+      description: "Photos, creator updates, tournament moments, and community posts.",
+      icon: Camera
+    },
+    {
+      id: "x",
+      label: "X",
+      url: "https://x.com/bloody",
+      description: "Follow Bloody for competitive updates, stream announcements, and Riftbound posts.",
+      icon: X
+    }
+  ],
+  tags: ["Streamer", "Competitive play", "Sivir", "Hartford Top 16"],
+  highlights: [
+    {
+      title: "Long-time creator",
+      text: "Bloody brings years of streaming and YouTube experience to her competitive journey in Riftbound."
+    },
+    {
+      title: "Hartford Top 16",
+      text: "A Top 16 finish in Hartford put Bloody among the event's strongest competitors."
+    },
+    {
+      title: "Best of Sivir",
+      text: "Bloody earned the event's Best Sivir result while sharpening one of her signature competitive picks."
+    },
+    {
+      title: "Aiming for the top",
+      text: "Her focus is firmly on training, improving, and competing to become one of the best Riftbound players in the world."
+    }
+  ],
+  assets: {
+    logo: "community/bloody-profile.webp",
+    banner: "community/bloody-banner.webp",
+    tiktok: "community/bloody-banner.webp",
+    youtube: "community/bloody-banner.webp",
+    twitch: "community/bloody-banner.webp"
+  },
+  overviewBanner: "community/bloody-banner.webp",
+  overviewLogo: "community/bloody-profile.webp",
+  routes: [
+    {
+      key: "twitch",
+      title: "Twitch stream",
+      subtitle: "Watch live Riftbound practice, competitive play, and community streams.",
+      linkId: "twitch"
+    },
+    {
+      key: "youtube",
+      title: "YouTube channel",
+      subtitle: "Watch videos, competitive highlights, and Bloody's wider creator content.",
+      linkId: "youtube"
+    },
+    {
+      key: "tiktok",
+      title: "TikTok clips",
+      subtitle: "Follow short-form clips, competitive moments, and stream highlights.",
+      linkId: "tiktok"
+    }
+  ]
+};
+
 const COMMUNITY_SPOTLIGHTS: CommunitySpotlight[] = [
   RIFTLAB_SPOTLIGHT,
   RUNESANDRIFT_SPOTLIGHT,
@@ -2630,7 +2734,8 @@ const COMMUNITY_SPOTLIGHTS: CommunitySpotlight[] = [
   DAEMONXGG_SPOTLIGHT,
   MASKEDSWAN_SPOTLIGHT,
   ARG0NTCG_SPOTLIGHT,
-  TRONISBAD_SPOTLIGHT
+  TRONISBAD_SPOTLIGHT,
+  BLOODY_SPOTLIGHT
 ];
 
 interface CaptureNotice {

@@ -9,7 +9,7 @@ import {
 describe("community spotlight themes", () => {
   it("defines a theme for every spotlight and no unknown entries", () => {
     expect(Object.keys(COMMUNITY_SPOTLIGHT_THEMES).sort()).toEqual([...COMMUNITY_SPOTLIGHT_IDS].sort());
-    expect(COMMUNITY_SPOTLIGHT_IDS).toHaveLength(13);
+    expect(COMMUNITY_SPOTLIGHT_IDS).toHaveLength(14);
   });
 
   it("uses valid six-digit CSS hex colors", () => {
@@ -37,6 +37,10 @@ describe("community spotlight themes", () => {
     expect(communitySpotlightTheme("  TRONISBAD ")).toEqual({
       primary: "#F28A24",
       secondary: "#7A2531"
+    });
+    expect(communitySpotlightTheme("  BLOODY ")).toEqual({
+      primary: "#C24F86",
+      secondary: "#D6B752"
     });
   });
 
