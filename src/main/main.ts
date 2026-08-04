@@ -188,7 +188,11 @@ import {
 } from "./services/smokeIsolation.js";
 import { TcgaResolver } from "./services/tcgaResolver.js";
 import { TcgaReplayResearchCapture } from "./services/tcgaReplayResearchCapture.js";
-import { TcgaWebReplayCaptureService } from "./services/tcgaWebReplayCaptureService.js";
+import { TcgaSeatCaptureBridge } from "./services/tcgaSeatCaptureBridge.js";
+import {
+  TcgaWebReplayCaptureService,
+  type TcgaWebReplayBindingEvent
+} from "./services/tcgaWebReplayCaptureService.js";
 import { UpdaterService } from "./services/updaterService.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -202,6 +206,7 @@ const REPLAY_STREAM_MAGIC = "RIFTLITE_REPLAY_STREAM_V1";
 const REPLAY_STREAM_VIDEO_START = "VIDEO_DATA";
 const REPLAY_STREAM_VIDEO_END = "END_VIDEO_DATA";
 const RIFTREPLAY_CAPTURE_FEATURE_ENABLED = true;
+const TCGA_MATCH_LOGGER_SEAT_CAPTURE_ENABLED = true;
 const ATLAS_GAME_PARTITION = GAME_WEBVIEW_PARTITIONS.atlas;
 const IS_PACKAGED_SMOKE_TEST = process.argv.includes("--riftlite-smoke-test");
 const SMOKE_PATHS = resolveRiftLiteSmokePaths(IS_PACKAGED_SMOKE_TEST, process.env);
@@ -280,6 +285,7 @@ let tcgaWebReplayCaptureService: TcgaWebReplayCaptureService<
 > | null = null;
 let tcgaWebReplayProductAccountUid = "";
 let tcgaWebReplayConfigurationTail: Promise<void> = Promise.resolve();
+const tcgaSeatCaptureBridge = new TcgaSeatCaptureBridge();
 let updater: UpdaterService;
 let registeredScreenshotHotkey = "";
 let registeredShadowClipHotkey = "";
@@ -2159,7 +2165,8 @@ function installTcgaReplayResearchTap(webContents: WebContents): TcgaReplayResea
     const researchStatus = tcgaReplayResearchCapture?.getStatus();
     const researchActive = researchStatus?.active === true;
     const productActive = Boolean(tcgaWebReplayProductAccountUid && tcgaWebReplayCaptureService);
-    if ((!researchActive && !productActive) || !trustedTcgaResearchContents(webContents)) return;
+    const seatCaptureActive = TCGA_MATCH_LOGGER_SEAT_CAPTURE_ENABLED;
+    if ((!researchActive && !productActive && !seatCaptureActive) || !trustedTcgaResearchContents(webContents)) return;
     const payload = tcgaResearchRecord(params);
     const requestId = tcgaResearchText(payload.requestId);
 
@@ -2179,18 +2186,30 @@ function installTcgaReplayResearchTap(webContents: WebContents): TcgaReplayResea
         const capturedAt = tcgaResearchText(decoded.capturedAt);
         const documentId = tcgaResearchText(decoded.documentId);
         const decodedPayload = tcgaResearchRecord(decoded.payload);
-        if (productActive && (
+        const bindingEvent: TcgaWebReplayBindingEvent | null = (
           kind === "hook-ready" ||
           kind === "hook-resumed" ||
           kind === "rtc-channel" ||
           kind === "rtc-data"
-        )) {
-          tcgaWebReplayCaptureService?.ingestBindingEvent(webContents.id, {
+        )
+          ? {
             kind,
             capturedAt,
             documentId,
             payload: decodedPayload
-          });
+          }
+          : null;
+        if (seatCaptureActive && bindingEvent) {
+          for (const event of tcgaSeatCaptureBridge.ingestBindingEvent(webContents.id, bindingEvent)) {
+            if (typeof capture !== "undefined") {
+              void capture.handleEvent(event).catch((error) => {
+                void logStartupIssue("TCGA match seat capture failed", error);
+              });
+            }
+          }
+        }
+        if (productActive && bindingEvent) {
+          tcgaWebReplayCaptureService?.ingestBindingEvent(webContents.id, bindingEvent);
         }
         if (researchActive && tcgaResearchText(decoded.sessionId) === researchStatus?.sessionId) {
           recordTcgaReplayResearch(
@@ -2211,9 +2230,9 @@ function installTcgaReplayResearchTap(webContents: WebContents): TcgaReplayResea
       return;
     }
 
-    // Product Web Replay consent covers only the narrow WebRTC game-channel
-    // binding above. Ignore every broader CDP network event unless the user
-    // separately started the local Research Monitor.
+    // Product Web Replay and match-seat detection use only the narrow WebRTC
+    // game-channel binding above. Ignore every broader CDP network event unless
+    // the user separately started the local Research Monitor.
     if (!researchActive) return;
 
     if (method === "Network.requestWillBeSent") {
@@ -2359,7 +2378,9 @@ function installTcgaReplayResearchTap(webContents: WebContents): TcgaReplayResea
     const captureStatus = tcgaReplayResearchCapture?.getStatus();
     await configureTcgaResearchPageHook(
       tap,
-      captureStatus?.active === true || Boolean(tcgaWebReplayProductAccountUid),
+      captureStatus?.active === true ||
+        Boolean(tcgaWebReplayProductAccountUid) ||
+        TCGA_MATCH_LOGGER_SEAT_CAPTURE_ENABLED,
       captureStatus?.active === true ? captureStatus.sessionId : ""
     );
     if (captureStatus?.active) {
@@ -2377,6 +2398,7 @@ function installTcgaReplayResearchTap(webContents: WebContents): TcgaReplayResea
     }
   }).catch((error) => {
     const message = error instanceof Error ? error.message : String(error);
+    void logStartupIssue("TCGA game-channel hook failed", error);
     if (tcgaReplayResearchCapture?.getStatus().active) {
       tcgaReplayResearchCapture.setTransportState("error", message);
       recordTcgaReplayResearch("monitor-hook-error", { phase: "install", message });
@@ -2384,6 +2406,7 @@ function installTcgaReplayResearchTap(webContents: WebContents): TcgaReplayResea
   });
   webContents.once("destroyed", () => {
     tcgaReplayResearchTaps.delete(webContents.id);
+    tcgaSeatCaptureBridge.forgetWebContents(webContents.id);
     tcgaWebReplayCaptureService?.discardWebContents(webContents.id);
     requests.clear();
     socketUrls.clear();
@@ -2402,7 +2425,7 @@ async function setTcgaReplayResearchTapActive(active: boolean, sessionId = ""): 
   }
   await configureTcgaResearchPageHook(
     tap,
-    active || Boolean(tcgaWebReplayProductAccountUid),
+    active || Boolean(tcgaWebReplayProductAccountUid) || TCGA_MATCH_LOGGER_SEAT_CAPTURE_ENABLED,
     active ? sessionId : ""
   );
   if (active && !tap.networkEnabled) {
@@ -2443,13 +2466,16 @@ async function configureTcgaWebReplayProductCaptureNow(): Promise<void> {
   await tcgaWebReplayCaptureService?.configure(outputDirectory, nextAccountUid, discordShareHubIds);
   tcgaWebReplayProductAccountUid = nextAccountUid;
   const contents = gameWebContentsByPlatform.get("tcga");
-  if (nextAccountUid && contents && !contents.isDestroyed()) {
-    tcgaWebReplayCaptureService?.beginDocument(contents.id);
+  if (contents && !contents.isDestroyed()) {
+    if (nextAccountUid) {
+      tcgaWebReplayCaptureService?.beginDocument(contents.id);
+    }
     installTcgaReplayResearchTap(contents);
   }
   const researchStatus = tcgaReplayResearchCapture?.getStatus();
   if (
     !nextAccountUid &&
+    !TCGA_MATCH_LOGGER_SEAT_CAPTURE_ENABLED &&
     researchStatus?.active !== true &&
     (!contents || !tcgaReplayResearchTaps.has(contents.id))
   ) {
@@ -6854,7 +6880,11 @@ async function createWindow(): Promise<void> {
     if (policy.platform === "tcga" && tcgaWebReplayProductAccountUid) {
       tcgaWebReplayCaptureService?.beginDocument(webContents.id);
     }
-    if (tcgaReplayResearchCapture?.getStatus().active || tcgaWebReplayProductAccountUid) {
+    if (
+      tcgaReplayResearchCapture?.getStatus().active ||
+      tcgaWebReplayProductAccountUid ||
+      TCGA_MATCH_LOGGER_SEAT_CAPTURE_ENABLED
+    ) {
       installTcgaReplayResearchTap(webContents);
     }
     installFullscreenShortcut(webContents);
@@ -6932,13 +6962,20 @@ async function createWindow(): Promise<void> {
     const refreshGuestContext = () => {
       rememberGameWebContents(webContents);
       maybeInstallRawCaptureWebSocketTap(webContents);
-      if (tcgaReplayResearchCapture?.getStatus().active || tcgaWebReplayProductAccountUid) {
+      if (
+        tcgaReplayResearchCapture?.getStatus().active ||
+        tcgaWebReplayProductAccountUid ||
+        TCGA_MATCH_LOGGER_SEAT_CAPTURE_ENABLED
+      ) {
         installTcgaReplayResearchTap(webContents);
       }
     };
     webContents.on("did-start-navigation", (_navigationEvent, url, isInPlace, isMainFrame) => {
       if (isMainFrame && !isInPlace) {
         mainNavigationStartedAt = Date.now();
+        if (policy.platform === "tcga") {
+          tcgaSeatCaptureBridge.forgetWebContents(webContents.id);
+        }
         if (policy.platform === "tcga" && tcgaWebReplayProductAccountUid) {
           tcgaWebReplayCaptureService?.beginDocument(webContents.id);
         }

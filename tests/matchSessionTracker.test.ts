@@ -52,6 +52,29 @@ function event(kind: CaptureEvent["kind"], payload: Record<string, unknown>, at 
 }
 
 describe("MatchSessionTracker", () => {
+  it("applies the privacy-safe TCGA peer seat update to the review draft", () => {
+    const tracker = new MatchSessionTracker();
+    tracker.ingest(event("match-start", {
+      active: true,
+      myName: "ConfiguredUser",
+      opponentName: "Rival",
+      score: { me: "0", opp: "0" }
+    }));
+    tracker.ingest(event("match-update", {
+      active: true,
+      reason: "tcga-peer-seat",
+      wentFirst: "2nd"
+    }, "2026-04-24T10:00:01.000Z"));
+    const end = event("match-end", {
+      active: false,
+      score: { me: "8", opp: "4" }
+    }, "2026-04-24T10:05:00.000Z");
+
+    const draft = tracker.buildDraft("tcga", end, settings);
+
+    expect(draft.games[0]?.wentFirst).toBe("2nd");
+  });
+
   it("keeps sticky identity when final inactive payload is sparse", () => {
     const tracker = new MatchSessionTracker();
     tracker.ingest(event("match-start", {
