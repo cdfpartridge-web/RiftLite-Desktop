@@ -255,6 +255,87 @@ describe("Atlas seat tracking", () => {
     });
   });
 
+  it("reads the current Atlas first-player choice from authoritative room fields", () => {
+    const payload = frame("plr_local");
+    payload.frame.raw = JSON.stringify({
+      type: "authoritative_patch_commit",
+      gameInstanceId: "GAME-CURRENT",
+      action: { type: "choose_first_player" },
+      patch: {
+        operations: [
+          {
+            op: "set_room_fields",
+            fields: {
+              phase: "mulligan",
+              firstPlayerId: "plr_opponent"
+            }
+          },
+          { op: "zone_reorder", playerId: "plr_local", zone: "deck", cardIds: [] }
+        ]
+      }
+    });
+
+    expect(parseAtlasSeatFrame(payload)).toEqual({
+      gameInstanceId: "GAME-CURRENT",
+      roomCode: "ROOM1",
+      localPlayerId: "plr_local",
+      firstPlayerId: "plr_opponent",
+      wentFirst: "2nd"
+    });
+  });
+
+  it("recovers first-player evidence from an authoritative two-player snapshot", () => {
+    const payload = frame("plr_local", "plr_local", "GAME-SNAPSHOT", "ROOM-SNAPSHOT");
+    payload.frame.raw = JSON.stringify({
+      type: "authoritative_snapshot",
+      gameInstanceId: "GAME-SNAPSHOT",
+      snapshot: {
+        roomCode: "ROOM-SNAPSHOT",
+        phase: "in_game",
+        firstPlayerId: "plr_local",
+        players: [
+          { id: "plr_opponent", seat: 0 },
+          { id: "plr_local", seat: 1 }
+        ]
+      }
+    });
+
+    expect(parseAtlasSeatFrame(payload)).toMatchObject({
+      gameInstanceId: "GAME-SNAPSHOT",
+      roomCode: "ROOM-SNAPSHOT",
+      firstPlayerId: "plr_local",
+      wentFirst: "1st"
+    });
+  });
+
+  it("rejects conflicting patches and snapshots that do not identify a seated local player", () => {
+    const conflicting = frame("plr_local");
+    conflicting.frame.raw = JSON.stringify({
+      type: "authoritative_patch_commit",
+      gameInstanceId: "GAME1",
+      action: { type: "choose_first_player", firstPlayerId: "plr_local" },
+      patch: {
+        operations: [{
+          op: "set_room_fields",
+          fields: { firstPlayerId: "plr_opponent" }
+        }]
+      }
+    });
+    const spectatorLike = frame("plr_local");
+    spectatorLike.frame.raw = JSON.stringify({
+      type: "authoritative_snapshot",
+      gameInstanceId: "GAME1",
+      snapshot: {
+        roomCode: "ROOM1",
+        firstPlayerId: "plr_one",
+        players: [{ id: "plr_one" }, { id: "plr_two" }]
+      }
+    });
+
+    expect(parseAtlasSeatFrame(conflicting)).toBeNull();
+    expect(parseAtlasSeatFrame(spectatorLike)).toBeNull();
+  });
+
   it("ignores uncommitted client intents", () => {
     const payload = frame("plr_local");
     payload.frame.dir = "out";
@@ -264,6 +345,12 @@ describe("Atlas seat tracking", () => {
       action: { type: "choose_first_player", firstPlayerId: "plr_local" },
       actorPlayerId: "plr_local"
     });
+    expect(parseAtlasSeatFrame(payload)).toBeNull();
+  });
+
+  it("ignores outbound frames even if they mimic a server commit", () => {
+    const payload = frame("plr_local");
+    payload.frame.dir = "out";
     expect(parseAtlasSeatFrame(payload)).toBeNull();
   });
 

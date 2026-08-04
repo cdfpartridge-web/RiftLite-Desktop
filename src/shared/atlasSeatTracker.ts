@@ -135,30 +135,79 @@ export function validatedAtlasBattlefieldSeatSignal(value: unknown): AtlasBattle
 }
 
 export function parseAtlasSeatFrame(payload: RawCaptureAppendFramePayload): AtlasSeatEvidence | null {
-  if (payload.platform !== "atlas" || !payload.frame.raw.includes("\"firstPlayerId\"")) {
+  if (
+    payload.platform !== "atlas" ||
+    payload.frame.dir !== "in" ||
+    !payload.frame.raw.includes("\"firstPlayerId\"")
+  ) {
     return null;
   }
   const packet = parseRecord(payload.frame.raw);
-  if (!packet || readString(packet.type) !== "authoritative_patch_commit") {
+  if (!packet) {
     return null;
   }
-  const action = readRecord(packet.action);
-  if (readString(action?.type) !== "choose_first_player") {
-    return null;
-  }
-  const firstPlayerId = readString(action?.firstPlayerId);
   const requestUrl = payload.requestUrl ?? "";
   const localPlayerId = atlasPlayerIdFromUrl(requestUrl);
+  const firstPlayerId = authoritativeAtlasFirstPlayerId(packet, localPlayerId);
   if (!firstPlayerId || !localPlayerId) {
     return null;
   }
   return {
-    gameInstanceId: readString(packet.gameInstanceId),
-    roomCode: atlasRoomCodeFromUrl(requestUrl),
+    gameInstanceId: atlasGameInstanceId(packet),
+    roomCode: atlasRoomCode(packet, requestUrl),
     localPlayerId,
     firstPlayerId,
     wentFirst: firstPlayerId === localPlayerId ? "1st" : "2nd"
   };
+}
+
+function authoritativeAtlasFirstPlayerId(
+  packet: Record<string, unknown>,
+  localPlayerId: string
+): string {
+  if (!localPlayerId) {
+    return "";
+  }
+  const packetType = readString(packet.type);
+  if (packetType === "authoritative_patch_commit") {
+    const action = readRecord(packet.action);
+    if (readString(action?.type) !== "choose_first_player") {
+      return "";
+    }
+    const patch = readRecord(packet.patch);
+    const operations = Array.isArray(patch?.operations) ? patch.operations : [];
+    const candidates = [
+      readString(action?.firstPlayerId),
+      ...operations
+        .map(readRecord)
+        .filter((operation): operation is Record<string, unknown> => Boolean(operation))
+        .filter((operation) => readString(operation.op) === "set_room_fields")
+        .map((operation) => readString(readRecord(operation.fields)?.firstPlayerId))
+    ].filter(Boolean);
+    const uniqueCandidates = [...new Set(candidates)];
+    return uniqueCandidates.length === 1 ? uniqueCandidates[0] : "";
+  }
+  if (packetType !== "authoritative_snapshot") {
+    return "";
+  }
+  const payload = readRecord(packet.payload);
+  const snapshot = readRecord(packet.snapshot) ?? readRecord(payload?.snapshot);
+  const firstPlayerId = readString(snapshot?.firstPlayerId);
+  const players = Array.isArray(snapshot?.players) ? snapshot.players : [];
+  const playerIds = [...new Set(players
+    .map(readRecord)
+    .filter((player): player is Record<string, unknown> => Boolean(player))
+    .map((player) => readString(player.id) || readString(player.playerId))
+    .filter(Boolean))];
+  if (
+    !firstPlayerId ||
+    playerIds.length !== 2 ||
+    !playerIds.includes(localPlayerId) ||
+    !playerIds.includes(firstPlayerId)
+  ) {
+    return "";
+  }
+  return firstPlayerId;
 }
 
 export function atlasSeatCaptureEvent(payload: RawCaptureAppendFramePayload): CaptureEvent | null {
