@@ -1,8 +1,8 @@
 # RiftLite Current Engineering State
 
-> **Current cross-platform release:** v0.9.30 brings the accumulated replay-library, recording, Atlas recovery, season-filter, Prep/Notes, and Web Replay reliability work together. Read `docs/release-notes-v0.9.30.md` first.
+> **Current cross-platform release:** v0.9.31 adds automatic creator videos, movable Prep/Notes, pooled matchup statistics, and improved email-verification recovery. Read `docs/release-notes-v0.9.31.md` first.
 
-Last updated: 2026-08-03
+Last updated: 2026-08-04
 
 This is the durable handoff for continuing RiftLite work in a fresh Codex task. Read this file before changing code.
 
@@ -10,15 +10,15 @@ This is the durable handoff for continuing RiftLite work in a fresh Codex task. 
 
 - Active cross-platform release source repo:
   `C:\Users\cdfpa\OneDrive\Documents\Claude\Projects\Riftlite Beta 0.6\desktop-v06`
-- Current local package version: `0.9.30` (customer-facing build `v0.9.30`); fully built, validated, and published for Windows, Intel macOS, and Apple Silicon macOS
+- Current local package version: `0.9.31` (customer-facing build `v0.9.31`); fully built, validated, and published for Windows, Intel macOS, and Apple Silicon macOS
 - Current branch: `agent/release-v0.9.12`
 - Windows GitHub release repository (`windows` remote): `cdfpartridge-web/RiftLite-Desktop`
 - macOS GitHub release repository (`origin` remote): `cdfpartridge-web/RiftLite-Desktop-mac`
-- Current published Windows release: `v0.9.30` (2026-08-03)
-- Current published macOS release: `mac-v0.9.30` (2026-08-03)
+- Current published Windows release: `v0.9.31` (2026-08-04)
+- Current published macOS release: `mac-v0.9.31` (2026-08-04)
 - Windows installer output:
   `C:\Users\cdfpa\OneDrive\Documents\Claude\Projects\Riftlite Beta 0.6\desktop-v06\release\RiftLiteBetaInstall.exe`
-- Current local Windows installer: `release\RiftLiteBetaInstall.exe`, 207,647,683 bytes, SHA-256 `5CDAE64E37857930795CD6FA332EABAF8FC28AA823F197F4BA60B017ADFDC8A7`.
+- Current local Windows installer: `release\RiftLiteBetaInstall.exe`, 210,363,608 bytes, SHA-256 `A4449D01E84F4FF346A069D07D1C064A23E83E1F8AF3EFE1467C8A125A1D1A18`.
 
 Always name the remote explicitly when pushing: Windows source/tags go to `windows`; macOS source/tags go to `origin`. The repositories and release tags are deliberately separate.
 
@@ -28,7 +28,7 @@ Do not accidentally work from:
 - the separate `0.8.0` experiment/side project
 - an old copied Mac source tree unless the task explicitly concerns the Mac build
 
-The active working tree is intentionally dirty and contains a large amount of current work. Never reset, discard, or overwrite unrelated changes.
+The active working tree may contain current work. Never reset, discard, or overwrite unrelated changes.
 
 ## Immediate Working Rules
 
@@ -39,6 +39,21 @@ The active working tree is intentionally dirty and contains a large amount of cu
 5. Do not rebuild installers, publish releases, or deploy the website unless explicitly requested.
 6. Treat raw WebSocket replay data, account sync, hub ownership, Discord tokens, and API keys as security-sensitive.
 7. RiftReplay/Replay Lab and Vision work are parked or hidden. Do not expose them in menus or release notes unless explicitly requested.
+
+## 2026-08-04 v0.9.31 Release
+
+- Release commit `259f9857d0be26b12fa1ea157e27c72c7d128126` is tagged as Windows `v0.9.31` and macOS `mac-v0.9.31`.
+- Windows release: `https://github.com/cdfpartridge-web/RiftLite-Desktop/releases/tag/v0.9.31`.
+- macOS release: `https://github.com/cdfpartridge-web/RiftLite-Desktop-mac/releases/tag/mac-v0.9.31`.
+- Native macOS workflow: `https://github.com/cdfpartridge-web/RiftLite-Desktop-mac/actions/runs/30922228405`.
+- Desktop Home now consumes the automatically curated creator-video feed, uses the larger creator-video card, and keeps correct creator attribution. Prep/Notes defaults to the bottom-left, can be dragged, and remembers its position. Local matchup statistics use the same symmetric pooling principle as the website.
+- Website commit `8708b389940408dbeca323ba4b19c58ad555e55b` is live in production deployment `dpl_YFw76JVh4xKuuAHJd6TTbJyVPeY3`. It pools both capture directions in the public matchup matrix, discloses the two native cohorts, repairs aggregate lineage deduplication, and restores the email-verification resend flow.
+- Aggregate refresh run `https://github.com/cdfpartridge-web/Riftlite/actions/runs/30922037000` completed successfully after deployment. The live 30-day matrix reports `symmetric-v1`, 6,671 matrix-ready matches, 50 legends, and complementary mirrored matchup percentages.
+- Windows validation passed TypeScript, the 76-test account-sync gate, all 106 test files / 927 tests, the production build, NSIS/updater verification, and the packaged smoke test. Website validation passed 90 test files / 636 tests with one file / nine tests skipped, lint with zero errors, and the Next production build.
+- Windows installer SHA-256: `A4449D01E84F4FF346A069D07D1C064A23E83E1F8AF3EFE1467C8A125A1D1A18`; blockmap: `D4BA942F59F0BCE89C1BE75F9D9189164D1C9EB61C84C5063A678996E77A95CD`; updater manifest: `8DC60C7EE27C4AB98FA2924215CF7718F0CAF2057B9448F11A4CC41046B9E83A`.
+- macOS Apple Silicon DMG SHA-256: `85A1BE20893AFBF0BF2EC0DEF1ACD9E0C1C422211C4C7B29212741CCE5E11714`; ZIP: `E6FCAFA65CEDAC1C68DF48E69A3D78858BB25E9F4A39536BCCDC70C15609CDC5`.
+- macOS Intel DMG SHA-256: `8AB2C4CE91E65A58A9A75A7A1B2CB4360B6F0471F47C0ED40493A38F13919397`; ZIP: `E8657BDF3E28ED2E3D7EF214422EC01BD7198C49F9C841D4E7FE87025A961C38`; updater manifest: `EDDECCADCF610B5559A56864885E98C26FF2ED229C8AB159BFC2369E7716F6F7`.
+- Both updater manifests report version `0.9.31`. All eight published installer assets were downloaded after publication and matched GitHub sizes and SHA-256 digests; both updater manifests' size/SHA-512 relationships also matched independently.
 
 ## 2026-08-03 v0.9.30 Release
 
