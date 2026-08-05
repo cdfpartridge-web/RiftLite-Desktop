@@ -1,8 +1,8 @@
 # RiftLite Current Engineering State
 
-> **Current cross-platform release:** v0.9.31 adds automatic creator videos, movable Prep/Notes, pooled matchup statistics, and improved email-verification recovery. Read `docs/release-notes-v0.9.31.md` first.
+> **Current cross-platform release:** v0.9.32 automatically fills first/second seat information for Atlas and TCGA match reviews and adds TronIsBad and Bloody to creator discovery. Read `docs/release-notes-v0.9.32.md` first.
 
-Last updated: 2026-08-04
+Last updated: 2026-08-05
 
 This is the durable handoff for continuing RiftLite work in a fresh Codex task. Read this file before changing code.
 
@@ -10,15 +10,15 @@ This is the durable handoff for continuing RiftLite work in a fresh Codex task. 
 
 - Active cross-platform release source repo:
   `C:\Users\cdfpa\OneDrive\Documents\Claude\Projects\Riftlite Beta 0.6\desktop-v06`
-- Current local package version: `0.9.31` (customer-facing build `v0.9.31`); fully built, validated, and published for Windows, Intel macOS, and Apple Silicon macOS
+- Current local package version: `0.9.32` (customer-facing build `v0.9.32`); fully built, validated, and published for Windows, Intel macOS, and Apple Silicon macOS
 - Current branch: `agent/release-v0.9.12`
 - Windows GitHub release repository (`windows` remote): `cdfpartridge-web/RiftLite-Desktop`
 - macOS GitHub release repository (`origin` remote): `cdfpartridge-web/RiftLite-Desktop-mac`
-- Current published Windows release: `v0.9.31` (2026-08-04)
-- Current published macOS release: `mac-v0.9.31` (2026-08-04)
+- Current published Windows release: `v0.9.32` (2026-08-05)
+- Current published macOS release: `mac-v0.9.32` (2026-08-05)
 - Windows installer output:
   `C:\Users\cdfpa\OneDrive\Documents\Claude\Projects\Riftlite Beta 0.6\desktop-v06\release\RiftLiteBetaInstall.exe`
-- Current local Windows installer: `release\RiftLiteBetaInstall.exe`, 210,363,608 bytes, SHA-256 `A4449D01E84F4FF346A069D07D1C064A23E83E1F8AF3EFE1467C8A125A1D1A18`.
+- Current local Windows installer: `release\RiftLiteBetaInstall.exe`, 211,845,840 bytes, SHA-256 `989DC524725AFBA6858C46FB6157712318DAAE1229C906FBFA4F7D0D4062D2F9`.
 
 Always name the remote explicitly when pushing: Windows source/tags go to `windows`; macOS source/tags go to `origin`. The repositories and release tags are deliberately separate.
 
@@ -39,6 +39,22 @@ The active working tree may contain current work. Never reset, discard, or overw
 5. Do not rebuild installers, publish releases, or deploy the website unless explicitly requested.
 6. Treat raw WebSocket replay data, account sync, hub ownership, Discord tokens, and API keys as security-sensitive.
 7. RiftReplay/Replay Lab and Vision work are parked or hidden. Do not expose them in menus or release notes unless explicitly requested.
+
+## 2026-08-05 v0.9.32 Release
+
+- Release commit `1d1d6560bcb1fb69c273462b995bf7e3ca37c9c1` is tagged as Windows `v0.9.32` and macOS `mac-v0.9.32`.
+- Windows release: `https://github.com/cdfpartridge-web/RiftLite-Desktop/releases/tag/v0.9.32`.
+- macOS release: `https://github.com/cdfpartridge-web/RiftLite-Desktop-mac/releases/tag/mac-v0.9.32`.
+- Native macOS workflow: `https://github.com/cdfpartridge-web/RiftLite-Desktop-mac/actions/runs/30988943632`.
+- Match review now automatically fills whether the local player went first or second for both Rift Atlas and TCGA Arena. Atlas can recover the seat from current authoritative room events and snapshots, while TCGA tracks each game independently when a best-of-three reuses one game channel.
+- TronIsBad and Bloody are available through the desktop Home creator spotlight and normal creator discovery surfaces.
+- Website `main` commit `dcc72ed` was already live in production deployment `dpl_DVhQdu2zbfFWFExaH4JcuqNZCNWn`, including replay presentation/reliability work, the automatic filtered creator-video carousel, pooled matchup statistics, email-verification recovery, and both latest creator additions. No duplicate production deploy was needed. The Home page, download page, and Home API returned HTTP 200 after publication, and the permanent Windows/Intel Mac/Apple Silicon Mac download URLs now resolve to the 0.9.32 releases.
+- Desktop validation passed TypeScript, the 76-test account-sync gate, all 108 test files / 947 tests, the production build, Windows installer/updater verification, NSIS integrity checks, and the packaged smoke test. The native Mac workflow passed the same release gate plus x64/arm64 packaging, FFmpeg architecture/licence checks, updater and bundle identity checks, strict ad-hoc signature verification, DMG verification, and the packaged smoke test.
+- Website validation passed 90 test files / 636 tests with one file / nine tests skipped, lint with zero errors, and the Next production build.
+- Windows installer SHA-256: `989DC524725AFBA6858C46FB6157712318DAAE1229C906FBFA4F7D0D4062D2F9`; blockmap: `E5AA85DED4B510D3DDBA78834DB120A51652F947E018F37C01BE1AD19E77ED6D`; updater manifest: `7F31433CE75E20D2FCB469A87586C3CC9661F26F71517646F8B1A9D14969C86C`.
+- macOS Apple Silicon DMG SHA-256: `88E5AA2AEE0E2258FF425AA6391C66BB3D06408947A2277A5A9215590BD454E3`; ZIP: `49D23C266B4B5B34EE4B05924EFC2663C6710B476CBA93E34E54F5012595617D`.
+- macOS Intel DMG SHA-256: `B00FDAE58A76557F734A1F1D47BE5F78BF37BF09BA426042C6F5BFD62E9EE4C9`; ZIP: `9B627D753F4B8A8664BC0AC958AF0E9E74564DDB2B76AAA087F61F929CAF1F45`; updater manifest: `2DCF6E855A2958E100AD2641C9BA29993FD06A3D1FDCDB5CEB2ACAF88B00BB5B`.
+- Both updater manifests report version `0.9.32`. All eight published installer assets were independently downloaded after publication and matched GitHub sizes and SHA-256 digests; both updater manifests' size/SHA-512 relationships matched the downloaded installers.
 
 ## 2026-08-04 v0.9.31 Release
 
