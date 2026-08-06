@@ -1897,6 +1897,69 @@ describe("MatchSessionTracker", () => {
     expect(tracker.get("atlas")?.evidence).toHaveLength(7);
   });
 
+  it("keeps the stable Atlas opponent when a deck-search card temporarily wins DOM ordering", () => {
+    const tracker = new MatchSessionTracker();
+    const roomCode = "YE5LZ";
+    const base = {
+      active: true,
+      roomCode,
+      myName: "BMU",
+      myChampionCode: "VEN-155",
+      opponentChampionCode: "OGN-259",
+      myBattlefieldCode: "OGN-298",
+      opponentBattlefieldCode: "OGN-297",
+      score: { me: "0", opp: "0", source: "atlas-score-track" }
+    };
+    const realOpponent = {
+      name: "Tsaysana",
+      side: "opponent",
+      source: "identity-dom",
+      score: 8
+    };
+    const deckSearchCard = {
+      name: "Stacked",
+      side: "opponent",
+      source: "dom",
+      score: 8
+    };
+
+    tracker.ingest(event("match-start", {
+      ...base,
+      opponentName: "Tsaysana",
+      atlasPlayerCandidates: [realOpponent],
+      rows: [{ text: "Played Kennen, Storm of Shuriken from hand." }]
+    }, "2026-08-05T21:58:19.552Z", "atlas"));
+
+    const snapshots = [
+      event("match-snapshot", {
+        ...base,
+        opponentName: "Stacked",
+        atlasPlayerCandidates: [deckSearchCard, realOpponent]
+      }, "2026-08-05T22:00:41.963Z", "atlas"),
+      event("match-snapshot", {
+        ...base,
+        opponentName: "Tsaysana",
+        atlasPlayerCandidates: [realOpponent, deckSearchCard]
+      }, "2026-08-05T22:01:12.859Z", "atlas"),
+      event("match-snapshot", {
+        ...base,
+        opponentName: "Stacked",
+        atlasPlayerCandidates: [deckSearchCard, realOpponent]
+      }, "2026-08-05T22:01:43.373Z", "atlas")
+    ];
+
+    for (const snapshot of snapshots) {
+      expect(tracker.shouldFinalizeBeforeNewSession(snapshot)).toBe(false);
+      tracker.ingest(snapshot);
+      expect(tracker.get("atlas")?.sticky.opponentName).toBe("Tsaysana");
+    }
+
+    expect(tracker.get("atlas")).toMatchObject({
+      startedAt: "2026-08-05T21:58:19.552Z",
+      sticky: { roomCode, opponentName: "Tsaysana" }
+    });
+  });
+
   it("starts a fresh Atlas session for a real replacement opponent in a reused room", () => {
     const tracker = new MatchSessionTracker();
     const roomCode = "REUSED";

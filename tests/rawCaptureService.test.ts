@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { createHash, randomBytes } from "node:crypto";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { setTimeout as realDelay } from "node:timers/promises";
 import { gunzipSync, gzipSync } from "node:zlib";
@@ -389,6 +389,97 @@ describe("RawCaptureService", () => {
     const diagnostics = await harness.service.getWebReplayUploadDiagnostics();
     expect(diagnostics.lanes.atlas).toMatchObject({ captured: 1, eligible: 0, failed: 0 });
     expect(diagnostics.recentFailures).toEqual([]);
+  });
+
+  it("removes same-file replay aliases from the upload queue while preserving every local record", async () => {
+    const harness = await failedMulliganUploadHarness();
+    const alias: ReplayRecord = {
+      ...harness.replay,
+      id: "missing-mulligan-replay-alias",
+      matchId: "missing-mulligan-match-alias",
+      title: "Later corrected match title",
+      rawCapture: { ...harness.replay.rawCapture! }
+    };
+    await harness.store.saveReplay(alias);
+
+    await harness.service.removeWebReplayUploadFromQueue(harness.captureSessionId);
+
+    const saved = await harness.store.getReplays();
+    expect(saved.map((replay) => replay.id).sort()).toEqual([
+      harness.replay.id,
+      alias.id
+    ].sort());
+    expect(saved.every((replay) => (
+      replay.rawCapture?.uploadStatus === "disabled" &&
+      replay.rawCapture.processingStatus === "pending" &&
+      replay.rawCapture.webReplayAutoUploadEligible === false
+    ))).toBe(true);
+    await expect(readFile(harness.rawPath, "utf8")).resolves.toContain("riftreplay-raw-capture");
+    const manifest = JSON.parse(await readFile(harness.indexPath, "utf8")) as {
+      metadata: RawCaptureReplayMetadata;
+    };
+    expect(manifest.metadata).toMatchObject({
+      uploadStatus: "disabled",
+      processingStatus: "pending",
+      webReplayAutoUploadEligible: false
+    });
+    expect((await harness.service.getWebReplayUploadDiagnostics()).queue).toEqual([]);
+  });
+
+  it("refuses queue alias removal when one capture identifier points at separate local artifacts", async () => {
+    const harness = await failedMulliganUploadHarness();
+    const conflictingPath = join(dirname(harness.rawPath), "conflicting-capture.json");
+    await writeFile(conflictingPath, JSON.stringify({ schema: "riftreplay-raw-capture", version: 1 }), "utf8");
+    const alias: ReplayRecord = {
+      ...harness.replay,
+      id: "conflicting-capture-alias",
+      matchId: "conflicting-capture-match",
+      rawCapture: {
+        ...harness.replay.rawCapture!,
+        localPath: conflictingPath
+      }
+    };
+    await harness.store.saveReplay(alias);
+
+    await expect(harness.service.removeWebReplayUploadFromQueue(harness.captureSessionId))
+      .rejects.toThrow("More than one separate Web Replay capture uses this identifier");
+
+    const saved = await harness.store.getReplays();
+    expect(saved.every((replay) => replay.rawCapture?.uploadStatus === "failed")).toBe(true);
+    const manifest = JSON.parse(await readFile(harness.indexPath, "utf8")) as {
+      metadata: RawCaptureReplayMetadata;
+    };
+    expect(manifest.metadata.uploadStatus).toBe("failed");
+    await expect(readFile(harness.rawPath, "utf8")).resolves.toContain("riftreplay-raw-capture");
+    await expect(readFile(conflictingPath, "utf8")).resolves.toContain("riftreplay-raw-capture");
+  });
+
+  it("does not hide a ready Web Replay when a stale alias still looks failed", async () => {
+    const harness = await failedMulliganUploadHarness();
+    const readyAlias: ReplayRecord = {
+      ...harness.replay,
+      id: "ready-capture-alias",
+      matchId: "ready-capture-match",
+      rawCapture: {
+        ...harness.replay.rawCapture!,
+        uploadStatus: "uploaded",
+        processingStatus: "ready",
+        uploadId: "rl2_ready_alias",
+        uploadUrl: "https://www.riftlite.com/replays/rl2_ready_alias"
+      }
+    };
+    await harness.store.saveReplay(readyAlias);
+
+    await expect(harness.service.removeWebReplayUploadFromQueue(harness.captureSessionId))
+      .rejects.toThrow("already exists online");
+
+    const saved = await harness.store.getReplays();
+    expect(saved.find((replay) => replay.id === harness.replay.id)?.rawCapture?.uploadStatus).toBe("failed");
+    expect(saved.find((replay) => replay.id === readyAlias.id)?.rawCapture?.processingStatus).toBe("ready");
+    const manifest = JSON.parse(await readFile(harness.indexPath, "utf8")) as {
+      metadata: RawCaptureReplayMetadata;
+    };
+    expect(manifest.metadata.uploadStatus).toBe("failed");
   });
 
   it("can dismiss a failed initialized remote shell while preserving the local capture", async () => {
@@ -1506,7 +1597,20 @@ describe("RawCaptureService", () => {
 
     const restartedService = new RawCaptureService(store);
     await restartedService.getStatus();
-    const attached = await restartedService.finishForReplay(replay("recovered-replay", "RECOVERY-ATTACH"));
+    const recoveredReplayStartedAt = 1781360000000;
+    const recoveredReplay: ReplayRecord = {
+      ...replay("recovered-replay", "RECOVERY-ATTACH"),
+      capturedAt: new Date(recoveredReplayStartedAt).toISOString(),
+      events: [{
+        id: "recovered-replay-end",
+        platform: "atlas",
+        kind: "match-end",
+        capturedAt: new Date(recoveredReplayStartedAt + 60_000).toISOString(),
+        url: "https://riftatlas.example/game",
+        payload: { roomCode: "RECOVERY-ATTACH" }
+      }]
+    };
+    const attached = await restartedService.finishForReplay(recoveredReplay);
     expect(attached.rawCapture?.captureSessionId).toBe(activeStatus.captureSessionId);
     const attachedManifest = JSON.parse(await readFile(
       `${attached.rawCapture!.localPath!}.riftlite-index.json`,
@@ -3569,6 +3673,78 @@ describe("RawCaptureService", () => {
 
     expect(saved?.rawCapture).toBeUndefined();
     expect(await service.getStatus()).toMatchObject({ active: true, messageCount: 2 });
+  });
+
+  it("does not reparent an earlier persisted capture from a stale repeated room code", async () => {
+    const replayDirectory = await tempReplayDirectory();
+    const store = fakeStore(settings({ enabled: true }, replayDirectory));
+    const service = new RawCaptureService(store);
+    const firstStartedAt = Date.parse("2026-08-05T17:05:00.000Z");
+    const firstCompletedAt = Date.parse("2026-08-05T17:43:00.000Z");
+    const firstReplay: ReplayRecord = {
+      ...replay("first-room-owner", "REUSED"),
+      matchId: "first-room-owner-match",
+      capturedAt: new Date(firstStartedAt).toISOString(),
+      title: "Leona vs Jax",
+      events: [{
+        id: "first-room-owner-end",
+        platform: "atlas",
+        kind: "match-end",
+        capturedAt: new Date(firstCompletedAt).toISOString(),
+        url: "https://riftatlas.example/game",
+        payload: { roomCode: "REUSED" }
+      }]
+    };
+    await store.saveReplay(firstReplay);
+    await service.appendFrame(atlasFrame(JSON.stringify({
+      type: "room_shell_sync",
+      sessionDoc: { roomCode: "REUSED", phase: "in_game", gameNumber: 1 }
+    }), { ts: firstStartedAt }));
+    await service.appendFrame(atlasFrame(JSON.stringify({
+      type: "authoritative_snapshot",
+      roomCode: "REUSED"
+    }), { ts: firstCompletedAt - 1_000 }));
+
+    const firstSaved = await service.finishForReplay(firstReplay);
+    expect(firstSaved.rawCapture?.captureSessionId).toBeTruthy();
+
+    const secondStartedAt = Date.parse("2026-08-05T17:49:00.000Z");
+    const secondCompletedAt = Date.parse("2026-08-05T18:06:00.000Z");
+    const secondReplay: ReplayRecord = {
+      ...replay("later-stale-room", "REUSED"),
+      matchId: "later-stale-room-match",
+      capturedAt: new Date(secondStartedAt).toISOString(),
+      title: "Darius vs Lillia",
+      events: [{
+        id: "later-stale-room-end",
+        platform: "atlas",
+        kind: "match-end",
+        capturedAt: new Date(secondCompletedAt).toISOString(),
+        url: "https://riftatlas.example/game",
+        payload: { roomCode: "REUSED" }
+      }]
+    };
+    await store.saveReplay(secondReplay);
+
+    const secondSaved = await service.finishForReplay(secondReplay);
+
+    expect(secondSaved.rawCapture).toBeUndefined();
+    expect((await store.getReplays()).find((candidate) => candidate.id === secondReplay.id)?.rawCapture)
+      .toBeUndefined();
+    expect((await store.getReplays()).find((candidate) => candidate.id === firstReplay.id)?.rawCapture?.captureSessionId)
+      .toBe(firstSaved.rawCapture?.captureSessionId);
+    const rawDirectory = join(replayDirectory, "Raw Capture");
+    const indexName = (await readdir(rawDirectory)).find((name) => name.endsWith(".riftlite-index.json"));
+    const manifest = JSON.parse(await readFile(join(rawDirectory, indexName!), "utf8")) as {
+      localReplayId?: string;
+      localMatchId?: string;
+      title?: string;
+    };
+    expect(manifest).toMatchObject({
+      localReplayId: firstReplay.id,
+      localMatchId: firstReplay.matchId,
+      title: firstReplay.title
+    });
   });
 
   it("finalizes raw capture without a video replay and attaches its persistent index later", async () => {

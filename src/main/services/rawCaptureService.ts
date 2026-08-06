@@ -1051,9 +1051,10 @@ export class RawCaptureService {
     const identity = replay
       ? rawCaptureReplayIdentity(replay, explicitIdentity)
       : rawCaptureFinishIdentityValues(explicitIdentity);
+    const persistedTemporalWindow = rawCaptureTemporalWindow(explicitIdentity, replay);
     const temporalWindow = rawCaptureFinishHasRemoteIdentity(explicitIdentity, replay)
       ? null
-      : rawCaptureTemporalWindow(explicitIdentity, replay);
+      : persistedTemporalWindow;
     const session = this.findSessionForIdentity(identity, temporalWindow);
     let manifest: PersistedRawCaptureManifest | null = null;
     if (session?.frames.length) {
@@ -1077,7 +1078,7 @@ export class RawCaptureService {
         this.finalizingSessionIds.delete(session.captureSessionId);
       }
     } else {
-      manifest = await this.findPersistedCapture(identity, settings);
+      manifest = await this.findPersistedCapture(identity, settings, persistedTemporalWindow);
     }
     if (!manifest) {
       this.lastAssociationError = "Raw capture was not attached because no unique active session matched the replay identity and time window.";
@@ -1652,43 +1653,65 @@ export class RawCaptureService {
 
   async removeWebReplayUploadFromQueue(captureSessionId: string): Promise<void> {
     const normalizedCaptureSessionId = normalizeDiagnosticCaptureSessionId(captureSessionId);
-    const settings = await this.store.getSettings();
-    const replays = await this.store.getReplays();
-    const matchingReplays = replays.filter((replay) => (
-      replay.rawCapture?.captureSessionId === normalizedCaptureSessionId
-    ));
-    const matchingManifests = (await readRawCaptureManifests(settings)).filter((manifest) => (
-      manifest.metadata.captureSessionId === normalizedCaptureSessionId ||
-      manifest.identity.captureSessionId === normalizedCaptureSessionId
-    ));
-    if (!matchingReplays.length && !matchingManifests.length) {
-      throw new Error("The Web Replay capture is no longer available on this device.");
-    }
-    if (matchingReplays.length > 1 || matchingManifests.length > 1) {
-      throw new Error("More than one Web Replay source matched this capture. Refresh diagnostics and try again.");
-    }
     await this.withCaptureTask(normalizedCaptureSessionId, async () => {
-      const persistedManifest = matchingManifests[0]
-        ? await readRawCaptureManifest(matchingManifests[0].indexPath)
-        : null;
-      const currentMetadata = persistedManifest?.metadata ?? matchingReplays[0]?.rawCapture ?? matchingManifests[0]?.metadata;
-      if (!currentMetadata) {
+      const settings = await this.store.getSettings();
+      const matchingReplays = (await this.store.getReplays()).filter((replay) => (
+        replay.rawCapture?.captureSessionId === normalizedCaptureSessionId
+      ));
+      const matchingManifests = (await readRawCaptureManifests(settings)).filter((manifest) => (
+        manifest.metadata.captureSessionId === normalizedCaptureSessionId ||
+        manifest.identity.captureSessionId === normalizedCaptureSessionId
+      ));
+      if (!matchingReplays.length && !matchingManifests.length) {
+        throw new Error("The Web Replay capture is no longer available on this device.");
+      }
+
+      const sourcePlatforms = new Set<string>([
+        ...matchingReplays.map((replay) => replay.platform),
+        ...matchingManifests.map((manifest) => manifest.platform)
+      ]);
+      const sourceProviders = new Set<string>([
+        ...matchingReplays.map((replay) => replay.rawCapture?.provider || ""),
+        ...matchingManifests.map((manifest) => manifest.metadata.provider || "")
+      ].filter(Boolean));
+      const sourcePaths = new Set<string>([
+        ...matchingReplays.map((replay) => rawCaptureSourcePathKey(replay.rawCapture?.localPath)),
+        ...matchingManifests.map((manifest) => rawCaptureSourcePathKey(manifest.localPath))
+      ].filter(Boolean));
+      if (sourcePlatforms.size > 1 || sourceProviders.size > 1 || sourcePaths.size > 1) {
+        throw new Error("More than one separate Web Replay capture uses this identifier. No local replay or capture was changed.");
+      }
+
+      const persistedManifests = (await Promise.all(matchingManifests.map(async (manifest) => (
+        await readRawCaptureManifest(manifest.indexPath) ?? manifest
+      )))).filter((manifest) => (
+        manifest.metadata.captureSessionId === normalizedCaptureSessionId ||
+        manifest.identity.captureSessionId === normalizedCaptureSessionId
+      ));
+      const sourceMetadata = [
+        ...persistedManifests.map((manifest) => manifest.metadata),
+        ...matchingReplays.map((replay) => replay.rawCapture)
+      ].filter((metadata): metadata is RawCaptureReplayMetadata => Boolean(metadata));
+      if (!sourceMetadata.length) {
         throw new Error("The Web Replay upload record is incomplete.");
       }
-      if (currentMetadata.processingStatus === "ready") {
+      if (sourceMetadata.some((metadata) => metadata.processingStatus === "ready")) {
         throw new Error("This Web Replay already exists online and cannot be removed through the local upload queue.");
       }
-      const removedMetadata = rawCaptureMetadataRemovedFromUploadQueue(currentMetadata);
-      const manifest = persistedManifest ?? matchingManifests[0];
-      if (manifest) {
+
+      for (const manifest of persistedManifests) {
+        const removedMetadata = rawCaptureMetadataRemovedFromUploadQueue(manifest.metadata);
         await writeRawCaptureManifest({
           ...manifest,
           updatedAt: removedMetadata.processingUpdatedAt!,
           metadata: removedMetadata
         });
       }
-      if (matchingReplays[0]) {
-        await this.saveReplayRawCapture(matchingReplays[0], removedMetadata);
+      for (const replay of matchingReplays) {
+        await this.saveReplayRawCapture(
+          replay,
+          rawCaptureMetadataRemovedFromUploadQueue(replay.rawCapture!)
+        );
       }
     });
   }
@@ -2142,7 +2165,8 @@ export class RawCaptureService {
 
   private async findPersistedCapture(
     identity: RawCaptureReplayIdentity,
-    settings: UserSettings
+    settings: UserSettings,
+    temporalWindow: RawCaptureTemporalWindow | null = null
   ): Promise<PersistedRawCaptureManifest | null> {
     const manifests = await readRawCaptureManifests(settings);
     const findUnique = (predicate: (manifest: PersistedRawCaptureManifest) => boolean) => {
@@ -2156,29 +2180,43 @@ export class RawCaptureService {
     if (byCapture) {
       return byCapture;
     }
-    const bySeries = findUnique((manifest) => identity.seriesIds.some((value) => (
+    const byLocalMatch = findUnique((manifest) => identity.matchIds.some((value) => (
+      identityEquals(value, manifest.localMatchId || manifest.identity.localMatchId || "")
+    )));
+    if (byLocalMatch) {
+      return byLocalMatch;
+    }
+    const byLocalReplay = findUnique((manifest) => identity.replayIds.some((value) => (
+      identityEquals(value, manifest.localReplayId || manifest.identity.localReplayId || "")
+    )));
+    if (byLocalReplay) {
+      return byLocalReplay;
+    }
+
+    const weakCandidate = (manifest: PersistedRawCaptureManifest): boolean => (
+      rawCapturePersistedCandidateFitsContext(manifest, identity, temporalWindow)
+    );
+    const bySeries = findUnique((manifest) => weakCandidate(manifest) && identity.seriesIds.some((value) => (
       identityEquals(value, manifest.identity.seriesId || manifest.metadata.seriesId || "")
     )));
     if (bySeries) {
       return bySeries;
     }
-    const byMatch = findUnique((manifest) => identity.matchIds.some((value) => (
-      identityEquals(value, manifest.localMatchId || "") ||
+    const byMatch = findUnique((manifest) => weakCandidate(manifest) && identity.matchIds.some((value) => (
       identityEquals(value, manifest.identity.matchId || "") ||
       (manifest.identity.matchIds ?? []).some((matchId) => identityEquals(value, matchId))
     )));
     if (byMatch) {
       return byMatch;
     }
-    const byReplay = findUnique((manifest) => identity.replayIds.some((value) => (
-      identityEquals(value, manifest.localReplayId || "") ||
+    const byReplay = findUnique((manifest) => weakCandidate(manifest) && identity.replayIds.some((value) => (
       identityEquals(value, manifest.identity.replayId || "") ||
       (manifest.identity.replayIds ?? []).some((replayId) => identityEquals(value, replayId))
     )));
     if (byReplay) {
       return byReplay;
     }
-    return findUnique((manifest) => identity.roomCodes.some((value) => (
+    return findUnique((manifest) => weakCandidate(manifest) && identity.roomCodes.some((value) => (
       identityEquals(value, manifest.identity.roomCode || manifest.metadata.roomCode || "") ||
       (manifest.identity.roomCodes ?? manifest.metadata.roomCodes ?? []).some((roomCode) => identityEquals(value, roomCode))
     )));
@@ -4637,6 +4675,13 @@ function pathInsideDirectory(childPath: string, rootPath: string): boolean {
   return pathBetween === "" || Boolean(pathBetween && !pathBetween.startsWith("..") && !isAbsolute(pathBetween));
 }
 
+function rawCaptureSourcePathKey(value: string | undefined): string {
+  const sourcePath = typeof value === "string" ? value.trim() : "";
+  if (!sourcePath) return "";
+  const normalized = resolve(sourcePath);
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+
 function hasLinkedRiftLiteReplayAccount(settings: UserSettings): boolean {
   return hasVerifiedRiftLiteAccount(settings);
 }
@@ -5588,6 +5633,40 @@ function rawCaptureSessionFitsTemporalWindow(
     session.lastSeenAt >= window.startedAt &&
     session.lastSeenAt <= window.completedAt + RAW_CAPTURE_TEMPORAL_MAX_END_GAP_MS &&
     window.completedAt - session.lastSeenAt <= RAW_CAPTURE_TEMPORAL_MAX_END_GAP_MS;
+}
+
+function rawCaptureManifestFitsTemporalWindow(
+  manifest: PersistedRawCaptureManifest,
+  window: RawCaptureTemporalWindow
+): boolean {
+  const firstSeenAt = rawCaptureTimestamp(manifest.metadata.firstSeenAt ?? manifest.identity.capturedAt);
+  const lastSeenAt = rawCaptureTimestamp(manifest.metadata.lastSeenAt ?? manifest.identity.completedAt);
+  if (firstSeenAt === null || lastSeenAt === null) {
+    return false;
+  }
+  return firstSeenAt >= window.startedAt - RAW_CAPTURE_TEMPORAL_MAX_PRELUDE_MS &&
+    firstSeenAt <= window.completedAt &&
+    lastSeenAt >= window.startedAt &&
+    lastSeenAt <= window.completedAt + RAW_CAPTURE_TEMPORAL_MAX_END_GAP_MS &&
+    window.completedAt - lastSeenAt <= RAW_CAPTURE_TEMPORAL_MAX_END_GAP_MS;
+}
+
+function rawCapturePersistedCandidateFitsContext(
+  manifest: PersistedRawCaptureManifest,
+  identity: RawCaptureReplayIdentity,
+  temporalWindow: RawCaptureTemporalWindow | null
+): boolean {
+  const localReplayId = manifest.localReplayId || manifest.identity.localReplayId || "";
+  const localMatchId = manifest.localMatchId || manifest.identity.localMatchId || "";
+  if (
+    (localReplayId && !identity.replayIds.some((value) => identityEquals(value, localReplayId))) ||
+    (localMatchId && !identity.matchIds.some((value) => identityEquals(value, localMatchId)))
+  ) {
+    // A persisted source already owned by another local replay must not be
+    // reparented merely because later DOM evidence repeats a stale Atlas room.
+    return false;
+  }
+  return !temporalWindow || rawCaptureManifestFitsTemporalWindow(manifest, temporalWindow);
 }
 
 function latestReplayEventTimestamp(replay: ReplayRecord): string | undefined {

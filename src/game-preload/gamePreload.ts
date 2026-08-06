@@ -6,6 +6,10 @@ import {
 } from "../shared/atlasBattlefieldOwnership.js";
 import { isAtlasActiveRoomBoundary } from "../shared/atlasCaptureLifecycle.js";
 import {
+  chooseAtlasOpponentIdentityName,
+  compareAtlasPlayerIdentityCandidates
+} from "../shared/atlasPlayerIdentity.js";
+import {
   ATLAS_EMPTY_SHELL_MIN_AGE_MS,
   ATLAS_STALLED_SHELL_MIN_AGE_MS,
   assessAtlasShell,
@@ -1923,7 +1927,7 @@ function collectAtlasPlayerCandidates(): AtlasPlayerCandidate[] {
     }
   }
   return [...byKey.values()]
-    .sort((a, b) => b.score - a.score)
+    .sort(compareAtlasPlayerIdentityCandidates)
     .slice(0, 12);
 }
 
@@ -2093,12 +2097,7 @@ function isLikelyAtlasPlayerActionText(value: string): boolean {
 }
 
 function chooseAtlasOpponentName(candidates: AtlasPlayerCandidate[], localName: string): string {
-  const localKey = normalizeNameKey(localName);
-  const usable = candidates.filter((candidate) => {
-    const key = normalizeNameKey(candidate.name);
-    return key && key !== localKey && candidate.score >= 3;
-  });
-  return usable.find((candidate) => candidate.side === "opponent")?.name ?? (usable.length === 1 ? usable[0].name : "");
+  return chooseAtlasOpponentIdentityName(candidates, localName);
 }
 
 function cleanAtlasPlayerName(value: string): string {

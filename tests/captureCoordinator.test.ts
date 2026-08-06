@@ -1103,6 +1103,70 @@ describe("CaptureCoordinator", () => {
     expect(sent.some((item) => item.channel === "match:draft")).toBe(false);
   });
 
+  it("does not open rollover reviews when an Atlas deck search surfaces a card as the opponent", async () => {
+    const { coordinator, saved, sent } = coordinatorHarness();
+    const roomCode = "YE5LZ";
+    const realOpponent = {
+      name: "Tsaysana",
+      side: "opponent",
+      source: "identity-dom",
+      score: 8
+    };
+    const deckSearchCard = {
+      name: "Stacked",
+      side: "opponent",
+      source: "dom",
+      score: 8
+    };
+    const base = {
+      active: true,
+      format: "Auto",
+      roomCode,
+      myName: "BMU",
+      configuredUsername: "BMU",
+      myChampionCode: "VEN-155",
+      opponentChampionCode: "OGN-259",
+      myBattlefieldCode: "OGN-298",
+      opponentBattlefieldCode: "OGN-297",
+      score: { me: "0", opp: "0", source: "atlas-score-track" }
+    };
+
+    await coordinator.handleEvent(event("match-start", {
+      ...base,
+      opponentName: "Tsaysana",
+      atlasPlayerCandidates: [realOpponent],
+      rows: [{ text: "Played Kennen, Storm of Shuriken from hand." }]
+    }, "2026-08-05T21:58:19.552Z", "atlas"));
+
+    await coordinator.handleEvent(event("match-snapshot", {
+      ...base,
+      opponentName: "Stacked",
+      atlasPlayerCandidates: [deckSearchCard, realOpponent]
+    }, "2026-08-05T22:00:41.963Z", "atlas"));
+    await coordinator.handleEvent(event("match-snapshot", {
+      ...base,
+      opponentName: "Tsaysana",
+      atlasPlayerCandidates: [realOpponent, deckSearchCard]
+    }, "2026-08-05T22:01:12.859Z", "atlas"));
+    await coordinator.handleEvent(event("match-snapshot", {
+      ...base,
+      opponentName: "Stacked",
+      atlasPlayerCandidates: [deckSearchCard, realOpponent]
+    }, "2026-08-05T22:01:43.373Z", "atlas"));
+
+    expect(saved).toHaveLength(0);
+    expect(sent.filter((item) => item.channel === "match:draft")).toHaveLength(0);
+    expect(coordinator.hasActiveCaptureSession("atlas")).toBe(true);
+
+    const review = await coordinator.forceReview("atlas");
+    expect(review).toMatchObject({
+      platform: "atlas",
+      opponentName: "Tsaysana"
+    });
+    expect(saved).toHaveLength(1);
+    expect(sent.filter((item) => item.channel === "match:draft")).toHaveLength(1);
+  });
+
   it("keeps a two-game RiftAtlas BO3 sweep as two distinct games", async () => {
     const { coordinator, saved } = coordinatorHarness();
 

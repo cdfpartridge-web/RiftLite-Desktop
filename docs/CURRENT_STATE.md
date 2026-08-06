@@ -2,7 +2,7 @@
 
 > **Current cross-platform release:** v0.9.32 automatically fills first/second seat information for Atlas and TCGA match reviews and adds TronIsBad and Bloody to creator discovery. Read `docs/release-notes-v0.9.32.md` first.
 
-Last updated: 2026-08-05
+Last updated: 2026-08-06
 
 This is the durable handoff for continuing RiftLite work in a fresh Codex task. Read this file before changing code.
 
@@ -10,7 +10,7 @@ This is the durable handoff for continuing RiftLite work in a fresh Codex task. 
 
 - Active cross-platform release source repo:
   `C:\Users\cdfpa\OneDrive\Documents\Claude\Projects\Riftlite Beta 0.6\desktop-v06`
-- Current local package version: `0.9.32` (customer-facing build `v0.9.32`); fully built, validated, and published for Windows, Intel macOS, and Apple Silicon macOS
+- Current local package version: `0.9.33` (customer-facing build `v0.9.33`); this validated release candidate contains the capture-lifecycle fixes documented below, while the currently published cross-platform release remains v0.9.32
 - Current branch: `agent/release-v0.9.12`
 - Windows GitHub release repository (`windows` remote): `cdfpartridge-web/RiftLite-Desktop`
 - macOS GitHub release repository (`origin` remote): `cdfpartridge-web/RiftLite-Desktop-mac`
@@ -18,7 +18,7 @@ This is the durable handoff for continuing RiftLite work in a fresh Codex task. 
 - Current published macOS release: `mac-v0.9.32` (2026-08-05)
 - Windows installer output:
   `C:\Users\cdfpa\OneDrive\Documents\Claude\Projects\Riftlite Beta 0.6\desktop-v06\release\RiftLiteBetaInstall.exe`
-- Current local Windows installer: `release\RiftLiteBetaInstall.exe`, 211,845,840 bytes, SHA-256 `989DC524725AFBA6858C46FB6157712318DAAE1229C906FBFA4F7D0D4062D2F9`.
+- Current local Windows installer: `release\RiftLiteBetaInstall.exe`, 212,736,694 bytes, SHA-256 `7AF30EC8B0B214799CAD46BD06D5E1BB44103BC2C91DB9567F4726070B0397FA`.
 
 Always name the remote explicitly when pushing: Windows source/tags go to `windows`; macOS source/tags go to `origin`. The repositories and release tags are deliberately separate.
 
@@ -39,6 +39,16 @@ The active working tree may contain current work. Never reset, discard, or overw
 5. Do not rebuild installers, publish releases, or deploy the website unless explicitly requested.
 6. Treat raw WebSocket replay data, account sync, hub ownership, Discord tokens, and API keys as security-sensitive.
 7. RiftReplay/Replay Lab and Vision work are parked or hidden. Do not expose them in menus or release notes unless explicitly requested.
+
+## 2026-08-06 v0.9.33 Release Candidate (Unpublished)
+
+- Atlas player identity selection now prioritizes reliable player/presence DOM sources over generic deck-search card text. Same-room snapshots preserve the established opponent while that reliable identity remains present, preventing deck searches such as `Stacked Deck` from generating false match rollovers and repeated review popups.
+- `Keep local only` now safely clears every replay alias that points to the same raw artifact, while refusing genuinely different artifacts or an alias that is already ready online.
+- Persisted raw-capture fallback matching no longer reparents an artifact already owned by another local replay through stale room/series evidence, and weak matches must fit the replay time window.
+- Existing local replay rows and raw files were deliberately not changed. The known incomplete Kennen–Yasuo rows and ambiguous Darius–Lillia association still require a separate backed-up data repair if desired.
+- Validation passed TypeScript, the 76-test account-sync gate, all 109 test files / 955 tests, the production build, Windows installer/updater verification, NSIS integrity checks, and the packaged smoke test.
+- Local installer: `release\RiftLiteBetaInstall.exe`, 212,736,694 bytes, SHA-256 `7AF30EC8B0B214799CAD46BD06D5E1BB44103BC2C91DB9567F4726070B0397FA`. Blockmap SHA-256: `10BD30674DC2E9E780A8E2E391159B6FB65E936964AB885C87CAC935803AB1B3`; updater manifest SHA-256: `7B2854DBBE0919C955BD41D223B6D6417D7D0A2177B24376BFB91382DCF32C01`.
+- This build is local only. No GitHub commit, push, tag, release, asset upload, website deployment, macOS build, Discord action, or production-data mutation occurred.
 
 ## 2026-08-05 v0.9.32 Release
 
