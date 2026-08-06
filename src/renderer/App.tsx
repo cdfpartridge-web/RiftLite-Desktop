@@ -203,7 +203,7 @@ import {
   type MatchCombineSavePayload,
   type MatchCombineWarning
 } from "../shared/matchCombine";
-import { upsertMatchPreservingOrder } from "../shared/matchList";
+import { localMatchesEligibleForStats, upsertMatchPreservingOrder } from "../shared/matchList";
 import { upsertReplayPreservingOrder } from "../shared/replayList";
 import { publicCommunitySyncEnabled, syncModePatch } from "../shared/syncPolicy";
 import {
@@ -3873,14 +3873,20 @@ function App() {
     showActionFeedback("Review popup opened.");
   }
 
-  async function dismissReviewDraft() {
-    if (reviewDraft) {
-      markReviewDismissed(reviewDraft);
+  async function dismissReviewDraft(draft: MatchDraft) {
+    if (draft.status === "saved") {
+      openNextQueuedReview();
+      return;
     }
-    const next = openNextQueuedReview();
-    if (!next) {
+    const deferred = await window.riftlite.deferMatchReview(
+      normalizeReviewDraft(attachTestingSessionToDraft(draft))
+    );
+    setMatches((current) => upsertMatchPreservingOrder(current, deferred));
+    markReviewDismissed(deferred);
+    if (!queuedReviewDraftsRef.current.length) {
       await window.riftlite.dismissMatchReview();
     }
+    openNextQueuedReview();
   }
 
   async function chooseGamePlatform(platform: GamePlatform, openPlay = false) {
@@ -6682,11 +6688,12 @@ function App() {
 
           {reviewDraft ? (
             <MatchReviewModal
+              key={reviewDraft.id}
               draft={reviewDraft}
               decks={decks}
               battlefields={battlefields}
               previousFlags={previousMatchFlags}
-              onClose={dismissReviewDraft}
+              onReviewLater={dismissReviewDraft}
               onDelete={deleteReviewDraft}
               onConfirm={confirmDraft}
           onChange={setReviewDraft}
@@ -9152,7 +9159,7 @@ function MatchupLabView({
       battlefields: Map<string, number>;
       decks: Map<string, number>;
     }>();
-    for (const match of matches) {
+    for (const match of localMatchesEligibleForStats(matches)) {
       const mine = cleanLegend(match.myChampion);
       const opponent = cleanLegend(match.opponentChampion);
       if (!mine || !opponent || match.hiddenFromStats) {
@@ -14503,7 +14510,10 @@ function MatchesView({
   const [sessionGoal, setSessionGoal] = useState("");
   const [sessionDeckId, setSessionDeckId] = useState("");
   const activeMatches = useMemo(() => activeLocalMatches(matches), [matches]);
-  const analyticsMatches = useMemo(() => validAnalytics(activeMatches.map(localToAnalytics)), [activeMatches]);
+  const analyticsMatches = useMemo(
+    () => validAnalytics(localMatchesEligibleForStats(activeMatches).map(localToAnalytics)),
+    [activeMatches]
+  );
   const filteredMatches = useMemo(() => filterLocalMatches(matches, filters), [matches, filters]);
   const legendOptions = useMemo(() => matrixLegendOptions(analyticsMatches), [analyticsMatches]);
   const myLegendOptions = useMemo(() => sideLegendOptions(analyticsMatches, "me"), [analyticsMatches]);
@@ -15192,8 +15202,9 @@ function ReplaySegmentPicker({
 
 function TestingSessionSummary({ session, matches, replays }: { session: TestingSession; matches: MatchDraft[]; replays: ReplayRecord[] }) {
   const stats = localMatchStats(matches);
+  const statsMatches = localMatchesEligibleForStats(matches);
   const replayMatchIds = new Set(replays.map((replay) => replay.matchId));
-  const legendsFaced = topValueList(matches.map((match) => normalizeLegendName(match.opponentChampion)).filter(Boolean)).slice(0, 4);
+  const legendsFaced = topValueList(statsMatches.map((match) => normalizeLegendName(match.opponentChampion)).filter(Boolean)).slice(0, 4);
   const replayCount = matches.filter((match) => replayMatchIds.has(match.id)).length;
   return (
     <div className="testing-session-summary">
@@ -15510,7 +15521,7 @@ function opponentLegendRecordLabel(match: AnalyticsMatch): string {
 }
 
 function localMatchStats(matches: MatchDraft[]): { winRate: string; record: string; streak: string; mostPlayed: string } {
-  const completed = matches.filter((match) => match.result !== "Incomplete");
+  const completed = localMatchesEligibleForStats(matches).filter((match) => match.result !== "Incomplete");
   const wins = completed.filter((match) => match.result === "Win").length;
   const losses = completed.filter((match) => match.result === "Loss").length;
   const draws = completed.filter((match) => match.result === "Draw").length;
@@ -15518,13 +15529,13 @@ function localMatchStats(matches: MatchDraft[]): { winRate: string; record: stri
   return {
     winRate: decisive ? `${Math.round((wins / decisive) * 100)}%` : "Pending",
     record: `${wins}-${losses}${draws ? `-${draws}` : ""}`,
-    streak: currentMatchStreak(matches),
-    mostPlayed: topValue(matches.map((match) => normalizeLegendName(match.myChampion)).filter(Boolean))
+    streak: currentMatchStreak(completed),
+    mostPlayed: topValue(completed.map((match) => normalizeLegendName(match.myChampion)).filter(Boolean))
   };
 }
 
 function currentMatchStreak(matches: MatchDraft[]): string {
-  const completed = [...matches]
+  const completed = localMatchesEligibleForStats(matches)
     .filter((match) => match.result === "Win" || match.result === "Loss")
     .sort((a, b) => new Date(b.capturedAt).getTime() - new Date(a.capturedAt).getTime());
   const latest = completed[0]?.result;
@@ -15593,7 +15604,10 @@ function StatsView({ matches }: { matches: MatchDraft[] }) {
   const [selectedStat, setSelectedStat] = useState<StatsDrilldownSelection | null>(null);
   const [sourceFilter, setSourceFilter] = useState("");
   const [personalFilters, setPersonalFilters] = useState<MatrixFilters>(DEFAULT_PERSONAL_MATRIX_FILTERS);
-  const allAnalytics = useMemo(() => validAnalytics(matches.map(localToAnalytics)), [matches]);
+  const allAnalytics = useMemo(
+    () => validAnalytics(localMatchesEligibleForStats(matches).map(localToAnalytics)),
+    [matches]
+  );
   const analytics = useMemo(() => sourceFilter ? allAnalytics.filter((match) => match.source === sourceFilter) : allAnalytics, [allAnalytics, sourceFilter]);
   const personalAnalytics = useMemo(() => filterMatrixMatches(analytics, personalFilters, true), [analytics, personalFilters]);
   const hasScorepadMatches = useMemo(() => allAnalytics.some((match) => match.source === "scorepad" || match.source === "manual"), [allAnalytics]);
@@ -15685,7 +15699,8 @@ function StreamView({
 }) {
   const [previewLayout, setPreviewLayout] = useState<"landscape" | "portrait">("landscape");
   const [overlayActionStatus, setOverlayActionStatus] = useState("");
-  const latest = matches[0];
+  const statsMatches = useMemo(() => localMatchesEligibleForStats(matches), [matches]);
+  const latest = statsMatches[0];
   const landscapeUrl = overlayInfo?.landscapeUrl || overlayInfo?.url || "";
   const portraitUrl = overlayInfo?.portraitUrl || "";
   const selectedOverlayUrl = previewLayout === "portrait" ? portraitUrl : landscapeUrl;
@@ -15693,8 +15708,8 @@ function StreamView({
   const sessionStart = overlaySessionStartDate(settings.overlaySessionStartedAt);
   const sessionStartMs = sessionStart.date.getTime();
   const sessionMatches = useMemo(
-    () => matches.filter((match) => match.result !== "Incomplete" && new Date(match.capturedAt).getTime() >= sessionStartMs),
-    [matches, sessionStartMs]
+    () => statsMatches.filter((match) => match.result !== "Incomplete" && new Date(match.capturedAt).getTime() >= sessionStartMs),
+    [statsMatches, sessionStartMs]
   );
   const sessionWins = sessionMatches.filter((match) => match.result === "Win").length;
   const sessionLosses = sessionMatches.filter((match) => match.result === "Loss").length;
@@ -15702,7 +15717,10 @@ function StreamView({
   const sessionRecord = `${sessionWins}-${sessionLosses}${sessionDraws ? `-${sessionDraws}` : ""}`;
   const latestMyLegend = latest ? normalizeLegendName(latest.myChampion) : "";
   const latestOpponentLegend = latest ? normalizeLegendName(latest.opponentChampion) : "";
-  const completed = useMemo(() => validAnalytics(matches.map(localToAnalytics)).filter((match) => match.result !== "Incomplete"), [matches]);
+  const completed = useMemo(
+    () => validAnalytics(statsMatches.map(localToAnalytics)).filter((match) => match.result !== "Incomplete"),
+    [statsMatches]
+  );
   const legendStats = useMemo(() => overlayPreviewStats(completed.filter((match) => match.myChampion === latestMyLegend)), [completed, latestMyLegend]);
   const matchupStats = useMemo(
     () => overlayPreviewStats(completed.filter((match) => match.myChampion === latestMyLegend && match.opponentChampion === latestOpponentLegend)),
@@ -16670,7 +16688,10 @@ function DeckDetail({ deck, matches, active, onSetActive, onRefresh, onDelete, o
 
 function DeckPerformancePanel({ performance }: { performance: DeckPerformanceStats }) {
   const [selectedMatch, setSelectedMatch] = useState<AnalyticsMatch | null>(null);
-  const analytics = useMemo(() => validAnalytics(performance.matches.map(localToAnalytics)), [performance.matches]);
+  const analytics = useMemo(
+    () => validAnalytics(localMatchesEligibleForStats(performance.matches).map(localToAnalytics)),
+    [performance.matches]
+  );
   const recent = useMemo(() => performance.recentMatches.map(localToAnalytics), [performance.recentMatches]);
   const lastPlayed = performance.overview.lastPlayed ? new Date(performance.overview.lastPlayed).toLocaleDateString() : "Never";
 
@@ -20741,6 +20762,19 @@ function rendererErrorMessage(error: unknown, fallback: string): string {
   return text || fallback;
 }
 
+function matchReviewErrorMessage(error: unknown, fallback: string): string {
+  const raw = rendererErrorMessage(error, fallback)
+    .replace(/^Error invoking remote method '[^']+':\s*/i, "")
+    .replace(/^Error:\s*/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (/memory access out of bounds/i.test(raw)) {
+    return `${fallback} RiftLite's local database stopped responding. This review is still open; retry Save match or Review later.`;
+  }
+  const safeDetail = raw && raw !== fallback ? raw.slice(0, 280) : "";
+  return safeDetail ? `${fallback} ${safeDetail}` : `${fallback} Please try again.`;
+}
+
 function replayFlagSortMs(flag: ReplayFlag): number {
   if (typeof flag.timeMs === "number") {
     return flag.timeMs;
@@ -24808,7 +24842,10 @@ function CommunityView({ matches, communityMatches, hubMatches, settings, status
   const [formatFilter, setFormatFilter] = useState("");
   const [deckPresenceFilter, setDeckPresenceFilter] = useState("");
   const communityRef = useRef<HTMLElement | null>(null);
-  const localReady = useMemo(() => matches.filter((match) => match.sync.community === "synced" || match.sync.community === "pending"), [matches]);
+  const localReady = useMemo(
+    () => localMatchesEligibleForStats(matches).filter((match) => match.sync.community === "synced" || match.sync.community === "pending"),
+    [matches]
+  );
   const analytics = useMemo(
     () => validAnalytics(communityMatches.length ? communityMatches.map((match) => communityToAnalytics(match)) : localReady.map(localToAnalytics)),
     [communityMatches, localReady]
@@ -26201,6 +26238,9 @@ function StatRow({ label, value, onClick }: { label: string; value: string; onCl
 }
 
 function SyncPill({ match }: { match: MatchDraft }) {
+  if (match.status === "pending-review" || match.status === "incomplete") {
+    return <span className="sync-pill pending">review needed</span>;
+  }
   const hubStates = Object.values(match.sync.hubs);
   const teamStates = Object.values(match.sync.teams ?? {});
   const privateStates = [...hubStates, ...teamStates];
@@ -27690,6 +27730,9 @@ function reviewBo3Notice(draft: MatchDraft, games: MatchGame[]): string {
 }
 
 function reviewFooterHint(draft: MatchDraft, isScorepadDraft: boolean): string {
+  if (draft.status === "saved") {
+    return "Saved match - Cancel discards changes made since it was opened";
+  }
   if (isScorepadDraft) {
     return "Source: Scorepad - public community sync disabled";
   }
@@ -27909,18 +27952,19 @@ function catalogSearchKey(value: string): string {
   return value.toLowerCase().replace(/[’`]/g, "'").replace(/[^a-z0-9]+/g, "");
 }
 
-function MatchReviewModal({ draft, decks, battlefields, previousFlags, onClose, onDelete, onConfirm, onChange }: {
+function MatchReviewModal({ draft, decks, battlefields, previousFlags, onReviewLater, onDelete, onConfirm, onChange }: {
   draft: MatchDraft;
   decks: SavedDeck[];
   battlefields: BattlefieldOption[];
   previousFlags: string[];
-  onClose: () => void;
+  onReviewLater: (draft: MatchDraft) => Promise<void>;
   onDelete: (draft: MatchDraft) => Promise<void>;
   onConfirm: (draft: MatchDraft) => Promise<void>;
   onChange: (draft: MatchDraft) => void;
 }) {
   const [isSaving, setIsSaving] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isDeferring, setIsDeferring] = useState(false);
   const [saveError, setSaveError] = useState("");
   const [seatErrorGames, setSeatErrorGames] = useState<number[]>([]);
   const [previousFlagChoice, setPreviousFlagChoice] = useState("");
@@ -27940,7 +27984,7 @@ function MatchReviewModal({ draft, decks, battlefields, previousFlags, onClose, 
   }
 
   async function saveMatch() {
-    if (isSaving || isDeleting) {
+    if (isSaving || isDeleting || isDeferring) {
       return;
     }
     setSaveError("");
@@ -27955,14 +27999,33 @@ function MatchReviewModal({ draft, decks, battlefields, previousFlags, onClose, 
     setIsSaving(true);
     try {
       await onConfirm(normalizeReviewDraft(draft));
-    } catch {
-      setSaveError("Save did not complete. Please try again.");
+    } catch (error) {
+      setSaveError(matchReviewErrorMessage(error, "Save did not complete."));
       setIsSaving(false);
     }
   }
 
+  async function reviewLater() {
+    if (isSaving || isDeleting || isDeferring) {
+      return;
+    }
+    setSaveError("");
+    setIsDeferring(true);
+    try {
+      await onReviewLater(normalizeReviewDraft(draft));
+    } catch (error) {
+      setSaveError(matchReviewErrorMessage(
+        error,
+        draft.status === "saved"
+          ? "The match editor could not close safely. It is still open."
+          : "Review later could not store this match. The review is still open."
+      ));
+      setIsDeferring(false);
+    }
+  }
+
   async function deleteCapture() {
-    if (isSaving || isDeleting) {
+    if (isSaving || isDeleting || isDeferring) {
       return;
     }
     const confirmed = window.confirm("Delete this captured match? Use this for non-games where the opponent left during setup. The match will move to the recycle bin and will not count in stats.");
@@ -27973,8 +28036,8 @@ function MatchReviewModal({ draft, decks, battlefields, previousFlags, onClose, 
     setIsDeleting(true);
     try {
       await onDelete(draft);
-    } catch {
-      setSaveError("Delete did not complete. Please try again.");
+    } catch (error) {
+      setSaveError(matchReviewErrorMessage(error, "Delete did not complete."));
       setIsDeleting(false);
     }
   }
@@ -28140,6 +28203,7 @@ function MatchReviewModal({ draft, decks, battlefields, previousFlags, onClose, 
   const deckSelectValue = attachedDeck?.id ?? (meaningfulDeckName(draft.deckName) ? "__current" : "");
   const bo1SeatInvalid = seatErrorGames.includes(1);
   const isScorepadDraft = draft.source === "scorepad" || draft.source === "manual";
+  const isSavedDraft = draft.status === "saved";
   const confidence = reviewCaptureConfidence(draft, reviewGames, isScorepadDraft);
   const bo3Notice = isMultiGameReview ? reviewBo3Notice(draft, reviewGames) : "";
   const isAutomaticTcgaSave = draft.platform === "tcga" && !isScorepadDraft;
@@ -28160,7 +28224,7 @@ function MatchReviewModal({ draft, decks, battlefields, previousFlags, onClose, 
             <h2>{isScorepadDraft ? "Review Scorepad match" : "Review captured match"}</h2>
             <p>{isScorepadDraft ? "Scorepad matches save locally and stay out of public community stats." : "RiftLite captured this automatically. Make corrections before syncing."}</p>
           </div>
-          <button className="icon-button" disabled={isSaving} onClick={onClose}>x</button>
+          <button className="icon-button" disabled={isSaving || isDeleting || isDeferring} onClick={() => void reviewLater()} aria-label={isSavedDraft ? "Cancel editing" : "Review later"}>x</button>
         </header>
         <section className={`capture-confidence ${confidence.tone}`} aria-live="polite">
           <div>
@@ -28298,9 +28362,9 @@ function MatchReviewModal({ draft, decks, battlefields, previousFlags, onClose, 
         </div>
         <footer>
           <span className={saveError ? "save-error" : ""}><Flag size={16} /> {saveError || reviewFooterHint(draft, isScorepadDraft)}</span>
-          <button className="danger" disabled={isSaving || isDeleting} onClick={() => void deleteCapture()}><Trash2 size={16} /> {isDeleting ? "Deleting..." : "Delete capture"}</button>
-          <button className="secondary" disabled={isSaving || isDeleting} onClick={onClose}>Review later</button>
-          <button className="primary" disabled={isSaving || isDeleting} onClick={() => void saveMatch()}><Check size={16} /> {isSaving ? "Saving..." : "Save match"}</button>
+          <button className="danger" disabled={isSaving || isDeleting || isDeferring} onClick={() => void deleteCapture()}><Trash2 size={16} /> {isDeleting ? "Deleting..." : "Delete capture"}</button>
+          <button className="secondary" disabled={isSaving || isDeleting || isDeferring} onClick={() => void reviewLater()}>{isDeferring ? isSavedDraft ? "Closing..." : "Keeping..." : isSavedDraft ? "Cancel" : "Review later"}</button>
+          <button className="primary" disabled={isSaving || isDeleting || isDeferring} onClick={() => void saveMatch()}><Check size={16} /> {isSaving ? "Saving..." : "Save match"}</button>
         </footer>
       </section>
     </div>

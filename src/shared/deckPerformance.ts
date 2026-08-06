@@ -1,5 +1,6 @@
 import { normalizeLegendName } from "./legendNames.js";
 import type { MatchDraft, MatchGame, SavedDeck } from "./types.js";
+import { localMatchesEligibleForStats } from "./matchList.js";
 
 export type DeckTrendLabel = "hot" | "cooling" | "stable" | "not enough data";
 
@@ -78,17 +79,20 @@ type GameRecord = {
 };
 
 export function buildDeckPerformance(deck: SavedDeck, matches: MatchDraft[], sessionStart?: Date): DeckPerformanceStats {
-  const deckMatches = deckMatchesFor(deck, matches).sort(compareCapturedDesc);
-  const completedMatches = deckMatches.filter(isCompletedMatch);
+  const deckMatches = deckMatchesFor(deck, matches)
+    .filter((match) => !match.deletedAt && !match.hiddenFromStats && !match.mergedIntoMatchId)
+    .sort(compareCapturedDesc);
+  const statsDeckMatches = localMatchesEligibleForStats(deckMatches);
+  const completedMatches = statsDeckMatches.filter(isCompletedMatch);
   const overview = {
     ...recordStats(completedMatches.map((match) => match.result)),
     bo1: completedMatches.filter((match) => match.format === "Bo1").length,
     bo3: completedMatches.filter((match) => match.format === "Bo3").length,
-    incomplete: deckMatches.length - completedMatches.length,
+    incomplete: statsDeckMatches.length - completedMatches.length,
     currentStreak: currentStreak(completedMatches),
     lastPlayed: deckMatches[0]?.capturedAt ?? ""
   };
-  const gameRecords = deckMatches.flatMap(matchGameRecords).filter((game) => game.result !== "Incomplete");
+  const gameRecords = completedMatches.flatMap(matchGameRecords).filter((game) => game.result !== "Incomplete");
 
   return {
     deck,

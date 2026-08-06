@@ -44,6 +44,7 @@ const api: RiftLiteApi = {
   getMatches: () => ipcRenderer.invoke("matches:get") as Promise<MatchDraft[]>,
   getDeletedMatches: () => ipcRenderer.invoke("matches:deleted") as Promise<MatchDraft[]>,
   saveMatchDraft: (draft) => ipcRenderer.invoke("matches:save-draft", draft) as Promise<MatchDraft>,
+  deferMatchReview: (draft) => ipcRenderer.invoke("matches:defer-review", draft) as Promise<MatchDraft>,
   confirmMatch: (draft) => ipcRenderer.invoke("matches:confirm", draft) as Promise<MatchDraft>,
   previewCombinedMatches: (matchIds) => ipcRenderer.invoke("matches:combine-preview", matchIds) as ReturnType<RiftLiteApi["previewCombinedMatches"]>,
   saveCombinedMatches: (payload) => ipcRenderer.invoke("matches:combine-save", payload) as Promise<MatchDraft>,

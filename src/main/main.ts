@@ -381,7 +381,27 @@ function startupLogPath(): string {
 }
 
 function formatStartupError(error: unknown): string {
-  return error instanceof Error ? `${error.message}\n${error.stack ?? ""}` : String(error);
+  if (!(error instanceof Error)) {
+    return String(error).slice(0, 8_000);
+  }
+  const isSqlRuntimeFailure = /memory access out of bounds/i.test(error.message);
+  const message = isSqlRuntimeFailure
+    ? "RuntimeError: memory access out of bounds"
+    : error.message.replace(/\s+/g, " ").slice(0, 1_000);
+  const stack = (error.stack ?? "").split(/\r?\n/).slice(1).join("\n").slice(0, 6_000);
+  return `${message}${stack ? `\n${stack}` : ""}`;
+}
+
+function matchPersistenceDiagnostic(error: unknown): Error {
+  const raw = error instanceof Error ? error.message : String(error);
+  const message = /memory access out of bounds/i.test(raw)
+    ? "RuntimeError: memory access out of bounds"
+    : raw.replace(/\s+/g, " ").slice(0, 500) || "Unknown match persistence failure";
+  const diagnostic = new Error(message);
+  if (error instanceof Error && error.stack) {
+    diagnostic.stack = `${diagnostic.name}: ${message}\n${error.stack.split(/\r?\n/).slice(1).join("\n")}`;
+  }
+  return diagnostic;
 }
 
 async function logStartupIssue(label: string, error: unknown): Promise<void> {
@@ -7350,26 +7370,46 @@ function registerIpc(): void {
     queueAccountCloudSync("Match saved");
     return saved;
   });
+  handleTrustedAppIpc("matches:defer-review", async (_event, draft: MatchDraft) => {
+    const deferred = await store.deferMatchReview(draft);
+    // If the first pending-row write failed, replay finalization deliberately
+    // parked its prepared VOD/raw capture in memory. The new row is now
+    // durable, so secure that material before allowing Review later to close.
+    if (draft.status !== "saved") {
+      await capture.waitForReplayFinalization(deferred.id);
+    }
+    const latest = (await store.getMatches()).find((candidate) => candidate.id === deferred.id) ?? deferred;
+    queueAccountCloudSync("Match review deferred");
+    return latest;
+  });
   handleTrustedAppIpc("matches:confirm", async (_event, draft: MatchDraft) => {
-    return confirmMatchLocalFirst(draft, {
-      saveLocally: async (candidate) => {
-        const saved = await capture.confirmMatch(candidate, {
-          deferReplayFinalization: confirmedMatchSupportsBackgroundDelivery(candidate)
-        });
-        return saved.platform === "tcga"
-          ? commitConfirmedTcgaReplayLocally(saved)
-          : saved;
-      },
-      shouldDeliverInBackground: confirmedMatchSupportsBackgroundDelivery,
-      queueBackgroundDelivery: queueConfirmedMatchDelivery,
-      deliverBeforeResponse: async (saved) => {
-        await capture.waitForReplayFinalization(saved.id);
-        const latest = (await store.getMatches()).find((candidate) => candidate.id === saved.id) ?? saved;
-        const synced = await capture.syncConfirmedMatch(latest);
-        queueAccountCloudSync("Match saved");
-        return synced;
-      }
-    });
+    try {
+      return await confirmMatchLocalFirst(draft, {
+        saveLocally: async (candidate) => {
+          const saved = await capture.confirmMatch(candidate, {
+            deferReplayFinalization: confirmedMatchSupportsBackgroundDelivery(candidate)
+          });
+          return saved.platform === "tcga"
+            ? commitConfirmedTcgaReplayLocally(saved)
+            : saved;
+        },
+        shouldDeliverInBackground: confirmedMatchSupportsBackgroundDelivery,
+        queueBackgroundDelivery: queueConfirmedMatchDelivery,
+        deliverBeforeResponse: async (saved) => {
+          await capture.waitForReplayFinalization(saved.id);
+          const latest = (await store.getMatches()).find((candidate) => candidate.id === saved.id) ?? saved;
+          const synced = await capture.syncConfirmedMatch(latest);
+          queueAccountCloudSync("Match saved");
+          return synced;
+        }
+      });
+    } catch (error) {
+      await logStartupIssue(
+        `Match confirmation failed (${draft.platform}, ${draft.id})`,
+        matchPersistenceDiagnostic(error)
+      );
+      throw error;
+    }
   });
   handleTrustedAppIpc("matches:combine-preview", (_event, matchIds: string[]) => store.previewCombinedMatches(matchIds));
   handleTrustedAppIpc("matches:combine-save", async (_event, payload) => {

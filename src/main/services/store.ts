@@ -586,6 +586,49 @@ export class RiftLiteStore {
     }, { invalidateMatches: true });
   }
 
+  /**
+   * Durably parks an open match review without allowing a stale renderer draft
+   * to undo a confirmation or overwrite newer delivery state. Capture is
+   * deliberately allowed to open a review when its first database write
+   * fails, so Review later must also be able to create the missing pending row.
+   */
+  async deferMatchReview(draft: MatchDraft): Promise<MatchDraft> {
+    return this.enqueueAtomicDatabaseMutation("defer-match-review", (db) => {
+      const result = db.exec("SELECT data_json FROM matches WHERE id=?", [draft.id]);
+      const hasStoredRow = Boolean(result[0]?.values.length);
+      const row = result[0]?.values[0]?.[0];
+      const current = this.parseStoredMatch(row);
+      if (hasStoredRow && !current) {
+        throw new Error("This match's local database row is unreadable. RiftLite left it untouched for recovery.");
+      }
+      if (current?.deletedAt) {
+        throw new Error("This captured match was deleted while its review was open. It was not restored.");
+      }
+      if (!current && draft.status === "saved") {
+        throw new Error("This saved match is no longer in local history. It was not recreated.");
+      }
+      // Any saved row is authoritative. A stale pending renderer draft can
+      // race a TCGA confirmation that committed locally before replay
+      // finalization failed; changing that saved row here could leave remote
+      // destinations marked synced with different local match data.
+      if (current?.status === "saved") {
+        return current;
+      }
+
+      const now = new Date().toISOString();
+      const next = compactMatchForStorage(normalizeStoredMatch(current
+        ? mergeDeferredReviewFields(current, draft, now)
+        : { ...draft, updatedAt: now }));
+      db.run(
+        `INSERT OR REPLACE INTO matches
+         (id, platform, status, result, captured_at, updated_at, data_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [next.id, next.platform, next.status, next.result, next.capturedAt, next.updatedAt, JSON.stringify(next)]
+      );
+      return next;
+    }, { invalidateMatches: true });
+  }
+
   async undoCombinedMatch(
     combinedMatchId: string,
     guard: (combined: Readonly<MatchDraft>) => boolean = () => true
@@ -2371,6 +2414,50 @@ function legacyRowToMatch(row: Record<string, unknown>, settings: UserSettings):
 
 function normalizeImportedMatch(match: MatchDraft): MatchDraft {
   return normalizeStoredMatch(match);
+}
+
+function mergeDeferredReviewFields(current: MatchDraft, draft: MatchDraft, updatedAt: string): MatchDraft {
+  return {
+    ...current,
+    // These are the fields the review modal can correct. System-owned capture,
+    // replay association, deletion, and sync fields remain on `current`.
+    result: draft.result,
+    format: draft.format,
+    score: draft.score,
+    myName: draft.myName,
+    opponentName: draft.opponentName,
+    myChampion: draft.myChampion,
+    opponentChampion: draft.opponentChampion,
+    myBattlefield: draft.myBattlefield,
+    opponentBattlefield: draft.opponentBattlefield,
+    deckName: draft.deckName,
+    deckSourceId: draft.deckSourceId,
+    deckSourceUrl: draft.deckSourceUrl,
+    deckSourceKey: draft.deckSourceKey,
+    deckSnapshotJson: draft.deckSnapshotJson,
+    flags: draft.flags,
+    notes: draft.notes,
+    games: draft.games,
+    keepReplay: draft.keepReplay,
+    testingSessionId: draft.testingSessionId ?? current.testingSessionId,
+    testingSessionLabel: draft.testingSessionLabel ?? current.testingSessionLabel,
+    rawEvidence: mergeDeferredReviewEvidence(current.rawEvidence, draft.rawEvidence),
+    status: draft.status,
+    updatedAt,
+    sync: current.sync
+  };
+}
+
+function mergeDeferredReviewEvidence(
+  current: MatchDraft["rawEvidence"] | undefined,
+  draft: MatchDraft["rawEvidence"] | undefined
+): MatchDraft["rawEvidence"] {
+  const merged = new Map<string, MatchDraft["rawEvidence"][number]>();
+  for (const event of [...(current ?? []), ...(draft ?? [])]) {
+    const key = event.id || `${event.platform}|${event.kind}|${event.capturedAt}|${event.url}`;
+    merged.set(key, event);
+  }
+  return [...merged.values()];
 }
 
 function normalizeStoredMatch(match: MatchDraft): MatchDraft {

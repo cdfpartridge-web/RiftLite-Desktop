@@ -7,3 +7,13 @@ export function upsertMatchPreservingOrder(matches: MatchDraft[], saved: MatchDr
   }
   return matches.map((match, index) => index === existingIndex ? saved : match);
 }
+
+/** Pending/incomplete reviews stay visible in history but never affect stats. */
+export function localMatchesEligibleForStats(matches: MatchDraft[]): MatchDraft[] {
+  return matches.filter((match) => (
+    match.status === "saved" &&
+    !match.deletedAt &&
+    !match.hiddenFromStats &&
+    !match.mergedIntoMatchId
+  ));
+}

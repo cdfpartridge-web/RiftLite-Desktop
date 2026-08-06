@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { upsertMatchPreservingOrder } from "../src/shared/matchList";
+import { localMatchesEligibleForStats, upsertMatchPreservingOrder } from "../src/shared/matchList";
 import type { MatchDraft } from "../src/shared/types";
 
 function match(id: string, capturedAt: string): MatchDraft {
@@ -48,5 +48,13 @@ describe("upsertMatchPreservingOrder", () => {
     const result = upsertMatchPreservingOrder([existing], captured);
 
     expect(result.map((item) => item.id)).toEqual(["captured", "existing"]);
+  });
+
+  it("keeps pending reviews in history data but out of statistical cohorts", () => {
+    const saved = match("saved", "2026-04-24T13:00:00.000Z");
+    const pending = { ...match("pending", "2026-04-24T14:00:00.000Z"), status: "pending-review" as const };
+    const hidden = { ...match("hidden", "2026-04-24T12:00:00.000Z"), hiddenFromStats: true };
+
+    expect(localMatchesEligibleForStats([pending, saved, hidden]).map((item) => item.id)).toEqual(["saved"]);
   });
 });

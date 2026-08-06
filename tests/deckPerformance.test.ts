@@ -19,7 +19,10 @@ function match(patch: Partial<MatchDraft>): MatchDraft {
   return {
     id: patch.id ?? crypto.randomUUID(),
     platform: "tcga",
-    status: "saved",
+    status: patch.status ?? "saved",
+    deletedAt: patch.deletedAt,
+    hiddenFromStats: patch.hiddenFromStats,
+    mergedIntoMatchId: patch.mergedIntoMatchId,
     capturedAt,
     updatedAt: capturedAt,
     result: patch.result ?? "Win",
@@ -73,6 +76,30 @@ describe("deck performance", () => {
     expect(performance.overview.record).toBe("1-1");
     expect(performance.overview.winRateLabel).toBe("50%");
     expect(performance.overview.incomplete).toBe(1);
+  });
+
+  it("does not count a pending review even when capture already inferred Win or Loss", () => {
+    const performance = buildDeckPerformance(deck, [
+      match({ id: "pending-win", status: "pending-review", result: "Win", deckSourceKey: "piltover:abc" }),
+      match({ id: "saved-loss", status: "saved", result: "Loss", deckSourceKey: "piltover:abc" })
+    ]);
+
+    expect(performance.matches.map((item) => item.id)).toContain("pending-win");
+    expect(performance.overview.record).toBe("0-1");
+    expect(performance.overview.total).toBe(1);
+    expect(performance.overview.incomplete).toBe(0);
+  });
+
+  it("does not reclassify hidden or merged repair rows as incomplete", () => {
+    const performance = buildDeckPerformance(deck, [
+      match({ id: "saved", result: "Win", deckSourceKey: "piltover:abc" }),
+      match({ id: "hidden", result: "Loss", deckSourceKey: "piltover:abc", hiddenFromStats: true }),
+      match({ id: "merged", result: "Loss", deckSourceKey: "piltover:abc", mergedIntoMatchId: "combined" })
+    ]);
+
+    expect(performance.matches.map((item) => item.id)).toEqual(["saved"]);
+    expect(performance.overview.record).toBe("1-0");
+    expect(performance.overview.incomplete).toBe(0);
   });
 
   it("builds seat, battlefield, trend, and active overlay stats from local matches", () => {

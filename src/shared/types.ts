@@ -2109,6 +2109,7 @@ export interface RiftLiteApi {
   getMatches(): Promise<MatchDraft[]>;
   getDeletedMatches(): Promise<MatchDraft[]>;
   saveMatchDraft(draft: MatchDraft): Promise<MatchDraft>;
+  deferMatchReview(draft: MatchDraft): Promise<MatchDraft>;
   confirmMatch(draft: MatchDraft): Promise<MatchDraft>;
   previewCombinedMatches(matchIds: string[]): Promise<import("./matchCombine.js").MatchCombinePreview>;
   saveCombinedMatches(payload: import("./matchCombine.js").MatchCombineSavePayload): Promise<MatchDraft>;

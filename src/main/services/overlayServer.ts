@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type { MatchDraft, OverlayDisplayOptions, SavedDeck, UserSettings } from "../../shared/types.js";
 import { activeDeckOverlayStats, buildDeckPerformance } from "../../shared/deckPerformance.js";
 import { normalizeLegendName } from "../../shared/legendNames.js";
+import { localMatchesEligibleForStats } from "../../shared/matchList.js";
 import { RiftLiteStore } from "./store.js";
 
 const OVERLAY_PORT = 17731;
@@ -168,9 +169,10 @@ export class OverlayServer {
     const { matches, settings, activeDeck } = await this.cachedStatsData();
     const sessionStart = overlaySessionStart(settings.overlaySessionStartedAt);
     const activeDeckStats = activeDeck ? activeDeckOverlayStats(buildDeckPerformance(activeDeck, matches, sessionStart.date), sessionStart.date) : null;
-    const completed = matches.filter(isCompletedMatch);
+    const statsMatches = localMatchesEligibleForStats(matches);
+    const completed = statsMatches.filter(isCompletedMatch);
     const session = completed.filter((match) => matchCapturedAfter(match, sessionStart.date));
-    const latest = matches[0];
+    const latest = statsMatches[0];
     const latestMyLegend = latest ? normalizeLegendName(latest.myChampion) : "";
     const latestOpponentLegend = latest ? normalizeLegendName(latest.opponentChampion) : "";
     const legendMatches = latestMyLegend
