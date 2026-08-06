@@ -1,6 +1,6 @@
 # RiftLite Current Engineering State
 
-> **Current release state:** Windows v0.9.34 and its supporting website update are live. macOS v0.9.34 source and tag are published, but native installer production is blocked by a GitHub Actions outage. Read `docs/release-notes-v0.9.34.md` first.
+> **Current release state:** Windows v0.9.35 is live. macOS v0.9.35 source and tag are published, but its native installer workflow is queued during a GitHub Actions major outage. No website deployment was required. Read `docs/release-notes-v0.9.35.md` first.
 
 Last updated: 2026-08-06
 
@@ -10,15 +10,15 @@ This is the durable handoff for continuing RiftLite work in a fresh Codex task. 
 
 - Active cross-platform release source repo:
   `C:\Users\cdfpa\OneDrive\Documents\Claude\Projects\Riftlite Beta 0.6\desktop-v06`
-- Current local package version: `0.9.34` (customer-facing build `v0.9.34`); Windows is published and the immutable macOS tag awaits a fresh workflow run after GitHub Actions recovers
+- Current local package version: `0.9.35` (customer-facing build `v0.9.35`); Windows is published and the immutable macOS tag is queued in the native build workflow
 - Current branch: `agent/release-v0.9.12`
 - Windows GitHub release repository (`windows` remote): `cdfpartridge-web/RiftLite-Desktop`
 - macOS GitHub release repository (`origin` remote): `cdfpartridge-web/RiftLite-Desktop-mac`
-- Current published Windows release: `v0.9.34` (2026-08-06)
+- Current published Windows release: `v0.9.35` (2026-08-06)
 - Current published macOS release: `mac-v0.9.33` (2026-08-06)
 - Windows installer output:
   `C:\Users\cdfpa\OneDrive\Documents\Claude\Projects\Riftlite Beta 0.6\desktop-v06\release\RiftLiteBetaInstall.exe`
-- Current local Windows installer: `release\RiftLiteBetaInstall.exe`, 212,869,050 bytes, SHA-256 `F71E722EF627523FF6FFB8FD398DC1D54BE7A7D91D45ACB358BBDB481412651E`.
+- Current local Windows installer: `release\RiftLiteBetaInstall.exe`, 214,418,312 bytes, SHA-256 `DD1B9A0DDBE301B98EB3106524A36112001D9FF3A75EF259A5DA3DFDBEC80E20`.
 
 Always name the remote explicitly when pushing: Windows source/tags go to `windows`; macOS source/tags go to `origin`. The repositories and release tags are deliberately separate.
 
@@ -39,6 +39,19 @@ The active working tree may contain current work. Never reset, discard, or overw
 5. Do not rebuild installers, publish releases, or deploy the website unless explicitly requested.
 6. Treat raw WebSocket replay data, account sync, hub ownership, Discord tokens, and API keys as security-sensitive.
 7. RiftReplay/Replay Lab and Vision work are parked or hidden. Do not expose them in menus or release notes unless explicitly requested.
+
+## 2026-08-06 v0.9.35 Release (Windows Live; macOS Queued)
+
+- Release commit `87821be0a603009e98dd69c1da238520e4b3bfec` is tagged as Windows `v0.9.35` and macOS `mac-v0.9.35`; both release repositories' `main` and working branches contain the same source.
+- Windows release: `https://github.com/cdfpartridge-web/RiftLite-Desktop/releases/tag/v0.9.35` and is the repository's current latest release.
+- Native macOS workflow: `https://github.com/cdfpartridge-web/RiftLite-Desktop-mac/actions/runs/31128215132`. The tag push webhook was missed during the official GitHub Actions major outage, so the workflow was manually dispatched at the same immutable tag. It is queued with zero steps started; no Mac installer or release is claimed until that run passes and all five assets are verified.
+- `Review later` now durably stores a captured match and its edits before closing, including waiting for replay/video finalization where necessary. A failed persistence attempt leaves the review open with a bounded, actionable error so the user can retry.
+- Pending reviews remain visible in Match History as `Review needed`, while incomplete rows are excluded from personal stats, deck performance, Matchup Lab, renderer/OBS overlays, and fallback community aggregates until the review is confirmed.
+- Saved or synced matches remain authoritative: a stale, deleted, or corrupt pending review cannot overwrite a completed row, and capture evidence is merged conservatively when a review is deferred.
+- Windows validation passed TypeScript, the 79-test account-sync gate, all 110 test files / 987 tests, the production build, installer/updater verification, NSIS integrity checks, and the packaged smoke test.
+- Windows installer: 214,418,312 bytes, SHA-256 `DD1B9A0DDBE301B98EB3106524A36112001D9FF3A75EF259A5DA3DFDBEC80E20`; blockmap: 201,783 bytes, SHA-256 `69161F62895AF3F309B65083E9D3A518D4CA5ECE319473B573EAF76DFE711D55`; updater manifest: 344 bytes, SHA-256 `89828A079BB5872E23CA0BD1868A3DB3527C863E502C6AABBBBA9E47455BADD3`.
+- All three Windows assets were independently downloaded after publication and matched the local sizes and SHA-256 digests. The downloaded updater manifest reports version `0.9.35` and its installer size and SHA-512 match the published executable.
+- This release changed only desktop source and tests. No website deployment, Discord action, or production data mutation was required.
 
 ## 2026-08-06 v0.9.34 Release (Windows And Web Live; macOS Blocked)
 
