@@ -1,6 +1,6 @@
 # RiftLite Current Engineering State
 
-> **Current release state:** Windows v0.9.34 and its supporting website update are live. macOS v0.9.34 source and tag are published, but native installer production is queued during a GitHub Actions outage. Read `docs/release-notes-v0.9.34.md` first.
+> **Current release state:** Windows v0.9.34 and its supporting website update are live. macOS v0.9.34 source and tag are published, but native installer production is blocked by a GitHub Actions outage. Read `docs/release-notes-v0.9.34.md` first.
 
 Last updated: 2026-08-06
 
@@ -10,7 +10,7 @@ This is the durable handoff for continuing RiftLite work in a fresh Codex task. 
 
 - Active cross-platform release source repo:
   `C:\Users\cdfpa\OneDrive\Documents\Claude\Projects\Riftlite Beta 0.6\desktop-v06`
-- Current local package version: `0.9.34` (customer-facing build `v0.9.34`); Windows is published and macOS is queued at the immutable release tag
+- Current local package version: `0.9.34` (customer-facing build `v0.9.34`); Windows is published and the immutable macOS tag awaits a fresh workflow run after GitHub Actions recovers
 - Current branch: `agent/release-v0.9.12`
 - Windows GitHub release repository (`windows` remote): `cdfpartridge-web/RiftLite-Desktop`
 - macOS GitHub release repository (`origin` remote): `cdfpartridge-web/RiftLite-Desktop-mac`
@@ -40,11 +40,11 @@ The active working tree may contain current work. Never reset, discard, or overw
 6. Treat raw WebSocket replay data, account sync, hub ownership, Discord tokens, and API keys as security-sensitive.
 7. RiftReplay/Replay Lab and Vision work are parked or hidden. Do not expose them in menus or release notes unless explicitly requested.
 
-## 2026-08-06 v0.9.34 Release (Windows And Web Live; macOS Queued)
+## 2026-08-06 v0.9.34 Release (Windows And Web Live; macOS Blocked)
 
 - Release commit `2e0a2bd81776deb31a18af3f57ea60118302780e` is tagged as Windows `v0.9.34` and macOS `mac-v0.9.34`.
 - Windows release: `https://github.com/cdfpartridge-web/RiftLite-Desktop/releases/tag/v0.9.34`.
-- macOS workflow: `https://github.com/cdfpartridge-web/RiftLite-Desktop-mac/actions/runs/31126023610`; it is queued at the exact release tag while GitHub reports an Actions major outage. No stale local Mac artifact was uploaded.
+- macOS workflow: `https://github.com/cdfpartridge-web/RiftLite-Desktop-mac/actions/runs/31126023610`; GitHub cancelled it before assigning a runner or executing any step while the official Actions component reported a major outage. No `mac-v0.9.34` release or stale local Mac artifact was published.
 - Website commit `4d86629c6b7b9fc53aeec87a6176c753e4fdb11f` is live in production deployment `dpl_3exritipUvATgeqVvSbzbRhPNJnh`, including the server-proven anonymous-account adoption flow. The production aliases, Home page, device-link page, and Home API were verified healthy.
 
 - Completed Atlas and TCGA capture data is retained locally when account verification, Web Replay upload, Discord delivery, or reviewed match reporting is temporarily unavailable.
@@ -57,7 +57,7 @@ The active working tree may contain current work. Never reset, discard, or overw
 - Windows installer: 212,869,050 bytes, SHA-256 `F71E722EF627523FF6FFB8FD398DC1D54BE7A7D91D45ACB358BBDB481412651E`; blockmap: 199,066 bytes, SHA-256 `22CF490FC1AC0545A26043EF59515F247E98A6E582C9F19E70CB800F321653D7`; updater manifest: 344 bytes, SHA-256 `548FC4CA0B62A089324F9AB0D4164E6E04BAA4ECFC463A897D651D204E6FB713`.
 - All three Windows assets were independently downloaded after publication and matched GitHub sizes and SHA-256 digests; the updater manifest's version, installer size, and SHA-512 relationship were also verified.
 - Website validation on current production `main` passed 98 test files / 684 tests with one file / nine tests skipped, lint with zero errors (14 pre-existing warnings), and the optimized Next production build.
-- After GitHub Actions recovers, the queued macOS workflow must complete, the five Mac assets must be independently verified, and this section must be finalized with their hashes without moving either release tag.
+- After GitHub Actions recovers, dispatch `build-mac.yml` again at the existing `mac-v0.9.34` tag, independently verify the five Mac assets, and finalize this section with their hashes without moving either release tag.
 
 ## 2026-08-06 v0.9.33 Release
 
