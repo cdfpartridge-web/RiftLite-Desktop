@@ -1756,6 +1756,7 @@ export interface AccountLinkStatus {
   email?: string;
   displayName?: string;
   message?: string;
+  adoptedAnonymousAccount?: boolean;
 }
 
 export interface AppNavigationRequest {

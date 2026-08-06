@@ -12787,7 +12787,7 @@ function AccountView({
           setLinkSession(null);
           setLinkProvider(null);
           setLinkQr("");
-          const linkedForFirstTime = linkStartedAsFirstConnection.current;
+          const linkedForFirstTime = linkStartedAsFirstConnection.current || result.adoptedAnonymousAccount === true;
           linkStartedAsFirstConnection.current = false;
           const refreshed = await refreshSettingsAndProfile();
           if (linkedForFirstTime && refreshed.settings.accountUid) {

@@ -520,7 +520,7 @@ type PersistedRawCaptureManifest = {
   indexPath: string;
   /** Whether deletion/purge of a real local ReplayRecord is authoritative. */
   requiresLocalReplayParent?: boolean;
-  /** Present only when an active JSONL journal was promoted after process exit. */
+  /** Present when an active JSONL journal was promoted without a local replay parent. */
   recoveredFromJournalAt?: string;
   localReplayId?: string;
   localMatchId?: string;
@@ -583,6 +583,7 @@ const RAW_CAPTURE_JOURNAL_SUFFIX = ".riftlite-active.jsonl";
 const RAW_CAPTURE_MAX_JOURNAL_BYTES = 32 * 1024 * 1024;
 const RAW_CAPTURE_JOURNAL_HANDLE_IDLE_MS = 250;
 const RAW_CAPTURE_RECOVERY_WARNING = "Recovered after an unexpected desktop shutdown. The final moments of this replay may be missing.";
+const RAW_CAPTURE_RETENTION_WARNING = "Retained locally before RiftLite released an inactive capture session whose replay association had not completed.";
 const FIREBASE_API_KEY = "AIzaSyBNqEY-i_CggjhDKVltoPQFrSOEfHF7fBA";
 const RAW_CAPTURE_TEMPORAL_MAX_PRELUDE_MS = 15 * 60 * 1000;
 const RAW_CAPTURE_TEMPORAL_MAX_END_GAP_MS = 3 * 60 * 1000;
@@ -668,9 +669,15 @@ export class RawCaptureService {
       return;
     }
     const ts = Number.isFinite(payload.frame.ts) ? payload.frame.ts : Date.now();
-    this.pruneStaleSessions(ts);
     const requestUrl = payload.requestUrl || "";
     const socketId = payload.frame.socketId || "ws-1";
+    await this.pruneStaleSessions(ts, settings);
+    if (
+      this.sessions.size >= RAW_CAPTURE_MAX_ACTIVE_SESSIONS &&
+      this.frameNeedsNewSession(details, socketId, requestUrl)
+    ) {
+      await this.retainOldestCompletedSession(settings, ts);
+    }
     const webReplayAutoUploadAccountUid = riftLiteWebReplayAutoUploadAccountUid(settings);
     const discordShareHubIds = riftLiteWebReplayDiscordShareHubIds(settings);
     const webReplayDiscordShareAccountUid = discordShareHubIds.length
@@ -930,15 +937,116 @@ export class RawCaptureService {
     return session;
   }
 
-  private pruneStaleSessions(now: number): void {
-    for (const session of this.sessions.values()) {
-      if (
-        !this.finalizingSessionIds.has(session.captureSessionId) &&
-        now >= session.lastSeenAt &&
-        now - session.lastSeenAt > RAW_CAPTURE_SESSION_IDLE_MS
-      ) {
-        this.removeSession(session.captureSessionId);
+  private async pruneStaleSessions(now: number, settings: UserSettings): Promise<void> {
+    const staleSessions = [...this.sessions.values()].filter((session) => (
+      !this.finalizingSessionIds.has(session.captureSessionId) &&
+      now >= session.lastSeenAt &&
+      now - session.lastSeenAt > RAW_CAPTURE_SESSION_IDLE_MS
+    ));
+    for (const session of staleSessions) {
+      if (this.sessionHasDurableRetentionEvidence(session)) {
+        await this.retainSessionDurably(session, settings, now, "idle-retention");
+      } else {
+        // Search/prelude-only journals are not match captures. Preserve the
+        // existing bounded cleanup behavior for them instead of growing the
+        // replay folder with unusable orphan artifacts.
+        await this.discardSessionJournal(session.captureSessionId);
+        this.forgetSessionInMemory(session.captureSessionId);
       }
+    }
+  }
+
+  private sessionHasDurableRetentionEvidence(session: ActiveRawCaptureSession): boolean {
+    if (session.provisional) {
+      return false;
+    }
+    const hasGameplayPhase = [...session.phases, ...session.games.flatMap((game) => game.phases)]
+      .some((phase) => [
+        "matchup", "initiative", "mulligan", "battlefield", "in_game", "sideboarding", "game_end"
+      ].includes(phase.normalizedPhase || normalizeAtlasReplayPhase(phase.phase)));
+    return hasGameplayPhase ||
+      session.lastFrameType === "room_shell_leave" ||
+      session.boundaries.some((boundary) => boundary.reason === "end-of-match");
+  }
+
+  private frameNeedsNewSession(
+    details: RawCaptureFrameDetails,
+    socketId: string,
+    requestUrl: string
+  ): boolean {
+    const routedSessionId = rawCaptureTransportKeys(requestUrl, socketId)
+      .map((key) => this.sessionIdByTransport.get(key))
+      .find(Boolean);
+    const routedSession = routedSessionId && !this.finalizingSessionIds.has(routedSessionId)
+      ? this.sessions.get(routedSessionId)
+      : undefined;
+    if (details.type === "search" && routedSession && !routedSession.provisional) {
+      return true;
+    }
+    const identitySession = this.findSessionForFrameIdentity(details);
+    if (identitySession && !hasRawCaptureIdentityConflict(identitySession, details)) {
+      return false;
+    }
+    return !routedSession || hasRawCaptureIdentityConflict(routedSession, details);
+  }
+
+  private async retainOldestCompletedSession(settings: UserSettings, now: number): Promise<boolean> {
+    const candidate = [...this.sessions.values()]
+      .filter((session) => !this.finalizingSessionIds.has(session.captureSessionId))
+      .filter((session) => {
+        const phase = normalizeAtlasReplayPhase(session.lastPhase);
+        return phase === "game_end" ||
+          session.lastFrameType === "room_shell_leave" ||
+          session.boundaries.some((boundary) => boundary.reason === "end-of-match");
+      })
+      .sort((left, right) => left.lastSeenAt - right.lastSeenAt)[0];
+    return candidate ? this.retainSessionDurably(candidate, settings, now, "capacity-retention") : false;
+  }
+
+  private async retainSessionDurably(
+    session: ActiveRawCaptureSession,
+    settings: UserSettings,
+    retainedAt: number,
+    reason: "idle-retention" | "capacity-retention"
+  ): Promise<boolean> {
+    if (this.finalizingSessionIds.has(session.captureSessionId)) {
+      return false;
+    }
+    const safeRetainedAt = Number.isFinite(retainedAt) && Math.abs(retainedAt) <= RAW_CAPTURE_MAX_DATE_MS
+      ? retainedAt
+      : Date.now();
+    const retainedAtIso = new Date(safeRetainedAt).toISOString();
+    const retainedSession: ActiveRawCaptureSession = {
+      ...session,
+      boundaries: [...session.boundaries, { at: session.lastSeenAt, reason }],
+      diagnostics: [...session.diagnostics, {
+        ts: safeRetainedAt,
+        severity: "warn",
+        code: "active_session_retained_locally",
+        message: RAW_CAPTURE_RETENTION_WARNING
+      }]
+    };
+    this.finalizingSessionIds.add(session.captureSessionId);
+    try {
+      await this.persistSession(retainedSession, {
+        platform: "atlas",
+        title: "Retained Atlas capture",
+        completedAt: retainedAtIso
+      }, undefined, settings, {
+        recoveredFromJournalAt: retainedAtIso,
+        journalPromotionWarning: RAW_CAPTURE_RETENTION_WARNING
+      });
+      await this.discardSessionJournal(session.captureSessionId);
+      this.forgetSessionInMemory(session.captureSessionId);
+      this.lastAssociationError = "";
+      return true;
+    } catch (error) {
+      this.lastAssociationError = `RiftLite kept an inactive Web Replay journal for a later recovery attempt: ${
+        truncateForUi(error instanceof Error ? error.message : String(error), 220)
+      }`;
+      return false;
+    } finally {
+      this.finalizingSessionIds.delete(session.captureSessionId);
     }
   }
 
@@ -1206,14 +1314,30 @@ export class RawCaptureService {
       return replay;
     }
     const settings = await this.store.getSettings();
-    const consentAccountUid = riftLiteTcgaWebReplayAutoUploadAccountUid(settings);
+    const captureAccountUid = riftLiteTcgaWebReplayCaptureAccountUid(settings);
     if (
-      !consentAccountUid ||
+      !captureAccountUid ||
       !prepared.expectedAccountUid ||
-      !riftLiteAccountUidEquals(prepared.expectedAccountUid, consentAccountUid)
+      !riftLiteAccountUidEquals(prepared.expectedAccountUid, captureAccountUid)
     ) {
       throw new Error("TCGA Web Replay automatic upload was disabled or its consenting account changed.");
     }
+    // Capture consent and upload authentication are deliberately separate. A
+    // transiently missing/failed account verification must not destroy the
+    // completed local TCGA artifact; it only defers delivery until account
+    // verification recovers.
+    const uploadAccountUid = riftLiteTcgaWebReplayAutoUploadAccountUid(settings);
+    const webReplayUploadReady = Boolean(
+      uploadAccountUid &&
+      riftLiteAccountUidEquals(prepared.expectedAccountUid, uploadAccountUid)
+    );
+    // Keep the durable capture bound to the explicit consenting account. The
+    // ordinary retry lane will remain closed while that account is unverified,
+    // then automatically pick this artifact up after verification recovers.
+    const webReplayAutoUploadEligible = riftLiteAccountUidEquals(
+      prepared.expectedAccountUid,
+      captureAccountUid
+    );
     const match = explicitIdentity.match ?? rawCaptureMatchSummaryFromDraft(replay?.matchSnapshot);
     if (!rawCaptureMatchSummaryResolved(match)) {
       throw new Error("TCGA Web Replay requires a saved match result before upload.");
@@ -1230,6 +1354,7 @@ export class RawCaptureService {
     const currentDiscordHubIds = riftLiteWebReplayDiscordShareHubIds(settings);
     const discordShareHubIds = intersectStringSets(prepared.discordShareHubIds ?? [], currentDiscordHubIds);
     const webReplayDiscordShareEligible = Boolean(
+      webReplayUploadReady &&
       discordShareHubIds.length &&
       riftLiteAccountUidEquals(prepared.expectedAccountUid, settings.accountUid)
     );
@@ -1244,7 +1369,7 @@ export class RawCaptureService {
       lastSeenAt: prepared.lastSeenAt,
       uploadStatus: "not-uploaded",
       processingStatus: "pending",
-      deliveryStage: "queued",
+      deliveryStage: webReplayUploadReady ? "queued" : "captured",
       attemptCount: 0,
       captureCompletedAt: persistedAt,
       resultStatus: "resolved",
@@ -1252,10 +1377,10 @@ export class RawCaptureService {
       processingUpdatedAt: persistedAt,
       localPath: prepared.localPath,
       visibility,
-      webReplayAutoUploadEligible: true,
-      webReplayAutoUploadAccountUid: consentAccountUid,
+      webReplayAutoUploadEligible,
+      webReplayAutoUploadAccountUid: captureAccountUid,
       webReplayDiscordShareEligible,
-      webReplayDiscordShareAccountUid: webReplayDiscordShareEligible ? consentAccountUid : undefined,
+      webReplayDiscordShareAccountUid: webReplayDiscordShareEligible ? uploadAccountUid : undefined,
       webReplayDiscordShareHubIds: webReplayDiscordShareEligible ? discordShareHubIds : undefined,
       discordShareStatus: webReplayDiscordShareEligible ? "pending" : undefined
     };
@@ -1285,7 +1410,7 @@ export class RawCaptureService {
     };
     await writeRawCaptureManifest(manifest);
     let saved = replay ? await this.saveReplayRawCapture(replay, metadata) : null;
-    if (options.deferDelivery) {
+    if (options.deferDelivery || !webReplayUploadReady) {
       // The artifact, index, and optional replay association are now durable.
       // Upload/processing/Discord delivery can safely continue after the match
       // confirmation IPC returns, including via startup manifest recovery.
@@ -2066,7 +2191,7 @@ export class RawCaptureService {
     explicitIdentity: RawCaptureFinishIdentity,
     replay: ReplayRecord | undefined,
     settings: UserSettings,
-    options: { recoveredFromJournalAt?: string } = {}
+    options: { recoveredFromJournalAt?: string; journalPromotionWarning?: string } = {}
   ): Promise<PersistedRawCaptureManifest> {
     const match = explicitIdentity.match ?? rawCaptureMatchSummaryFromDraft(replay?.matchSnapshot);
     const persistedAt = new Date().toISOString();
@@ -2109,7 +2234,9 @@ export class RawCaptureService {
       resultStatus: rawCaptureMatchSummaryResolved(match) ? "resolved" : "pending",
       resultFinalizedAt: rawCaptureMatchSummaryResolved(match) ? persistedAt : undefined,
       processingUpdatedAt: persistedAt,
-      partialWarnings: options.recoveredFromJournalAt ? [RAW_CAPTURE_RECOVERY_WARNING] : undefined,
+      partialWarnings: options.recoveredFromJournalAt
+        ? [options.journalPromotionWarning ?? RAW_CAPTURE_RECOVERY_WARNING]
+        : undefined,
       error: session.lastError || undefined,
       localPath,
       visibility: webReplayDiscordShareEligible ? "unlisted" : rawCaptureVisibility(settings),
@@ -3792,8 +3919,12 @@ export class RawCaptureService {
   }
 
   private removeSession(captureSessionId: string): void {
-    this.sessions.delete(captureSessionId);
+    this.forgetSessionInMemory(captureSessionId);
     void this.discardSessionJournal(captureSessionId);
+  }
+
+  private forgetSessionInMemory(captureSessionId: string): void {
+    this.sessions.delete(captureSessionId);
     for (const [key, routedSessionId] of this.sessionIdByTransport) {
       if (routedSessionId === captureSessionId) {
         this.sessionIdByTransport.delete(key);
@@ -5416,6 +5547,18 @@ function riftLiteWebReplayConsentedAccountUid(
   settings: UserSettings,
   platform: "atlas" | "tcga"
 ): string {
+  const captureAccountUid = riftLiteWebReplayCaptureAccountUid(settings, platform);
+  return captureAccountUid &&
+    Boolean(String(settings.firebaseRefreshToken ?? "").trim()) &&
+    Boolean(String(settings.accountLastVerifiedAt ?? "").trim())
+    ? captureAccountUid
+    : "";
+}
+
+function riftLiteWebReplayCaptureAccountUid(
+  settings: UserSettings,
+  platform: "atlas" | "tcga"
+): string {
   const enabled = platform === "tcga"
     ? settings.rawCapture.tcgaWebReplayAutoUploadEnabled === true
     : settings.rawCapture.webReplayAutoUploadEnabled === true;
@@ -5427,11 +5570,13 @@ function riftLiteWebReplayConsentedAccountUid(
   return settings.rawCapture.enabled === true &&
     enabled &&
     Boolean(platformConsentUid) &&
-    platformConsentUid === accountUid &&
-    Boolean(String(settings.firebaseRefreshToken ?? "").trim()) &&
-    Boolean(String(settings.accountLastVerifiedAt ?? "").trim())
+    platformConsentUid === accountUid
     ? platformConsentUid
     : "";
+}
+
+export function riftLiteTcgaWebReplayCaptureAccountUid(settings: UserSettings): string {
+  return riftLiteWebReplayCaptureAccountUid(settings, "tcga");
 }
 
 export function riftLiteTcgaWebReplayAutoUploadAccountUid(settings: UserSettings): string {

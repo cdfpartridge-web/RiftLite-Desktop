@@ -9,6 +9,8 @@ import {
   mergeRawCaptureReplayMetadata,
   RawCaptureService,
   rawCaptureDiscordActiveDeckFromMatch,
+  riftLiteTcgaWebReplayAutoUploadAccountUid,
+  riftLiteTcgaWebReplayCaptureAccountUid,
   webReplayIncompleteOverrideAllowed
 } from "../src/main/services/rawCaptureService";
 import type { RiftLiteStore } from "../src/main/services/store";
@@ -1530,6 +1532,133 @@ describe("RawCaptureService", () => {
     }));
   });
 
+  it("promotes a stale Atlas journal to a durable source before releasing its session", async () => {
+    const replayDirectory = await tempReplayDirectory();
+    const store = fakeStore(settings({ enabled: true }, replayDirectory));
+    const service = new RawCaptureService(store);
+    const firstSeenAt = 1781360000000;
+
+    await service.appendFrame(atlasFrame(JSON.stringify({
+      type: "room_shell_sync",
+      sessionDoc: { roomCode: "STALE-RETAINED", phase: "in_game", gameNumber: 1 }
+    }), {
+      ts: firstSeenAt,
+      requestUrl: "wss://riftatlas.example/stale-retained",
+      socketId: "stale-retained-socket"
+    }));
+    await service.appendFrame(atlasFrame(JSON.stringify({
+      type: "room_shell_sync",
+      sessionDoc: { roomCode: "STALE-RETAINED", phase: "lobby", gameNumber: 1 }
+    }), {
+      ts: firstSeenAt + 1,
+      requestUrl: "wss://riftatlas.example/stale-retained",
+      socketId: "stale-retained-socket"
+    }));
+    const staleCaptureId = (await service.getStatus()).captureSessionId!;
+    const rawDirectory = join(replayDirectory, "Raw Capture");
+    const staleJournalPath = join(rawDirectory, `${staleCaptureId}.riftlite-active.jsonl`);
+    await expect(readFile(staleJournalPath, "utf8")).resolves.toContain("STALE-RETAINED");
+
+    await service.appendFrame(atlasFrame(JSON.stringify({
+      type: "room_shell_sync",
+      sessionDoc: { roomCode: "NEXT-CAPTURE", phase: "in_game", gameNumber: 1 }
+    }), {
+      ts: firstSeenAt + (6 * 60 * 60 * 1000) + 2,
+      requestUrl: "wss://riftatlas.example/next-capture",
+      socketId: "next-capture-socket"
+    }));
+
+    await expect(readFile(staleJournalPath).catch(() => null)).resolves.toBeNull();
+    const manifestPaths = (await readdir(rawDirectory))
+      .filter((name) => name.endsWith(".riftlite-index.json"))
+      .map((name) => join(rawDirectory, name));
+    const manifests = await Promise.all(manifestPaths.map(async (path) => (
+      JSON.parse(await readFile(path, "utf8")) as {
+        recoveredFromJournalAt?: string;
+        localPath: string;
+        metadata: RawCaptureReplayMetadata;
+      }
+    )));
+    const retained = manifests.find((manifest) => manifest.metadata.captureSessionId === staleCaptureId);
+    expect(retained).toMatchObject({
+      recoveredFromJournalAt: expect.any(String),
+      metadata: {
+        captureSessionId: staleCaptureId,
+        uploadStatus: "not-uploaded",
+        deliveryStage: "captured",
+        partialWarnings: expect.arrayContaining([expect.stringContaining("Retained locally")])
+      }
+    });
+    await expect(readFile(retained!.localPath, "utf8")).resolves.toContain("STALE-RETAINED");
+    expect((service as unknown as { sessions: Map<string, unknown> }).sessions.size).toBe(1);
+    expect((await service.getStatus()).captureSessionId).not.toBe(staleCaptureId);
+  });
+
+  it("deletes stale search-only journals instead of promoting them into orphan captures", async () => {
+    const replayDirectory = await tempReplayDirectory();
+    const service = new RawCaptureService(fakeStore(settings({ enabled: true }, replayDirectory)));
+    const firstSeenAt = 1781360000000;
+    await service.appendFrame(atlasFrame(JSON.stringify({ type: "search", query: "ranked" }), {
+      ts: firstSeenAt,
+      requestUrl: "wss://riftatlas.example/search-only",
+      socketId: "search-only-socket"
+    }));
+    const searchCaptureId = (await service.getStatus()).captureSessionId!;
+    const rawDirectory = join(replayDirectory, "Raw Capture");
+
+    await service.appendFrame(atlasFrame(JSON.stringify({
+      type: "room_shell_sync",
+      sessionDoc: { roomCode: "AFTER-SEARCH", phase: "in_game", gameNumber: 1 }
+    }), {
+      ts: firstSeenAt + (6 * 60 * 60 * 1000) + 1,
+      requestUrl: "wss://riftatlas.example/after-search",
+      socketId: "after-search-socket"
+    }));
+
+    const files = await readdir(rawDirectory);
+    expect(files).not.toContain(`${searchCaptureId}.riftlite-active.jsonl`);
+    expect(files.some((name) => name.endsWith(".riftlite-index.json"))).toBe(false);
+  });
+
+  it("promotes an ended Atlas session before reclaiming its bounded capacity slot", async () => {
+    const replayDirectory = await tempReplayDirectory();
+    const service = new RawCaptureService(fakeStore(settings({ enabled: true }, replayDirectory)));
+    const firstSeenAt = 1781360000000;
+
+    for (let index = 0; index < 16; index += 1) {
+      await service.appendFrame(atlasFrame(JSON.stringify({
+        type: "room_shell_sync",
+        sessionDoc: { roomCode: `ENDED-${index}`, phase: "in_game", gameNumber: 1 }
+      }), {
+        ts: firstSeenAt + (index * 2),
+        requestUrl: `wss://riftatlas.example/ended-${index}`,
+        socketId: `ended-socket-${index}`
+      }));
+      await service.appendFrame(atlasFrame(JSON.stringify({
+        type: "room_shell_sync",
+        sessionDoc: { roomCode: `ENDED-${index}`, phase: "lobby", gameNumber: 1 }
+      }), {
+        ts: firstSeenAt + (index * 2) + 1,
+        requestUrl: `wss://riftatlas.example/ended-${index}`,
+        socketId: `ended-socket-${index}`
+      }));
+    }
+    await service.appendFrame(atlasFrame(JSON.stringify({
+      type: "room_shell_sync",
+      sessionDoc: { roomCode: "CAPACITY-NEW", phase: "in_game", gameNumber: 1 }
+    }), {
+      ts: firstSeenAt + 100,
+      requestUrl: "wss://riftatlas.example/capacity-new",
+      socketId: "capacity-new-socket"
+    }));
+
+    const rawDirectory = join(replayDirectory, "Raw Capture");
+    const files = await readdir(rawDirectory);
+    expect(files.some((name) => name.endsWith(".riftlite-index.json"))).toBe(true);
+    expect((service as unknown as { sessions: Map<string, unknown> }).sessions.size).toBe(16);
+    expect(await service.getStatus()).toMatchObject({ active: true, lastError: undefined });
+  });
+
   it("journals a burst through one persistent append handle without dropping frames", async () => {
     const replayDirectory = await tempReplayDirectory();
     const service = new RawCaptureService(fakeStore(settings({ enabled: true }, replayDirectory)));
@@ -1841,6 +1970,45 @@ describe("RawCaptureService", () => {
     });
     expect(await service.uploadPendingRawCaptures()).toBe(0);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps the Atlas source and index when replay association storage throws", async () => {
+    const replayDirectory = await tempReplayDirectory();
+    const store = fakeStore(settings({ enabled: true }, replayDirectory));
+    const sourceReplay = replay("association-write-failure", "ASSOCIATION-FAILURE");
+    await store.saveReplay(sourceReplay);
+    const service = new RawCaptureService(store);
+    await service.appendFrame(atlasFrame(JSON.stringify({
+      type: "room_shell_sync",
+      sessionDoc: { roomCode: "ASSOCIATION-FAILURE", phase: "game_end", gameNumber: 1 }
+    })));
+    const captureSessionId = (await service.getStatus()).captureSessionId!;
+    const associationWrite = vi.spyOn(store, "updateActiveReplay")
+      .mockRejectedValueOnce(new Error("temporary replay association database failure"));
+
+    await expect(service.finishForReplay(sourceReplay))
+      .rejects.toThrow("temporary replay association database failure");
+    associationWrite.mockRestore();
+
+    const rawDirectory = join(replayDirectory, "Raw Capture");
+    const filesAfterFailure = await readdir(rawDirectory);
+    expect(filesAfterFailure.some((name) => name.endsWith(".riftlite-active.jsonl"))).toBe(false);
+    const indexName = filesAfterFailure.find((name) => name.endsWith(".riftlite-index.json"));
+    expect(indexName).toBeTruthy();
+    const manifest = JSON.parse(await readFile(join(rawDirectory, indexName!), "utf8")) as {
+      localPath: string;
+      metadata: RawCaptureReplayMetadata;
+    };
+    expect(manifest.metadata.captureSessionId).toBe(captureSessionId);
+    await expect(readFile(manifest.localPath, "utf8")).resolves.toContain("ASSOCIATION-FAILURE");
+
+    const restartedService = new RawCaptureService(store);
+    const attached = await restartedService.finishForReplay(sourceReplay);
+    expect(attached.rawCapture).toMatchObject({
+      captureSessionId,
+      localPath: manifest.localPath,
+      uploadStatus: "not-uploaded"
+    });
   });
 
   it("retains explicit upload consent through a transient account verification error", async () => {
@@ -2559,6 +2727,122 @@ describe("RawCaptureService", () => {
         games: [{ gameNumber: 1, result: "loss" }]
       }
     })).rejects.toThrow("TCGA Web Replay automatic upload was disabled");
+  });
+
+  it("persists a consented TCGA capture locally while account verification is unavailable", async () => {
+    const replayDirectory = await tempReplayDirectory();
+    const unverifiedSettings = {
+      ...settings({
+        enabled: true,
+        tcgaWebReplayAutoUploadEnabled: true,
+        tcgaWebReplayAutoUploadAccountUid: "account-1",
+        visibility: "private"
+      }, replayDirectory),
+      accountUid: "account-1",
+      firebaseRefreshToken: "",
+      accountLastVerifiedAt: "",
+      accountLastVerificationError: "The linked account could not be verified."
+    } as UserSettings;
+    expect(riftLiteTcgaWebReplayCaptureAccountUid(unverifiedSettings)).toBe("account-1");
+    expect(riftLiteTcgaWebReplayAutoUploadAccountUid(unverifiedSettings)).toBe("");
+
+    const store = fakeStore(unverifiedSettings);
+    const tokenProvider = vi.fn(async () => "id-token");
+    const service = new RawCaptureService(store, tokenProvider);
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    const rawDirectory = join(replayDirectory, "Raw Capture");
+    await mkdir(rawDirectory, { recursive: true });
+    const localPath = join(rawDirectory, "tcga-unverified.json.gz");
+    const source = {
+      schema: "riftlite-tcga-raw-capture",
+      version: 1,
+      capture: {
+        captureSessionId: "tcga_capture_unverified",
+        identity: {
+          perspectivePlayerId: "player-self",
+          firstSeenAt: 1782727200000,
+          lastSeenAt: 1782727800000
+        },
+        source: { schema: "riftlite-tcga-web-replay", version: 1 },
+        match: { result: "win", perspectivePoints: 8, opponentPoints: 4 }
+      },
+      transport: {
+        incompleteChunkGroups: 0,
+        incompleteChunkCount: 0,
+        issueCounts: {}
+      },
+      messages: [{ seq: 0, parsed: { type: "GAME_DATA" } }]
+    };
+    await writeFile(localPath, gzipSync(Buffer.from(JSON.stringify(source), "utf8")));
+    const localReplay = replay("tcga-unverified-replay", "", "tcga");
+    const saved = await service.registerPreparedTcgaCapture({
+      platform: "tcga",
+      artifactEncoding: "gzip",
+      captureSessionId: source.capture.captureSessionId,
+      localPath,
+      messageCount: source.messages.length,
+      firstSeenAt: source.capture.identity.firstSeenAt,
+      lastSeenAt: source.capture.identity.lastSeenAt,
+      expectedAccountUid: "account-1"
+    }, {
+      platform: "tcga",
+      localMatchId: localReplay.matchId,
+      localReplayId: localReplay.id,
+      title: localReplay.title,
+      capturedAt: localReplay.capturedAt,
+      completedAt: "2026-06-29T10:10:00.000Z",
+      match: {
+        format: "bo1",
+        result: "win",
+        score: { perspective: 1, opponent: 0 },
+        games: [{ gameNumber: 1, result: "win", perspectivePoints: 8, opponentPoints: 4 }]
+      }
+    }, localReplay);
+
+    expect(saved?.rawCapture).toMatchObject({
+      localPath,
+      uploadStatus: "not-uploaded",
+      processingStatus: "pending",
+      deliveryStage: "captured",
+      webReplayAutoUploadEligible: true,
+      webReplayAutoUploadAccountUid: "account-1",
+      webReplayDiscordShareEligible: false
+    });
+    await expect(readFile(localPath)).resolves.toBeInstanceOf(Buffer);
+    await expect(readFile(`${localPath}.riftlite-index.json`, "utf8")).resolves.toContain(
+      '"captureSessionId":"tcga_capture_unverified"'
+    );
+    expect(await service.uploadPendingRawCaptures()).toBe(0);
+    expect(tokenProvider).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    await store.saveSettings({
+      firebaseRefreshToken: "refresh-token",
+      accountLastVerifiedAt: "2026-08-06T15:00:00.000Z",
+      accountLastVerificationError: ""
+    });
+    fetchMock
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        replay: { replayId: "tcga_recovered", status: "pending", visibility: "private" },
+        uploadRequired: false,
+        completeEndpoint: "/api/v2/replays/tcga_recovered/complete",
+        playerPath: "/replays/tcga_recovered"
+      }), { status: 201 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        replay: { replayId: "tcga_recovered", status: "ready", visibility: "private" },
+        playerPath: "/replays/tcga_recovered"
+      }), { status: 200 }));
+
+    expect(await service.uploadPendingRawCaptures()).toBe(1);
+    expect(tokenProvider).toHaveBeenCalledWith("account-1");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect((await store.getReplays()).find((candidate) => candidate.id === localReplay.id)?.rawCapture)
+      .toMatchObject({
+        uploadStatus: "uploaded",
+        processingStatus: "ready",
+        deliveryStage: "ready",
+        uploadId: "tcga_recovered"
+      });
   });
 
   it("uses the canonical account token provider and accepts its same-account credential repair", async () => {

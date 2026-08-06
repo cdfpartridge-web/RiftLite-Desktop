@@ -1233,6 +1233,7 @@ export class FirebaseSyncService {
     const payload = await this.authenticatedWebsiteRequest(`/api/auth/link/status?${query}`, { method: "GET" }, "account-link");
     const status = readString(payload.status) as AccountLinkStatus["status"];
     const customToken = readString(payload.customToken);
+    const anonymousAdoptionSourceUid = readString(payload.anonymousAdoptionSourceUid);
     if (status === "complete" && customToken) {
       await this.requireLinkedAccountIdentity(
         linkGeneration,
@@ -1255,13 +1256,39 @@ export class FirebaseSyncService {
         );
         this.invalidateLinkedAccountAuth();
         const replacementGeneration = this.linkedAccountAuthGeneration;
+        let adoptedAnonymousAccount = false;
         const settings = await this.updateLinkedAccountSettings(
           replacementGeneration,
           startedSettings.accountUid,
           "The RiftLite account changed while this browser sign-in was completing. Start a new account link.",
           (current) => {
-            const preserveLocalAccountData = !current.accountUid || current.accountUid === linkedUid;
+            adoptedAnonymousAccount = Boolean(
+              anonymousAdoptionSourceUid &&
+              anonymousAdoptionSourceUid !== linkedUid &&
+              current.accountUid === anonymousAdoptionSourceUid &&
+              current.firebaseUid === anonymousAdoptionSourceUid
+            );
+            const preserveLocalAccountData = !current.accountUid ||
+              current.accountUid === linkedUid ||
+              adoptedAnonymousAccount;
             const payloadDisplayName = readString(payload.displayName);
+            const rawCapture = adoptedAnonymousAccount
+              ? {
+                ...current.rawCapture,
+                webReplayAutoUploadAccountUid:
+                  current.rawCapture.webReplayAutoUploadAccountUid === anonymousAdoptionSourceUid
+                    ? linkedUid
+                    : current.rawCapture.webReplayAutoUploadAccountUid,
+                tcgaWebReplayAutoUploadAccountUid:
+                  current.rawCapture.tcgaWebReplayAutoUploadAccountUid === anonymousAdoptionSourceUid
+                    ? linkedUid
+                    : current.rawCapture.tcgaWebReplayAutoUploadAccountUid,
+                webReplayDiscordShareAccountUid:
+                  current.rawCapture.webReplayDiscordShareAccountUid === anonymousAdoptionSourceUid
+                    ? linkedUid
+                    : current.rawCapture.webReplayDiscordShareAccountUid
+              }
+              : current.rawCapture;
             return {
               firebaseUid: linkedAuth.uid,
               firebaseRefreshToken: linkedAuth.refreshToken,
@@ -1287,7 +1314,8 @@ export class FirebaseSyncService {
                 : "",
               accountCloudSyncLastError: preserveLocalAccountData ? current.accountCloudSyncLastError : "",
               accountLastVerifiedAt: "",
-              accountLastVerificationError: "Account verification is still in progress."
+              accountLastVerificationError: "Account verification is still in progress.",
+              rawCapture
             };
           }
         );
@@ -1316,7 +1344,8 @@ export class FirebaseSyncService {
           uid: linkedUid,
           email: settings.accountEmail,
           displayName: settings.accountDisplayName,
-          message: readString(payload.message)
+          message: readString(payload.message),
+          adoptedAnonymousAccount
         };
       });
     }
@@ -1348,7 +1377,8 @@ export class FirebaseSyncService {
       uid: readString(payload.uid),
       email: readString(payload.email),
       displayName: readString(payload.displayName),
-      message: readString(payload.message)
+      message: readString(payload.message),
+      adoptedAnonymousAccount: false
     };
   }
 
@@ -1567,9 +1597,12 @@ export class FirebaseSyncService {
         authGeneration,
         settings.accountUid,
         "The linked RiftLite account changed while it was being verified.",
-        () => ({
+        (current) => ({
           accountUid: canonicalUid,
           firebaseUid: authenticatedUid,
+          ...(current.firebaseUid !== authenticatedUid
+            ? { firebaseRefreshToken: current.firebaseRefreshToken }
+            : {}),
           accountEmail: next.email,
           accountHandle: next.handle,
           accountDisplayName: next.displayName,
@@ -3347,33 +3380,46 @@ export class FirebaseSyncService {
     const expectedAccountUid = settings.accountUid;
     const expectedRefreshToken = settings.firebaseRefreshToken;
     if (settings.firebaseRefreshToken) {
+      let refreshed: AuthState | null = null;
       try {
-        const refreshed = await this.refreshToken(settings.firebaseRefreshToken);
-        if (!linkedAccountAuthUidMatches(settings, refreshed.uid) && !allowAccountReconnect) {
-          throw new LinkedAccountMismatchError("The saved sign-in belongs to a different RiftLite account.");
-        }
-        await this.updateLinkedAccountSettings(
-          authGeneration,
-          expectedAccountUid,
-          "The linked RiftLite account changed while its session was refreshing.",
-          () => ({
-            firebaseUid: refreshed.uid,
-            firebaseRefreshToken: refreshed.refreshToken
-          }),
-          expectedRefreshToken
-        );
-        this.auth = refreshed;
-        return this.auth;
+        refreshed = await this.refreshToken(settings.firebaseRefreshToken);
       } catch (error) {
         if (this.isLinkedAccountAuthGenerationCurrent(authGeneration)) {
           this.auth = null;
         }
-        if (error instanceof LinkedAccountMismatchError) {
-          throw error;
-        }
         if (settings.accountUid && !allowAccountReconnect) {
           throw new Error("Your RiftLite account session expired. Reconnect it from the Account page.", { cause: error });
         }
+      }
+      if (refreshed) {
+        if (!linkedAccountAuthUidMatches(settings, refreshed.uid) && !allowAccountReconnect) {
+          if (this.isLinkedAccountAuthGenerationCurrent(authGeneration)) {
+            this.auth = null;
+          }
+          throw new LinkedAccountMismatchError("The saved sign-in belongs to a different RiftLite account.");
+        }
+        // Credential persistence is outside the refresh-only catch above.
+        // Storage/runtime failures must keep their real diagnosis so a retry
+        // batch does not mistake a poisoned database for an expired session.
+        try {
+          await this.updateLinkedAccountSettings(
+            authGeneration,
+            expectedAccountUid,
+            "The linked RiftLite account changed while its session was refreshing.",
+            () => ({
+              firebaseUid: refreshed.uid,
+              firebaseRefreshToken: refreshed.refreshToken
+            }),
+            expectedRefreshToken
+          );
+        } catch (error) {
+          if (this.isLinkedAccountAuthGenerationCurrent(authGeneration)) {
+            this.auth = null;
+          }
+          throw error;
+        }
+        this.auth = refreshed;
+        return this.auth;
       }
     }
     if (settings.accountUid && !allowAccountReconnect) {

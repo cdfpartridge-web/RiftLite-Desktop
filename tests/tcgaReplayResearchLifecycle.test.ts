@@ -112,4 +112,17 @@ describe("TCGA replay monitor lifecycle", () => {
     expect(queue).toContain("job.pending = null");
     expect(source).toContain("selectConfirmedMatchReportRetries(await store.getMatches(), 10)");
   });
+
+  it("bounds systemic report failures to one attempt per coalesced recovery sweep", () => {
+    const retryStart = source.indexOf("async function syncSettledMatchReports");
+    const retryEnd = source.indexOf("function retryDeferredConfirmedMatchDeliveries", retryStart);
+    const retry = source.slice(retryStart, retryEnd);
+
+    expect(retryStart).toBeGreaterThan(-1);
+    expect(retry).toContain("runConfirmedMatchReportRetryBatch(candidates");
+    expect(retry).toContain("blocked: Boolean(result.failure)");
+    expect(retry).toContain("createSingleFlight(async");
+    expect(retry).toContain("if (!reportResult.blocked)");
+    expect(retry).toContain("retryDeferredConfirmedMatchDeliveries();");
+  });
 });

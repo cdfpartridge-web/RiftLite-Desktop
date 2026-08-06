@@ -46,6 +46,83 @@ function savedReplay(id: string): ReplayRecord {
 }
 
 describe("RiftLiteStore database recovery", () => {
+  it("reopens the canonical database and retries once after a transient sql.js memory failure", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "riftlite-store-sqljs-runtime-reopen-"));
+    try {
+      const dbPath = join(directory, "riftlite-v06.sqlite");
+      const legacyPath = join(directory, "riftlite-v06-store.json");
+      const store = new RiftLiteStore(dbPath, legacyPath);
+      await store.load();
+      await store.saveMatch(savedMatch("durable-before-runtime-failure"));
+
+      interface StoreRuntimeInternals {
+        db: { export(): Uint8Array } | null;
+        sql: object | null;
+      }
+      const internals = store as unknown as StoreRuntimeInternals;
+      const originalRuntime = internals.sql;
+      const exportSpy = vi.spyOn(internals.db!, "export")
+        .mockImplementationOnce(() => {
+          throw new Error("RuntimeError: memory access out of bounds");
+        });
+
+      await expect(store.saveMatch(savedMatch("committed-after-runtime-reopen"))).resolves.toMatchObject({
+        id: "committed-after-runtime-reopen"
+      });
+      expect(exportSpy).toHaveBeenCalledTimes(1);
+      expect(internals.sql).not.toBe(originalRuntime);
+      expect((await store.getMatches()).map((match) => match.id)).toEqual(expect.arrayContaining([
+        "durable-before-runtime-failure",
+        "committed-after-runtime-reopen"
+      ]));
+
+      const restarted = new RiftLiteStore(dbPath, legacyPath);
+      await restarted.load();
+      expect((await restarted.getMatches()).map((match) => match.id)).toEqual(expect.arrayContaining([
+        "durable-before-runtime-failure",
+        "committed-after-runtime-reopen"
+      ]));
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("bounds sql.js runtime recovery to one retry", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "riftlite-store-sqljs-runtime-bounded-"));
+    try {
+      const dbPath = join(directory, "riftlite-v06.sqlite");
+      const legacyPath = join(directory, "riftlite-v06-store.json");
+      const store = new RiftLiteStore(dbPath, legacyPath);
+      await store.load();
+      await store.saveMatch(savedMatch("durable-before-repeated-runtime-failure"));
+
+      interface StoreWriteInternals {
+        writeDatabaseFile(database: object): Promise<void>;
+      }
+      const internals = store as unknown as StoreWriteInternals;
+      const writeSpy = vi.spyOn(internals, "writeDatabaseFile")
+        .mockRejectedValue(new Error("RuntimeError: memory access out of bounds"));
+
+      await expect(store.saveMatch(savedMatch("must-not-loop-or-leak"))).rejects.toThrow(
+        "memory access out of bounds"
+      );
+      expect(writeSpy).toHaveBeenCalledTimes(2);
+      expect((await store.getMatches()).map((match) => match.id)).toEqual([
+        "durable-before-repeated-runtime-failure"
+      ]);
+
+      writeSpy.mockRestore();
+      await store.saveMatch(savedMatch("committed-after-bounded-failure"));
+      expect((await store.getMatches()).map((match) => match.id)).toEqual(expect.arrayContaining([
+        "durable-before-repeated-runtime-failure",
+        "committed-after-bounded-failure"
+      ]));
+      expect((await store.getMatches()).some((match) => match.id === "must-not-loop-or-leak")).toBe(false);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("keeps failed candidate writes invisible and out of later successful commits", async () => {
     const directory = await mkdtemp(join(tmpdir(), "riftlite-store-atomic-write-failure-"));
     try {

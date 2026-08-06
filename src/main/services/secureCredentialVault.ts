@@ -39,6 +39,8 @@ export interface ProtectedSettingsResult {
   persistedSettings: UserSettings;
   protected: boolean;
   storageChanged: boolean;
+  /** Restores the exact vault state that preceded this settings save. */
+  rollbackVaultChange?: () => Promise<void>;
 }
 
 export function stripLegacyHubSecrets(settings: UserSettings): UserSettings {
@@ -113,6 +115,17 @@ function firebaseCredentialBindingMatches(
   return Boolean(binding) &&
     binding?.firebaseUid === settings.firebaseUid &&
     binding.generation === settings.firebaseCredentialGeneration;
+}
+
+function firebaseCredentialBindingCanAdoptGeneration(
+  binding: FirebaseCredentialBinding | null | undefined,
+  settings: UserSettings
+): binding is FirebaseCredentialBinding {
+  return Boolean(binding?.firebaseUid) &&
+    Boolean(binding?.accountUid) &&
+    binding?.firebaseUid === settings.firebaseUid &&
+    binding.accountUid === settings.accountUid &&
+    binding.generation !== settings.firebaseCredentialGeneration;
 }
 
 class FirebaseCredentialBindingError extends Error {}
@@ -281,6 +294,22 @@ export class SecureCredentialVault {
 
       if (
         vault.entries.firebaseRefreshToken &&
+        firebaseCredentialBindingCanAdoptGeneration(vault.firebaseRefreshTokenBinding, resolvedSettings)
+      ) {
+        // Older releases wrote the encrypted token/binding before committing
+        // SQLite. If that second write failed, the exact same non-empty
+        // Firebase + RiftLite identity can safely finish the interrupted
+        // commit by adopting the vault generation. Cross-account or unknown
+        // identities still take the fail-closed branch below.
+        resolvedSettings = {
+          ...resolvedSettings,
+          firebaseCredentialGeneration: vault.firebaseRefreshTokenBinding.generation
+        };
+        storageChanged = true;
+      }
+
+      if (
+        vault.entries.firebaseRefreshToken &&
         !firebaseCredentialBindingMatches(vault.firebaseRefreshTokenBinding, resolvedSettings)
       ) {
         // A vault rename and SQLite persistence are separate durable writes.
@@ -336,7 +365,8 @@ export class SecureCredentialVault {
     if (!encryptionAvailable(this.encryption)) {
       if (touchedKeys.length > 0) {
         try {
-          const vault = await this.readVault() ?? emptyVault();
+          const previousVault = await this.readVault();
+          const vault = previousVault ? cloneVault(previousVault) : emptyVault();
           for (const key of touchedKeys) {
             if (values[key]) {
               // Absence is a pending-migration marker: the new value remains
@@ -357,6 +387,13 @@ export class SecureCredentialVault {
             }
           }
           await this.writeVault(vault);
+          const result = this.unprotected(touched.firebaseRefreshToken
+            ? { ...settings, firebaseCredentialGeneration: "" }
+            : settings);
+          return {
+            ...result,
+            rollbackVaultChange: () => this.restoreVaultSnapshot(previousVault)
+          };
         } catch (error) {
           const onlyClears = touchedKeys.every((key) => !values[key]);
           throw new Error(
@@ -367,13 +404,12 @@ export class SecureCredentialVault {
           );
         }
       }
-      return this.unprotected(touched.firebaseRefreshToken
-        ? { ...settings, firebaseCredentialGeneration: "" }
-        : settings);
+      return this.unprotected(settings);
     }
 
     try {
-      let vault = await this.readVault();
+      const previousVault = await this.readVault();
+      let vault = previousVault ? cloneVault(previousVault) : null;
       if (!vault) {
         vault = emptyVault();
       }
@@ -449,7 +485,10 @@ export class SecureCredentialVault {
         runtimeSettings,
         persistedSettings: redactSensitiveSettings(runtimeSettings),
         protected: true,
-        storageChanged
+        storageChanged,
+        rollbackVaultChange: storageChanged
+          ? () => this.restoreVaultSnapshot(previousVault)
+          : undefined
       };
     } catch (error) {
       if (error instanceof FirebaseCredentialBindingError) {
@@ -519,6 +558,17 @@ export class SecureCredentialVault {
     } finally {
       await unlink(temporaryPath).catch(() => undefined);
     }
+  }
+
+  private async restoreVaultSnapshot(vault: SecureCredentialVaultFile | null): Promise<void> {
+    if (vault) {
+      await this.writeVault(vault);
+      return;
+    }
+    await unlink(this.filePath).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== "ENOENT") throw error;
+    });
+    this.vaultCache = null;
   }
 }
 

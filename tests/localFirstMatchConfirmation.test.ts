@@ -3,7 +3,9 @@ import {
   confirmedMatchNeedsReportRetry,
   confirmedMatchSupportsBackgroundDelivery,
   confirmMatchLocalFirst,
+  createSingleFlight,
   deliverConfirmedMatchInBackground,
+  runConfirmedMatchReportRetryBatch,
   selectConfirmedMatchReportRetries
 } from "../src/main/services/localFirstMatchConfirmation.js";
 
@@ -164,6 +166,79 @@ describe("local-first match confirmation", () => {
       "match-9",
       "match-10"
     ]);
+  });
+
+  it("stops a report retry batch on the first thrown infrastructure failure", async () => {
+    const candidates = [
+      { id: "match-1", state: "pending" },
+      { id: "match-2", state: "pending" },
+      { id: "match-3", state: "pending" }
+    ];
+    const syncMatch = vi.fn(async (candidate: typeof candidates[number]) => {
+      if (candidate.id === "match-2") {
+        throw new Error("database runtime unavailable");
+      }
+      return { ...candidate, state: "synced" };
+    });
+
+    const result = await runConfirmedMatchReportRetryBatch(candidates, syncMatch);
+
+    expect(syncMatch.mock.calls.map(([candidate]) => candidate.id)).toEqual(["match-1", "match-2"]);
+    expect(result.processed).toEqual([{ id: "match-1", state: "synced" }]);
+    expect(result.failure).toMatchObject({
+      match: { id: "match-2", state: "pending" },
+      error: expect.objectContaining({ message: "database runtime unavailable" })
+    });
+    expect(candidates).toEqual([
+      { id: "match-1", state: "pending" },
+      { id: "match-2", state: "pending" },
+      { id: "match-3", state: "pending" }
+    ]);
+  });
+
+  it("continues after a handled per-destination failure returns normally", async () => {
+    const candidates = [
+      { id: "match-1", state: "failed" },
+      { id: "match-2", state: "pending" }
+    ];
+    const syncMatch = vi.fn(async (candidate: typeof candidates[number]) => (
+      candidate.id === "match-1" ? candidate : { ...candidate, state: "synced" }
+    ));
+
+    const result = await runConfirmedMatchReportRetryBatch(candidates, syncMatch);
+
+    expect(syncMatch).toHaveBeenCalledTimes(2);
+    expect(result).toEqual({
+      processed: [
+        { id: "match-1", state: "failed" },
+        { id: "match-2", state: "synced" }
+      ],
+      failure: null
+    });
+  });
+
+  it("coalesces overlapping recovery requests and permits the next sweep after failure", async () => {
+    let rejectFirstRun!: (error: Error) => void;
+    const firstRun = new Promise<number>((_resolve, reject) => {
+      rejectFirstRun = reject;
+    });
+    const operation = vi.fn<() => Promise<number>>()
+      .mockImplementationOnce(() => firstRun)
+      .mockResolvedValueOnce(2);
+    const run = createSingleFlight(operation);
+
+    const first = run();
+    const overlapping = run();
+    expect(first).toBe(overlapping);
+    await Promise.resolve();
+    expect(operation).toHaveBeenCalledOnce();
+
+    const firstFailure = expect(first).rejects.toThrow("shared recovery failure");
+    const overlappingFailure = expect(overlapping).rejects.toThrow("shared recovery failure");
+    rejectFirstRun(new Error("shared recovery failure"));
+    await Promise.all([firstFailure, overlappingFailure]);
+    await expect(run()).resolves.toBe(2);
+    expect(operation).toHaveBeenCalledTimes(2);
   });
 
   it("waits for replay finalization before loading and syncing the latest match", async () => {

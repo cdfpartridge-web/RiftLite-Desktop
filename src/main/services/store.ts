@@ -11,7 +11,7 @@ import { normalizeLegendName } from "../../shared/legendNames.js";
 import { buildCombinedBo3Match, buildMatchCombinePreview, markOriginalAsCombined, restoreCombinedOriginal, type MatchCombinePreview, type MatchCombineSavePayload } from "../../shared/matchCombine.js";
 import type { CaptureEvent, DeckNotebook, ImportSummary, MatchDraft, OverlayDisplayOptions, ReplayFolder, ReplayRecord, RiftLiteBackupFile, RiftLiteBackupOptions, SavedDeck, UserSettings } from "../../shared/types.js";
 import { sanitizeBackupFile } from "./backupSanitizer.js";
-import { redactCorruptSettingsText, redactSensitiveSettings, sensitiveCredentialPatch, stripLegacyHubSecrets, type SecureCredentialVault } from "./secureCredentialVault.js";
+import { redactCorruptSettingsText, redactSensitiveSettings, sensitiveCredentialPatch, stripLegacyHubSecrets, type ProtectedSettingsResult, type SecureCredentialVault } from "./secureCredentialVault.js";
 import {
   ReplayPayloadStore,
   replayPayloadFieldsShareIdentity,
@@ -452,27 +452,43 @@ export class RiftLiteStore {
     current: UserSettings
   ): Promise<UserSettings> {
     const protectedSettings = await this.prepareSettingsForSave(patch, current);
-    return this.runAtomicDatabaseMutation(
-      async (db) => {
-        db.run("INSERT OR REPLACE INTO settings (key, value_json, updated_at) VALUES (?, ?, ?)", [
-          "settings",
-          JSON.stringify(protectedSettings.persistedSettings),
-          Date.now()
-        ]);
-        return protectedSettings.runtimeSettings;
-      },
-      {
-        onCommitted: (runtimeSettings) => {
-          this.settingsCache = runtimeSettings;
+    let databaseCommitted = false;
+    try {
+      return await this.runAtomicDatabaseMutation(
+        async (db) => {
+          db.run("INSERT OR REPLACE INTO settings (key, value_json, updated_at) VALUES (?, ?, ?)", [
+            "settings",
+            JSON.stringify(protectedSettings.persistedSettings),
+            Date.now()
+          ]);
+          return protectedSettings.runtimeSettings;
+        },
+        {
+          onCommitted: (runtimeSettings) => {
+            databaseCommitted = true;
+            this.settingsCache = runtimeSettings;
+          }
+        }
+      );
+    } catch (error) {
+      if (!databaseCommitted && protectedSettings.rollbackVaultChange) {
+        try {
+          await protectedSettings.rollbackVaultChange();
+        } catch (rollbackError) {
+          throw new AggregateError(
+            [error, rollbackError],
+            "RiftLite could not save settings or restore the previous secure credential state. Reconnect the account before retrying."
+          );
         }
       }
-    );
+      throw error;
+    }
   }
 
   private async prepareSettingsForSave(
     patch: Partial<UserSettings>,
     current: UserSettings
-  ): Promise<{ runtimeSettings: UserSettings; persistedSettings: UserSettings }> {
+  ): Promise<ProtectedSettingsResult> {
     const replayVideoMode = Object.prototype.hasOwnProperty.call(patch, "replayVideoMode")
       ? normalizeReplayVideoMode((patch as { replayVideoMode?: unknown }).replayVideoMode)
       : current.replayVideoMode;
@@ -507,7 +523,9 @@ export class RiftLiteStore {
       ? await this.credentialVault.protectForSave(sanitizedNext, sensitiveCredentialPatch(patch))
       : {
           runtimeSettings: sanitizedNext,
-          persistedSettings: sanitizedNext
+          persistedSettings: sanitizedNext,
+          protected: false,
+          storageChanged: false
         };
   }
 
@@ -1539,8 +1557,7 @@ export class RiftLiteStore {
 
   private async open(): Promise<void> {
     await mkdir(dirname(this.dbPath), { recursive: true });
-    const wasmPath = require.resolve("sql.js/dist/sql-wasm.wasm");
-    this.sql = await initSqlJs({ locateFile: () => wasmPath });
+    this.sql = await this.initializeSqlJs();
     const bytes = existsSync(this.dbPath) ? await readFile(this.dbPath) : null;
     try {
       this.db = bytes?.length ? new this.sql.Database(bytes) : new this.sql.Database();
@@ -1678,6 +1695,22 @@ export class RiftLiteStore {
     } catch {
       return;
     }
+  }
+
+  private async initializeSqlJs(freshRuntime = false): Promise<SqlJsStatic> {
+    const wasmPath = require.resolve("sql.js/dist/sql-wasm.wasm");
+    if (!freshRuntime) {
+      return initSqlJs({ locateFile: () => wasmPath });
+    }
+
+    // sql.js memoizes its WASM module in module scope. Evicting this CommonJS
+    // wrapper is required to obtain a genuinely fresh WASM heap after a
+    // runtime memory fault; calling the imported initializer again would
+    // return the poisoned singleton.
+    const initializerPath = require.resolve("sql.js/dist/sql-wasm.js");
+    delete require.cache[initializerPath];
+    const freshInitializer = require(initializerPath) as typeof initSqlJs;
+    return freshInitializer({ locateFile: () => wasmPath });
   }
 
   private async finalizeLegacyJsonMigration(): Promise<void> {
@@ -1984,11 +2017,65 @@ export class RiftLiteStore {
     try {
       return await action();
     } catch (error) {
+      if (isSqlJsRuntimeMemoryError(error)) {
+        await this.reopenCanonicalDatabaseAfterRuntimeFailure(context);
+        // Deliberately retry only once. If the fresh sql.js Database also
+        // fails, leave the canonical file untouched and require an app restart.
+        return action();
+      }
       if (!isDatabaseMalformedError(error)) {
         throw error;
       }
       await this.repairDatabase(context);
       return action();
+    }
+  }
+
+  /**
+   * A sql.js `memory access out of bounds` failure poisons the active WASM
+   * Database object; VACUUMing that same object cannot repair it. Reopen the
+   * last durably committed SQLite file instead. This runs while
+   * databaseOperationQueue is held, so no other mutation can race the swap.
+   */
+  private async reopenCanonicalDatabaseAfterRuntimeFailure(context: string): Promise<void> {
+    if (!this.sql) {
+      throw new Error("RiftLite database did not initialize");
+    }
+    await this.persistQueue.catch(() => undefined);
+    if (!existsSync(this.dbPath)) {
+      throw new Error("RiftLite could not reopen its database after a sql.js runtime failure because no durable database file exists.");
+    }
+
+    await this.createLastKnownGoodBackup(`runtime-reopen-${context}`, true).catch(() => undefined);
+    const bytes = await readFile(this.dbPath);
+    const freshSql = await this.initializeSqlJs(true);
+    let reopened: Database | null = null;
+    try {
+      reopened = new freshSql.Database(bytes);
+      const issue = this.databaseIntegrityIssue(reopened);
+      if (issue) {
+        throw new Error(`RiftLite could not reopen its database after a sql.js runtime failure: ${issue}`);
+      }
+
+      const previous = this.db;
+      this.sql = freshSql;
+      this.db = reopened;
+      reopened = null;
+      this.databaseMutationVersion += 1;
+      this.settingsCache = null;
+      this.invalidateMatchCache();
+      this.invalidateReplayCache();
+      try {
+        previous?.close();
+      } catch {
+        // The replacement is already validated and active.
+      }
+    } finally {
+      try {
+        reopened?.close();
+      } catch {
+        // Preserve the original reopen error.
+      }
     }
   }
 
@@ -2470,6 +2557,11 @@ function truncateStoredValue(value: unknown, limit: number): string {
 function isDatabaseMalformedError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return /database disk image is malformed|database corruption|malformed database|file is not a database/i.test(message);
+}
+
+function isSqlJsRuntimeMemoryError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /memory access out of bounds/i.test(message);
 }
 
 function savedDeckFromRow(row: unknown[]): SavedDeck {

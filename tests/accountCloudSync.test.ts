@@ -1744,6 +1744,124 @@ describe("FirebaseSyncService account cloud sync", () => {
     });
   });
 
+  it("adopts a server-proven anonymous account without clearing or disabling its local setup", async () => {
+    const { service, store, getSettings } = harness();
+    await store.saveSettings({
+      accountUid: "anonymous-desktop",
+      firebaseUid: "anonymous-desktop",
+      firebaseRefreshToken: "anonymous-refresh-token",
+      accountCloudSyncEnabled: true,
+      activeHubs: [{ id: "legacy-hub", name: "Legacy hub", sync: true }],
+      activeTeams: [{
+        id: "legacy-team",
+        slug: "legacy-team",
+        name: "Legacy team",
+        sync: true,
+        role: "member",
+        visibility: "private",
+        joinedAt: "2026-07-01T00:00:00.000Z"
+      }],
+      privateHubWebReplayGrantKeys: ["legacy-hub|legacy-match|legacy-replay"],
+      rawCapture: {
+        ...getSettings().rawCapture,
+        enabled: true,
+        webReplayAutoUploadEnabled: true,
+        webReplayAutoUploadAccountUid: "anonymous-desktop",
+        tcgaWebReplayAutoUploadEnabled: true,
+        tcgaWebReplayAutoUploadAccountUid: "anonymous-desktop",
+        webReplayDiscordShareEnabled: true,
+        webReplayDiscordShareAccountUid: "anonymous-desktop",
+        webReplayDiscordShareHubIds: ["legacy-hub"]
+      }
+    });
+    Object.assign(service, {
+      authenticatedWebsiteRequest: vi.fn(async () => ({
+        status: "complete",
+        customToken: "real-account-token",
+        uid: "real-account",
+        email: "real@example.com",
+        displayName: "Real player",
+        anonymousAdoptionSourceUid: "anonymous-desktop"
+      })),
+      signInWithCustomToken: vi.fn(async () => ({
+        uid: "real-account",
+        idToken: "real-id-token",
+        refreshToken: "real-refresh-token",
+        expiresAt: Math.floor(Date.now() / 1000) + 3600
+      })),
+      getAccountProfile: vi.fn(async () => null),
+      getAccountConnectionStatus: vi.fn(async () => ({ verified: true }))
+    });
+
+    await expect(service.getAccountLinkStatus("link-session")).resolves.toMatchObject({
+      status: "complete",
+      uid: "real-account",
+      adoptedAnonymousAccount: true
+    });
+    expect(getSettings()).toMatchObject({
+      accountUid: "real-account",
+      firebaseUid: "real-account",
+      accountCloudSyncEnabled: false,
+      activeHubs: [expect.objectContaining({ id: "legacy-hub" })],
+      activeTeams: [expect.objectContaining({ id: "legacy-team" })],
+      privateHubWebReplayGrantKeys: ["legacy-hub|legacy-match|legacy-replay"],
+      rawCapture: {
+        webReplayAutoUploadEnabled: true,
+        webReplayAutoUploadAccountUid: "real-account",
+        tcgaWebReplayAutoUploadEnabled: true,
+        tcgaWebReplayAutoUploadAccountUid: "real-account",
+        webReplayDiscordShareEnabled: true,
+        webReplayDiscordShareAccountUid: "real-account",
+        webReplayDiscordShareHubIds: ["legacy-hub"]
+      }
+    });
+  });
+
+  it("does not preserve a different account from an unproven adoption response", async () => {
+    const { service, store, getSettings } = harness();
+    await store.saveSettings({
+      accountUid: "old-account",
+      firebaseUid: "old-account",
+      accountHandle: "old-player",
+      activeHubs: [{ id: "old-hub", name: "Old hub", sync: true }],
+      activeTeams: [{
+        id: "old-team",
+        slug: "old-team",
+        name: "Old team",
+        sync: true,
+        role: "member",
+        visibility: "private",
+        joinedAt: "2026-07-01T00:00:00.000Z"
+      }]
+    });
+    Object.assign(service, {
+      authenticatedWebsiteRequest: vi.fn(async () => ({
+        status: "complete",
+        customToken: "new-account-token",
+        uid: "new-account",
+        anonymousAdoptionSourceUid: "unrelated-anonymous-uid"
+      })),
+      signInWithCustomToken: vi.fn(async () => ({
+        uid: "new-account",
+        idToken: "new-id-token",
+        refreshToken: "new-refresh-token",
+        expiresAt: Math.floor(Date.now() / 1000) + 3600
+      })),
+      getAccountProfile: vi.fn(async () => null),
+      getAccountConnectionStatus: vi.fn(async () => ({ verified: true }))
+    });
+
+    await expect(service.getAccountLinkStatus("link-session")).resolves.toMatchObject({
+      adoptedAnonymousAccount: false
+    });
+    expect(getSettings()).toMatchObject({
+      accountUid: "new-account",
+      accountHandle: "",
+      activeHubs: [],
+      activeTeams: []
+    });
+  });
+
   it("clears private memberships on a genuine switch between two accounts", async () => {
     const { service, store, getSettings } = harness();
     await store.saveSettings({
@@ -2174,6 +2292,25 @@ describe("FirebaseSyncService account cloud sync", () => {
       accountUid: "account-1",
       firebaseRefreshToken: "refresh"
     });
+  });
+
+  it("does not misreport credential persistence failures as an expired session", async () => {
+    const { service, store } = harness();
+    const refreshToken = vi.fn(async () => ({
+      uid: "account-1",
+      idToken: "fresh-id-token",
+      refreshToken: "fresh-refresh-token",
+      expiresAt: Math.floor(Date.now() / 1000) + 3600
+    }));
+    Object.assign(service, { auth: null, refreshToken });
+    vi.mocked(store.updateSettings).mockRejectedValueOnce(
+      new Error("RuntimeError: memory access out of bounds")
+    );
+
+    await expect(service.getAccountCloudSyncStatus()).rejects.toThrow(
+      "RuntimeError: memory access out of bounds"
+    );
+    expect(refreshToken).toHaveBeenCalledOnce();
   });
 
   it("does not verify or rewrite the pin when the website reports an unrelated UID", async () => {

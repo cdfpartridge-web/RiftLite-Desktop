@@ -7,6 +7,7 @@ import {
   SecureCredentialVault,
   type CredentialEncryption
 } from "../src/main/services/secureCredentialVault.js";
+import { FirebaseSyncService } from "../src/main/services/firebaseSync.js";
 import { sanitizeBackupCaptureEvent } from "../src/main/services/backupSanitizer.js";
 import { RiftLiteStore } from "../src/main/services/store.js";
 import type { CaptureEvent, MatchDraft, ReplayRecord, RiftLiteBackupFile } from "../src/shared/types.js";
@@ -414,6 +415,117 @@ describe("secure credential storage", () => {
     }
   });
 
+  it("atomically rebinds a legacy credential when the verified connection supplies its Firebase UID", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "riftlite-credentials-firebase-uid-backfill-"));
+    try {
+      const encryption = new TestEncryption();
+      const vaultPath = join(directory, "vault.json");
+      const dbPath = join(directory, "riftlite-v06.sqlite");
+      const legacyPath = join(directory, "riftlite-v06-store.json");
+      const store = new RiftLiteStore(
+        dbPath,
+        legacyPath,
+        new SecureCredentialVault(vaultPath, encryption)
+      );
+      await store.load();
+      await store.saveSettings({
+        accountUid: "account-a",
+        firebaseUid: "",
+        firebaseRefreshToken: "account-a-refresh"
+      });
+      const legacySettings = await store.getSettings();
+      expect(legacySettings.firebaseCredentialGeneration).not.toBe("");
+
+      const service = new FirebaseSyncService(store, () => null);
+      Object.assign(service, {
+        authenticatedWebsiteRequest: vi.fn(async () => ({
+          connection: {
+            verified: true,
+            uid: "account-a",
+            authenticatedUid: "account-a",
+            identityUids: ["account-a"],
+            checkedAt: "2026-08-06T12:00:00.000Z",
+            credentialRepair: { required: false }
+          }
+        }))
+      });
+
+      await expect(service.getAccountConnectionStatus()).resolves.toMatchObject({
+        connected: true,
+        verified: true,
+        uid: "account-a"
+      });
+      const verifiedSettings = await store.getSettings();
+      expect(verifiedSettings).toMatchObject({
+        accountUid: "account-a",
+        firebaseUid: "account-a",
+        firebaseRefreshToken: "account-a-refresh",
+        accountLastVerifiedAt: "2026-08-06T12:00:00.000Z",
+        accountLastVerificationError: ""
+      });
+      expect(verifiedSettings.firebaseCredentialGeneration).not.toBe(legacySettings.firebaseCredentialGeneration);
+
+      const durableVault = JSON.parse(await readFile(vaultPath, "utf8")) as {
+        firebaseRefreshTokenBinding?: { firebaseUid?: string; accountUid?: string; generation?: string } | null;
+      };
+      expect(durableVault.firebaseRefreshTokenBinding).toEqual({
+        firebaseUid: "account-a",
+        accountUid: "account-a",
+        generation: verifiedSettings.firebaseCredentialGeneration
+      });
+
+      const restarted = new RiftLiteStore(
+        dbPath,
+        legacyPath,
+        new SecureCredentialVault(vaultPath, encryption)
+      );
+      await restarted.load();
+      expect(await restarted.getSettings()).toMatchObject({
+        accountUid: "account-a",
+        firebaseUid: "account-a",
+        firebaseRefreshToken: "account-a-refresh"
+      });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ["an empty Firebase UID", "", { firebaseUid: "account-a" }],
+    ["a non-empty Firebase UID", "firebase-a", { firebaseUid: "firebase-b" }],
+    ["the pinned account during a UID backfill", "", { accountUid: "account-b", firebaseUid: "firebase-b" }]
+  ])("rejects changing %s without changing the credential", async (_label, initialFirebaseUid, patch) => {
+    const directory = await mkdtemp(join(tmpdir(), "riftlite-credentials-firebase-uid-swap-"));
+    try {
+      const encryption = new TestEncryption();
+      const vaultPath = join(directory, "vault.json");
+      const dbPath = join(directory, "riftlite-v06.sqlite");
+      const legacyPath = join(directory, "riftlite-v06-store.json");
+      const store = new RiftLiteStore(
+        dbPath,
+        legacyPath,
+        new SecureCredentialVault(vaultPath, encryption)
+      );
+      await store.load();
+      await store.saveSettings({
+        accountUid: "account-a",
+        firebaseUid: initialFirebaseUid,
+        firebaseRefreshToken: "account-a-refresh"
+      });
+
+      await expect(store.saveSettings(patch)).rejects.toThrow(
+        "The linked account identity changed without a matching credential update. Reconnect the account instead."
+      );
+      expect(await store.getSettings()).toMatchObject({
+        accountUid: "account-a",
+        firebaseUid: initialFirebaseUid,
+        firebaseRefreshToken: "account-a-refresh"
+      });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("fails a credential clear when its vault tombstone cannot be committed", async () => {
     const directory = await mkdtemp(join(tmpdir(), "riftlite-credentials-failed-unlink-"));
     try {
@@ -453,7 +565,7 @@ describe("secure credential storage", () => {
     }
   });
 
-  it("fails closed after a vault write if the matching account identity cannot be persisted", async () => {
+  it("restores the exact prior vault if the matching account identity cannot be persisted", async () => {
     const directory = await mkdtemp(join(tmpdir(), "riftlite-credentials-account-commit-race-"));
     try {
       const encryption = new TestEncryption();
@@ -471,6 +583,45 @@ describe("secure credential storage", () => {
         accountUid: "account-a",
         firebaseRefreshToken: "account-a-refresh"
       });
+      const capturedAt = "2026-08-06T12:00:00.000Z";
+      const match: MatchDraft = {
+        id: "credential-rollback-match",
+        platform: "atlas",
+        status: "saved",
+        capturedAt,
+        updatedAt: capturedAt,
+        result: "Win",
+        format: "Bo1",
+        score: "1-0",
+        myName: "BMU",
+        opponentName: "Opponent",
+        myChampion: "Kennen",
+        opponentChampion: "Yasuo",
+        myBattlefield: "",
+        opponentBattlefield: "",
+        deckName: "Rollback deck",
+        deckSourceId: "",
+        flags: "",
+        notes: "Must survive a failed account save",
+        games: [],
+        rawEvidence: [],
+        sync: { community: "disabled", hubs: {}, teams: {} }
+      };
+      const replay: ReplayRecord = {
+        id: "credential-rollback-replay",
+        matchId: match.id,
+        platform: "atlas",
+        capturedAt,
+        title: "Kennen vs Yasuo",
+        players: { me: "BMU", opponent: "Opponent" },
+        events: []
+      };
+      await store.saveMatch(match);
+      await store.saveReplay(replay);
+      const beforeFailure = await store.getSettings();
+      const previousGeneration = beforeFailure.firebaseCredentialGeneration;
+      const previousVault = await readFile(vaultPath);
+      expect(previousGeneration).not.toBe("");
 
       const internals = store as unknown as { writeDatabaseFile(database: object): Promise<void> };
       vi.spyOn(internals, "writeDatabaseFile").mockRejectedValueOnce(new Error("simulated database write failure"));
@@ -483,8 +634,12 @@ describe("secure credential storage", () => {
       expect(await store.getSettings()).toMatchObject({
         firebaseUid: "account-a",
         accountUid: "account-a",
-        firebaseRefreshToken: "account-a-refresh"
+        firebaseRefreshToken: "account-a-refresh",
+        firebaseCredentialGeneration: previousGeneration
       });
+      expect(await readFile(vaultPath)).toEqual(previousVault);
+      expect((await store.getMatches()).map((candidate) => candidate.id)).toContain(match.id);
+      expect((await store.getReplays()).map((candidate) => candidate.id)).toContain(replay.id);
 
       const restarted = new RiftLiteStore(
         dbPath,
@@ -495,7 +650,111 @@ describe("secure credential storage", () => {
       expect(await restarted.getSettings()).toMatchObject({
         firebaseUid: "account-a",
         accountUid: "account-a",
-        firebaseRefreshToken: ""
+        firebaseRefreshToken: "account-a-refresh",
+        firebaseCredentialGeneration: previousGeneration
+      });
+      expect((await restarted.getMatches()).map((candidate) => candidate.id)).toContain(match.id);
+      expect((await restarted.getReplays()).map((candidate) => candidate.id)).toContain(replay.id);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("finishes an interrupted same-account vault-first credential commit after restart", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "riftlite-credentials-same-account-generation-recovery-"));
+    try {
+      const encryption = new TestEncryption();
+      const vaultPath = join(directory, "vault.json");
+      const dbPath = join(directory, "riftlite-v06.sqlite");
+      const legacyPath = join(directory, "riftlite-v06-store.json");
+      const vault = new SecureCredentialVault(vaultPath, encryption);
+      const store = new RiftLiteStore(dbPath, legacyPath, vault);
+      await store.load();
+      await store.saveSettings({
+        firebaseUid: "account-a",
+        accountUid: "account-a",
+        firebaseRefreshToken: "original-refresh-token"
+      });
+      const durableSettings = await store.getSettings();
+
+      // Simulate the ordering used by an older build: the vault rename
+      // succeeds, then the process/database write fails before SQLite stores
+      // the matching generation.
+      const staged = await vault.protectForSave(
+        { ...durableSettings, firebaseRefreshToken: "newer-same-account-refresh-token" },
+        { firebaseRefreshToken: true, rawCaptureApiKey: false, scorepadDeviceSecret: false }
+      );
+      expect(staged.runtimeSettings.firebaseCredentialGeneration)
+        .not.toBe(durableSettings.firebaseCredentialGeneration);
+
+      const restarted = new RiftLiteStore(
+        dbPath,
+        legacyPath,
+        new SecureCredentialVault(vaultPath, encryption)
+      );
+      await restarted.load();
+      expect(await restarted.getSettings()).toMatchObject({
+        firebaseUid: "account-a",
+        accountUid: "account-a",
+        firebaseRefreshToken: "newer-same-account-refresh-token",
+        firebaseCredentialGeneration: staged.runtimeSettings.firebaseCredentialGeneration
+      });
+
+      const restartedAgain = new RiftLiteStore(
+        dbPath,
+        legacyPath,
+        new SecureCredentialVault(vaultPath, encryption)
+      );
+      await restartedAgain.load();
+      expect(await restartedAgain.getSettings()).toMatchObject({
+        firebaseUid: "account-a",
+        accountUid: "account-a",
+        firebaseRefreshToken: "newer-same-account-refresh-token",
+        firebaseCredentialGeneration: staged.runtimeSettings.firebaseCredentialGeneration
+      });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("does not adopt a vault generation from a different account", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "riftlite-credentials-cross-account-generation-rejection-"));
+    try {
+      const encryption = new TestEncryption();
+      const vaultPath = join(directory, "vault.json");
+      const dbPath = join(directory, "riftlite-v06.sqlite");
+      const legacyPath = join(directory, "riftlite-v06-store.json");
+      const vault = new SecureCredentialVault(vaultPath, encryption);
+      const store = new RiftLiteStore(dbPath, legacyPath, vault);
+      await store.load();
+      await store.saveSettings({
+        firebaseUid: "account-a",
+        accountUid: "account-a",
+        firebaseRefreshToken: "account-a-refresh-token"
+      });
+      const durableSettings = await store.getSettings();
+
+      await vault.protectForSave(
+        {
+          ...durableSettings,
+          firebaseUid: "account-b",
+          accountUid: "account-b",
+          firebaseRefreshToken: "account-b-refresh-token"
+        },
+        { firebaseRefreshToken: true, rawCaptureApiKey: false, scorepadDeviceSecret: false }
+      );
+
+      const restarted = new RiftLiteStore(
+        dbPath,
+        legacyPath,
+        new SecureCredentialVault(vaultPath, encryption)
+      );
+      await restarted.load();
+      expect(await restarted.getSettings()).toMatchObject({
+        firebaseUid: "account-a",
+        accountUid: "account-a",
+        firebaseRefreshToken: "",
+        firebaseCredentialGeneration: ""
       });
     } finally {
       await rm(directory, { recursive: true, force: true });

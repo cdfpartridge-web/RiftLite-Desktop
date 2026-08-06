@@ -26,6 +26,11 @@ export type ConfirmedMatchReportRetrySelection<Saved> = {
   matches: Saved[];
 };
 
+export type ConfirmedMatchReportRetryBatchResult<Saved> = {
+  processed: Saved[];
+  failure: { match: Saved; error: unknown } | null;
+};
+
 export type ConfirmedMatchBackgroundDeliveryOperations<Saved> = {
   finalizeReplay: (saved: Saved) => Promise<"sync-required" | "sync-complete">;
   loadLatest: (saved: Saved) => Promise<Saved>;
@@ -81,6 +86,48 @@ export function selectConfirmedMatchReportRetries<Saved extends ConfirmedMatchRe
     })
     .slice(0, boundedLimit - newest.length);
   return { matches: [...newest, ...fairRemainder] };
+}
+
+/**
+ * Stops a background batch when an error escapes the per-match sync layer.
+ * Destination-specific failures are represented in the returned match, so a
+ * thrown error here indicates shared auth, identity, or storage infrastructure
+ * which should not be retried for every row in the same sweep.
+ */
+export async function runConfirmedMatchReportRetryBatch<Saved>(
+  matches: Saved[],
+  syncMatch: (match: Saved) => Promise<Saved>
+): Promise<ConfirmedMatchReportRetryBatchResult<Saved>> {
+  const processed: Saved[] = [];
+  for (const match of matches) {
+    try {
+      processed.push(await syncMatch(match));
+    } catch (error) {
+      return { processed, failure: { match, error } };
+    }
+  }
+  return { processed, failure: null };
+}
+
+/** Coalesces overlapping timer/startup requests without suppressing a later retry. */
+export function createSingleFlight<Result>(operation: () => Promise<Result>): () => Promise<Result> {
+  let inFlight: Promise<Result> | null = null;
+  return () => {
+    if (inFlight) {
+      return inFlight;
+    }
+    const run = Promise.resolve().then(operation);
+    inFlight = run;
+    void run.then(
+      () => {
+        if (inFlight === run) inFlight = null;
+      },
+      () => {
+        if (inFlight === run) inFlight = null;
+      }
+    );
+    return run;
+  };
 }
 
 function timestamp(value: string): number {

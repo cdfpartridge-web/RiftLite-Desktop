@@ -1,6 +1,6 @@
 # RiftLite Current Engineering State
 
-> **Current cross-platform release:** v0.9.33 fixes repeated Rift Atlas match-review popups and improves recovery for stuck Web Replay uploads. Read `docs/release-notes-v0.9.33.md` first.
+> **Current cross-platform release candidate:** v0.9.34 protects local recordings through temporary account, upload, reporting, and storage failures. Read `docs/release-notes-v0.9.34.md` first.
 
 Last updated: 2026-08-06
 
@@ -10,7 +10,7 @@ This is the durable handoff for continuing RiftLite work in a fresh Codex task. 
 
 - Active cross-platform release source repo:
   `C:\Users\cdfpa\OneDrive\Documents\Claude\Projects\Riftlite Beta 0.6\desktop-v06`
-- Current local package version: `0.9.33` (customer-facing build `v0.9.33`); fully built, validated, and published for Windows, Intel macOS, and Apple Silicon macOS
+- Current local package version: `0.9.34` (customer-facing build `v0.9.34`); release candidate awaiting final Windows and macOS publication
 - Current branch: `agent/release-v0.9.12`
 - Windows GitHub release repository (`windows` remote): `cdfpartridge-web/RiftLite-Desktop`
 - macOS GitHub release repository (`origin` remote): `cdfpartridge-web/RiftLite-Desktop-mac`
@@ -39,6 +39,18 @@ The active working tree may contain current work. Never reset, discard, or overw
 5. Do not rebuild installers, publish releases, or deploy the website unless explicitly requested.
 6. Treat raw WebSocket replay data, account sync, hub ownership, Discord tokens, and API keys as security-sensitive.
 7. RiftReplay/Replay Lab and Vision work are parked or hidden. Do not expose them in menus or release notes unless explicitly requested.
+
+## 2026-08-06 v0.9.34 Release Candidate
+
+- Completed Atlas and TCGA capture data is retained locally when account verification, Web Replay upload, Discord delivery, or reviewed match reporting is temporarily unavailable.
+- Interrupted Atlas journals with real match evidence are promoted into recoverable local captures, while search-only journals retain bounded cleanup behavior.
+- Startup and timer recovery now retry confirmed match reports before resuming pending Web Replay delivery, with overlapping recovery requests safely coalesced.
+- Secure credential writes can finish an interrupted same-account generation commit without accepting cross-account identity changes, and vault changes roll back if the SQLite settings commit fails.
+- The local SQLite runtime can reopen the durable database once after a rare sql.js/WASM memory fault instead of misreporting the failure as an expired account session.
+- Website and desktop account linking now support a server-proven upgrade from a legacy anonymous device identity to a real RiftLite account while preserving local setup; genuine account switches remain fail-closed.
+- Windows validation passed TypeScript, the 79-test account-sync gate, all 109 test files / 975 tests, the production build, installer/updater verification, NSIS integrity checks, and the packaged smoke test.
+- Local Windows installer: 212,869,050 bytes, SHA-256 `F71E722EF627523FF6FFB8FD398DC1D54BE7A7D91D45ACB358BBDB481412651E`; blockmap: 199,066 bytes, SHA-256 `22CF490FC1AC0545A26043EF59515F247E98A6E582C9F19E70CB800F321653D7`; updater manifest: 344 bytes, SHA-256 `548FC4CA0B62A089324F9AB0D4164E6E04BAA4ECFC463A897D651D204E6FB713`.
+- Publication URLs, the native macOS workflow, and independently downloaded asset hashes will be recorded after publication.
 
 ## 2026-08-06 v0.9.33 Release
 

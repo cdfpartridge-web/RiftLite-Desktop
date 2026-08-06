@@ -141,7 +141,9 @@ import { startEventLoopWatchdog, type EventLoopWatchdog } from "./services/event
 import {
   confirmedMatchSupportsBackgroundDelivery,
   confirmMatchLocalFirst,
+  createSingleFlight,
   deliverConfirmedMatchInBackground,
+  runConfirmedMatchReportRetryBatch,
   selectConfirmedMatchReportRetries
 } from "./services/localFirstMatchConfirmation.js";
 import {
@@ -160,7 +162,7 @@ import { OverlayServer } from "./services/overlayServer.js";
 import {
   RawCaptureService,
   rawCaptureMatchSummaryFromDraft,
-  riftLiteTcgaWebReplayAutoUploadAccountUid,
+  riftLiteTcgaWebReplayCaptureAccountUid,
   type RawCaptureFinishIdentity
 } from "./services/rawCaptureService.js";
 import { attachReplayVideoToStore } from "./services/replayVideoAttachment.js";
@@ -698,31 +700,39 @@ async function uploadPendingRawCapturesWithAccountRefresh(forceRetry = false): P
   return rawCaptureService.uploadPendingRawCaptures(5, forceRetry);
 }
 
-async function syncSettledMatchReports(): Promise<number> {
+async function syncSettledMatchReports(): Promise<{ syncedCount: number; blocked: boolean }> {
   const candidates = selectConfirmedMatchReportRetries(await store.getMatches(), 10).matches;
-  let syncedCount = 0;
-  for (const match of candidates) {
-    try {
-      const synced = await syncService.syncMatch(match, { quiet: true });
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send("match:draft", synced);
-      }
-      syncedCount += 1;
-    } catch (error) {
-      await logStartupIssue(`Pending match report retry failed (${match.id})`, error);
+  const result = await runConfirmedMatchReportRetryBatch(candidates, async (match) => {
+    const synced = await syncService.syncMatch(match, { quiet: true });
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("match:draft", synced);
     }
+    return synced;
+  });
+  if (result.failure) {
+    await logStartupIssue(
+      `Pending match report retry failed (${result.failure.match.id})`,
+      result.failure.error
+    );
   }
-  if (syncedCount) {
+  const syncedCount = result.processed.length;
+  if (syncedCount && !result.failure) {
     queueAccountCloudSync("Pending match reports retried");
   }
-  return syncedCount;
+  return { syncedCount, blocked: Boolean(result.failure) };
 }
 
-async function retryPendingRawCapturesAndMatchReports(): Promise<number> {
+const runPendingRawCaptureAndMatchReportRecovery = createSingleFlight(async (): Promise<number> => {
   const uploaded = await uploadPendingRawCapturesWithAccountRefresh();
-  await syncSettledMatchReports();
-  retryDeferredConfirmedMatchDeliveries();
+  const reportResult = await syncSettledMatchReports();
+  if (!reportResult.blocked) {
+    retryDeferredConfirmedMatchDeliveries();
+  }
   return uploaded;
+});
+
+function retryPendingRawCapturesAndMatchReports(): Promise<number> {
+  return runPendingRawCaptureAndMatchReportRecovery();
 }
 
 function retryDeferredConfirmedMatchDeliveries(): void {
@@ -2459,7 +2469,10 @@ function configureTcgaWebReplayProductCapture(): Promise<void> {
 async function configureTcgaWebReplayProductCaptureNow(): Promise<void> {
   const settings = await store.getSettings();
   const outputDirectory = await rawCaptureService.captureDirectory();
-  const nextAccountUid = riftLiteTcgaWebReplayAutoUploadAccountUid(settings);
+  // Keep local TCGA capture alive for the explicitly consenting account even
+  // when its upload credentials are temporarily unverified. Verification is
+  // still enforced by RawCaptureService before any network delivery.
+  const nextAccountUid = riftLiteTcgaWebReplayCaptureAccountUid(settings);
   const activeHubIds = new Set(settings.activeHubs.map((hub) => hub.id));
   const discordShareHubIds = activeDiscordReplayHubIds(settings)
     .filter((hubId) => activeHubIds.has(hubId));
