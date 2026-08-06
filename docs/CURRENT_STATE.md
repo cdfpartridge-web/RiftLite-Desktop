@@ -1,6 +1,6 @@
 # RiftLite Current Engineering State
 
-> **Current cross-platform release:** v0.9.32 automatically fills first/second seat information for Atlas and TCGA match reviews and adds TronIsBad and Bloody to creator discovery. Read `docs/release-notes-v0.9.32.md` first.
+> **Current cross-platform release:** v0.9.33 fixes repeated Rift Atlas match-review popups and improves recovery for stuck Web Replay uploads. Read `docs/release-notes-v0.9.33.md` first.
 
 Last updated: 2026-08-06
 
@@ -10,12 +10,12 @@ This is the durable handoff for continuing RiftLite work in a fresh Codex task. 
 
 - Active cross-platform release source repo:
   `C:\Users\cdfpa\OneDrive\Documents\Claude\Projects\Riftlite Beta 0.6\desktop-v06`
-- Current local package version: `0.9.33` (customer-facing build `v0.9.33`); this validated release candidate contains the capture-lifecycle fixes documented below, while the currently published cross-platform release remains v0.9.32
+- Current local package version: `0.9.33` (customer-facing build `v0.9.33`); fully built, validated, and published for Windows, Intel macOS, and Apple Silicon macOS
 - Current branch: `agent/release-v0.9.12`
 - Windows GitHub release repository (`windows` remote): `cdfpartridge-web/RiftLite-Desktop`
 - macOS GitHub release repository (`origin` remote): `cdfpartridge-web/RiftLite-Desktop-mac`
-- Current published Windows release: `v0.9.32` (2026-08-05)
-- Current published macOS release: `mac-v0.9.32` (2026-08-05)
+- Current published Windows release: `v0.9.33` (2026-08-06)
+- Current published macOS release: `mac-v0.9.33` (2026-08-06)
 - Windows installer output:
   `C:\Users\cdfpa\OneDrive\Documents\Claude\Projects\Riftlite Beta 0.6\desktop-v06\release\RiftLiteBetaInstall.exe`
 - Current local Windows installer: `release\RiftLiteBetaInstall.exe`, 212,736,694 bytes, SHA-256 `7AF30EC8B0B214799CAD46BD06D5E1BB44103BC2C91DB9567F4726070B0397FA`.
@@ -40,15 +40,22 @@ The active working tree may contain current work. Never reset, discard, or overw
 6. Treat raw WebSocket replay data, account sync, hub ownership, Discord tokens, and API keys as security-sensitive.
 7. RiftReplay/Replay Lab and Vision work are parked or hidden. Do not expose them in menus or release notes unless explicitly requested.
 
-## 2026-08-06 v0.9.33 Release Candidate (Unpublished)
+## 2026-08-06 v0.9.33 Release
 
+- Release commit `6b83c97183df033002c8a56cd6cef153d82a1980` is tagged as Windows `v0.9.33` and macOS `mac-v0.9.33`.
+- Windows release: `https://github.com/cdfpartridge-web/RiftLite-Desktop/releases/tag/v0.9.33`.
+- macOS release: `https://github.com/cdfpartridge-web/RiftLite-Desktop-mac/releases/tag/mac-v0.9.33`.
+- Native macOS workflow: `https://github.com/cdfpartridge-web/RiftLite-Desktop-mac/actions/runs/31086522903`.
 - Atlas player identity selection now prioritizes reliable player/presence DOM sources over generic deck-search card text. Same-room snapshots preserve the established opponent while that reliable identity remains present, preventing deck searches such as `Stacked Deck` from generating false match rollovers and repeated review popups.
 - `Keep local only` now safely clears every replay alias that points to the same raw artifact, while refusing genuinely different artifacts or an alias that is already ready online.
 - Persisted raw-capture fallback matching no longer reparents an artifact already owned by another local replay through stale room/series evidence, and weak matches must fit the replay time window.
-- Existing local replay rows and raw files were deliberately not changed. The known incomplete Kennen–Yasuo rows and ambiguous Darius–Lillia association still require a separate backed-up data repair if desired.
-- Validation passed TypeScript, the 76-test account-sync gate, all 109 test files / 955 tests, the production build, Windows installer/updater verification, NSIS integrity checks, and the packaged smoke test.
-- Local installer: `release\RiftLiteBetaInstall.exe`, 212,736,694 bytes, SHA-256 `7AF30EC8B0B214799CAD46BD06D5E1BB44103BC2C91DB9567F4726070B0397FA`. Blockmap SHA-256: `10BD30674DC2E9E780A8E2E391159B6FB65E936964AB885C87CAC935803AB1B3`; updater manifest SHA-256: `7B2854DBBE0919C955BD41D223B6D6417D7D0A2177B24376BFB91382DCF32C01`.
-- This build is local only. No GitHub commit, push, tag, release, asset upload, website deployment, macOS build, Discord action, or production-data mutation occurred.
+- Existing local replay rows and raw files were deliberately not changed. The known incomplete Kennen-Yasuo rows and ambiguous Darius-Lillia association still require a separate backed-up data repair if desired.
+- Windows validation passed TypeScript, the 76-test account-sync gate, all 109 test files / 955 tests, the production build, installer/updater verification, NSIS integrity checks, and the packaged smoke test. The native Mac workflow passed the same release gate plus x64/arm64 packaging, FFmpeg architecture/licence checks, updater and bundle identity checks, strict ad-hoc signature verification, DMG verification, and the packaged smoke test.
+- Windows installer: 212,736,694 bytes, SHA-256 `7AF30EC8B0B214799CAD46BD06D5E1BB44103BC2C91DB9567F4726070B0397FA`; blockmap: 198,426 bytes, SHA-256 `10BD30674DC2E9E780A8E2E391159B6FB65E936964AB885C87CAC935803AB1B3`; updater manifest: 344 bytes, SHA-256 `7B2854DBBE0919C955BD41D223B6D6417D7D0A2177B24376BFB91382DCF32C01`.
+- macOS Apple Silicon DMG SHA-256: `A7EDBA7731B4CA08A8D87FB48B3453D72ACC994A7E4A9D46AD253AFD77CF54D1`; ZIP: `0A2D5EF5B7C6D71F6F4209E6982FA932CFFF891F5B32F65299B3531E692911E7`.
+- macOS Intel DMG SHA-256: `7F2239B4D5B03225A44D3089A09DB2206F0CC4367F7BCBD342F8B240F203FB38`; ZIP: `A6D64914B68385CCB04B6A16B639F1A71BC3DA9759B484DEF703185E14BFBF8B`; updater manifest: `AF6C7844318B96EA3A7741203607E73100E8BAC3A9575F8CD006EC0D5B2F6F14`.
+- Both updater manifests report version `0.9.33`. All eight published assets were independently downloaded after publication and matched GitHub sizes and SHA-256 digests; both updater manifests' size/SHA-512 relationships matched the downloaded installers.
+- No website deployment, Discord action, or production replay-data mutation was required for this release.
 
 ## 2026-08-05 v0.9.32 Release
 
