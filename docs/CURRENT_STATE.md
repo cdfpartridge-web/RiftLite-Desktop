@@ -1,6 +1,6 @@
 # RiftLite Current Engineering State
 
-> **Current release state:** Windows v0.9.35 remains live. A local-only Windows v0.9.36 candidate has been built and verified but has not been committed, tagged, pushed, or published. macOS v0.9.35 source and tag remain published. Read `docs/release-notes-v0.9.36.md` first.
+> **Current release state:** Windows v0.9.36 and macOS v0.9.36 are live. No website deployment was required. Read `docs/release-notes-v0.9.36.md` first.
 
 Last updated: 2026-08-07
 
@@ -10,12 +10,12 @@ This is the durable handoff for continuing RiftLite work in a fresh Codex task. 
 
 - Active cross-platform release source repo:
   `C:\Users\cdfpa\OneDrive\Documents\Claude\Projects\Riftlite Beta 0.6\desktop-v06`
-- Current local package version: `0.9.36` (customer-facing build `v0.9.36`); this is a verified local Windows candidate only, while public Windows remains v0.9.35
+- Current local package version: `0.9.36` (customer-facing build `v0.9.36`); matching Windows and macOS releases are published
 - Current branch: `agent/release-v0.9.12`
 - Windows GitHub release repository (`windows` remote): `cdfpartridge-web/RiftLite-Desktop`
 - macOS GitHub release repository (`origin` remote): `cdfpartridge-web/RiftLite-Desktop-mac`
-- Current published Windows release: `v0.9.35` (2026-08-06)
-- Current published macOS release: `mac-v0.9.33` (2026-08-06)
+- Current published Windows release: `v0.9.36` (2026-08-07)
+- Current published macOS release: `mac-v0.9.36` (2026-08-07)
 - Windows installer output:
   `C:\Users\cdfpa\OneDrive\Documents\Claude\Projects\Riftlite Beta 0.6\desktop-v06\release\RiftLiteBetaInstall.exe`
 - Current local Windows installer: v0.9.36 `release\RiftLiteBetaInstall.exe`, 216,037,882 bytes, SHA-256 `617B7475E1A63E27FFB852D2FF334D3952185DD55EA8586BAC8CFE7BB8184CD4`.
@@ -40,23 +40,29 @@ The active working tree may contain current work. Never reset, discard, or overw
 6. Treat raw WebSocket replay data, account sync, hub ownership, Discord tokens, and API keys as security-sensitive.
 7. RiftReplay/Replay Lab and Vision work are parked or hidden. Do not expose them in menus or release notes unless explicitly requested.
 
-## 2026-08-07 v0.9.36 Local Candidate (Not Published)
+## 2026-08-07 v0.9.36 Release (Windows And macOS Live)
 
-- Package and customer-facing build identity are `0.9.36`. No commit, tag, push, GitHub release, macOS build, website deployment, Discord action, or production-data mutation was performed.
+- Release commit `9aa990df1115dae62bbb1083d8962326848afafc` is tagged as Windows `v0.9.36` and macOS `mac-v0.9.36`; both release repositories' `main` and `agent/release-v0.9.12` branches contain that exact source.
+- Windows release: `https://github.com/cdfpartridge-web/RiftLite-Desktop/releases/tag/v0.9.36` and is the repository's current latest release.
+- macOS release: `https://github.com/cdfpartridge-web/RiftLite-Desktop-mac/releases/tag/mac-v0.9.36` and is the repository's current latest release. Native workflow `https://github.com/cdfpartridge-web/RiftLite-Desktop-mac/actions/runs/31171550063` completed successfully.
 - Atlas empty-shell detection now measures a fresh visible-page grace period, binds recovery decisions to the current navigation, ignores stale shell-ready events, limits automatic runtime repair to one attempt, and reveals the page on a shorter recovery timeout instead of leaving the game hidden.
 - If runtime repair still returns an empty Atlas shell, the client offers an explicit embedded sign-in reset that preserves Atlas-local decks and RiftLite data. Connection diagnostics now validate the advertised application script body and MIME type so an HTTP 200 placeholder/security-gateway page is reported as a failure.
 - sql.js WebAssembly runtime recovery now covers additional poisoned-runtime variants (`table index is out of bounds` and `null function or function signature mismatch`) that previously caused every later local mutation—including Match Review save and delete—to fail until restart.
 - **Delete capture** can create its recycle-bin record from the open review when the initial local write never committed, safely skips unreadable linked replay metadata, logs failures, prevents a discarded review from recreating deferred replay work, and no longer reports a committed deletion as failed when only the follow-up history refresh fails.
 - Completed Web Replay warnings now have a device-local **Clear from activity** action. It hides only that warning card and preserves the local match, capture, warning metadata, and online replay; a changed warning signature appears again.
-- Validation passed TypeScript, the 79-test account-sync gate, all 111 test files / 1,005 tests, the production build, Windows artifact/updater verification, executable and NSIS archive integrity checks, and the isolated packaged smoke test.
+- Windows validation passed TypeScript, the 79-test account-sync gate, all 111 test files / 1,005 tests, the production build, Windows artifact/updater verification, executable and NSIS archive integrity checks, and the isolated packaged smoke test.
+- The native macOS workflow passed the same source gates plus Intel and Apple Silicon packaging, architecture-specific FFmpeg checks, updater/bundle identity validation, strict ad-hoc signature verification, DMG verification, and the packaged smoke test.
 - Windows installer: 216,037,882 bytes, SHA-256 `617B7475E1A63E27FFB852D2FF334D3952185DD55EA8586BAC8CFE7BB8184CD4`; blockmap: 203,434 bytes, SHA-256 `500E095AA879794A12C008BC786269C21A7D0E7B4F81278050C02146C546E647`; updater manifest: 344 bytes, SHA-256 `ACB2ED7F62DD9BC7B9A770E3CDAA85151114318180E4BB9F6BC3657E2D621F7A`.
-- The updater manifest reports version `0.9.36`; its installer size and SHA-512 match the generated executable. The unpacked executable reports FileVersion and ProductVersion `0.9.36`.
+- macOS Apple Silicon DMG: 172,799,229 bytes, SHA-256 `F91226B9461ED2DD40BEBB7120BBC493A8340D4D51D299DB06189F1CAD66CA85`; ZIP: 165,421,578 bytes, SHA-256 `B7471E03C269D6EC98C5E8EADACB605F553E16283D58979F86A637A65326A6B0`.
+- macOS Intel DMG: 187,984,957 bytes, SHA-256 `DF942F7A5E3FB880C0F069CDA75BF39BC12944AB51FA84EE16595624397B07B3`; ZIP: 180,321,914 bytes, SHA-256 `E06FD533DB85D40373831C8B76F6A93FCC520514D84F2754E25BC4A0CC24FA38`; updater manifest: 830 bytes, SHA-256 `A6FB6599642DE26F49912DE21F02FEB76DFAD2ECF0005B703A746ECBC818DBF7`.
+- All three Windows and all five macOS assets were independently downloaded after publication and matched their public sizes and SHA-256 digests. Both updater manifests report version `0.9.36`; every referenced installer size and SHA-512 relationship matches the downloaded artifact.
+- This release changed only desktop source and tests. No website deployment, Discord action, or production-data mutation was required.
 
-## 2026-08-06 v0.9.35 Release (Windows Live; macOS Queued)
+## 2026-08-06 v0.9.35 Release (Windows Published; macOS Superseded)
 
 - Release commit `87821be0a603009e98dd69c1da238520e4b3bfec` is tagged as Windows `v0.9.35` and macOS `mac-v0.9.35`; both release repositories' `main` and working branches contain the same source.
-- Windows release: `https://github.com/cdfpartridge-web/RiftLite-Desktop/releases/tag/v0.9.35` and is the repository's current latest release.
-- Native macOS workflow: `https://github.com/cdfpartridge-web/RiftLite-Desktop-mac/actions/runs/31128215132`. The tag push webhook was missed during the official GitHub Actions major outage, so the workflow was manually dispatched at the same immutable tag. It is queued with zero steps started; no Mac installer or release is claimed until that run passes and all five assets are verified.
+- Windows release: `https://github.com/cdfpartridge-web/RiftLite-Desktop/releases/tag/v0.9.35`.
+- Native macOS workflow `https://github.com/cdfpartridge-web/RiftLite-Desktop-mac/actions/runs/31128215132` was cancelled without receiving a runner or executing a step during the official GitHub Actions outage. No v0.9.35 Mac installer was published; it was superseded by the verified v0.9.36 release.
 - `Review later` now durably stores a captured match and its edits before closing, including waiting for replay/video finalization where necessary. A failed persistence attempt leaves the review open with a bounded, actionable error so the user can retry.
 - Pending reviews remain visible in Match History as `Review needed`, while incomplete rows are excluded from personal stats, deck performance, Matchup Lab, renderer/OBS overlays, and fallback community aggregates until the review is confirmed.
 - Saved or synced matches remain authoritative: a stale, deleted, or corrupt pending review cannot overwrite a completed row, and capture evidence is merged conservatively when a review is deferred.
