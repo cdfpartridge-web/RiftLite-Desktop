@@ -1651,8 +1651,12 @@ export class CaptureCoordinator {
     const nextOpponentRaw = readPayloadString(nextEvent.payload.opponentName);
     const previousOpponent = normalizeCaptureNameKey(previousOpponentRaw);
     const nextOpponent = normalizeCaptureNameKey(nextOpponentRaw);
-    const previousOpponentNoise = isLikelyAtlasContinuationNameNoise(previousOpponentRaw);
-    const nextOpponentNoise = isLikelyAtlasContinuationNameNoise(nextOpponentRaw);
+    const previousRoom = normalizeCaptureNameKey(readPayloadString(pendingEnd.payload.roomCode));
+    const nextRoom = normalizeCaptureNameKey(readPayloadString(nextEvent.payload.roomCode));
+    const previousOpponentNoise = isLikelyAtlasContinuationNameNoise(previousOpponentRaw) ||
+      Boolean(previousOpponent && previousRoom && previousOpponent === previousRoom);
+    const nextOpponentNoise = isLikelyAtlasContinuationNameNoise(nextOpponentRaw) ||
+      Boolean(nextOpponent && nextRoom && nextOpponent === nextRoom);
     const sameReliableOpponent = Boolean(
       previousOpponent &&
       nextOpponent &&

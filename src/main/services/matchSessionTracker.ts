@@ -379,8 +379,12 @@ function shouldStartFreshSession(session: SessionState, event: CaptureEvent): bo
   }
   const existingOpponent = normalizePlayerNameKey(readString(session.sticky.opponentName));
   const nextOpponent = normalizePlayerNameKey(readString(event.payload.opponentName));
-  const existingOpponentIsNoise = isLikelyAtlasActionText(existingOpponent) || isLikelyAtlasPlayerNameNoise(existingOpponent);
-  const nextOpponentIsNoise = isLikelyAtlasActionText(nextOpponent) || isLikelyAtlasPlayerNameNoise(nextOpponent);
+  const existingOpponentIsNoise = isLikelyAtlasActionText(existingOpponent) ||
+    isLikelyAtlasPlayerNameNoise(existingOpponent) ||
+    isAtlasRoomCodePlayerIdentity(session.sticky, existingOpponent);
+  const nextOpponentIsNoise = isLikelyAtlasActionText(nextOpponent) ||
+    isLikelyAtlasPlayerNameNoise(nextOpponent) ||
+    isAtlasRoomCodePlayerIdentity(event.payload, nextOpponent);
   if (event.platform === "atlas" && (existingOpponentIsNoise || nextOpponentIsNoise)) {
     return false;
   }
@@ -471,8 +475,12 @@ function isAtlasSameOpponentBo3ContinuationCandidate(session: SessionState, even
   }
   const existingOpponent = normalizePlayerNameKey(readString(session.sticky.opponentName));
   const nextOpponent = normalizePlayerNameKey(readString(event.payload.opponentName));
-  const existingOpponentIsNoise = isLikelyAtlasActionText(existingOpponent) || isLikelyAtlasPlayerNameNoise(existingOpponent);
-  const nextOpponentIsNoise = isLikelyAtlasActionText(nextOpponent) || isLikelyAtlasPlayerNameNoise(nextOpponent);
+  const existingOpponentIsNoise = isLikelyAtlasActionText(existingOpponent) ||
+    isLikelyAtlasPlayerNameNoise(existingOpponent) ||
+    isAtlasRoomCodePlayerIdentity(session.sticky, existingOpponent);
+  const nextOpponentIsNoise = isLikelyAtlasActionText(nextOpponent) ||
+    isLikelyAtlasPlayerNameNoise(nextOpponent) ||
+    isAtlasRoomCodePlayerIdentity(event.payload, nextOpponent);
   if (existingOpponent && nextOpponent && existingOpponent !== nextOpponent && !existingOpponentIsNoise && !nextOpponentIsNoise) {
     return false;
   }
@@ -534,8 +542,12 @@ function isAtlasContinuationAfterHeldGame(session: SessionState, event: CaptureE
   }
   const existingOpponent = normalizePlayerNameKey(readString(session.sticky.opponentName));
   const nextOpponent = normalizePlayerNameKey(readString(event.payload.opponentName));
-  const existingOpponentIsNoise = isLikelyAtlasActionText(existingOpponent) || isLikelyAtlasPlayerNameNoise(existingOpponent);
-  const nextOpponentIsNoise = isLikelyAtlasActionText(nextOpponent) || isLikelyAtlasPlayerNameNoise(nextOpponent);
+  const existingOpponentIsNoise = isLikelyAtlasActionText(existingOpponent) ||
+    isLikelyAtlasPlayerNameNoise(existingOpponent) ||
+    isAtlasRoomCodePlayerIdentity(session.sticky, existingOpponent);
+  const nextOpponentIsNoise = isLikelyAtlasActionText(nextOpponent) ||
+    isLikelyAtlasPlayerNameNoise(nextOpponent) ||
+    isAtlasRoomCodePlayerIdentity(event.payload, nextOpponent);
   if (existingOpponent && nextOpponent && existingOpponent !== nextOpponent && !existingOpponentIsNoise && !nextOpponentIsNoise) {
     return false;
   }
@@ -628,7 +640,11 @@ function mergeSticky(
         continue;
       }
       const rawOpponentName = readString(value);
-      if (isLikelyAtlasActionText(rawOpponentName) || isLikelyAtlasPlayerNameNoise(rawOpponentName)) {
+      if (
+        isLikelyAtlasActionText(rawOpponentName) ||
+        isLikelyAtlasPlayerNameNoise(rawOpponentName) ||
+        isAtlasRoomCodePlayerIdentity(source, normalizePlayerNameKey(rawOpponentName))
+      ) {
         continue;
       }
       const cleanedOpponentName = cleanPlayerName(rawOpponentName);
@@ -2728,6 +2744,11 @@ function isLikelyAtlasPlayerNameNoise(value: string): boolean {
     /^\d+\s*locked\b/.test(normalized) ||
     /^\d+\s*must\b/.test(normalized) ||
     /^\d+\s*(?:cards?|runes?|energy|power)\b/.test(normalized);
+}
+
+function isAtlasRoomCodePlayerIdentity(payload: Record<string, unknown>, normalizedPlayerName: string): boolean {
+  const roomCode = normalizePlayerNameKey(readString(payload.roomCode));
+  return Boolean(roomCode && normalizedPlayerName && roomCode === normalizedPlayerName);
 }
 
 function battlefieldChanged(current: string, nextValue: unknown): boolean {

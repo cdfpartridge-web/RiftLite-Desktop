@@ -1268,9 +1268,10 @@ function readAtlasSnapshot(): Record<string, unknown> {
         inGameText ||
         terminalText)
   );
+  const roomCode = readRoomCode(bodyText) || atlasBattlefieldSeatRoomCode;
   const atlasPlayers = nonGamePage
     ? { me: "", opponent: "", candidates: [] }
-    : readAtlasPlayers(bodyText, logRows, active || boardEvidence || hasScoreEvidence || gameplayRows);
+    : readAtlasPlayers(bodyText, logRows, active || boardEvidence || hasScoreEvidence || gameplayRows, roomCode);
   const myLegendCard = atlasCardByZone(zoneCards, "self", "legend");
   const opponentLegendCard = atlasCardByZone(zoneCards, "opponent", "legend");
   const battlefieldCards = readAtlasBattlefieldCards(zoneCards);
@@ -1291,7 +1292,7 @@ function readAtlasSnapshot(): Record<string, unknown> {
       left: candidate.left
     })).slice(0, 10),
     rows: logRows,
-    roomCode: readRoomCode(bodyText) || atlasBattlefieldSeatRoomCode,
+    roomCode,
     format: readAtlasFormat(bodyText),
     atlasSideboarding: sideboarding,
     atlasBo3Queue,
@@ -1826,10 +1827,16 @@ function usefulAtlasCardText(value: string): string {
   return /^(target|auto pay|[+-]?\d+\s*(buff|target)?)$/i.test(text) ? "" : text;
 }
 
-function readAtlasPlayers(bodyText: string, logRows: Array<{ text: string }>, readDomCandidates = true): { me: string; opponent: string; candidates: AtlasPlayerCandidate[] } {
+function readAtlasPlayers(
+  bodyText: string,
+  logRows: Array<{ text: string }>,
+  readDomCandidates = true,
+  roomCode = ""
+): { me: string; opponent: string; candidates: AtlasPlayerCandidate[] } {
   const sessionName = readAtlasSessionPlayerName();
+  const roomCodeKey = normalizeNameKey(roomCode);
   const candidates = readDomCandidates ? collectAtlasPlayerCandidates() : [];
-  const domOpponent = chooseAtlasOpponentName(candidates, sessionName);
+  const domOpponent = chooseAtlasOpponentName(candidates, sessionName, roomCode);
   if (sessionName || domOpponent) {
     return { me: sessionName, opponent: domOpponent, candidates };
   }
@@ -1843,15 +1850,15 @@ function readAtlasPlayers(bodyText: string, logRows: Array<{ text: string }>, re
   const chatNames = lines
     .map((line) => line.match(/^(.{1,48}?)\s+at\s+\d{1,2}:\d{2}\s*:/u)?.[1] ?? "")
     .map(cleanAtlasPlayerName)
-    .filter((name) => name && !/^you$/i.test(name) && !isAtlasGenericName(name));
+    .filter((name) => name && normalizeNameKey(name) !== roomCodeKey && !/^you$/i.test(name) && !isAtlasGenericName(name));
   const opponent = firstStableName(chatNames);
   if (opponent) {
     return { me: sessionName, opponent, candidates };
   }
   const turnNames = lines
-    .map((line) => line.match(/^(.{1,48}?)['’]s turn\b/iu)?.[1] ?? "")
+    .map((line) => line.match(/^(.{1,48}?)[’']s turn\b/iu)?.[1] ?? "")
     .map(cleanAtlasPlayerName)
-    .filter((name) => name && !isAtlasGenericName(name));
+    .filter((name) => name && normalizeNameKey(name) !== roomCodeKey && !isAtlasGenericName(name));
   return { me: sessionName, opponent: firstStableName(turnNames), candidates };
 }
 
@@ -2096,8 +2103,8 @@ function isLikelyAtlasPlayerActionText(value: string): boolean {
     /\b(take the first|decides who plays first|locked in|locked a battlefield|mulligan|sideboarding|sideboard|their turn|your turn)\b/.test(withoutClockPrefix);
 }
 
-function chooseAtlasOpponentName(candidates: AtlasPlayerCandidate[], localName: string): string {
-  return chooseAtlasOpponentIdentityName(candidates, localName);
+function chooseAtlasOpponentName(candidates: AtlasPlayerCandidate[], localName: string, roomCode: string): string {
+  return chooseAtlasOpponentIdentityName(candidates, localName, [roomCode]);
 }
 
 function cleanAtlasPlayerName(value: string): string {

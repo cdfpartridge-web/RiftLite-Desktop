@@ -43,13 +43,15 @@ export function compareAtlasPlayerIdentityCandidates(
 
 export function chooseAtlasOpponentIdentityName<T extends AtlasPlayerIdentityCandidate>(
   candidates: T[],
-  localName: string
+  localName: string,
+  excludedNames: string[] = []
 ): string {
   const localKey = normalizeAtlasPlayerIdentityName(localName);
+  const excludedKeys = new Set(excludedNames.map(normalizeAtlasPlayerIdentityName).filter(Boolean));
   const usable = candidates
     .filter((candidate) => {
       const key = normalizeAtlasPlayerIdentityName(candidate.name);
-      return key && key !== localKey && finiteScore(candidate.score) >= 3;
+      return key && key !== localKey && !excludedKeys.has(key) && finiteScore(candidate.score) >= 3;
     })
     .sort(compareAtlasPlayerIdentityCandidates);
   return usable.find((candidate) => candidate.side === "opponent")?.name ??

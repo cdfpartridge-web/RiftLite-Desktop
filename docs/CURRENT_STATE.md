@@ -1,16 +1,16 @@
 # RiftLite Current Engineering State
 
-> **Current release state:** Windows v0.9.36 and macOS v0.9.36 are live. No website deployment was required. Read `docs/release-notes-v0.9.36.md` first.
+> **Current release state:** v0.9.37 is the locally verified release candidate; Windows v0.9.36 and macOS v0.9.36 remain live until publication completes. No website deployment is required. For a new chat, read `docs/HANDOVER_2026-08-07_POST_V0.9.36.md` first; `docs/release-notes-v0.9.37.md` is the candidate customer-facing summary.
 
 Last updated: 2026-08-07
 
-This is the durable handoff for continuing RiftLite work in a fresh Codex task. Read this file before changing code.
+For a new Codex chat, read `docs/HANDOVER_2026-08-07_POST_V0.9.36.md` first. This file remains the longer architecture and append-only release history; some older sections are historical rather than current operational truth.
 
 ## Canonical Repository
 
 - Active cross-platform release source repo:
   `C:\Users\cdfpa\OneDrive\Documents\Claude\Projects\Riftlite Beta 0.6\desktop-v06`
-- Current local package version: `0.9.36` (customer-facing build `v0.9.36`); matching Windows and macOS releases are published
+- Current local package version: `0.9.37` (customer-facing build `v0.9.37`); Windows and macOS publication is in progress
 - Current branch: `agent/release-v0.9.12`
 - Windows GitHub release repository (`windows` remote): `cdfpartridge-web/RiftLite-Desktop`
 - macOS GitHub release repository (`origin` remote): `cdfpartridge-web/RiftLite-Desktop-mac`
@@ -18,7 +18,7 @@ This is the durable handoff for continuing RiftLite work in a fresh Codex task. 
 - Current published macOS release: `mac-v0.9.36` (2026-08-07)
 - Windows installer output:
   `C:\Users\cdfpa\OneDrive\Documents\Claude\Projects\Riftlite Beta 0.6\desktop-v06\release\RiftLiteBetaInstall.exe`
-- Current local Windows installer: v0.9.36 `release\RiftLiteBetaInstall.exe`, 216,037,882 bytes, SHA-256 `617B7475E1A63E27FFB852D2FF334D3952185DD55EA8586BAC8CFE7BB8184CD4`.
+- Current local Windows installer: v0.9.37 `release\RiftLiteBetaInstall.exe`, 216,415,717 bytes, SHA-256 `C7EF7C8E3674FB0087CB88DFB2A2C4B0035FA5860B9DC674643B9A2C744487E9`.
 
 Always name the remote explicitly when pushing: Windows source/tags go to `windows`; macOS source/tags go to `origin`. The repositories and release tags are deliberately separate.
 
@@ -29,6 +29,17 @@ Do not accidentally work from:
 - an old copied Mac source tree unless the task explicitly concerns the Mac build
 
 The active working tree may contain current work. Never reset, discard, or overwrite unrelated changes.
+
+## 2026-08-07 v0.9.37 Release Candidate
+
+- Prevents RiftAtlas room codes from becoming player identities. This stops a room-code change between games from looking like an opponent change and force-publishing Game 1 as a completed Bo1.
+- Best-of-three continuation checks and sticky opponent merging defensively ignore room-code identities, preserving the active series across Atlas room transitions and preventing repeated incomplete review prompts.
+- The sql.js recovery boundary now recognizes `bad parameter or other API misuse`, reopens the canonical durable database, and retries the failed mutation once. This restores Match Review save, review-later, delete, and close behavior after that runtime failure mode.
+- The renderer gives database-specific recovery guidance if the bounded retry still fails.
+- Regression coverage includes current-room opponent filtering, changed-room BO3 continuation, capture-coordinator suppression of the exact false rollover sequence, and durable database reopen-and-retry behavior.
+- The versioned Windows release pipeline passed TypeScript lint, the 79-test account-sync gate, all 111 test files / 1,009 tests, the production build, Windows artifact/updater verification, executable and NSIS archive integrity checks, and the isolated packaged smoke test.
+- Windows installer: 216,415,717 bytes, SHA-256 `C7EF7C8E3674FB0087CB88DFB2A2C4B0035FA5860B9DC674643B9A2C744487E9`; blockmap: 203,419 bytes, SHA-256 `D463D0D8FF270A6E2050C0CC994B3C81EA2B94DEDB8B828A72D75687B0A0FFE6`; updater manifest: 344 bytes, SHA-256 `BE4C65C053B4D006E3D70425441E4447EB509D33306007CA407E43DC6E357E3F`.
+- Existing incorrectly split historical match rows are not automatically merged. No website deployment or production-data mutation is required for this release.
 
 ## Immediate Working Rules
 
@@ -198,7 +209,7 @@ The Windows release gate, installer verification, updater-manifest verification,
 
 The hosted Web Replay was also promoted through website PR 2 at merge commit `c949fa1`. Its new **Take control** action creates an in-memory what-if branch with card movement, attachment, chain/target, counter, score, undo/redo, reset, and conservative later-known-hand support. It never mutates the canonical replay. The clean Vercel build passed, and production interaction was verified at 1920 x 1080 on a current public Atlas replay.
 
-See `docs/HANDOVER_2026-07-27_POST_V0.9.12.md` for the exact desktop file manifest, root causes, separate preserved website worktree state, and earlier validation history.
+See `docs/HANDOVER_2026-08-07_POST_V0.9.36.md` for the current repository snapshot, release evidence, known limitations, and a copy-ready new-chat prompt. `docs/HANDOVER_2026-07-27_POST_V0.9.12.md` remains historical implementation detail.
 
 ## Current Product Shape
 
@@ -1009,22 +1020,22 @@ npx vitest run tests/storeRecovery.test.ts
 
 ## Working Tree Snapshot
 
-The intentional 0.8.00 implementation, tests, assets, and documentation were committed and pushed to both platform repositories. Generated `dist` and `release` outputs remain ignored. Always inspect `git status` before new work and preserve any changes created after this release.
+Before the post-v0.9.36 handover was created, the canonical desktop checkout was clean at documentation HEAD `ad5dc1a`; runtime release tags point to `9aa990d`. Creating the new handover intentionally adds or modifies documentation only. Generated `dist` and `release` outputs remain ignored. Always inspect `git status` before new work and preserve all later changes.
 
 ## Recommended Next Engineering Order
 
-1. Capture one short Atlas BO1 from both players, upload both perspectives, and validate the manual Replay Combiner with the two real links.
-2. Manually smoke-test account-sync conflict choices with two real devices/test accounts.
-3. Smoke-test one Atlas BO3 with identical child-game scores and delayed finalization.
-4. Keep the old local Replay Lab hidden; use the first-party website Replay V2 flow for current replay work.
-5. Review dependency-audit upgrades separately.
-6. Build installers only when explicitly requested.
+1. Read the new post-v0.9.36 handover and inspect current Git status before selecting work.
+2. Collect affected-user diagnostics and reproduce the next requested bug before changing capture, account, or replay behavior.
+3. Seek real affected-tester confirmation for the v0.9.36 Atlas startup and Match Review reliability fixes when available.
+4. Keep the old local Replay Lab and Vision work hidden unless explicitly reopened.
+5. Start website work from a verified current `origin/main` worktree, not the historical replay-preview checkout.
+6. Build or publish installers only when explicitly requested; the next release must be newer than v0.9.36.
 
 ## Prompt For A Fresh Codex Task
 
 Use this exact starter message in a new task opened in the same workspace:
 
-> Work from `C:\Users\cdfpa\OneDrive\Documents\Claude\Projects\Riftlite Beta 0.6\desktop-v06`. Before changing anything, read `docs/CURRENT_STATE.md` and `docs/HANDOVER_2026-07-20.md` completely. For replay work, also read `docs/WEB_REPLAY_SYSTEM_HANDOVER.md`. Preserve both repositories and the known desktop CRLF/stat-only status entries. Do not rebuild, deploy, push, tag, publish, send Discord messages, or mutate production data unless I explicitly ask. Continue with: [describe the next bug or feature].
+> Work from `C:\Users\cdfpa\OneDrive\Documents\Claude\Projects\Riftlite Beta 0.6\desktop-v06`. Before changing anything, read `docs/HANDOVER_2026-08-07_POST_V0.9.36.md` and the top/current-release section of `docs/CURRENT_STATE.md`. Inspect Git status in every repository/worktree in scope and preserve all existing changes. For replay work, also read `docs/WEB_REPLAY_SYSTEM_HANDOVER.md` as an architecture/privacy reference while taking current release status from the new handover and code; for account work, read `docs/account-onboarding.md` and `docs/account-cloud-sync.md`. Do not reset, clean, rebuild, deploy, push, tag, publish, send Discord messages, or mutate production data unless I explicitly ask. Summarize the baseline, then continue with: [describe the next bug or feature].
 
 The old task remains useful as an archive, but day-to-day engineering context should come from this file, the current code, tests, diagnostics, and attached logs.
 

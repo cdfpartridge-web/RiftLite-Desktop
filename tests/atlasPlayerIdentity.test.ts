@@ -27,6 +27,19 @@ describe("Atlas player identity ranking", () => {
     expect(chooseAtlasOpponentIdentityName([realOpponent, deckSearchCard], "BMU")).toBe("Tsaysana");
   });
 
+  it("never selects the current Atlas room code as the opponent identity", () => {
+    const roomCodeCandidate = {
+      name: "UV9VG",
+      side: "opponent" as const,
+      source: "opponent-dom",
+      score: 8
+    };
+
+    expect(chooseAtlasOpponentIdentityName([roomCodeCandidate], "BMU", ["UV9VG"])).toBe("");
+    expect(chooseAtlasOpponentIdentityName([roomCodeCandidate, realOpponent], "BMU", ["UV9VG"]))
+      .toBe("Tsaysana");
+  });
+
   it("sorts reliable identity candidates before generic DOM candidates", () => {
     expect([deckSearchCard, realOpponent].sort(compareAtlasPlayerIdentityCandidates).map((item) => item.name))
       .toEqual(["Tsaysana", "Stacked"]);

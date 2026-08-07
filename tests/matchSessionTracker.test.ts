@@ -1960,6 +1960,52 @@ describe("MatchSessionTracker", () => {
     });
   });
 
+  it("keeps a held Atlas BO3 session when changing room codes were misread as player names", () => {
+    const tracker = new MatchSessionTracker();
+    const firstRoom = "UV9VG";
+    const secondRoom = "Q4X2P";
+    const startedAt = "2026-08-07T14:15:00.000Z";
+    const firstGame = {
+      active: true,
+      format: "Auto",
+      roomCode: firstRoom,
+      opponentName: firstRoom,
+      score: { me: "0", opp: "0", source: "atlas-score-track" }
+    };
+
+    tracker.ingest(event("match-start", firstGame, startedAt, "atlas", "https://play.riftatlas.com/game"));
+    tracker.ingest(event("match-snapshot", {
+      ...firstGame,
+      score: { me: "8", opp: "3", source: "atlas-score-track" }
+    }, "2026-08-07T14:26:25.136Z", "atlas", "https://play.riftatlas.com/game"));
+    const gameOneEnd = event("match-end", {
+      ...firstGame,
+      reason: "result-text-detected",
+      atlasResultKind: "game-result",
+      endText: "Confirm Game 1 Winner",
+      score: { me: "8", opp: "3", source: "atlas-score-track" }
+    }, "2026-08-07T14:26:26.328Z", "atlas", "https://play.riftatlas.com/game");
+    tracker.ingest(gameOneEnd);
+    tracker.holdCurrentGame("atlas", gameOneEnd);
+
+    const gameTwoStart = event("match-start", {
+      active: true,
+      format: "Auto",
+      roomCode: secondRoom,
+      opponentName: secondRoom,
+      score: { me: "0", opp: "0", source: "atlas-score-track" }
+    }, "2026-08-07T14:26:35.250Z", "atlas", "https://play.riftatlas.com/game");
+
+    expect(tracker.shouldFinalizeBeforeNewSession(gameTwoStart)).toBe(false);
+    tracker.ingest(gameTwoStart);
+    expect(tracker.get("atlas")).toMatchObject({
+      startedAt,
+      sticky: { roomCode: secondRoom }
+    });
+    expect(tracker.get("atlas")?.sticky.opponentName).toBeUndefined();
+    expect(tracker.previewGames("atlas")[0]).toMatchObject({ gameNumber: 1, myPoints: 8, oppPoints: 3 });
+  });
+
   it("starts a fresh Atlas session for a real replacement opponent in a reused room", () => {
     const tracker = new MatchSessionTracker();
     const roomCode = "REUSED";

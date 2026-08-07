@@ -2683,7 +2683,7 @@ function isSqlJsRuntimeFailure(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   const name = error instanceof Error ? error.name : "";
   return name === "RuntimeError" ||
-    /memory access out of bounds|null function or function signature mismatch|table index is out of bounds/i.test(message);
+    /memory access out of bounds|null function or function signature mismatch|table index is out of bounds|bad parameter or other api misuse/i.test(message);
 }
 
 function savedDeckFromRow(row: unknown[]): SavedDeck {

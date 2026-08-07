@@ -20847,7 +20847,7 @@ function matchReviewErrorMessage(error: unknown, fallback: string): string {
     .replace(/^Error:\s*/i, "")
     .replace(/\s+/g, " ")
     .trim();
-  if (/memory access out of bounds|null function or function signature mismatch|table index is out of bounds/i.test(raw)) {
+  if (/memory access out of bounds|null function or function signature mismatch|table index is out of bounds|bad parameter or other api misuse/i.test(raw)) {
     const retryAction = /^Delete\b/i.test(fallback)
       ? "restart RiftLite, then try Delete capture again"
       : "restart RiftLite, then retry Save match or Review later";

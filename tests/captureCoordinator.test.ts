@@ -1398,6 +1398,57 @@ describe("CaptureCoordinator", () => {
     expect(sent.filter((item) => item.channel === "match:draft")).toHaveLength(1);
   });
 
+  it("does not publish Game 1 when an Atlas BO3 room code is misread as the opponent", async () => {
+    const { coordinator, saved, sent, diagnostics } = coordinatorHarness();
+    const score = (me: string, opp: string) => ({
+      me,
+      opp,
+      source: "atlas-score-track",
+      raw: [`me:active:${me}:Set your score to ${me}`, `unknown:active:${opp}:${opp}`]
+    });
+    const firstRoom = "UV9VG";
+    const secondRoom = "Q4X2P";
+    const roomPayload = (roomCode: string) => ({
+      active: true,
+      format: "Auto",
+      roomCode,
+      opponentName: roomCode
+    });
+
+    await coordinator.handleEvent(event("match-start", {
+      ...roomPayload(firstRoom),
+      score: score("0", "0")
+    }, "2026-08-07T14:15:00.000Z", "atlas", "https://play.riftatlas.com/game"));
+    await coordinator.handleEvent(event("match-snapshot", {
+      ...roomPayload(firstRoom),
+      score: score("8", "3")
+    }, "2026-08-07T14:26:25.136Z", "atlas", "https://play.riftatlas.com/game"));
+    await coordinator.handleEvent(event("match-end", {
+      ...roomPayload(firstRoom),
+      reason: "result-text-detected",
+      atlasResultKind: "game-result",
+      endText: "Confirm Game 1 Winner",
+      score: score("8", "3")
+    }, "2026-08-07T14:26:26.328Z", "atlas", "https://play.riftatlas.com/game"));
+
+    expect(saved).toHaveLength(0);
+    expect(sent.filter((item) => item.channel === "match:draft")).toHaveLength(0);
+
+    await coordinator.handleEvent(event("match-start", {
+      ...roomPayload(secondRoom),
+      score: score("0", "0")
+    }, "2026-08-07T14:26:35.250Z", "atlas", "https://play.riftatlas.com/game"));
+
+    expect(saved).toHaveLength(0);
+    expect(sent.filter((item) => item.channel === "match:draft")).toHaveLength(0);
+    expect(coordinator.hasActiveCaptureSession("atlas")).toBe(true);
+    expect(diagnostics.record).not.toHaveBeenCalledWith(expect.objectContaining({
+      payload: expect.objectContaining({
+        guardReason: "FINAL_GUARD_ATLAS_AUTHORITATIVE_ROLLOVER"
+      })
+    }));
+  });
+
   it("keeps a sparse RiftAtlas first-game end pending long enough for a delayed BO3 next game", async () => {
     vi.useFakeTimers();
     try {

@@ -46,7 +46,10 @@ function savedReplay(id: string): ReplayRecord {
 }
 
 describe("RiftLiteStore database recovery", () => {
-  it("reopens the canonical database and retries once after a transient sql.js memory failure", async () => {
+  it.each([
+    "RuntimeError: memory access out of bounds",
+    "bad parameter or other API misuse"
+  ])("reopens the canonical database and retries once after sql.js reports %s", async (runtimeMessage) => {
     const directory = await mkdtemp(join(tmpdir(), "riftlite-store-sqljs-runtime-reopen-"));
     try {
       const dbPath = join(directory, "riftlite-v06.sqlite");
@@ -63,7 +66,7 @@ describe("RiftLiteStore database recovery", () => {
       const originalRuntime = internals.sql;
       const exportSpy = vi.spyOn(internals.db!, "export")
         .mockImplementationOnce(() => {
-          throw new Error("RuntimeError: memory access out of bounds");
+          throw new Error(runtimeMessage);
         });
 
       await expect(store.saveMatch(savedMatch("committed-after-runtime-reopen"))).resolves.toMatchObject({

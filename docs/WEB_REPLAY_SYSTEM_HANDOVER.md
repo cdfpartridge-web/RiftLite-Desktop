@@ -1,9 +1,11 @@
 # RiftLite Web Replay System Handover
 
-Last verified: 2026-07-12
-Release baseline: RiftLite `v0.8.03` (package SemVer `0.8.3`)
+> Architecture and privacy reference only. Its release-baseline header and some later status statements are historical. For current production/repository state, start with `docs/HANDOVER_2026-08-07_POST_V0.9.36.md` and current code. TCGA Web Replay is now published but remains BO1-only; the public replay archive paginates, while the signed-in owner library remains unpaginated.
+
+Architecture content last deeply verified: 2026-07-12; current-status routing corrected 2026-08-07
+Historical architecture baseline: RiftLite `v0.8.03` (package SemVer `0.8.3`); current desktop release: `v0.9.36`
 Production website: `https://www.riftlite.com`
-System status: Atlas live/account-linked; isolated TCGA local adapter validated but not deployed or auto-uploaded
+Current high-level status: Atlas and TCGA Web Replay are live/account-linked; TCGA remains BO1-only. See the current handover and code for later implementation details.
 
 This is the durable technical and product handover for the complete RiftLite Web Replay system. Read this document together with `docs/CURRENT_STATE.md` before changing replay capture, upload, account authentication, replay privacy, Discord delivery, normalization, the web player, or the desktop embed.
 
