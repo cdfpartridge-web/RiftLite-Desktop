@@ -1,8 +1,8 @@
 # RiftLite Post-v0.9.12 Handover - 2026-07-27
 
-> Superseded for current release and working-tree state by `docs/HANDOVER_2026-08-07_POST_V0.9.36.md`. This file remains historical root-cause and implementation detail for the post-v0.9.12 work later included in published releases.
+> Superseded for current release and working-tree state by `docs/HANDOVER_2026-08-07_POST_V0.9.37.md`. This file remains historical root-cause and implementation detail for the post-v0.9.12 work later included in published releases.
 
-This is retained as implementation history only. For a new Codex chat, start with `docs/HANDOVER_2026-08-07_POST_V0.9.36.md`, then use `docs/CURRENT_STATE.md` for the longer architecture and release history.
+This is retained as implementation history only. For a new Codex chat, start with `docs/HANDOVER_2026-08-07_POST_V0.9.37.md`, then use `docs/CURRENT_STATE.md` for the longer architecture and release history.
 
 ## Executive Summary
 

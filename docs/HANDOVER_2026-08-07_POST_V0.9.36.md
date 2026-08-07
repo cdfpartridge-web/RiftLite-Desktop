@@ -1,5 +1,7 @@
 # RiftLite Post-v0.9.36 Handover - 2026-08-07
 
+> Superseded for current release and working-tree state by `docs/HANDOVER_2026-08-07_POST_V0.9.37.md`. This file remains the historical v0.9.36 publication record.
+
 > This is the authoritative starting point for a new Codex chat after the v0.9.36 release. It supersedes older handovers for current release, branch, and working-tree state. Use `docs/CURRENT_STATE.md` as the longer architecture and historical record, not as the sole freshness source.
 
 ## Executive Summary
