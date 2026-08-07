@@ -718,15 +718,37 @@ export class RiftLiteStore {
     this.matchesLoadPromise = null;
   }
 
-  async deleteMatch(id: string): Promise<void> {
+  async deleteMatch(id: string, fallbackDraft?: MatchDraft): Promise<void> {
+    if (fallbackDraft && fallbackDraft.id !== id) {
+      throw new Error("The captured match did not match the requested deletion.");
+    }
     await this.enqueueAtomicDatabaseMutation("delete-match", (db) => {
-      const row = db.exec("SELECT data_json FROM matches WHERE id=?", [id])[0]?.values[0]?.[0];
-      if (typeof row !== "string") {
+      const result = db.exec("SELECT data_json FROM matches WHERE id=?", [id]);
+      const hasStoredRow = Boolean(result[0]?.values.length);
+      const row = result[0]?.values[0]?.[0];
+      const current = this.parseStoredMatch(row);
+      if (hasStoredRow && !current && !fallbackDraft) {
+        throw new Error("This match's local database row is unreadable. Open its review and try Delete capture again.");
+      }
+      if (!current && !fallbackDraft) {
         return;
       }
       const now = new Date().toISOString();
-      const match = normalizeStoredMatch({ ...JSON.parse(row) as MatchDraft, deletedAt: now, updatedAt: now });
-      db.run("UPDATE matches SET updated_at=?, data_json=? WHERE id=?", [match.updatedAt, JSON.stringify(match), id]);
+      const match = compactMatchForStorage(normalizeStoredMatch({
+        ...(current ?? fallbackDraft!),
+        deletedAt: now,
+        updatedAt: now
+      }));
+      // Capture deliberately opens a review even when its first local write
+      // fails. INSERT OR REPLACE lets an explicit Delete capture action create
+      // the recycle-bin tombstone from that in-memory review, and safely
+      // replaces an unreadable row without allowing it to block deletion.
+      db.run(
+        `INSERT OR REPLACE INTO matches
+         (id, platform, status, result, captured_at, updated_at, data_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [match.id, match.platform, match.status, match.result, match.capturedAt, match.updatedAt, JSON.stringify(match)]
+      );
       this.markReplaysDeletedByMatchInDatabase(db, id, now);
     }, { invalidateMatches: true, invalidateReplays: true });
   }
@@ -1258,7 +1280,15 @@ export class RiftLiteStore {
   private markReplaysDeletedByMatchInDatabase(db: Database, matchId: string, deletedAt: string): void {
     const result = db.exec("SELECT id, data_json FROM replays WHERE match_id=?", [matchId]);
     for (const row of result[0]?.values ?? []) {
-      const replay = { ...JSON.parse(String(row[1])) as StoredReplayRecord, deletedAt };
+      const stored = this.parseStoredReplayMetadata(row[1]);
+      if (!stored) {
+        // Normal replay reads already preserve and skip unreadable metadata.
+        // Do the same here so one damaged replay cannot permanently prevent
+        // its parent match from being deleted. The deleted parent also fences
+        // this orphan from later replay finalization or upload.
+        continue;
+      }
+      const replay = { ...stored, deletedAt };
       db.run("UPDATE replays SET data_json=? WHERE id=?", [JSON.stringify(replay), String(row[0])]);
     }
   }
@@ -2060,7 +2090,7 @@ export class RiftLiteStore {
     try {
       return await action();
     } catch (error) {
-      if (isSqlJsRuntimeMemoryError(error)) {
+      if (isSqlJsRuntimeFailure(error)) {
         await this.reopenCanonicalDatabaseAfterRuntimeFailure(context);
         // Deliberately retry only once. If the fresh sql.js Database also
         // fails, leave the canonical file untouched and require an app restart.
@@ -2075,9 +2105,9 @@ export class RiftLiteStore {
   }
 
   /**
-   * A sql.js `memory access out of bounds` failure poisons the active WASM
-   * Database object; VACUUMing that same object cannot repair it. Reopen the
-   * last durably committed SQLite file instead. This runs while
+   * A sql.js WebAssembly runtime failure poisons the active Database object;
+   * VACUUMing that same object cannot repair it. Reopen the last durably
+   * committed SQLite file instead. This runs while
    * databaseOperationQueue is held, so no other mutation can race the swap.
    */
   private async reopenCanonicalDatabaseAfterRuntimeFailure(context: string): Promise<void> {
@@ -2646,9 +2676,14 @@ function isDatabaseMalformedError(error: unknown): boolean {
   return /database disk image is malformed|database corruption|malformed database|file is not a database/i.test(message);
 }
 
-function isSqlJsRuntimeMemoryError(error: unknown): boolean {
+function isSqlJsRuntimeFailure(error: unknown): boolean {
+  if (typeof WebAssembly !== "undefined" && error instanceof WebAssembly.RuntimeError) {
+    return true;
+  }
   const message = error instanceof Error ? error.message : String(error);
-  return /memory access out of bounds/i.test(message);
+  const name = error instanceof Error ? error.name : "";
+  return name === "RuntimeError" ||
+    /memory access out of bounds|null function or function signature mismatch|table index is out of bounds/i.test(message);
 }
 
 function savedDeckFromRow(row: unknown[]): SavedDeck {

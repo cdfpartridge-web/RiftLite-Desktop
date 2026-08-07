@@ -5,6 +5,16 @@ import type {
 
 const ATLAS_PAGE_URL = "https://play.riftatlas.com/";
 const DEFAULT_TIMEOUT_MS = 12_000;
+const APP_SCRIPT_PROBE_MAX_BYTES = 16_384;
+const APP_SCRIPT_MIN_CONTENT_LENGTH = 64;
+const JAVASCRIPT_MIME_TYPES = new Set([
+  "application/ecmascript",
+  "application/javascript",
+  "application/x-ecmascript",
+  "application/x-javascript",
+  "text/ecmascript",
+  "text/javascript"
+]);
 const ALLOWED_DIAGNOSTIC_ORIGINS = new Set([
   "https://play.riftatlas.com",
   "https://clerk.riftatlas.com",
@@ -90,8 +100,14 @@ export function atlasCriticalResourceUrls(html: string): {
   const sources = [...html.matchAll(/\b(?:src|href)=["']([^"']+)["']/gi)]
     .map((match) => allowedDiagnosticUrl(match[1]))
     .filter((value): value is URL => Boolean(value));
+  const appScripts = sources.filter((url) => (
+    url.origin === "https://play.riftatlas.com" && /\/_next\/static\/.*\.js$/i.test(url.pathname)
+  ));
   return {
-    appScript: sources.find((url) => url.origin === "https://play.riftatlas.com" && /\/_next\/static\/.*\.js$/i.test(url.pathname))?.toString() ?? "",
+    // Next.js advertises bootstrap chunks first and route/application chunks
+    // later. Probe the final advertised script so a healthy bootstrap cannot
+    // hide a blocked page chunk behind an HTTP 200 diagnostic.
+    appScript: appScripts[appScripts.length - 1]?.toString() ?? "",
     authScript: sources.find((url) => (
       url.origin === "https://clerk.riftatlas.com" || url.origin === "https://accounts.riftatlas.com"
     ) && /\.js$/i.test(url.pathname))?.toString() ?? "",
@@ -143,20 +159,29 @@ async function checkResource(
       signal: controller.signal
     });
     let body = "";
+    let validationError = "";
     if (captureText) {
       body = (await response.text()).slice(0, 750_000);
+    } else if (id === "app-script" && response.ok) {
+      const probe = await readBoundedBody(response, APP_SCRIPT_PROBE_MAX_BYTES);
+      validationError = validateAppScriptResponse(response, probe.text);
     } else {
       await response.body?.cancel().catch(() => undefined);
     }
+    const ok = response.ok && !validationError;
     return {
       check: {
         id,
         label,
         origin: new URL(url).origin,
-        ok: response.ok,
+        ok,
         statusCode: response.status,
         durationMs: Math.max(0, now() - startedAt),
-        ...(!response.ok ? { error: `HTTP ${response.status}` } : {})
+        ...(!response.ok
+          ? { error: `HTTP ${response.status}` }
+          : validationError
+            ? { error: validationError }
+            : {})
       },
       body
     };
@@ -175,6 +200,68 @@ async function checkResource(
   } finally {
     clearTimeout(timer);
   }
+}
+
+async function readBoundedBody(response: Response, maxBytes: number): Promise<{ text: string }> {
+  if (!response.body) return { text: "" };
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let text = "";
+  let bytesRead = 0;
+  let finished = false;
+  try {
+    while (bytesRead < maxBytes) {
+      const result = await reader.read();
+      if (result.done) {
+        finished = true;
+        break;
+      }
+      const remaining = maxBytes - bytesRead;
+      const chunk = result.value.byteLength > remaining
+        ? result.value.subarray(0, remaining)
+        : result.value;
+      bytesRead += chunk.byteLength;
+      text += decoder.decode(chunk, { stream: true });
+      if (result.value.byteLength > remaining) break;
+    }
+    text += decoder.decode();
+    return { text };
+  } finally {
+    if (!finished) {
+      await reader.cancel().catch(() => undefined);
+    }
+  }
+}
+
+function validateAppScriptResponse(response: Response, body: string): string {
+  const mimeType = diagnosticMimeType(response.headers.get("content-type"));
+  if (!mimeType) {
+    return "The Atlas application response did not include a JavaScript content type.";
+  }
+  if (!JAVASCRIPT_MIME_TYPES.has(mimeType)) {
+    return `The Atlas application response used a non-JavaScript content type (${mimeType}).`;
+  }
+
+  const content = body.replace(/^\uFEFF/, "").trim();
+  if (content.length < APP_SCRIPT_MIN_CONTENT_LENGTH) {
+    return `The Atlas application response body was too small (${content.length} characters; minimum ${APP_SCRIPT_MIN_CONTENT_LENGTH}).`;
+  }
+  const leadingMarkup = content.slice(0, 2_048);
+  if (
+    /^(?:<!--[\s\S]*?-->\s*)*<(?:!doctype\s+html|html|head|body|script|meta|title)\b/i.test(leadingMarkup) ||
+    (/<html(?:\s|>)/i.test(leadingMarkup) && /<(?:head|body)(?:\s|>)/i.test(leadingMarkup))
+  ) {
+    return "The Atlas application response contained HTML instead of JavaScript.";
+  }
+  return "";
+}
+
+function diagnosticMimeType(value: string | null): string {
+  const mimeType = (value ?? "").split(";", 1)[0]?.trim().toLowerCase() ?? "";
+  if (!/^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/.test(mimeType)) {
+    return mimeType ? "unrecognized" : "";
+  }
+  return mimeType.slice(0, 80);
 }
 
 function diagnosticsResult(

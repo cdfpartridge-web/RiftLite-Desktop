@@ -33,6 +33,10 @@ describe("Web Replay desktop centre", () => {
     expect(appSource).toContain("window.riftlite.retryPendingWebReplayUploads()");
     expect(appSource).toContain("Upload anyway");
     expect(appSource).toContain("Keep local only");
+    expect(appSource).toContain("Removed from Upload activity");
+    expect(appSource).toContain("Clear from activity");
+    expect(appSource).toContain("webReplayReadyWarningDismissalKey(item)");
+    expect(appSource).toContain("dismissCompletedWarning(item)");
     expect(appSource).toContain("window.riftlite.uploadIncompleteWebReplay(item.captureSessionId)");
     expect(appSource).toContain("window.riftlite.removeWebReplayUploadFromQueue(item.captureSessionId)");
     expect(appSource).toContain("webReplayQueueItemCanBeKeptLocalOnly(item)");

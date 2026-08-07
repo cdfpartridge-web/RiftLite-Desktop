@@ -140,6 +140,7 @@ function coordinatorHarness(options: {
     resolveCard: ReturnType<typeof vi.fn>;
   };
   store: {
+    getMatches: ReturnType<typeof vi.fn>;
     saveReplayIfMatchActive: ReturnType<typeof vi.fn>;
   };
 } {
@@ -835,6 +836,52 @@ describe("CaptureCoordinator", () => {
       }),
       expect.objectContaining({ matchId: saved.id, platform: "atlas" })
     );
+  });
+
+  it("does not let an in-flight finalizer recreate work after a review is discarded", async () => {
+    const finalizeRawCaptureForMatch = vi.fn(async () => null);
+    const { coordinator, saved, savedReplays, store } = coordinatorHarness({
+      replayCaptureEnabled: true,
+      finalizeRawCaptureForMatch
+    });
+    const pending = draft({ id: "delete-finalization-race", platform: "atlas" });
+    saved.push(pending);
+    const prepared = {
+      draft: pending,
+      endEvent: event("match-end", { active: false }, "2026-07-21T15:10:00.000Z", "atlas"),
+      resolvedReplayEvents: [],
+      visualFrames: [],
+      settings: { ...settings, replayCaptureEnabled: true },
+      deckTrackerSnapshots: []
+    };
+    const internals = coordinator as unknown as {
+      persistPreparedReplayFinalization(value: typeof prepared): Promise<void>;
+    };
+    let markParentReadStarted!: () => void;
+    let releaseParentRead!: () => void;
+    const parentReadStarted = new Promise<void>((resolve) => {
+      markParentReadStarted = resolve;
+    });
+    const parentReadGate = new Promise<void>((resolve) => {
+      releaseParentRead = resolve;
+    });
+    store.getMatches.mockImplementationOnce(async () => {
+      markParentReadStarted();
+      await parentReadGate;
+      return saved;
+    });
+
+    const finalizing = internals.persistPreparedReplayFinalization(prepared);
+    await parentReadStarted;
+    coordinator.discardMatchReview(pending.id);
+    releaseParentRead();
+    await finalizing;
+
+    expect(savedReplays).toHaveLength(0);
+    expect(finalizeRawCaptureForMatch).not.toHaveBeenCalled();
+    await coordinator.waitForReplayFinalization(pending.id);
+    expect(finalizeRawCaptureForMatch).not.toHaveBeenCalled();
+    expect(coordinator.hasActiveMatchCapture()).toBe(false);
   });
 
   it("rechecks deferred Atlas finalization when confirmation races the first replay write failure", async () => {

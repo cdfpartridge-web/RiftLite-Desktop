@@ -123,6 +123,40 @@ describe("RiftLiteStore database recovery", () => {
     }
   });
 
+  it.each([
+    "null function or function signature mismatch",
+    "table index is out of bounds"
+  ])("reopens the poisoned sql.js runtime when deletion hits %s", async (runtimeMessage) => {
+    const directory = await mkdtemp(join(tmpdir(), "riftlite-store-delete-runtime-reopen-"));
+    try {
+      const dbPath = join(directory, "riftlite-v06.sqlite");
+      const legacyPath = join(directory, "riftlite-v06-store.json");
+      const store = new RiftLiteStore(dbPath, legacyPath);
+      await store.load();
+      const match = await store.saveMatch(savedMatch(`delete-after-${runtimeMessage}`));
+
+      interface StoreRuntimeInternals {
+        db: { export(): Uint8Array } | null;
+        sql: object | null;
+      }
+      const internals = store as unknown as StoreRuntimeInternals;
+      const originalRuntime = internals.sql;
+      vi.spyOn(internals.db!, "export")
+        .mockImplementationOnce(() => {
+          throw new WebAssembly.RuntimeError(runtimeMessage);
+        });
+
+      await expect(store.deleteMatch(match.id)).resolves.toBeUndefined();
+      expect(internals.sql).not.toBe(originalRuntime);
+      expect(await store.getMatches()).toEqual([]);
+      expect(await store.getDeletedMatches()).toEqual([
+        expect.objectContaining({ id: match.id, deletedAt: expect.any(String) })
+      ]);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("keeps failed candidate writes invisible and out of later successful commits", async () => {
     const directory = await mkdtemp(join(tmpdir(), "riftlite-store-atomic-write-failure-"));
     try {

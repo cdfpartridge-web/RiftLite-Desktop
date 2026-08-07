@@ -62,8 +62,9 @@ describe("Atlas empty-shell recovery integration", () => {
     expect(recovery).toContain('"riftlite-replays"');
     expect(rendererRepair).toContain('mode: AtlasWebviewRecoveryMode = "runtime"');
     expect(rendererRepair).toContain("window.riftlite.recoverAtlasWebview(mode)");
+    expect(rendererRepair).toContain("setAtlasExplicitRepairMode(mode)");
     expect(rendererRepair).toContain("setAtlasExplicitRepairToken(Date.now())");
-    expect(rendererSource).toContain("atlasExplicitRepairUrl(atlasExplicitRepairToken)");
+    expect(rendererSource).toContain("atlasExplicitRepairUrl(atlasExplicitRepairToken, atlasExplicitRepairMode)");
   });
 
   it("validates repair modes and keeps the active-capture safety gate in the main process", () => {
@@ -76,23 +77,49 @@ describe("Atlas empty-shell recovery integration", () => {
     expect(handler).toContain('requestedMode === undefined ? "runtime" : validAtlasWebviewRecoveryMode(requestedMode)');
     expect(handler).toContain('throw new Error("Atlas repair mode is invalid.")');
     expect(handler).toContain("capture.getGamePlatformSwitchStatus()");
-    expect(handler).toContain("atlasEmptyShellMainRecovery.resetAfterExplicitRepair()");
-    expect(handler).toContain("refreshAtlasWebviewRuntime(mode)");
+    expect(handler).toContain("const result = await refreshAtlasWebviewRuntime(mode)");
+    expect(handler).toContain("if (result.ok)");
+    expect(handler).toContain("atlasEmptyShellMainRecovery.markExplicitRepairConsumed()");
+    expect(handler.indexOf("atlasEmptyShellMainRecovery.markExplicitRepairConsumed()"))
+      .toBeGreaterThan(handler.indexOf("await refreshAtlasWebviewRuntime(mode)"));
+  });
+
+  it("uses repair URLs once without reopening the automatic-repair budget on a platform switch", () => {
+    const platformEffect = sourceBetween(
+      rendererSource,
+      'if (activePlatform === "atlas")',
+      '}, [activePlatform]);'
+    );
+
+    expect(platformEffect).toContain('setAtlasExplicitRepairMode("runtime")');
+    expect(platformEffect).toContain("setAtlasExplicitRepairToken(0)");
+    expect(platformEffect).not.toContain("atlasEmptyShellAutoRepairRef.current = false");
   });
 
   it("warns at eight seconds and waits eighteen seconds before automatic repair", () => {
-    expect(gamePreloadSource).toContain(
-      'window.setTimeout(() => reportAtlasShellStatusIfNeeded("stalled"), ATLAS_STALLED_SHELL_MIN_AGE_MS)'
+    const deadlineChecks = sourceBetween(
+      gamePreloadSource,
+      "function scheduleAtlasShellDeadlineChecks",
+      "function checkAtlasShellAfterBecomingVisible"
     );
-    expect(gamePreloadSource).toContain(
-      'window.setTimeout(() => reportAtlasShellStatusIfNeeded("empty"), ATLAS_EMPTY_SHELL_MIN_AGE_MS)'
-    );
+    expect(deadlineChecks).toContain('reportAtlasShellStatusIfNeeded("stalled")');
+    expect(deadlineChecks).toContain("ATLAS_STALLED_SHELL_MIN_AGE_MS");
+    expect(deadlineChecks).toContain('reportAtlasShellStatusIfNeeded("empty")');
+    expect(deadlineChecks).toContain("ATLAS_EMPTY_SHELL_MIN_AGE_MS");
     const mutationCheck = sourceBetween(
       gamePreloadSource,
       "function scheduleAtlasShellMutationCheck",
-      "function checkAtlasShellAfterBecomingVisible"
+      "function clearAtlasShellDeadlineTimers"
     );
     expect(mutationCheck).toContain('reportAtlasShellStatusIfNeeded("observe")');
     expect(mutationCheck).not.toContain("atlasEmptyShellReported");
+    const visibleCheck = sourceBetween(
+      gamePreloadSource,
+      "function checkAtlasShellAfterBecomingVisible",
+      "function snapshot"
+    );
+    expect(visibleCheck).toContain("clearAtlasShellDeadlineTimers()");
+    expect(visibleCheck).toContain("scheduleAtlasShellDeadlineChecks()");
+    expect(visibleCheck).not.toContain("Date.now() - atlasShellChecksStartedAt");
   });
 });

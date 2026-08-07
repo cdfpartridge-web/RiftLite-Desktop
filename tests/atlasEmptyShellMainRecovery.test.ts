@@ -58,21 +58,71 @@ describe("Atlas empty-shell main recovery guard", () => {
     expect(guard.considerEmptyShell(41, ATLAS_URL, false).action).toBe("schedule-reload");
   });
 
-  it("resets only after shell-ready confirmation or explicit repair", () => {
+  it("cancels a scheduled recovery when the original shell becomes ready first", () => {
     const guard = new AtlasEmptyShellMainRecoveryGuard();
     guard.beginNavigation(41, ATLAS_URL);
     const first = guard.considerEmptyShell(41, ATLAS_URL, false);
     if (first.action !== "schedule-reload") throw new Error("expected a scheduled recovery");
-    guard.abandonScheduledReload(first.recoveryKey);
 
-    guard.beginNavigation(41, `${ATLAS_URL}lobby`);
-    expect(guard.considerEmptyShell(41, ATLAS_URL, false).action).toBe("ignore");
-    guard.markAtlasShellReady();
+    expect(guard.markAtlasShellReady(41, ATLAS_URL)).toBe(true);
+    expect(guard.commitScheduledReload(first.recoveryKey, 41, first.navigationKey)).toBe(false);
     expect(guard.considerEmptyShell(41, ATLAS_URL, false).action).toBe("schedule-reload");
+  });
 
-    const second = guard.considerEmptyShell(41, ATLAS_URL, false);
-    expect(second.action).toBe("ignore");
-    guard.resetAfterExplicitRepair();
+  it("ignores stale ready events until the automatic repair navigation becomes ready", () => {
+    const guard = new AtlasEmptyShellMainRecoveryGuard();
+    const navigationKey = guard.beginNavigation(41, ATLAS_URL);
+    const first = guard.considerEmptyShell(41, ATLAS_URL, false);
+    if (first.action !== "schedule-reload") throw new Error("expected a scheduled recovery");
+    expect(guard.commitScheduledReload(first.recoveryKey, 41, navigationKey)).toBe(true);
+
+    expect(guard.markAtlasShellReady(41, ATLAS_URL)).toBe(false);
+    const repairUrl = `${ATLAS_URL}?riftlite_repair=123`;
+    guard.beginNavigation(41, repairUrl);
+    expect(guard.isCurrentNavigation(41, ATLAS_URL)).toBe(false);
+    expect(guard.markAtlasShellReady(41, ATLAS_URL)).toBe(false);
+    expect(guard.isCurrentNavigation(41, repairUrl)).toBe(true);
+    expect(guard.markAtlasShellReady(41, repairUrl)).toBe(true);
+    expect(guard.considerEmptyShell(41, ATLAS_URL, false).action).toBe("schedule-reload");
+  });
+
+  it("keeps an explicit repair consumed until its repair navigation reports ready", () => {
+    const guard = new AtlasEmptyShellMainRecoveryGuard();
+    guard.beginNavigation(41, ATLAS_URL);
+
+    guard.markExplicitRepairConsumed();
+    expect(guard.considerEmptyShell(41, ATLAS_URL, false)).toMatchObject({
+      action: "ignore",
+      reason: "already-consumed"
+    });
+    expect(guard.markAtlasShellReady(41, ATLAS_URL)).toBe(false);
+
+    const repairUrl = `${ATLAS_URL}sign-in?redirect_url=%2F&riftlite_repair=456`;
+    guard.beginNavigation(77, repairUrl);
+    expect(guard.markAtlasShellReady(77, repairUrl)).toBe(true);
+    expect(guard.considerEmptyShell(41, ATLAS_URL, false).action).toBe("schedule-reload");
+  });
+
+  it("can clear a consumed repair after its bound guest is replaced", () => {
+    const guard = new AtlasEmptyShellMainRecoveryGuard();
+    guard.markExplicitRepairConsumed();
+    const repairUrl = `${ATLAS_URL}?riftlite_repair=789`;
+    guard.beginNavigation(41, repairUrl);
+    guard.forgetGuest(41);
+
+    guard.beginNavigation(77, ATLAS_URL);
+    expect(guard.markAtlasShellReady(77, ATLAS_URL)).toBe(true);
+    expect(guard.considerEmptyShell(77, ATLAS_URL, false).action).toBe("schedule-reload");
+  });
+
+  it("follows an in-page redirect from the repair URL before accepting ready", () => {
+    const guard = new AtlasEmptyShellMainRecoveryGuard();
+    guard.markExplicitRepairConsumed();
+    guard.beginNavigation(41, `${ATLAS_URL}sign-in?riftlite_repair=999`);
+    guard.beginNavigation(41, ATLAS_URL);
+
+    expect(guard.isCurrentNavigation(41, ATLAS_URL)).toBe(true);
+    expect(guard.markAtlasShellReady(41, ATLAS_URL)).toBe(true);
     expect(guard.considerEmptyShell(41, ATLAS_URL, false).action).toBe("schedule-reload");
   });
 

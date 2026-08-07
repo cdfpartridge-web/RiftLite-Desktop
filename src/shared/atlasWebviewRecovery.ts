@@ -3,9 +3,14 @@ import type { AtlasWebviewRecoveryMode, CaptureEvent } from "./types.js";
 export const ATLAS_RELOAD_STORM_WINDOW_MS = 20_000;
 export const ATLAS_RELOAD_STORM_THRESHOLD = 4;
 
-export function atlasExplicitRepairUrl(repairToken: number): string {
+export function atlasExplicitRepairUrl(
+  repairToken: number,
+  mode: AtlasWebviewRecoveryMode = "runtime"
+): string {
   const safeToken = Number.isFinite(repairToken) ? Math.max(0, Math.trunc(repairToken)) : 0;
-  return `https://play.riftatlas.com/?riftlite_repair=${safeToken}`;
+  return mode === "runtime"
+    ? `https://play.riftatlas.com/?riftlite_repair=${safeToken}`
+    : `https://play.riftatlas.com/sign-in?redirect_url=%2F&riftlite_repair=${safeToken}`;
 }
 
 export interface AtlasReloadStormState {
@@ -49,6 +54,16 @@ export function shouldAutoRepairAtlasEmptyShell(
   alreadyRepaired: boolean
 ): boolean {
   return !alreadyRepaired &&
+    event.platform === "atlas" &&
+    event.kind === "debug" &&
+    event.payload.reason === "atlas-app-shell-empty";
+}
+
+export function shouldEscalateAtlasEmptyShell(
+  event: Pick<CaptureEvent, "kind" | "platform" | "payload">,
+  runtimeRepairAttempted: boolean
+): boolean {
+  return runtimeRepairAttempted &&
     event.platform === "atlas" &&
     event.kind === "debug" &&
     event.payload.reason === "atlas-app-shell-empty";

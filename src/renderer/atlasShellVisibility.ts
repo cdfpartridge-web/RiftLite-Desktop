@@ -9,6 +9,7 @@ export type AtlasShellVisibilityEvent =
   | "atlas-left";
 
 export const ATLAS_SHELL_COVER_TIMEOUT_MS = 28_000;
+export const ATLAS_SHELL_RECOVERY_COVER_TIMEOUT_MS = 12_000;
 
 export const INITIAL_ATLAS_SHELL_VISIBILITY: AtlasShellVisibility = "inactive";
 
@@ -40,4 +41,10 @@ export function updateAtlasShellVisibility(
 
 export function shouldCoverAtlasShell(visibility: AtlasShellVisibility): boolean {
   return visibility === "covered" || visibility === "recovering";
+}
+
+export function atlasShellCoverTimeoutMs(visibility: AtlasShellVisibility): number {
+  return visibility === "recovering"
+    ? ATLAS_SHELL_RECOVERY_COVER_TIMEOUT_MS
+    : ATLAS_SHELL_COVER_TIMEOUT_MS;
 }

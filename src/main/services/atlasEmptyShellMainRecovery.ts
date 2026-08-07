@@ -24,10 +24,17 @@ interface GuestNavigationState {
 type RecoveryAttemptState =
   | { status: "idle" }
   | {
-      status: "scheduled" | "consumed";
+      status: "scheduled";
       guestId: number;
       navigationKey: string;
       recoveryKey: string;
+    }
+  | {
+      status: "consumed";
+      recoveryKey: string;
+      targetGuestId?: number;
+      targetNavigationKey?: string;
+      bindNextAtlasNavigation: boolean;
     };
 
 /**
@@ -51,6 +58,18 @@ export class AtlasEmptyShellMainRecoveryGuard {
       navigationKey,
       url: normalizeNavigationUrl(url)
     });
+    if (this.attempt.status === "consumed") {
+      const followsBoundRepair = this.attempt.targetGuestId === guestId && Boolean(this.attempt.targetNavigationKey);
+      const startsRepair = hasAtlasRepairToken(url);
+      if (isAtlasUrl(url) && (followsBoundRepair || startsRepair || this.attempt.bindNextAtlasNavigation)) {
+        this.attempt = {
+          ...this.attempt,
+          targetGuestId: guestId,
+          targetNavigationKey: navigationKey,
+          bindNextAtlasNavigation: false
+        };
+      }
+    }
     return navigationKey;
   }
 
@@ -90,7 +109,11 @@ export class AtlasEmptyShellMainRecoveryGuard {
       return false;
     }
     const scheduled = this.attempt;
-    this.attempt = { ...scheduled, status: "consumed" };
+    this.attempt = {
+      status: "consumed",
+      recoveryKey,
+      bindNextAtlasNavigation: false
+    };
     const current = this.guestNavigations.get(guestId);
     return scheduled.guestId === guestId &&
       scheduled.navigationKey === navigationKey &&
@@ -99,20 +122,58 @@ export class AtlasEmptyShellMainRecoveryGuard {
 
   abandonScheduledReload(recoveryKey: string): void {
     if (this.attempt.status === "scheduled" && this.attempt.recoveryKey === recoveryKey) {
-      this.attempt = { ...this.attempt, status: "consumed" };
+      this.attempt = {
+        status: "consumed",
+        recoveryKey,
+        bindNextAtlasNavigation: true
+      };
     }
   }
 
-  markAtlasShellReady(): void {
-    this.attempt = { status: "idle" };
+  isCurrentNavigation(guestId: number, url: string): boolean {
+    const current = this.guestNavigations.get(guestId);
+    return Boolean(current && isAtlasUrl(url) && current.url === normalizeNavigationUrl(url));
   }
 
-  resetAfterExplicitRepair(): void {
-    this.attempt = { status: "idle" };
+  markAtlasShellReady(guestId: number, url: string): boolean {
+    const current = this.guestNavigations.get(guestId);
+    if (!current || !this.isCurrentNavigation(guestId, url)) {
+      return false;
+    }
+    if (this.attempt.status === "scheduled") {
+      this.attempt = { status: "idle" };
+      return true;
+    }
+    if (
+      this.attempt.status === "consumed" &&
+      this.attempt.targetGuestId === guestId &&
+      this.attempt.targetNavigationKey === current.navigationKey
+    ) {
+      this.attempt = { status: "idle" };
+      return true;
+    }
+    return false;
+  }
+
+  markExplicitRepairConsumed(): void {
+    const recoveryKey = `atlas-explicit-repair:${++this.nextRecoveryId}`;
+    this.attempt = {
+      status: "consumed",
+      recoveryKey,
+      bindNextAtlasNavigation: false
+    };
   }
 
   forgetGuest(guestId: number): void {
     this.guestNavigations.delete(guestId);
+    if (this.attempt.status === "consumed" && this.attempt.targetGuestId === guestId) {
+      this.attempt = {
+        ...this.attempt,
+        targetGuestId: undefined,
+        targetNavigationKey: undefined,
+        bindNextAtlasNavigation: true
+      };
+    }
   }
 
   private currentNavigation(guestId: number, url: string): GuestNavigationState {
@@ -128,7 +189,8 @@ export class AtlasEmptyShellMainRecoveryGuard {
 function normalizeNavigationUrl(value: string): string {
   try {
     const url = new URL(value);
-    return `${url.origin}${url.pathname}`;
+    const repairToken = url.searchParams.get("riftlite_repair");
+    return `${url.origin}${url.pathname}${repairToken === null ? "" : `?riftlite_repair=${repairToken}`}`;
   } catch {
     return value.split(/[?#]/, 1)[0];
   }
@@ -137,6 +199,15 @@ function normalizeNavigationUrl(value: string): string {
 function isAtlasUrl(value: string): boolean {
   try {
     return new URL(value).hostname.toLowerCase() === "play.riftatlas.com";
+  } catch {
+    return false;
+  }
+}
+
+function hasAtlasRepairToken(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return isAtlasUrl(value) && url.searchParams.has("riftlite_repair");
   } catch {
     return false;
   }

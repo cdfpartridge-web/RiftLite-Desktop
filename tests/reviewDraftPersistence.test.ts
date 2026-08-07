@@ -203,4 +203,59 @@ describe("deferred match review persistence", () => {
       expect(await store.getDeletedMatches()).toHaveLength(1);
     });
   });
+
+  it("deletes an in-memory review even when its first database write never committed", async () => {
+    await withStore("riftlite-review-delete-missing-row-", async (store) => {
+      const draft = reviewDraft("in-memory-delete");
+
+      await expect(store.deleteMatch(draft.id, draft)).resolves.toBeUndefined();
+      expect(await store.getMatches()).toEqual([]);
+      expect(await store.getDeletedMatches()).toEqual([
+        expect.objectContaining({
+          id: draft.id,
+          status: "pending-review",
+          deletedAt: expect.any(String)
+        })
+      ]);
+    });
+  });
+
+  it("repairs an unreadable review row when the user explicitly deletes its open draft", async () => {
+    await withStore("riftlite-review-delete-corrupt-row-", async (store) => {
+      const draft = reviewDraft("corrupt-delete");
+      await store.saveMatch(draft);
+      const internals = store as unknown as {
+        db: { run(sql: string, params?: unknown[]): void };
+      };
+      internals.db.run("UPDATE matches SET data_json=? WHERE id=?", ["{not-json", draft.id]);
+
+      await expect(store.deleteMatch(draft.id, draft)).resolves.toBeUndefined();
+      expect(await store.getMatches()).toEqual([]);
+      expect(await store.getDeletedMatches()).toEqual([
+        expect.objectContaining({ id: draft.id, deletedAt: expect.any(String) })
+      ]);
+    });
+  });
+
+  it("does not let one unreadable linked replay block capture deletion", async () => {
+    await withStore("riftlite-review-delete-corrupt-replay-", async (store) => {
+      const draft = reviewDraft("corrupt-linked-replay");
+      await store.saveMatch(draft);
+      const internals = store as unknown as {
+        db: { run(sql: string, params?: unknown[]): void };
+      };
+      internals.db.run(
+        `INSERT INTO replays (id, match_id, platform, captured_at, data_json)
+         VALUES (?, ?, ?, ?, ?)`,
+        ["corrupt-replay", draft.id, draft.platform, draft.capturedAt, "{not-json"]
+      );
+
+      await expect(store.deleteMatch(draft.id, draft)).resolves.toBeUndefined();
+      expect(await store.getMatches()).toEqual([]);
+      expect(await store.getDeletedMatches()).toEqual([
+        expect.objectContaining({ id: draft.id, deletedAt: expect.any(String) })
+      ]);
+      expect(await store.getReplays()).toEqual([]);
+    });
+  });
 });

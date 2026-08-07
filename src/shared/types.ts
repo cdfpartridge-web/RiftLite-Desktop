@@ -2114,7 +2114,7 @@ export interface RiftLiteApi {
   previewCombinedMatches(matchIds: string[]): Promise<import("./matchCombine.js").MatchCombinePreview>;
   saveCombinedMatches(payload: import("./matchCombine.js").MatchCombineSavePayload): Promise<MatchDraft>;
   undoCombinedMatch(combinedMatchId: string): Promise<MatchDraft[]>;
-  deleteMatch(id: string): Promise<void>;
+  deleteMatch(id: string, fallbackDraft?: MatchDraft): Promise<void>;
   restoreMatch(id: string): Promise<MatchDraft | null>;
   purgeMatch(id: string): Promise<void>;
   exportMatchHistoryCsv(payload: MatchHistoryCsvExportPayload): Promise<string>;

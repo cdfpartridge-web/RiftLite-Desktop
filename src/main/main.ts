@@ -6712,11 +6712,16 @@ function handleAtlasShellStatusEvent(sender: WebContents, event: CaptureEvent): 
   }
   const reason = typeof event.payload.reason === "string" ? event.payload.reason : "";
   const senderUrl = sender.isDestroyed() ? "" : sender.getURL();
-  if (platformFromUrl(senderUrl) !== "atlas") {
+  const reportedUrl = event.url;
+  if (
+    platformFromUrl(senderUrl) !== "atlas" ||
+    platformFromUrl(reportedUrl) !== "atlas" ||
+    !atlasEmptyShellMainRecovery.isCurrentNavigation(sender.id, reportedUrl)
+  ) {
     return;
   }
   if (reason === "atlas-app-shell-ready") {
-    atlasEmptyShellMainRecovery.markAtlasShellReady();
+    atlasEmptyShellMainRecovery.markAtlasShellReady(sender.id, reportedUrl);
     return;
   }
   if (reason !== "atlas-app-shell-empty") {
@@ -6725,7 +6730,7 @@ function handleAtlasShellStatusEvent(sender: WebContents, event: CaptureEvent): 
 
   const decision = atlasEmptyShellMainRecovery.considerEmptyShell(
     sender.id,
-    senderUrl,
+    reportedUrl,
     capture.hasActiveCaptureSession("atlas")
   );
   if (decision.action !== "schedule-reload") {
@@ -7052,7 +7057,12 @@ async function createWindow(): Promise<void> {
       }
     });
     webContents.on("did-navigate", refreshGuestContext);
-    webContents.on("did-navigate-in-page", refreshGuestContext);
+    webContents.on("did-navigate-in-page", (_navigationEvent, url, isMainFrame) => {
+      if (isMainFrame && policy.platform === "atlas") {
+        atlasEmptyShellMainRecovery.beginNavigation(webContents.id, url);
+      }
+      refreshGuestContext();
+    });
     webContents.on("dom-ready", refreshGuestContext);
     webContents.once("destroyed", () => {
       const wasCurrentAtlasGuest = policy.platform === "atlas"
@@ -7423,10 +7433,18 @@ function registerIpc(): void {
     queueAccountCloudSync("Match combination undone");
     return restored;
   });
-  handleTrustedAppIpc("matches:delete", async (_event, id: string) => {
-    await store.deleteMatch(id);
-    capture.dismissMatchReview(id);
-    queueAccountCloudSync("Match deleted");
+  handleTrustedAppIpc("matches:delete", async (_event, id: string, fallbackDraft?: MatchDraft) => {
+    try {
+      await store.deleteMatch(id, fallbackDraft);
+      capture.discardMatchReview(id);
+      queueAccountCloudSync("Match deleted");
+    } catch (error) {
+      await logStartupIssue(
+        `Captured match deletion failed (${fallbackDraft?.platform || "unknown"}, ${id})`,
+        matchPersistenceDiagnostic(error)
+      );
+      throw error;
+    }
   });
   handleTrustedAppIpc("matches:restore", async (_event, id: string) => {
     const restored = await store.restoreMatch(id);
@@ -8027,8 +8045,11 @@ function registerIpc(): void {
     if (!switchStatus.allowed) {
       return { ok: false, mode, message: switchStatus.message };
     }
-    atlasEmptyShellMainRecovery.resetAfterExplicitRepair();
-    return refreshAtlasWebviewRuntime(mode);
+    const result = await refreshAtlasWebviewRuntime(mode);
+    if (result.ok) {
+      atlasEmptyShellMainRecovery.markExplicitRepairConsumed();
+    }
+    return result;
   });
   handleTrustedAppIpc("atlas-webview:diagnostics:get", () => atlasConnectionDiagnosticsSnapshot());
   handleTrustedAppIpc("atlas-webview:diagnostics:run", () => diagnoseAtlasConnection());

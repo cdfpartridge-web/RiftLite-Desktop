@@ -170,6 +170,7 @@ export class CaptureCoordinator {
   private readonly platformEventQueues = new Map<GamePlatform, Promise<void>>();
   private readonly replayFinalizationByMatchId = new Map<string, Promise<void>>();
   private readonly deferredReplayFinalizationByMatchId = new Map<string, DeferredReplayFinalization>();
+  private readonly discardedMatchReviewIds = new Set<string>();
   private readonly pendingConfirmedReplayFinalizationMatchIds = new Set<string>();
   private readonly nonBlockingDeferredReplayFinalizationMatchIds = new Set<string>();
   private captureMaintenanceGate: { promise: Promise<void>; release: () => void } | null = null;
@@ -867,15 +868,23 @@ export class CaptureCoordinator {
   }
 
   private async persistPreparedReplayFinalization(prepared: DeferredReplayFinalization): Promise<void> {
+    if (this.discardedMatchReviewIds.has(prepared.draft.id)) {
+      this.deferredReplayFinalizationByMatchId.delete(prepared.draft.id);
+      return;
+    }
     let latest: MatchDraft | undefined;
     try {
       latest = (await this.store.getMatches()).find((match) => match.id === prepared.draft.id);
     } catch (error) {
-      this.deferredReplayFinalizationByMatchId.set(prepared.draft.id, prepared);
+      this.retainDeferredReplayFinalization(prepared);
       throw error;
     }
     if (!latest) {
-      this.deferredReplayFinalizationByMatchId.set(prepared.draft.id, prepared);
+      this.retainDeferredReplayFinalization(prepared);
+      return;
+    }
+    if (this.discardedMatchReviewIds.has(prepared.draft.id)) {
+      this.deferredReplayFinalizationByMatchId.delete(prepared.draft.id);
       return;
     }
 
@@ -892,7 +901,7 @@ export class CaptureCoordinator {
           )
         ) ?? undefined;
       } catch (error) {
-        this.deferredReplayFinalizationByMatchId.set(prepared.draft.id, prepared);
+        this.retainDeferredReplayFinalization(prepared);
         throw error;
       }
       if (!replay) {
@@ -901,6 +910,10 @@ export class CaptureCoordinator {
         this.deferredReplayFinalizationByMatchId.delete(prepared.draft.id);
         return;
       }
+    }
+    if (this.discardedMatchReviewIds.has(prepared.draft.id)) {
+      this.deferredReplayFinalizationByMatchId.delete(prepared.draft.id);
+      return;
     }
     try {
       await this.finalizeRawCaptureForMatch?.(rawCaptureIdentity, replay);
@@ -911,9 +924,17 @@ export class CaptureCoordinator {
       // local manifest/registration itself was not committed; retain the
       // prepared material and make confirmation retry instead of silently
       // closing the only path that can create the Web Replay.
-      this.deferredReplayFinalizationByMatchId.set(prepared.draft.id, prepared);
+      this.retainDeferredReplayFinalization(prepared);
       throw error;
     }
+  }
+
+  private retainDeferredReplayFinalization(prepared: DeferredReplayFinalization): void {
+    if (this.discardedMatchReviewIds.has(prepared.draft.id)) {
+      this.deferredReplayFinalizationByMatchId.delete(prepared.draft.id);
+      return;
+    }
+    this.deferredReplayFinalizationByMatchId.set(prepared.draft.id, prepared);
   }
 
   private trackReplayFinalization(
@@ -1004,6 +1025,16 @@ export class CaptureCoordinator {
       message: "Match review closed; capture is ready"
     };
     this.emitHealth(true);
+  }
+
+  discardMatchReview(matchId: string): void {
+    if (matchId) {
+      // The database deletion is the durable upload fence. Keep this runtime
+      // fence for the rest of the process so an already-running finalizer can
+      // never recreate deferred work after the review has been discarded.
+      this.discardedMatchReviewIds.add(matchId);
+    }
+    this.dismissMatchReview(matchId);
   }
 
   markConfirmedReplayFinalizationPending(matchId: string, error: unknown): void {

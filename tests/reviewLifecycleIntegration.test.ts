@@ -47,13 +47,19 @@ describe("match review lifecycle integration", () => {
 
   it("keeps a failed review deletion visible and retryable", () => {
     const remove = functionSource("deleteReviewDraft", "prepareDraftForReview");
-    const deleteAt = remove.indexOf("await window.riftlite.deleteMatch(draft.id)");
+    const deleteAt = remove.indexOf("await window.riftlite.deleteMatch(draft.id, draft)");
     const dismissAt = remove.indexOf("markReviewDismissed(draft)");
     const advanceAt = remove.indexOf("openNextQueuedReview()");
 
     expect(deleteAt).toBeGreaterThan(-1);
     expect(dismissAt).toBeGreaterThan(deleteAt);
     expect(advanceAt).toBeGreaterThan(deleteAt);
+    expect(remove).toContain("Promise.allSettled");
+    const deleteHandlerAt = mainSource.indexOf('handleTrustedAppIpc("matches:delete"');
+    const durableDeleteAt = mainSource.indexOf("await store.deleteMatch(id, fallbackDraft)", deleteHandlerAt);
+    const discardAt = mainSource.indexOf("capture.discardMatchReview(id)", deleteHandlerAt);
+    expect(durableDeleteAt).toBeGreaterThan(deleteHandlerAt);
+    expect(discardAt).toBeGreaterThan(durableDeleteAt);
   });
 
   it("shows accessible staged feedback while a durable match save is running", () => {

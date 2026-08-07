@@ -6,9 +6,11 @@ import {
 } from "../src/main/services/atlasConnectionDiagnostics.js";
 
 const pageUrl = "https://play.riftatlas.com/";
+const bootstrapScriptUrl = "https://play.riftatlas.com/_next/static/chunks/bootstrap-001.js";
 const appScriptUrl = "https://play.riftatlas.com/_next/static/chunks/app-123.js";
 const authScriptUrl = "https://clerk.riftatlas.com/npm/@clerk/clerk-js.js?v=5";
 const assetUrl = "https://assets.riftatlas-workers.com/cards/OGN-001.webp?size=small";
+const appScriptBody = `(() => { globalThis.__riftAtlasApp = "ready"; })();${"/* atlas */".repeat(8)}`;
 
 const atlasHtml = `<!doctype html>
   <html>
@@ -22,6 +24,22 @@ const atlasHtml = `<!doctype html>
 afterEach(() => {
   vi.useRealTimers();
 });
+
+function successfulResource(url: string): Response {
+  if (url === pageUrl) {
+    return new Response(atlasHtml, {
+      status: 200,
+      headers: { "content-type": "text/html; charset=utf-8" }
+    });
+  }
+  if (url === appScriptUrl) {
+    return new Response(appScriptBody, {
+      status: 200,
+      headers: { "content-type": "application/javascript; charset=utf-8" }
+    });
+  }
+  return new Response("resource", { status: 200 });
+}
 
 describe("Atlas connection diagnostics", () => {
   it("starts with an explicit not-tested result", () => {
@@ -41,6 +59,7 @@ describe("Atlas connection diagnostics", () => {
       <script src="http://play.riftatlas.com/_next/static/chunks/insecure.js"></script>
       <script src="https://play.riftatlas.com.evil.example/_next/static/chunks/hostile.js"></script>
       <script src="https://cdn.example.com/_next/static/chunks/external.js"></script>
+      <script src="${bootstrapScriptUrl}"></script>
       <script src="/_next/static/chunks/app-123.js"></script>
       <script src="https://accounts.riftatlas.com/client/account.js?version=2"></script>
       <img src="https://assets.riftatlas-workers.com/cards/OGN-001.webp?size=small">
@@ -54,10 +73,7 @@ describe("Atlas connection diagnostics", () => {
   });
 
   it("reports ready only after the page, application, auth, and asset checks succeed", async () => {
-    const fetcher = vi.fn(async (url: string) => new Response(
-      url === pageUrl ? atlasHtml : "resource",
-      { status: 200 }
-    ));
+    const fetcher = vi.fn(async (url: string) => successfulResource(url));
 
     const result = await runAtlasConnectionTest(fetcher);
 
@@ -105,10 +121,9 @@ describe("Atlas connection diagnostics", () => {
       <script src="${authScriptUrl}"></script>
       <img src="${assetUrl}">
     `;
-    const fetcher = vi.fn(async (url: string) => new Response(
-      url === pageUrl ? htmlWithoutApp : "resource",
-      { status: 200 }
-    ));
+    const fetcher = vi.fn(async (url: string) => url === pageUrl
+      ? new Response(htmlWithoutApp, { status: 200 })
+      : successfulResource(url));
 
     const result = await runAtlasConnectionTest(fetcher);
 
@@ -146,10 +161,9 @@ describe("Atlas connection diagnostics", () => {
     expectedState,
     expectedMessage
   }) => {
-    const fetcher = vi.fn(async (url: string) => new Response(
-      url === pageUrl ? atlasHtml : "resource",
-      { status: url === failedUrl ? 502 : 200 }
-    ));
+    const fetcher = vi.fn(async (url: string) => url === failedUrl
+      ? new Response("unavailable", { status: 502 })
+      : successfulResource(url));
 
     const result = await runAtlasConnectionTest(fetcher);
 
@@ -160,6 +174,70 @@ describe("Atlas connection diagnostics", () => {
       statusCode: 502,
       error: "HTTP 502"
     });
+  });
+
+  it("rejects an HTTP-success application response with a non-JavaScript MIME type", async () => {
+    const privateBody = `<html><body>private-token-value${"x".repeat(100)}</body></html>`;
+    const fetcher = vi.fn(async (url: string) => {
+      if (url !== appScriptUrl) return successfulResource(url);
+      return new Response(privateBody, {
+        status: 200,
+        headers: {
+          "content-type": "text/html; profile=https://private.example/?token=do-not-report"
+        }
+      });
+    });
+
+    const result = await runAtlasConnectionTest(fetcher);
+    const encoded = JSON.stringify(result);
+
+    expect(result.state).toBe("failed");
+    expect(result.checks.find((check) => check.id === "app-script")).toMatchObject({
+      ok: false,
+      statusCode: 200,
+      error: "The Atlas application response used a non-JavaScript content type (text/html)."
+    });
+    expect(encoded).not.toContain("private-token-value");
+    expect(encoded).not.toContain("do-not-report");
+  });
+
+  it("rejects a JavaScript response whose body is too small without exposing its content", async () => {
+    const privateBody = "private-token";
+    const fetcher = vi.fn(async (url: string) => {
+      if (url !== appScriptUrl) return successfulResource(url);
+      return new Response(privateBody, {
+        status: 200,
+        headers: { "content-type": "text/javascript" }
+      });
+    });
+
+    const result = await runAtlasConnectionTest(fetcher);
+    const appCheck = result.checks.find((check) => check.id === "app-script");
+
+    expect(result.state).toBe("failed");
+    expect(appCheck).toMatchObject({
+      ok: false,
+      statusCode: 200,
+      error: `The Atlas application response body was too small (${privateBody.length} characters; minimum 64).`
+    });
+    expect(JSON.stringify(result)).not.toContain(privateBody);
+  });
+
+  it("rejects comment-prefixed HTML even when it is mislabeled as JavaScript", async () => {
+    const fetcher = vi.fn(async (url: string) => {
+      if (url !== appScriptUrl) return successfulResource(url);
+      return new Response(`<!-- security gateway --><script>${"fallback".repeat(20)}</script>`, {
+        status: 200,
+        headers: { "content-type": "application/javascript" }
+      });
+    });
+
+    const result = await runAtlasConnectionTest(fetcher);
+
+    expect(result.state).toBe("failed");
+    expect(result.checks.find((check) => check.id === "app-script")?.error).toBe(
+      "The Atlas application response contained HTML instead of JavaScript."
+    );
   });
 
   it("redacts URLs from network error text", async () => {

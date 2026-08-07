@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  ATLAS_SHELL_COVER_TIMEOUT_MS,
+  ATLAS_SHELL_RECOVERY_COVER_TIMEOUT_MS,
   INITIAL_ATLAS_SHELL_VISIBILITY,
+  atlasShellCoverTimeoutMs,
   shouldCoverAtlasShell,
   updateAtlasShellVisibility,
   type AtlasShellVisibility,
@@ -83,5 +86,11 @@ describe("Atlas shell cover visibility", () => {
     ]);
     expect(recoveryFallback).toBe("fallback-visible");
     expect(shouldCoverAtlasShell(recoveryFallback)).toBe(false);
+  });
+
+  it("uses a shorter bounded cover while a single runtime recovery is in progress", () => {
+    expect(atlasShellCoverTimeoutMs("covered")).toBe(ATLAS_SHELL_COVER_TIMEOUT_MS);
+    expect(atlasShellCoverTimeoutMs("recovering")).toBe(ATLAS_SHELL_RECOVERY_COVER_TIMEOUT_MS);
+    expect(ATLAS_SHELL_RECOVERY_COVER_TIMEOUT_MS).toBeLessThan(ATLAS_SHELL_COVER_TIMEOUT_MS);
   });
 });

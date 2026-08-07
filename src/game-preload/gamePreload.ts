@@ -13,8 +13,6 @@ import {
   ATLAS_EMPTY_SHELL_MIN_AGE_MS,
   ATLAS_STALLED_SHELL_MIN_AGE_MS,
   assessAtlasShell,
-  atlasVisibleEmptyCheckDelay,
-  atlasVisibleStallCheckDelay,
   isAtlasAuthSurfaceEvidence,
   shouldReportAtlasEmptyShell
 } from "../shared/atlasShellHealth.js";
@@ -204,8 +202,10 @@ let atlasDeferredMutationSnapshot = false;
 let atlasEmptyShellReported = false;
 let atlasStalledShellReported = false;
 let atlasShellReadyReported = false;
-let atlasShellChecksStartedAt = 0;
 let atlasShellMutationCheckTimer: number | undefined;
+let atlasShellStallTimer: number | undefined;
+let atlasShellEmptyTimer: number | undefined;
+let atlasShellFinalEmptyTimer: number | undefined;
 let atlasLocalPlayerSeat: AtlasPlayerSeat | null = null;
 let atlasBattlefieldSeatRoomCode = "";
 let atlasBattlefieldSeatSocketId = "";
@@ -2291,6 +2291,7 @@ function reportAtlasShellStatusIfNeeded(reportMode: "observe" | "stalled" | "emp
   };
   if (assessment.ready) {
     atlasShellReadyReported = true;
+    clearAtlasShellDeadlineTimers();
     send("debug", {
       reason: "atlas-app-shell-ready",
       ...shellEvidence
@@ -2352,20 +2353,45 @@ function scheduleAtlasShellMutationCheck(): void {
   }, 250);
 }
 
+function clearAtlasShellDeadlineTimers(): void {
+  for (const timer of [atlasShellStallTimer, atlasShellEmptyTimer, atlasShellFinalEmptyTimer]) {
+    if (timer !== undefined) {
+      window.clearTimeout(timer);
+    }
+  }
+  atlasShellStallTimer = undefined;
+  atlasShellEmptyTimer = undefined;
+  atlasShellFinalEmptyTimer = undefined;
+}
+
+function scheduleAtlasShellDeadlineChecks(): void {
+  clearAtlasShellDeadlineTimers();
+  atlasShellStallTimer = window.setTimeout(
+    () => reportAtlasShellStatusIfNeeded("stalled"),
+    ATLAS_STALLED_SHELL_MIN_AGE_MS
+  );
+  atlasShellEmptyTimer = window.setTimeout(
+    () => reportAtlasShellStatusIfNeeded("empty"),
+    ATLAS_EMPTY_SHELL_MIN_AGE_MS
+  );
+  atlasShellFinalEmptyTimer = window.setTimeout(
+    () => reportAtlasShellStatusIfNeeded("empty"),
+    30_000
+  );
+}
+
 function checkAtlasShellAfterBecomingVisible(): void {
-  if (platform !== "atlas" || document.visibilityState === "hidden" || atlasShellReadyReported) {
+  if (platform !== "atlas" || atlasShellReadyReported) {
+    return;
+  }
+  if (document.visibilityState === "hidden") {
+    clearAtlasShellDeadlineTimers();
     return;
   }
   reportAtlasShellStatusIfNeeded("observe");
-  const elapsed = Date.now() - atlasShellChecksStartedAt;
-  window.setTimeout(
-    () => reportAtlasShellStatusIfNeeded("stalled"),
-    atlasVisibleStallCheckDelay(elapsed)
-  );
-  window.setTimeout(
-    () => reportAtlasShellStatusIfNeeded("empty"),
-    atlasVisibleEmptyCheckDelay(elapsed)
-  );
+  // Hidden/background time must not consume Atlas's hydration grace period.
+  // Give the client a fresh visible interval before declaring it stalled.
+  scheduleAtlasShellDeadlineChecks();
 }
 
 function snapshot(): Record<string, unknown> {
@@ -2625,14 +2651,11 @@ function installDomObserver(): void {
     sendDebug("capture-ready-debug");
     publishSnapshot("initial");
     if (platform === "atlas") {
-      atlasShellChecksStartedAt = Date.now();
       document.addEventListener("visibilitychange", checkAtlasShellAfterBecomingVisible);
       for (const delay of [250, 750, 1_500, 3_000, 5_000]) {
         window.setTimeout(() => reportAtlasShellStatusIfNeeded("observe"), delay);
       }
-      window.setTimeout(() => reportAtlasShellStatusIfNeeded("stalled"), ATLAS_STALLED_SHELL_MIN_AGE_MS);
-      window.setTimeout(() => reportAtlasShellStatusIfNeeded("empty"), ATLAS_EMPTY_SHELL_MIN_AGE_MS);
-      window.setTimeout(() => reportAtlasShellStatusIfNeeded("empty"), 30_000);
+      scheduleAtlasShellDeadlineChecks();
     }
     const heartbeat = () => {
       publishSnapshot("safety-heartbeat");

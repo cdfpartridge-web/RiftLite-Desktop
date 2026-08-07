@@ -166,6 +166,13 @@ import {
   rawCaptureSettingsForPlatformUpload
 } from "../shared/replaySharing";
 import { replayDeliveryErrorMessage, replayDeliveryStages, replayDeliverySummary, webReplayQueueItemCanBeKeptLocalOnly } from "../shared/replayDelivery";
+import {
+  WEB_REPLAY_WARNING_DISMISSALS_STORAGE_KEY,
+  addWebReplayWarningDismissal,
+  parseWebReplayWarningDismissals,
+  webReplayReadyWarningDismissalKey,
+  webReplayReadyWarningIsDismissed
+} from "../shared/webReplayActivity";
 import { buildRiftLiteReplayModel, type RiftLiteReplayModel } from "../shared/riftLiteReplayEngine";
 import { activeDeckOverlayStats, buildDeckPerformance, type DeckBattlefieldPairStat, type DeckBattlefieldStat, type DeckPerformanceStats, type DeckRecordStats } from "../shared/deckPerformance";
 import {
@@ -210,6 +217,7 @@ import {
   atlasExplicitRepairUrl,
   initialAtlasReloadStormState,
   shouldAutoRepairAtlasEmptyShell,
+  shouldEscalateAtlasEmptyShell,
   updateAtlasReloadStormState
 } from "../shared/atlasWebviewRecovery";
 import { stopMediaRecorderSafely } from "../shared/mediaRecorderStop";
@@ -274,8 +282,8 @@ import { GuidedTour } from "./GuidedTour";
 import { resolveBundledReplayCardImage, RiftLiteReplayViewer } from "./RiftLiteReplayViewer";
 import { SettingsAccordionSection } from "./SettingsAccordionSection";
 import {
-  ATLAS_SHELL_COVER_TIMEOUT_MS,
   INITIAL_ATLAS_SHELL_VISIBILITY,
+  atlasShellCoverTimeoutMs,
   shouldCoverAtlasShell,
   updateAtlasShellVisibility
 } from "./atlasShellVisibility";
@@ -468,13 +476,14 @@ const HOME_CONFIG_URL = resolveHomeConfigUrl(
 const RELEASE_NOTES = {
   version: APP_VERSION_META,
   title: `RiftLite v${APP_VERSION_META}`,
-  intro: "This release makes the home page, Prep/Notes, and matchup statistics more useful while smoothing a few account and community rough edges.",
+  intro: "This release improves RiftAtlas startup recovery and makes captured-match saving and deletion more dependable.",
   items: [
-    "The home page now automatically features recent Riftbound videos from participating creators, with smarter curation and clearer creator attribution.",
-    "The creator video card is larger and makes better use of the available home-page space.",
-    "Prep/Notes now starts at the bottom-left of the game view, can be dragged wherever it suits you, and remembers its position.",
-    "Matchup statistics now pool both captured directions of each matchup, so the matrix presents one consistent community result with transparent sample details.",
-    "Email verification recovery is more dependable, including a working resend action and clearer status messages."
+    "RiftAtlas startup recovery now handles empty or stalled pages more reliably and will no longer leave the game hidden indefinitely.",
+    "If the automatic Atlas repair cannot restore the lobby, RiftLite now offers a clearer embedded sign-in reset while preserving Atlas-local decks and RiftLite data.",
+    "Atlas connection diagnostics now detect when a security gateway or network filter returns a placeholder page instead of the real application.",
+    "Rare local database runtime faults now recover automatically, preventing a whole session of failed Match Review saves and deletions.",
+    "Delete capture now remains reliable when the original review write or linked replay metadata was damaged, and completed deletions are no longer misreported as failures.",
+    "Completed Web Replay warnings can be cleared from Upload activity without deleting the local capture or online replay."
   ]
 };
 const RIOT_LEGAL_NOTICE = `RiftLite was created under Riot Games' "Legal Jibber Jabber" policy using assets owned by Riot Games. Riot Games does not endorse or sponsor this project.`;
@@ -2748,6 +2757,7 @@ function App() {
   const [mountedGamePlatform, setMountedGamePlatform] = useState<GamePlatform | null>(null);
   const [gameWebviewEpoch, setGameWebviewEpoch] = useState(0);
   const [atlasExplicitRepairToken, setAtlasExplicitRepairToken] = useState(0);
+  const [atlasExplicitRepairMode, setAtlasExplicitRepairMode] = useState<AtlasWebviewRecoveryMode>("runtime");
   const [atlasShellVisibility, setAtlasShellVisibility] = useState(INITIAL_ATLAS_SHELL_VISIBILITY);
   const [preloadUrl, setPreloadUrl] = useState("");
   const [logoUrl, setLogoUrl] = useState("");
@@ -3369,7 +3379,11 @@ function App() {
     if (activePlatform === "atlas") {
       setAtlasShellVisibility((current) => updateAtlasShellVisibility(current, "atlas-entered"));
     } else {
-      atlasEmptyShellAutoRepairRef.current = false;
+      // A repair URL is one-shot. Do not reopen the sign-in/reset route the
+      // next time Atlas is selected, but keep the consumed repair budget in
+      // sync with the main process until a healthy Atlas shell reports ready.
+      setAtlasExplicitRepairMode("runtime");
+      setAtlasExplicitRepairToken(0);
       setAtlasShellVisibility((current) => updateAtlasShellVisibility(current, "atlas-left"));
     }
   }, [activePlatform]);
@@ -3389,7 +3403,7 @@ function App() {
         "RiftLite could not verify the Atlas shell, so it has revealed the page instead of leaving it hidden.",
         7_000
       );
-    }, ATLAS_SHELL_COVER_TIMEOUT_MS);
+    }, atlasShellCoverTimeoutMs(atlasShellVisibility));
     return () => window.clearTimeout(timer);
   }, [activePlatform, activeView, atlasShellVisibility, gameWebviewEpoch]);
 
@@ -3911,20 +3925,27 @@ function App() {
   }
 
   async function deleteReviewDraft(draft: MatchDraft) {
-    await window.riftlite.deleteMatch(draft.id);
+    await window.riftlite.deleteMatch(draft.id, draft);
     markReviewDismissed(draft);
     openNextQueuedReview();
-    const [nextMatches, nextReplays, nextDeletedMatches, nextDeletedReplays] = await Promise.all([
+    showActionFeedback("Captured match deleted.");
+
+    // The delete IPC is the durable completion point. A later history read
+    // must not reopen the modal and claim deletion failed after it committed.
+    const [matchesResult, replaysResult, deletedMatchesResult, deletedReplaysResult] = await Promise.allSettled([
       window.riftlite.getMatches(),
       window.riftlite.getReplays(),
       window.riftlite.getDeletedMatches(),
       window.riftlite.getDeletedReplays()
     ]);
-    setMatches(nextMatches);
-    setReplays(nextReplays);
-    setDeletedMatches(nextDeletedMatches);
-    setDeletedReplays(nextDeletedReplays);
-    showActionFeedback("Captured match deleted.");
+    if (matchesResult.status === "fulfilled") setMatches(matchesResult.value);
+    if (replaysResult.status === "fulfilled") setReplays(replaysResult.value);
+    if (deletedMatchesResult.status === "fulfilled") setDeletedMatches(deletedMatchesResult.value);
+    if (deletedReplaysResult.status === "fulfilled") setDeletedReplays(deletedReplaysResult.value);
+    if ([matchesResult, replaysResult, deletedMatchesResult, deletedReplaysResult]
+      .some((result) => result.status === "rejected")) {
+      showActionFeedback("Captured match deleted. History will refresh when this page is reopened.", 5_000);
+    }
   }
 
   function prepareDraftForReview(draft: MatchDraft): MatchDraft {
@@ -4677,10 +4698,14 @@ function App() {
         return result;
       }
       atlasReloadStormRef.current = initialAtlasReloadStormState();
-      atlasEmptyShellAutoRepairRef.current = false;
+      // An explicit repair is already the one permitted recovery attempt. Do
+      // not immediately run the same automatic runtime repair if it still
+      // returns only Atlas's static introduction.
+      atlasEmptyShellAutoRepairRef.current = true;
       gameGuestAutoRecoveryRef.current.delete("atlas");
       setAtlasShellVisibility((current) => updateAtlasShellVisibility(current, "empty-shell-recovery-started"));
       setAtlasRecoverySuggested(false);
+      setAtlasExplicitRepairMode(mode);
       setAtlasExplicitRepairToken(Date.now());
       if (mountedGamePlatformRef.current === "atlas") {
         setGameWebviewEpoch((current) => current + 1);
@@ -4695,6 +4720,15 @@ function App() {
       atlasRecoveryBusyRef.current = false;
       setAtlasRecoveryBusy(false);
     }
+  }
+
+  async function resetAtlasSignInFromRecoveryPrompt(): Promise<void> {
+    if (!window.confirm(
+      "Reset the embedded RiftAtlas sign-in?\n\nThis signs RiftAtlas out, but keeps Atlas-local decks and all RiftLite data."
+    )) {
+      return;
+    }
+    await recoverAtlasWebview("sign-in");
   }
 
   function refreshGamePresentation(platform: GamePlatform) {
@@ -4791,10 +4825,15 @@ function App() {
       captureEvent.payload.reason === "atlas-app-shell-ready";
     if (atlasShellReadyEvent) {
       atlasReloadStormRef.current = initialAtlasReloadStormState();
+      atlasEmptyShellAutoRepairRef.current = false;
       setAtlasShellVisibility((current) => updateAtlasShellVisibility(current, "atlas-shell-ready"));
       setAtlasRecoverySuggested(false);
     }
     const atlasMatchActive = healthRef.current.platform === "atlas" && healthRef.current.state === "match-detected";
+    const escalateEmptyShell = !atlasMatchActive && shouldEscalateAtlasEmptyShell(
+      captureEvent,
+      atlasEmptyShellAutoRepairRef.current
+    );
     const autoRepairEmptyShell = !atlasMatchActive && shouldAutoRepairAtlasEmptyShell(
       captureEvent,
       atlasEmptyShellAutoRepairRef.current
@@ -4810,7 +4849,14 @@ function App() {
       setAtlasRecoverySuggested(nextRecoveryState.suggested);
     }
     void window.riftlite.reportRendererEvent(captureEvent).catch(() => undefined);
-    if (autoRepairEmptyShell) {
+    if (escalateEmptyShell) {
+      setAtlasShellVisibility((current) => updateAtlasShellVisibility(current, "shell-ready-timeout"));
+      setAtlasRecoverySuggested(true);
+      showActionFeedback(
+        "Atlas still did not start after its runtime refresh. Reset the embedded Atlas sign-in, or open Connection tools for a full reset.",
+        10_000
+      );
+    } else if (autoRepairEmptyShell) {
       setAtlasShellVisibility((current) => updateAtlasShellVisibility(current, "empty-shell-recovery-started"));
       showActionFeedback("Atlas loaded without its lobby. Repairing its embedded runtime and retrying once...", 8_000);
     }
@@ -6491,10 +6537,10 @@ function App() {
             {gameWebviewIsReady(activePlatform, mountedGamePlatform, preloadUrl) ? (
               <Webview
                 ref={gameRef}
-                key={`${mountedGamePlatform}:${preloadUrl}:${gameWebviewEpoch}:${mountedGamePlatform === "atlas" ? atlasExplicitRepairToken : 0}`}
+                key={`${mountedGamePlatform}:${preloadUrl}:${gameWebviewEpoch}:${mountedGamePlatform === "atlas" ? `${atlasExplicitRepairMode}:${atlasExplicitRepairToken}` : 0}`}
                 className="game-webview"
                 src={mountedGamePlatform === "atlas" && atlasExplicitRepairToken
-                  ? atlasExplicitRepairUrl(atlasExplicitRepairToken)
+                  ? atlasExplicitRepairUrl(atlasExplicitRepairToken, atlasExplicitRepairMode)
                   : GAME_URLS[mountedGamePlatform]}
                 preload={preloadUrl}
                 allowpopups="true"
@@ -6722,13 +6768,19 @@ function App() {
           <div>
             <strong>{atlasShellVisibility === "fallback-visible" ? "Check the Atlas page" : "Atlas did not start correctly"}</strong>
             <span>{atlasShellVisibility === "fallback-visible"
-              ? "RiftLite revealed Atlas after waiting. If only the static introduction loaded, Repair Atlas will safely refresh its runtime caches without signing you out."
+              ? "RiftLite revealed Atlas instead of leaving it covered. If only the static introduction remains, reset the embedded sign-in; this keeps Atlas-local decks and all RiftLite data."
               : "Repair Atlas refreshes embedded runtime caches without changing Atlas sign-in, local decks, or RiftLite data."}</span>
           </div>
           <div className="atlas-recovery-actions">
-            <button className="primary" disabled={atlasRecoveryBusy} onClick={() => void recoverAtlasWebview()}>
-              {atlasRecoveryBusy ? "Repairing..." : "Repair Atlas"}
-            </button>
+            {atlasShellVisibility === "fallback-visible" ? (
+              <button className="primary" disabled={atlasRecoveryBusy} onClick={() => void resetAtlasSignInFromRecoveryPrompt()}>
+                {atlasRecoveryBusy ? "Resetting..." : "Reset Atlas sign-in"}
+              </button>
+            ) : (
+              <button className="primary" disabled={atlasRecoveryBusy} onClick={() => void recoverAtlasWebview()}>
+                {atlasRecoveryBusy ? "Repairing..." : "Repair Atlas"}
+              </button>
+            )}
             <button
               className="secondary"
               disabled={atlasRecoveryBusy}
@@ -10196,6 +10248,13 @@ function WebReplayUploadCentre({
   const [busyAction, setBusyAction] = useState("");
   const [notice, setNotice] = useState("");
   const [actionError, setActionError] = useState("");
+  const [dismissedWarningKeys, setDismissedWarningKeys] = useState<string[]>(() => {
+    try {
+      return parseWebReplayWarningDismissals(window.localStorage.getItem(WEB_REPLAY_WARNING_DISMISSALS_STORAGE_KEY));
+    } catch {
+      return [];
+    }
+  });
   const status = webReplayCentreStatus(settings, diagnostics, diagnosticsError);
   const [controlsExpanded, setControlsExpanded] = useState(status.tone !== "ready");
   const totals = webReplayQueueTotals(diagnostics);
@@ -10205,6 +10264,7 @@ function WebReplayUploadCentre({
   const accountVerified = diagnostics?.accountVerified ?? hasVerifiedRiftLiteAccount(settings);
   const queue = (diagnostics?.queue ?? [])
     .filter((item) => item.stage !== "ready" || Boolean(item.partialWarnings?.length))
+    .filter((item) => !webReplayReadyWarningIsDismissed(item, dismissedWarningKeys))
     .slice(0, 6);
   const partialReadyCount = queue.filter((item) => item.stage === "ready" && item.partialWarnings?.length).length;
   const hasRetryableQueueItem = queue.some((item) => item.recommendedAction === "retry");
@@ -10319,6 +10379,22 @@ function WebReplayUploadCentre({
     } finally {
       setBusyAction("");
     }
+  }
+
+  function dismissCompletedWarning(item: WebReplayUploadQueueItem) {
+    const key = webReplayReadyWarningDismissalKey(item);
+    if (!key) return;
+    setDismissedWarningKeys((current) => {
+      const next = addWebReplayWarningDismissal(current, key);
+      try {
+        window.localStorage.setItem(WEB_REPLAY_WARNING_DISMISSALS_STORAGE_KEY, JSON.stringify(next));
+      } catch {
+        // The in-memory dismissal still works for this session.
+      }
+      return next;
+    });
+    setActionError("");
+    setNotice("Removed from Upload activity. Your local match and replay, and the online replay, were not changed.");
   }
 
   async function setDiscordHub(hubId: string, selected: boolean) {
@@ -10496,6 +10572,9 @@ function WebReplayUploadCentre({
                   ) : null}
                   {webReplayQueueItemCanBeKeptLocalOnly(item) ? (
                     <button type="button" className="secondary" disabled={busy} onClick={() => void keepLocalOnly(item)}>{itemBusy ? "Removing..." : "Keep local only"}</button>
+                  ) : null}
+                  {webReplayReadyWarningDismissalKey(item) ? (
+                    <button type="button" className="secondary" onClick={() => dismissCompletedWarning(item)}><X size={14} /> Clear from activity</button>
                   ) : null}
                 </div>
               </article>
@@ -20768,8 +20847,11 @@ function matchReviewErrorMessage(error: unknown, fallback: string): string {
     .replace(/^Error:\s*/i, "")
     .replace(/\s+/g, " ")
     .trim();
-  if (/memory access out of bounds/i.test(raw)) {
-    return `${fallback} RiftLite's local database stopped responding. This review is still open; retry Save match or Review later.`;
+  if (/memory access out of bounds|null function or function signature mismatch|table index is out of bounds/i.test(raw)) {
+    const retryAction = /^Delete\b/i.test(fallback)
+      ? "restart RiftLite, then try Delete capture again"
+      : "restart RiftLite, then retry Save match or Review later";
+    return `${fallback} RiftLite's local database runtime stopped responding. This review is still open; ${retryAction}.`;
   }
   const safeDetail = raw && raw !== fallback ? raw.slice(0, 280) : "";
   return safeDetail ? `${fallback} ${safeDetail}` : `${fallback} Please try again.`;

@@ -6,6 +6,7 @@ import {
   clearAtlasWebviewSiteData,
   initialAtlasReloadStormState,
   shouldAutoRepairAtlasEmptyShell,
+  shouldEscalateAtlasEmptyShell,
   updateAtlasReloadStormState,
   validAtlasWebviewRecoveryMode
 } from "../src/shared/atlasWebviewRecovery.js";
@@ -16,6 +17,12 @@ describe("Atlas embedded-browser recovery", () => {
       "https://play.riftatlas.com/?riftlite_repair=1785600000123"
     );
     expect(atlasExplicitRepairUrl(Number.NaN)).toBe("https://play.riftatlas.com/?riftlite_repair=0");
+    expect(atlasExplicitRepairUrl(1_785_600_000_123, "sign-in")).toBe(
+      "https://play.riftatlas.com/sign-in?redirect_url=%2F&riftlite_repair=1785600000123"
+    );
+    expect(atlasExplicitRepairUrl(1_785_600_000_123, "site-data")).toBe(
+      "https://play.riftatlas.com/sign-in?redirect_url=%2F&riftlite_repair=1785600000123"
+    );
   });
 
   it("offers recovery after four capture bridge initializations inside twenty seconds", () => {
@@ -59,6 +66,9 @@ describe("Atlas embedded-browser recovery", () => {
     expect(shouldAutoRepairAtlasEmptyShell(emptyShell, false)).toBe(true);
     expect(shouldAutoRepairAtlasEmptyShell(emptyShell, true)).toBe(false);
     expect(shouldAutoRepairAtlasEmptyShell(atlasEvent("capture-ready"), false)).toBe(false);
+    expect(shouldEscalateAtlasEmptyShell(emptyShell, false)).toBe(false);
+    expect(shouldEscalateAtlasEmptyShell(emptyShell, true)).toBe(true);
+    expect(shouldEscalateAtlasEmptyShell(atlasEvent("capture-ready"), true)).toBe(false);
   });
 
   it("clears Atlas runtime caches without clearing sign-in or local deck data", async () => {

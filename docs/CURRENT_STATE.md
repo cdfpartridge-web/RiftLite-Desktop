@@ -1,8 +1,8 @@
 # RiftLite Current Engineering State
 
-> **Current release state:** Windows v0.9.35 is live. macOS v0.9.35 source and tag are published, but its native installer workflow is queued during a GitHub Actions major outage. No website deployment was required. Read `docs/release-notes-v0.9.35.md` first.
+> **Current release state:** Windows v0.9.35 remains live. A local-only Windows v0.9.36 candidate has been built and verified but has not been committed, tagged, pushed, or published. macOS v0.9.35 source and tag remain published. Read `docs/release-notes-v0.9.36.md` first.
 
-Last updated: 2026-08-06
+Last updated: 2026-08-07
 
 This is the durable handoff for continuing RiftLite work in a fresh Codex task. Read this file before changing code.
 
@@ -10,7 +10,7 @@ This is the durable handoff for continuing RiftLite work in a fresh Codex task. 
 
 - Active cross-platform release source repo:
   `C:\Users\cdfpa\OneDrive\Documents\Claude\Projects\Riftlite Beta 0.6\desktop-v06`
-- Current local package version: `0.9.35` (customer-facing build `v0.9.35`); Windows is published and the immutable macOS tag is queued in the native build workflow
+- Current local package version: `0.9.36` (customer-facing build `v0.9.36`); this is a verified local Windows candidate only, while public Windows remains v0.9.35
 - Current branch: `agent/release-v0.9.12`
 - Windows GitHub release repository (`windows` remote): `cdfpartridge-web/RiftLite-Desktop`
 - macOS GitHub release repository (`origin` remote): `cdfpartridge-web/RiftLite-Desktop-mac`
@@ -18,7 +18,7 @@ This is the durable handoff for continuing RiftLite work in a fresh Codex task. 
 - Current published macOS release: `mac-v0.9.33` (2026-08-06)
 - Windows installer output:
   `C:\Users\cdfpa\OneDrive\Documents\Claude\Projects\Riftlite Beta 0.6\desktop-v06\release\RiftLiteBetaInstall.exe`
-- Current local Windows installer: `release\RiftLiteBetaInstall.exe`, 214,418,312 bytes, SHA-256 `DD1B9A0DDBE301B98EB3106524A36112001D9FF3A75EF259A5DA3DFDBEC80E20`.
+- Current local Windows installer: v0.9.36 `release\RiftLiteBetaInstall.exe`, 216,037,882 bytes, SHA-256 `617B7475E1A63E27FFB852D2FF334D3952185DD55EA8586BAC8CFE7BB8184CD4`.
 
 Always name the remote explicitly when pushing: Windows source/tags go to `windows`; macOS source/tags go to `origin`. The repositories and release tags are deliberately separate.
 
@@ -39,6 +39,18 @@ The active working tree may contain current work. Never reset, discard, or overw
 5. Do not rebuild installers, publish releases, or deploy the website unless explicitly requested.
 6. Treat raw WebSocket replay data, account sync, hub ownership, Discord tokens, and API keys as security-sensitive.
 7. RiftReplay/Replay Lab and Vision work are parked or hidden. Do not expose them in menus or release notes unless explicitly requested.
+
+## 2026-08-07 v0.9.36 Local Candidate (Not Published)
+
+- Package and customer-facing build identity are `0.9.36`. No commit, tag, push, GitHub release, macOS build, website deployment, Discord action, or production-data mutation was performed.
+- Atlas empty-shell detection now measures a fresh visible-page grace period, binds recovery decisions to the current navigation, ignores stale shell-ready events, limits automatic runtime repair to one attempt, and reveals the page on a shorter recovery timeout instead of leaving the game hidden.
+- If runtime repair still returns an empty Atlas shell, the client offers an explicit embedded sign-in reset that preserves Atlas-local decks and RiftLite data. Connection diagnostics now validate the advertised application script body and MIME type so an HTTP 200 placeholder/security-gateway page is reported as a failure.
+- sql.js WebAssembly runtime recovery now covers additional poisoned-runtime variants (`table index is out of bounds` and `null function or function signature mismatch`) that previously caused every later local mutation—including Match Review save and delete—to fail until restart.
+- **Delete capture** can create its recycle-bin record from the open review when the initial local write never committed, safely skips unreadable linked replay metadata, logs failures, prevents a discarded review from recreating deferred replay work, and no longer reports a committed deletion as failed when only the follow-up history refresh fails.
+- Completed Web Replay warnings now have a device-local **Clear from activity** action. It hides only that warning card and preserves the local match, capture, warning metadata, and online replay; a changed warning signature appears again.
+- Validation passed TypeScript, the 79-test account-sync gate, all 111 test files / 1,005 tests, the production build, Windows artifact/updater verification, executable and NSIS archive integrity checks, and the isolated packaged smoke test.
+- Windows installer: 216,037,882 bytes, SHA-256 `617B7475E1A63E27FFB852D2FF334D3952185DD55EA8586BAC8CFE7BB8184CD4`; blockmap: 203,434 bytes, SHA-256 `500E095AA879794A12C008BC786269C21A7D0E7B4F81278050C02146C546E647`; updater manifest: 344 bytes, SHA-256 `ACB2ED7F62DD9BC7B9A770E3CDAA85151114318180E4BB9F6BC3657E2D621F7A`.
+- The updater manifest reports version `0.9.36`; its installer size and SHA-512 match the generated executable. The unpacked executable reports FileVersion and ProductVersion `0.9.36`.
 
 ## 2026-08-06 v0.9.35 Release (Windows Live; macOS Queued)
 
