@@ -1,7 +1,7 @@
 import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { mkdir, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
-import { promisify } from "node:util";
+import { isDeepStrictEqual, promisify } from "node:util";
 import { gunzip, gzip } from "node:zlib";
 import {
   TCGA_REPLAY_RAW_SCHEMA,
@@ -122,7 +122,15 @@ export type TcgaWebReplayFinalizeReason =
   | "invalid-pending-artifact"
   | "no-match-window-candidate"
   | "no-replay-ready-candidate"
-  | "ambiguous-replay-candidate";
+  | "ambiguous-replay-candidate"
+  | "artifact-too-large";
+
+export interface TcgaWebReplayArtifactLimitDetail {
+  stage: "awaiting-result" | "product";
+  encoding: "raw-json" | "gzip";
+  actualBytes: number;
+  limitBytes: number;
+}
 
 export type TcgaWebReplayFinalizeResult<TRegistration> =
   | {
@@ -143,6 +151,7 @@ export type TcgaWebReplayFinalizeResult<TRegistration> =
       consideredCandidates: number;
       readyCandidates: number;
       rejectionCounts: Partial<Record<TcgaWebReplayCandidateRejection, number>>;
+      artifactLimit?: TcgaWebReplayArtifactLimitDetail;
     };
 
 export interface TcgaWebReplayCaptureLimits {
@@ -316,6 +325,16 @@ interface PendingScanResult {
   matches: LoadedPendingCapture[];
   invalid: boolean;
   accountMismatch: boolean;
+}
+
+class TcgaWebReplayArtifactLimitError extends Error {
+  constructor(
+    message: string,
+    readonly detail: TcgaWebReplayArtifactLimitDetail
+  ) {
+    super(message);
+    this.name = "TcgaWebReplayArtifactLimitError";
+  }
 }
 
 function positiveInteger(value: unknown, fallback: number): number {
@@ -560,6 +579,91 @@ function decodedMessage(value: unknown): TcgaReplayRawMessageV1["parsed"] | null
   });
   const parsed = asRecord(normalized) as TcgaReplayRawMessageV1["parsed"] | null;
   return parsed && safeString(parsed.type) ? parsed : null;
+}
+
+/**
+ * TCGA repeats complete player snapshots in many state messages, while the
+ * website normalizer applies those values as shallow patches. Persist the same
+ * timeline as deterministic shallow deltas so large, otherwise-valid games do
+ * not spend the replay budget on JSON-identical deck/card arrays. Decoder
+ * validation and capture identity continue to use the untouched RTC payloads.
+ */
+function deltaEncodePlayerStateMessages(messages: TcgaReplayRawMessageV1[]): TcgaReplayRawMessageV1[] {
+  const playerStates = new Map<string, TcgaReplayJsonObject>();
+
+  const mergePlayerDelta = (playerId: string, incoming: TcgaReplayJsonObject): {
+    delta: TcgaReplayJsonObject;
+    removedIdenticalValue: boolean;
+  } => {
+    const current = playerStates.get(playerId) ?? Object.create(null) as TcgaReplayJsonObject;
+    const delta = Object.create(null) as TcgaReplayJsonObject;
+    let removedIdenticalValue = false;
+    for (const [key, value] of Object.entries(incoming)) {
+      if (Object.prototype.hasOwnProperty.call(current, key) && isDeepStrictEqual(current[key], value)) {
+        removedIdenticalValue = true;
+      } else {
+        delta[key] = value;
+      }
+    }
+    playerStates.set(
+      playerId,
+      Object.assign(Object.create(null) as TcgaReplayJsonObject, current, incoming)
+    );
+    return { delta, removedIdenticalValue };
+  };
+
+  return messages.map((message) => {
+    const type = safeString(message.parsed.type);
+    const payload = asRecord(message.parsed.payload) as TcgaReplayJsonObject | null;
+    if (!payload) return message;
+
+    if (type === "NEWCOMMER_GAMEDATA" || type === "NEWCOMER_GAMEDATA") {
+      const players = asRecord(payload.players);
+      for (const [playerId, value] of Object.entries(players ?? {})) {
+        const player = asRecord(value) as TcgaReplayJsonObject | null;
+        if (playerId && player) mergePlayerDelta(playerId, player);
+      }
+      return message;
+    }
+
+    const playerId = safeIdentifier(message.parsed.gameId);
+    if (!playerId) return message;
+    if (type === "PLAYER_DATA") {
+      const { delta, removedIdenticalValue } = mergePlayerDelta(playerId, payload);
+      if (!removedIdenticalValue) return message;
+      // History is consumed independently before the website applies the
+      // player patch. Keep it on every original message, even when repeated.
+      if (Object.prototype.hasOwnProperty.call(payload, "newToHistory")) {
+        delta.newToHistory = payload.newToHistory;
+      }
+      return {
+        ...message,
+        parsed: {
+          ...message.parsed,
+          payload: delta
+        }
+      };
+    }
+
+    if (type === "GAME_DATA") {
+      const playerData = asRecord(payload.playerData) as TcgaReplayJsonObject | null;
+      if (!playerData) return message;
+      const { delta, removedIdenticalValue } = mergePlayerDelta(playerId, playerData);
+      if (!removedIdenticalValue) return message;
+      return {
+        ...message,
+        parsed: {
+          ...message.parsed,
+          payload: {
+            ...payload,
+            playerData: delta
+          }
+        }
+      };
+    }
+
+    return message;
+  });
 }
 
 function hasTransportIssues(finalization: TcgaPeerDecoderFinalization): boolean {
@@ -1413,9 +1517,23 @@ export class TcgaWebReplayCaptureService<
       return this.skipped("consent-changed", consideredCandidates, 1, rejectionCounts);
     }
     if (!matchResultConfirmed(context)) {
-      const awaiting = selected.pending
-        ? this.awaitingResultMetadata(selected.pending)
-        : await this.persistAwaitingResult(selected.memory as DecodedCandidate, window, expectedAccountUid);
+      let awaiting: TcgaWebReplayAwaitingResultCapture;
+      try {
+        awaiting = selected.pending
+          ? this.awaitingResultMetadata(selected.pending)
+          : await this.persistAwaitingResult(selected.memory as DecodedCandidate, window, expectedAccountUid);
+      } catch (error) {
+        if (!(error instanceof TcgaWebReplayArtifactLimitError)) throw error;
+        if (selected.memory) this.removeSession(selected.memory.session.key);
+        this.pruneCompletedSessions(window.completedAt);
+        return this.skipped(
+          "artifact-too-large",
+          consideredCandidates,
+          1,
+          rejectionCounts,
+          error.detail
+        );
+      }
       if (selected.memory) this.removeSession(selected.memory.session.key);
       return {
         status: "awaiting-result",
@@ -1426,9 +1544,23 @@ export class TcgaWebReplayCaptureService<
       };
     }
 
-    const capture = selected.pending
-      ? await this.persistPendingAsProduct(selected.pending, context, expectedAccountUid)
-      : await this.persistCandidate(selected.memory as DecodedCandidate, context, expectedAccountUid);
+    let capture: TcgaWebReplayPreparedCapture;
+    try {
+      capture = selected.pending
+        ? await this.persistPendingAsProduct(selected.pending, context, expectedAccountUid)
+        : await this.persistCandidate(selected.memory as DecodedCandidate, context, expectedAccountUid);
+    } catch (error) {
+      if (!(error instanceof TcgaWebReplayArtifactLimitError)) throw error;
+      if (selected.memory) this.removeSession(selected.memory.session.key);
+      this.pruneCompletedSessions(window.completedAt);
+      return this.skipped(
+        "artifact-too-large",
+        consideredCandidates,
+        1,
+        rejectionCounts,
+        error.detail
+      );
+    }
     let registration: TRegistration;
     try {
       registration = await this.registerCapture(capture, context, replay);
@@ -1780,6 +1912,7 @@ export class TcgaWebReplayCaptureService<
     expectedAccountUid: string
   ): Promise<TcgaWebReplayAwaitingResultCapture> {
     const { sourceHash, captureSessionId } = this.candidateIdentity(candidate);
+    const messages = deltaEncodePlayerStateMessages(candidate.messages);
     const artifact: TcgaWebReplayPendingCaptureV1 = {
       schema: PENDING_CAPTURE_SCHEMA,
       version: 1,
@@ -1793,15 +1926,31 @@ export class TcgaWebReplayCaptureService<
         }
       },
       transport: this.candidateTransport(candidate),
-      messages: candidate.messages
+      messages
     };
     const rawJson = Buffer.from(JSON.stringify(artifact), "utf8");
     if (rawJson.byteLength > this.limits.maxRawJsonBytes) {
-      throw new Error("TCGA awaiting-result artifact exceeds the raw JSON limit.");
+      throw new TcgaWebReplayArtifactLimitError(
+        "TCGA awaiting-result artifact exceeds the raw JSON limit.",
+        {
+          stage: "awaiting-result",
+          encoding: "raw-json",
+          actualBytes: rawJson.byteLength,
+          limitBytes: this.limits.maxRawJsonBytes
+        }
+      );
     }
     const compressed = await gzipAsync(rawJson, { level: 9 });
     if (compressed.byteLength > this.limits.maxGzipBytes) {
-      throw new Error("TCGA awaiting-result artifact exceeds the compressed limit.");
+      throw new TcgaWebReplayArtifactLimitError(
+        "TCGA awaiting-result artifact exceeds the compressed limit.",
+        {
+          stage: "awaiting-result",
+          encoding: "gzip",
+          actualBytes: compressed.byteLength,
+          limitBytes: this.limits.maxGzipBytes
+        }
+      );
     }
     const createdAt = Date.now();
     const core: PendingSidecarCoreV1 = {
@@ -1856,6 +2005,7 @@ export class TcgaWebReplayCaptureService<
   ): Promise<TcgaWebReplayPreparedCapture> {
     const session = candidate.session;
     const { sourceHash, captureSessionId } = this.candidateIdentity(candidate);
+    const messages = deltaEncodePlayerStateMessages(candidate.messages);
     const match = privacySafeMatchSummary(context);
     if (!match || match.result === "incomplete") {
       throw new Error("A resolved TCGA match result is required for a product artifact.");
@@ -1874,7 +2024,7 @@ export class TcgaWebReplayCaptureService<
         match
       },
       transport: this.candidateTransport(candidate),
-      messages: candidate.messages
+      messages
     };
     return this.writeProductArtifact(rawCapture, expectedAccountUid, candidate.session.discordShareHubIds);
   }
@@ -1908,7 +2058,8 @@ export class TcgaWebReplayCaptureService<
         ...artifact.transport,
         issueCounts: { ...artifact.transport.issueCounts }
       },
-      messages: artifact.messages
+      // This also compacts pending artifacts written by older desktop builds.
+      messages: deltaEncodePlayerStateMessages(artifact.messages)
     };
     return this.writeProductArtifact(rawCapture, expectedAccountUid, pending.sidecar.discordShareHubIds ?? []);
   }
@@ -1920,11 +2071,27 @@ export class TcgaWebReplayCaptureService<
   ): Promise<TcgaWebReplayPreparedCapture> {
     const rawJson = Buffer.from(JSON.stringify(rawCapture), "utf8");
     if (rawJson.byteLength > this.limits.maxRawJsonBytes) {
-      throw new Error("TCGA Web Replay artifact exceeds the raw JSON limit.");
+      throw new TcgaWebReplayArtifactLimitError(
+        "TCGA Web Replay artifact exceeds the raw JSON limit.",
+        {
+          stage: "product",
+          encoding: "raw-json",
+          actualBytes: rawJson.byteLength,
+          limitBytes: this.limits.maxRawJsonBytes
+        }
+      );
     }
     const compressed = await gzipAsync(rawJson, { level: 9 });
     if (compressed.byteLength > this.limits.maxGzipBytes) {
-      throw new Error("TCGA Web Replay artifact exceeds the compressed upload limit.");
+      throw new TcgaWebReplayArtifactLimitError(
+        "TCGA Web Replay artifact exceeds the compressed upload limit.",
+        {
+          stage: "product",
+          encoding: "gzip",
+          actualBytes: compressed.byteLength,
+          limitBytes: this.limits.maxGzipBytes
+        }
+      );
     }
     await mkdir(this.outputDirectory, { recursive: true });
     const localPath = join(
@@ -2119,14 +2286,16 @@ export class TcgaWebReplayCaptureService<
     reason: TcgaWebReplayFinalizeReason,
     consideredCandidates: number,
     readyCandidates: number,
-    rejectionCounts: Partial<Record<TcgaWebReplayCandidateRejection, number>>
+    rejectionCounts: Partial<Record<TcgaWebReplayCandidateRejection, number>>,
+    artifactLimit?: TcgaWebReplayArtifactLimitDetail
   ): TcgaWebReplayFinalizeResult<TRegistration> {
     return {
       status: "skipped",
       reason,
       consideredCandidates,
       readyCandidates,
-      rejectionCounts
+      rejectionCounts,
+      ...(artifactLimit ? { artifactLimit } : {})
     };
   }
 

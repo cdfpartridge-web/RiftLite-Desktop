@@ -71,7 +71,7 @@ describe("Web Replay desktop centre", () => {
     expect(appSource).toContain("webReplayNavBadgeTone");
     expect(appSource).toContain("refreshIntervalMs = waiting || webReplayDiagnostics?.retryInProgress ? 4_000 : 20_000");
     expect(appSource).toContain("void refreshWebReplayDiagnostics();");
-    expect(appSource).toContain("homeWebReplayStatus(settings, webReplayDiagnostics, activePlatform)");
+    expect(appSource).toContain("homeWebReplayStatus(settings, webReplayDiagnostics, settings.defaultGamePlatform)");
     expect(appSource).toContain("function homeWebReplayStatus");
     expect(appSource).toContain('label: `${totals.failed} upload${totals.failed === 1 ? "" : "s"} failed`');
     expect(appSource).toContain('label: `${totals.pending || 1} uploading`');

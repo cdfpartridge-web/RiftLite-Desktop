@@ -97,6 +97,7 @@ import type {
   DeckTrackerSideboardChange,
   DeckTrackerSideboardDirection,
   DeckTrackerState,
+  GameProvider,
   GamePlatform,
   HubActionResult,
   HubHealthStatus,
@@ -301,7 +302,7 @@ import {
 import "./styles/app.css";
 import "./styles/ui-dev-modern.css";
 
-type DeckFocusTarget = "library" | "prep" | "notebook" | "performance";
+type DeckFocusTarget = "library" | "saved" | "prep" | "notebook" | "performance";
 type MatchFocusTarget = {
   myLegend?: string;
   opponentLegend?: string;
@@ -311,6 +312,7 @@ type MatchFocusTarget = {
 type NavigationOptions = {
   communityTab?: CommunityTab;
   deckFocus?: DeckFocusTarget;
+  deckId?: string;
   communityDeckLegend?: string | null;
   matchFocus?: Omit<MatchFocusTarget, "nonce"> | null;
   spotlightId?: string;
@@ -354,6 +356,7 @@ const FALLBACK_BOOT_SETTINGS: UserSettings = {
   username: "",
   firstRunComplete: true,
   lastSeenVersion: RIFTLITE_BUILD_IDENTITY.displayVersion,
+  defaultGamePlatform: "tcga",
   syncMode: "community-and-hubs",
   communitySyncEnabled: true,
   firebaseUid: "",
@@ -1437,6 +1440,95 @@ const RIFTLAB_SPOTLIGHT: CommunitySpotlight = {
     youtube: "community/riftlab-youtube-thumb.jpeg",
     twitch: "community/riftlab-twitch-thumb.png"
   }
+};
+
+const FRODAN_SPOTLIGHT: CommunitySpotlight = {
+  id: "frodan",
+  name: "Frodan",
+  kicker: "Featured creator",
+  location: "Frodan Riftbound",
+  description: "Professional backseater and TFT Academy founder Frodan brings his competitive eye to Riftbound. Frodan Riftbound pairs deck guides and competitive reactions with Legend 101 sessions alongside top players, while Twitch carries the live grind.",
+  primaryCta: {
+    id: "youtube",
+    label: "Watch on YouTube",
+    url: "https://www.youtube.com/@FrodanRB",
+    description: "Watch Legend 101, deck guides, reactions, and competitive Riftbound coverage.",
+    icon: Video,
+    featured: true
+  },
+  links: [
+    {
+      id: "youtube",
+      label: "YouTube",
+      url: "https://www.youtube.com/@FrodanRB",
+      description: "Legend 101, deck guides, reactions, and competitive Riftbound learning.",
+      icon: Video,
+      featured: true
+    },
+    {
+      id: "twitch",
+      label: "Twitch",
+      url: "https://www.twitch.tv/frodan",
+      description: "Catch Frodan live for Riftbound games, coaching, and community play.",
+      icon: Radio,
+      featured: true
+    },
+    {
+      id: "x",
+      label: "X",
+      url: "https://x.com/Frodan",
+      description: "Follow Frodan for stream announcements, creator updates, and competitive conversation.",
+      icon: X
+    }
+  ],
+  tags: ["Legend 101", "Deck guides", "Competitive analysis", "Live play"],
+  highlights: [
+    {
+      title: "Legend 101",
+      text: "Learn alongside elite players as Frodan breaks down decks, decisions, matchups, and the details behind high-level play."
+    },
+    {
+      title: "Practical deck guides",
+      text: "Recent videos cover Kennen, Mel, Draven, Sett, and Leona, giving players clear routes into competitive lists."
+    },
+    {
+      title: "Competitive perspective",
+      text: "State-of-the-game reactions sit beside tournament-tested deck breakdowns and focused strategy discussion."
+    },
+    {
+      title: "Live community",
+      text: "Twitch carries live Riftbound sessions, while X is the quickest route to Frodan's updates and wider esports conversation."
+    }
+  ],
+  assets: {
+    logo: "community/frodan-profile.jpg",
+    banner: "community/frodan-banner.jpg",
+    tiktok: "community/frodan-x.jpg",
+    youtube: "community/frodan-youtube.jpg",
+    twitch: "community/frodan-twitch.png"
+  },
+  overviewBanner: "community/frodan-banner.jpg",
+  overviewLogo: "community/frodan-profile.jpg",
+  routes: [
+    {
+      key: "youtube",
+      title: "Frodan Riftbound",
+      subtitle: "Watch Legend 101, deck guides, reactions, and competitive learning.",
+      linkId: "youtube"
+    },
+    {
+      key: "twitch",
+      title: "Live on Twitch",
+      subtitle: "Catch live Riftbound sessions, coaching, and community play.",
+      linkId: "twitch"
+    },
+    {
+      key: "tiktok",
+      title: "Follow on X",
+      subtitle: "Get Frodan's updates, announcements, and wider esports conversation.",
+      linkId: "x"
+    }
+  ]
 };
 
 const RUNESANDRIFT_SPOTLIGHT: CommunitySpotlight = {
@@ -2732,6 +2824,7 @@ const BLOODY_SPOTLIGHT: CommunitySpotlight = {
 
 const COMMUNITY_SPOTLIGHTS: CommunitySpotlight[] = [
   RIFTLAB_SPOTLIGHT,
+  FRODAN_SPOTLIGHT,
   RUNESANDRIFT_SPOTLIGHT,
   CHALLENGERTCG_SPOTLIGHT,
   NOVEGGIES_SPOTLIGHT,
@@ -2809,6 +2902,7 @@ function App() {
   const [communityDeckLegendTarget, setCommunityDeckLegendTarget] = useState("");
   const [spotlightTargetId, setSpotlightTargetId] = useState("");
   const [deckFocusTarget, setDeckFocusTarget] = useState<DeckFocusTarget>("library");
+  const [deckSelectionTarget, setDeckSelectionTarget] = useState("");
   const [matchFocusTarget, setMatchFocusTarget] = useState<MatchFocusTarget | null>(null);
   const [focusedReplayId, setFocusedReplayId] = useState("");
   const guidedTourInitializedRef = useRef(false);
@@ -2821,6 +2915,8 @@ function App() {
   } | null>(null);
   const gameRef = useRef<Electron.WebviewTag | null>(null);
   const platformSwitchRequestRef = useRef(0);
+  const defaultPlatformSaveRequestRef = useRef(0);
+  const defaultPlatformSaveQueueRef = useRef<Promise<void>>(Promise.resolve());
   const activePlatformRef = useRef<GamePlatform>(activePlatform);
   const mountedGamePlatformRef = useRef<GamePlatform | null>(mountedGamePlatform);
   const gameGuestAutoRecoveryRef = useRef(new Set<GamePlatform>());
@@ -2900,6 +2996,12 @@ function App() {
   }, []);
 
   function openView(nextView: ActiveView, options?: NavigationOptions) {
+    if (nextView === "play" && healthRef.current.state === "review-needed") {
+      setActiveView("matches");
+      void openLatestPendingReview();
+      showActionFeedback("Review the captured match before starting another game.", 5_000);
+      return;
+    }
     if (options?.communityTab) {
       setActiveCommunityTab(options.communityTab);
       if (options.communityTab !== "community-decks" || options.communityDeckLegend === undefined) {
@@ -2911,6 +3013,9 @@ function App() {
     }
     if (options?.deckFocus) {
       setDeckFocusTarget(options.deckFocus);
+    }
+    if (nextView === "decks") {
+      setDeckSelectionTarget(options?.deckId ?? "");
     }
     if (options && "matchFocus" in options) {
       setMatchFocusTarget(options.matchFocus ? { ...options.matchFocus, nonce: Date.now() } : null);
@@ -3026,7 +3131,7 @@ function App() {
     setGuidedTourState(null);
     const restore = guidedTourRestoreRef.current;
     if (guidedTourReplayRef.current && restore) {
-      setActiveView(restore.view);
+      openView(restore.view);
       setSidebarCollapsed(restore.sidebarCollapsed);
       setExpandedNavGroup(restore.expandedNavGroup);
     } else {
@@ -3064,7 +3169,7 @@ function App() {
   useEffect(() => {
     const navigate = (event: Event) => {
       const view = (event as CustomEvent<{ view?: ActiveView }>).detail?.view;
-      if (view) setActiveView(view);
+      if (view) openView(view);
     };
     window.addEventListener("riftlite:navigate", navigate);
     return () => window.removeEventListener("riftlite:navigate", navigate);
@@ -3237,6 +3342,7 @@ function App() {
       scheduleDiagnosticsRefresh();
     });
     const offHealth = window.riftlite.onCaptureHealth((nextHealth) => {
+      healthRef.current = nextHealth;
       setHealth(nextHealth);
       if (nextHealth.state === "review-needed") {
         showCapturePrompt(nextHealth, "Match captured. Preparing the review popup and attaching replay data.");
@@ -3760,6 +3866,14 @@ function App() {
         { ...bootSettings, lastSeenVersion: APP_VERSION_META }
       );
     }
+    const bootPlatform = nextHealth.platform !== "none"
+      && (nextHealth.state === "match-detected" || nextHealth.state === "review-needed")
+      ? nextHealth.platform
+      : bootSettings.defaultGamePlatform;
+    activePlatformRef.current = bootPlatform;
+    healthRef.current = nextHealth;
+    settingsRef.current = bootSettings;
+    setActivePlatform(bootPlatform);
     setSettings(bootSettings);
     setHealth(nextHealth);
     setMatches(nextMatches);
@@ -3790,6 +3904,10 @@ function App() {
 
   function handleBootstrapFailure(error: unknown) {
     console.error("RiftLite startup failed; loading fallback shell", error);
+    activePlatformRef.current = FALLBACK_BOOT_SETTINGS.defaultGamePlatform;
+    healthRef.current = DEFAULT_HEALTH;
+    settingsRef.current = FALLBACK_BOOT_SETTINGS;
+    setActivePlatform(FALLBACK_BOOT_SETTINGS.defaultGamePlatform);
     setSettings(FALLBACK_BOOT_SETTINGS);
     setHealth(DEFAULT_HEALTH);
     setMatches([]);
@@ -3903,25 +4021,64 @@ function App() {
     openNextQueuedReview();
   }
 
-  async function chooseGamePlatform(platform: GamePlatform, openPlay = false) {
-    if (platform === activePlatform) {
-      if (openPlay) openView("play");
-      return;
-    }
+  async function chooseGamePlatform(platform: GamePlatform, openPlay = false): Promise<boolean> {
     const requestId = ++platformSwitchRequestRef.current;
+    if (openPlay && healthRef.current.state === "review-needed") {
+      openView("matches");
+      void openLatestPendingReview();
+      showActionFeedback("Review the captured match before starting another game.", 5_000);
+      return false;
+    }
+    const healthPlatformMatches = healthRef.current.platform === "none" || healthRef.current.platform === platform;
+    if (platform === activePlatformRef.current && healthPlatformMatches) {
+      if (openPlay) openView("play");
+      return true;
+    }
     const status = await window.riftlite.getGamePlatformSwitchStatus().catch(() => ({
       allowed: false,
       message: "RiftLite could not verify that capture is safe to switch. Stop the current match first."
     }));
     if (requestId !== platformSwitchRequestRef.current) {
-      return;
+      return false;
     }
     if (!status.allowed) {
       showActionFeedback(status.message, 5_000);
-      return;
+      return false;
     }
+    activePlatformRef.current = platform;
     setActivePlatform(platform);
     if (openPlay) openView("play");
+    return true;
+  }
+
+  async function saveDefaultGamePlatform(platform: GameProvider): Promise<void> {
+    const requestId = ++defaultPlatformSaveRequestRef.current;
+    const previousSave = defaultPlatformSaveQueueRef.current;
+    const saveAttempt = previousSave.catch(() => undefined).then(async () => {
+      if (requestId !== defaultPlatformSaveRequestRef.current) return;
+      const next = await window.riftlite.saveSettings({ defaultGamePlatform: platform });
+      if (requestId !== defaultPlatformSaveRequestRef.current) return;
+      settingsRef.current = next;
+      setSettings(next);
+      showActionFeedback(`${platform === "atlas" ? "Atlas" : "TCGA"} is now your default game.`);
+    });
+    defaultPlatformSaveQueueRef.current = saveAttempt.catch(() => undefined);
+    try {
+      await saveAttempt;
+    } catch (error) {
+      if (requestId === defaultPlatformSaveRequestRef.current) {
+        try {
+          const persistedSettings = await window.riftlite.getSettings();
+          if (requestId === defaultPlatformSaveRequestRef.current) {
+            settingsRef.current = persistedSettings;
+            setSettings(persistedSettings);
+          }
+        } catch {
+          // Keep the current renderer state if the authoritative reload also fails.
+        }
+        showActionFeedback(error instanceof Error ? error.message : "Default game could not be saved.", 5_000);
+      }
+    }
   }
 
   async function deleteReviewDraft(draft: MatchDraft) {
@@ -6439,14 +6596,14 @@ function App() {
           </div>
           {activeView === "home" ? (
             <div className="top-actions home-top-actions">
-              <button className="segmented" data-platform="tcga" onClick={() => void chooseGamePlatform("tcga")} data-active={activePlatform === "tcga"}>
-                <Globe2 size={16} /> TCGA
-              </button>
-              <button className="segmented" data-platform="atlas" onClick={() => void chooseGamePlatform("atlas")} data-active={activePlatform === "atlas"}>
-                <Globe2 size={16} /> Atlas
-              </button>
+              <span className="segmented home-default-platform" title="Change the default game from Play now on Home">
+                <Globe2 size={16} /> Default: {settings.defaultGamePlatform === "atlas" ? "Atlas" : "TCGA"}
+              </span>
               <button className="segmented icon-segment" onClick={() => openView("settings")} title="Settings" aria-label="Settings"><Settings size={17} /></button>
-              <button className="primary home-top-play" onClick={() => openView("play")}><Play size={17} /> Start playing</button>
+              <button className="primary home-top-play" onClick={() => health.state === "review-needed" ? openView("matches") : void chooseGamePlatform(settings.defaultGamePlatform, true)}>
+                {health.state === "review-needed" ? <ClipboardList size={17} /> : <Play size={17} />}
+                {health.state === "review-needed" ? "Open review" : `Play on ${settings.defaultGamePlatform === "atlas" ? "Atlas" : "TCGA"}`}
+              </button>
             </div>
           ) : (
           <div className="top-actions" data-hidden={activeView !== "play"} data-tour-target="play">
@@ -6661,6 +6818,7 @@ function App() {
             onResetGuidedTour={resetGuidedTourForNextLaunch}
             onNavigate={openView}
             onPlayPlatform={(platform) => void chooseGamePlatform(platform, true)}
+            onSetDefaultGamePlatform={saveDefaultGamePlatform}
             communityTab={activeCommunityTab}
             communityDeckLegendTarget={communityDeckLegendTarget}
             spotlightTargetId={spotlightTargetId}
@@ -6672,6 +6830,7 @@ function App() {
               }
             }}
             deckFocusTarget={deckFocusTarget}
+            deckSelectionTarget={deckSelectionTarget}
             onDeckFocusChange={setDeckFocusTarget}
             onDecksChanged={refreshDecks}
             onAccountDataRestored={refreshRestoredAccountData}
@@ -8280,16 +8439,24 @@ function SyncModeControl({ settings, onSave, compact = false }: { settings: User
   );
 }
 
+function homeOfficialDeckArtSources(deck: SavedDeck | null): string[] {
+  if (!deck) return [];
+  const snapshot = parseCommunityDeckSnapshot(deck.snapshotJson);
+  const legend = normalizeLegendName(deck.legend || snapshot?.legend || "");
+  const matchingLegendCards = (snapshot?.mainDeck ?? [])
+    .filter((card) => normalizeLegendName(card.name) === legend);
+  const highCopyCards = [...(snapshot?.mainDeck ?? [])]
+    .sort((left, right) => right.qty - left.qty);
+  const registrySources = [snapshot?.legendEntry, ...matchingLegendCards, ...highCopyCards]
+    .map((card) => card
+      ? resolveBundledReplayCardImage(card.cardId || "") || resolveBundledReplayCardImage(card.imageUrl || "")
+      : "")
+    .filter(Boolean);
+  return Array.from(new Set([...registrySources, legendImageUrl(legend)].filter(Boolean)));
+}
+
 function HomeActiveDeckArtwork({ deck }: { deck: SavedDeck | null }) {
-  const sources = useMemo(() => {
-    if (!deck) return [];
-    const snapshot = parseCommunityDeckSnapshot(deck.snapshotJson);
-    const legend = normalizeLegendName(deck.legend || snapshot?.legend || "");
-    return Array.from(new Set([
-      legendImageUrl(legend),
-      snapshot?.legendEntry?.imageUrl ?? ""
-    ].filter(Boolean)));
-  }, [deck]);
+  const sources = useMemo(() => homeOfficialDeckArtSources(deck), [deck]);
   const [sourceIndex, setSourceIndex] = useState(0);
 
   useEffect(() => {
@@ -8316,6 +8483,31 @@ function HomeActiveDeckArtwork({ deck }: { deck: SavedDeck | null }) {
         alt={`${legend} card artwork`}
         onError={() => setSourceIndex((index) => index + 1)}
       />
+    </div>
+  );
+}
+
+function HomeOfficialArtStack({ sources, label }: { sources: string[]; label: string }) {
+  const [failedSources, setFailedSources] = useState<Set<string>>(() => new Set());
+  const sourceKey = sources.join("|");
+
+  useEffect(() => {
+    setFailedSources(new Set());
+  }, [sourceKey]);
+
+  const visibleSources = sources.filter((source) => !failedSources.has(source)).slice(0, 3);
+  return (
+    <div className="home-deck-link-art" aria-label={label} data-empty={!visibleSources.length}>
+      {visibleSources.length ? visibleSources.map((source, index) => (
+        <img
+          key={source}
+          src={source}
+          alt=""
+          aria-hidden="true"
+          style={{ "--art-index": index } as React.CSSProperties}
+          onError={() => setFailedSources((current) => new Set(current).add(source))}
+        />
+      )) : <Layers size={38} aria-hidden="true" />}
     </div>
   );
 }
@@ -8388,7 +8580,6 @@ function homeWebReplayStatus(
 }
 
 function HomeView({
-  activePlatform,
   matches,
   replays,
   decks,
@@ -8399,9 +8590,9 @@ function HomeView({
   activeTestingSession,
   onNavigate,
   onPlayPlatform,
+  onSetDefaultGamePlatform,
   onOpenReplayForMatch
 }: {
-  activePlatform: GamePlatform;
   matches: MatchDraft[];
   replays: ReplayRecord[];
   decks: SavedDeck[];
@@ -8412,39 +8603,50 @@ function HomeView({
   activeTestingSession: TestingSession | null;
   onNavigate: (view: ActiveView, options?: NavigationOptions) => void;
   onPlayPlatform: (platform: GamePlatform) => void;
+  onSetDefaultGamePlatform: (platform: GameProvider) => Promise<void>;
   onOpenReplayForMatch: (matchId: string) => void;
 }) {
-  const latestMatch = useMemo(
-    () => [...matches].sort((a, b) => b.capturedAt.localeCompare(a.capturedAt))[0] ?? null,
-    [matches]
-  );
-  const latestReplay = useMemo(
-    () => [...replays].sort((a, b) => b.capturedAt.localeCompare(a.capturedAt))[0] ?? null,
-    [replays]
-  );
   const activeDeck = settings.activeDeckId ? decks.find((deck) => deck.id === settings.activeDeckId) ?? null : null;
   const recentMatches = useMemo(
     () => [...matches].sort((a, b) => b.capturedAt.localeCompare(a.capturedAt)).slice(0, 3),
     [matches]
   );
   const replayByMatch = useMemo(() => new Map(replays.map((replay) => [replay.matchId, replay])), [replays]);
-  const recentReplayActivity = useMemo(
-    () => [...replays].sort((a, b) => b.capturedAt.localeCompare(a.capturedAt)).slice(0, 4),
-    [replays]
+  const deckPerformances = useMemo(
+    () => decks.map((deck) => buildDeckPerformance(deck, matches)),
+    [decks, matches]
   );
-  const activeDeckPerformance = useMemo(
-    () => activeDeck ? buildDeckPerformance(activeDeck, matches) : null,
-    [activeDeck, matches]
+  const mostRecentlyPlayedPerformance = useMemo(
+    () => [...deckPerformances]
+      .filter((performance) => Boolean(performance.overview.lastPlayed))
+      .sort((left, right) => right.overview.lastPlayed.localeCompare(left.overview.lastPlayed))[0] ?? null,
+    [deckPerformances]
   );
+  const mostRecentlyImportedDeck = useMemo(
+    () => [...decks].sort((left, right) => right.lastImportedAt.localeCompare(left.lastImportedAt))[0] ?? null,
+    [decks]
+  );
+  const featuredDeck = mostRecentlyPlayedPerformance?.deck ?? activeDeck ?? mostRecentlyImportedDeck;
+  const featuredDeckPerformance = featuredDeck
+    ? deckPerformances.find((performance) => performance.deck.id === featuredDeck.id) ?? buildDeckPerformance(featuredDeck, matches)
+    : null;
+  const featuredDeckSource = mostRecentlyPlayedPerformance?.deck.id === featuredDeck?.id
+    ? "Recently played"
+    : activeDeck?.id === featuredDeck?.id
+      ? "Active deck"
+      : featuredDeck
+        ? "Latest import"
+        : "Your deck at a glance";
+  const featuredDeckRecentForm = (featuredDeckPerformance?.completedMatches ?? []).slice(0, 5);
   const focusMatchup = useMemo(() => {
-    if (!activeDeckPerformance?.matchups.length) return null;
-    return [...activeDeckPerformance.matchups]
+    if (!featuredDeckPerformance?.matchups.length) return null;
+    return [...featuredDeckPerformance.matchups]
       .filter((matchup) => matchup.total > 0)
       .sort((left, right) => left.winRate - right.winRate || right.total - left.total)[0] ?? null;
-  }, [activeDeckPerformance]);
+  }, [featuredDeckPerformance]);
   const captureStatus = homeCaptureStatus(health);
-  const activeDeckLegend = normalizeLegendName(activeDeck?.legend ?? "") || "Legend pending";
-  const webReplayStatus = homeWebReplayStatus(settings, webReplayDiagnostics, activePlatform);
+  const featuredDeckLegend = normalizeLegendName(featuredDeck?.legend ?? "") || "Legend pending";
+  const webReplayStatus = homeWebReplayStatus(settings, webReplayDiagnostics, settings.defaultGamePlatform);
   const EmbedWebview = "webview" as unknown as React.ElementType;
   const featuredCreators = COMMUNITY_SPOTLIGHTS;
   const [featuredCreatorIndex, setFeaturedCreatorIndex] = useState(() => {
@@ -8492,6 +8694,15 @@ function HomeView({
   const communityDeckVisualLegends = communityDeckSummary.legends.length
     ? communityDeckSummary.legends
     : ["Diana", "Vex", "Irelia", "Annie", "Pyke", "LeBlanc", "Kai'Sa", "Ahri"];
+  const myDeckArtSources = useMemo(() => Array.from(new Set(
+    [...decks]
+      .sort((left, right) => right.lastImportedAt.localeCompare(left.lastImportedAt))
+      .map((deck) => homeOfficialDeckArtSources(deck)[0] ?? "")
+      .filter(Boolean)
+  )).slice(0, 3), [decks]);
+  const communityDeckArtSources = Array.from(new Set(
+    communityDeckVisualLegends.map((legend) => legendImageUrl(legend)).filter(Boolean)
+  )).slice(0, 3);
 
   useEffect(() => {
     const media = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -8651,12 +8862,12 @@ function HomeView({
       <section className="modern-readiness-strip" aria-label="RiftLite readiness" data-tour-target="home">
         <div className="modern-status-item">
           <span className="modern-status-icon"><Globe2 size={20} /></span>
-          <span><small>Provider</small><strong>{activePlatform === "atlas" ? "RiftAtlas" : activePlatform === "tcga" ? "TCG Arena" : "Simulator"}</strong></span>
+          <span><small>Default game</small><strong>{settings.defaultGamePlatform === "atlas" ? "RiftAtlas" : "TCG Arena"}</strong></span>
         </div>
-        <div className="modern-status-item" data-tone={captureStatus.tone}>
+        <button type="button" className="modern-status-item modern-status-action" data-tone={captureStatus.tone} onClick={() => onNavigate("matches")}>
           <span className="modern-status-icon"><Check size={20} /></span>
           <span><small>Match tracking</small><strong>{captureStatus.label}</strong></span>
-        </div>
+        </button>
         <div className="modern-status-item">
           <span className="modern-status-icon"><Layers size={20} /></span>
           <span><small>Active deck</small><strong>{activeDeck?.title || "Choose a deck"}</strong></span>
@@ -8669,25 +8880,83 @@ function HomeView({
 
       <section className="modern-home-layout">
         <div className="modern-home-main">
-          <article className="modern-panel modern-next-action">
-            <div className="modern-panel-copy">
-              <span className="modern-kicker">Next action</span>
-              <h2>{health.state === "review-needed" ? "Review your captured match" : "Ready for your next match"}</h2>
-              <p>{health.state === "review-needed" && latestMatch
-                ? `${normalizeLegendName(latestMatch.myChampion) || "Your match"} is waiting for review before you continue.`
-                : `Tracking, ${activeDeck ? "your active deck" : "local match history"}, replay capture, and ${webReplayStatus.tone === "ready" ? "Web Replay delivery" : "local review"} are ready.`}</p>
-              <button className="primary modern-primary-action" onClick={() => health.state === "review-needed" ? onNavigate("matches") : onPlayPlatform(activePlatform)}>
-                {health.state === "review-needed" ? <ClipboardList size={17} /> : <Play size={17} />}
-                {health.state === "review-needed" ? "Open review" : "Start playing"}
-              </button>
+          <section className="modern-home-feature-row" aria-label="Deck tools">
+            <article className="modern-panel modern-deck-glance">
+              <div className="modern-deck-glance-copy">
+                <div className="modern-deck-glance-labels">
+                  <span className="modern-kicker">Your deck at a glance</span>
+                  {featuredDeck ? <span className="modern-source-badge">{featuredDeckSource}</span> : null}
+                </div>
+                <h2>{featuredDeck?.title || "Choose your first deck"}</h2>
+                <p>{featuredDeck
+                  ? `${featuredDeckPerformance?.overview.total ?? 0} recorded match${featuredDeckPerformance?.overview.total === 1 ? "" : "es"} · ${featuredDeckLegend}`
+                  : "Import a deck to bring its real card art, results, and recent form onto Home."}</p>
+                <div className="modern-deck-glance-stats">
+                  <div className="modern-deck-win-rate">
+                    <strong>{featuredDeckPerformance?.overview.total ? featuredDeckPerformance.overview.winRateLabel : "No data"}</strong>
+                    <span>Win rate</span>
+                  </div>
+                  <div className="modern-deck-form">
+                    <span>Recent form</span>
+                    <div>
+                      {featuredDeckRecentForm.length ? featuredDeckRecentForm.map((match) => (
+                        <i key={match.id} data-result={match.result} title={`${match.result} · ${homeRelativeDate(match.capturedAt)}`}>
+                          {match.result === "Win" ? "W" : match.result === "Loss" ? "L" : "D"}
+                        </i>
+                      )) : <em>No recent results</em>}
+                    </div>
+                  </div>
+                </div>
+                <button
+                  className="primary modern-primary-action"
+                  onClick={() => onNavigate("decks", featuredDeck
+                    ? { deckFocus: "performance", deckId: featuredDeck.id }
+                    : { deckFocus: decks.length ? "saved" : "library" })}
+                >
+                  <BarChart3 size={17} /> {featuredDeck ? "View deck stats" : "Open my decks"}
+                </button>
+              </div>
+              <HomeActiveDeckArtwork deck={featuredDeck ?? null} />
+            </article>
+
+            <div className="modern-deck-destinations">
+              <article className="modern-panel modern-deck-destination">
+                <div>
+                  <span className="modern-kicker">My decks</span>
+                  <h2>My decks</h2>
+                  <p>{decks.length
+                    ? `${decks.length} saved deck${decks.length === 1 ? "" : "s"}. Import, organize, and prepare your lists.`
+                    : "Import, organize, and prepare your saved decks."}</p>
+                </div>
+                <HomeOfficialArtStack sources={myDeckArtSources} label="Official card art from your saved decks" />
+                <button className="primary" onClick={() => onNavigate("decks", { deckFocus: decks.length ? "saved" : "library" })}>
+                  <BookOpen size={16} /> Open my decks
+                </button>
+              </article>
+
+              <article className="modern-panel modern-deck-destination modern-community-deck-destination">
+                <div>
+                  <span className="modern-kicker">Community decks</span>
+                  <h2>Community decks</h2>
+                  <p>{communityDeckSummary.label === "Community deck meta"
+                    ? "Discover decks shared by Riftbound players."
+                    : communityDeckSummary.label}</p>
+                </div>
+                <HomeOfficialArtStack sources={communityDeckArtSources} label="Official card art from Community decks" />
+                <button className="secondary" onClick={() => onNavigate("community", { communityTab: "community-decks" })}>
+                  <Globe2 size={16} /> Explore decks
+                </button>
+              </article>
             </div>
-            <div className="modern-next-art" aria-hidden="true"><Layers size={76} /></div>
-          </article>
+          </section>
 
           <article className="modern-panel modern-recent-panel">
             <header className="modern-panel-header">
               <h2>Recent matches</h2>
-              <button className="modern-text-action" onClick={() => onNavigate("matches")}>View all</button>
+              <div className="modern-panel-actions">
+                <button className="modern-text-action" onClick={() => onNavigate("matches")}>View all matches</button>
+                <button className="secondary modern-replay-action" onClick={() => onNavigate("replays")}><Film size={15} /> View my replays</button>
+              </div>
             </header>
             <div className="modern-match-list">
               {recentMatches.length ? recentMatches.map((match) => {
@@ -8725,8 +8994,8 @@ function HomeView({
             <div>
               <span className="modern-kicker">Insight</span>
               <h3>{focusMatchup
-                ? `${activeDeckLegend} vs ${focusMatchup.legend}${focusMatchup.total < 5 ? " needs more evidence" : " is your current focus"}`
-                : activeDeck ? "Build matchup evidence for your active deck" : "Choose an active deck to unlock matchup guidance"}</h3>
+                ? `${featuredDeckLegend} vs ${focusMatchup.legend}${focusMatchup.total < 5 ? " needs more evidence" : " is your current focus"}`
+                : featuredDeck ? "Build matchup evidence for this deck" : "Choose a deck to unlock matchup guidance"}</h3>
               <p>{focusMatchup
                 ? `${focusMatchup.record} across ${focusMatchup.total} recorded match${focusMatchup.total === 1 ? "" : "es"}. Compare community data, then add a sideboard or mulligan note.`
                 : "RiftLite uses your saved matches, deck prep, and community context to surface the next useful matchup."}</p>
@@ -8734,26 +9003,17 @@ function HomeView({
             <button className="modern-text-action" onClick={() => onNavigate("matchup-lab")}>Open lab</button>
           </article>
 
-          <article className="modern-panel modern-activity-panel">
-            <header className="modern-panel-header">
-              <h2>Replay & integration activity</h2>
-              <button className="modern-text-action" onClick={() => onNavigate("replays")}>Latest outcomes</button>
-            </header>
-            <div className="modern-activity-table" role="table" aria-label="Recent replay activity">
-              <div className="modern-activity-head" role="row"><span>Source</span><span>Event</span><span>Result</span><span>Time</span></div>
-              {recentReplayActivity.length ? recentReplayActivity.map((replay) => {
-                const match = matches.find((item) => item.id === replay.matchId) ?? replay.matchSnapshot;
-                const replayKind = replayHealthKind(replay);
-                return (
-                  <button className="modern-activity-row" role="row" key={replay.id} onClick={() => onOpenReplayForMatch(replay.matchId)}>
-                    <span>{replay.platform === "atlas" ? "RiftAtlas" : replay.platform === "tcga" ? "TCG Arena" : "Simulator"}</span>
-                    <span>{replay.title || "Replay captured"}<small>{replayHealthLabel(replayKind)}</small></span>
-                    <span data-result={match?.result}>{match?.result || "Saved"}</span>
-                    <span>{homeRelativeDate(replay.capturedAt)}</span>
-                  </button>
-                );
-              }) : <div className="modern-empty-state"><Film size={24} /><span>Replay activity will appear after capture.</span></div>}
+          <article className="modern-panel modern-activity-summary">
+            <Film size={20} />
+            <div>
+              <h3>{replays.length ? "Replay & integration activity up to date" : "Replay capture is ready"}</h3>
+              <p>{replays.length
+                ? `${replays.length} replay${replays.length === 1 ? "" : "s"} available in your local library.`
+                : "Your replay library will populate automatically after capture."}</p>
             </div>
+            <span data-tone={captureStatus.tone === "ready" && webReplayStatus.tone === "ready" ? "ready" : webReplayStatus.tone}>
+              <Check size={15} /> {captureStatus.tone === "ready" && webReplayStatus.tone === "ready" ? "All systems operational" : webReplayStatus.label}
+            </span>
           </article>
         </div>
 
@@ -8782,19 +9042,37 @@ function HomeView({
             ) : null}
           </article>
 
-          <article className="modern-panel modern-active-deck-card">
-            <div className="modern-deck-copy">
-              <span className="modern-kicker">Active deck</span>
-              <h2>{activeDeck?.title || "No active deck"}</h2>
-              <p>{activeDeck
-                ? `Legend · ${activeDeckLegend} · ${activeDeckPerformance?.overview.total ?? 0} recorded matches`
-                : "Choose a deck from your library to bring official Legend art and prep onto Home."}</p>
-              <div className="home-card-actions">
-                <button className="secondary" onClick={() => onNavigate("decks", { deckFocus: activeDeck ? "prep" : "library" })}><BookOpen size={16} /> {activeDeck ? "Open prep" : "Choose deck"}</button>
-                {activeDeck ? <button className="modern-text-action" onClick={() => onNavigate("decks", { deckFocus: "performance" })}>Performance</button> : null}
-              </div>
+          <article className="modern-panel modern-play-now-card">
+            <span className="modern-kicker">Play now</span>
+            <h2>Where are you playing?</h2>
+            <div className="home-platform-options" role="group" aria-label="Default game provider">
+              {(["atlas", "tcga"] as const).map((platform) => {
+                const selected = settings.defaultGamePlatform === platform;
+                return (
+                  <button
+                    type="button"
+                    className="home-platform-option"
+                    data-platform={platform}
+                    data-active={selected}
+                    aria-pressed={selected}
+                    onClick={() => void onSetDefaultGamePlatform(platform)}
+                    key={platform}
+                  >
+                    <Globe2 size={19} />
+                    <strong>{platform === "atlas" ? "Atlas" : "TCGA"}</strong>
+                    {selected ? <small>Default</small> : null}
+                  </button>
+                );
+              })}
             </div>
-            <HomeActiveDeckArtwork deck={activeDeck} />
+            <button className="primary modern-play-now-action" onClick={() => health.state === "review-needed" ? onNavigate("matches") : onPlayPlatform(settings.defaultGamePlatform)}>
+              {health.state === "review-needed" ? <ClipboardList size={17} /> : <Play size={17} />}
+              {health.state === "review-needed" ? "Open review" : `Play on ${settings.defaultGamePlatform === "atlas" ? "Atlas" : "TCGA"}`}
+            </button>
+            <div className="modern-play-readiness">
+              <span data-tone={captureStatus.tone}><Check size={14} /> {captureStatus.tone === "ready" ? "Capture ready" : captureStatus.label}</span>
+              <span data-tone={settings.deckTrackerEnabled ? "ready" : "quiet"}><Check size={14} /> {settings.deckTrackerEnabled ? "Deck tracker ready" : "Deck tracker off"}</span>
+            </div>
           </article>
 
           <article
@@ -8923,12 +9201,6 @@ function HomeView({
       </section>
 
       <section className="modern-discover-grid" aria-label="More from RiftLite">
-        <article className="home-card">
-          <div className="home-card-heading"><Globe2 size={18} /><div><h3>Community decks</h3><span>{communityDeckSummary.label}</span></div></div>
-          <div className="home-legend-strip" aria-label="Community deck legend preview">{communityDeckVisualLegends.map((legend) => <button type="button" key={legend} className="home-legend-token" title={`Open ${legend} decks`} onClick={() => onNavigate("community", { communityTab: "community-decks", communityDeckLegend: legend })}><img src={legendImageUrl(legend)} alt="" /></button>)}</div>
-          <div className="home-card-actions"><button className="primary" onClick={() => onNavigate("community", { communityTab: "community-decks" })}><Globe2 size={16} /> Explore deck meta</button><button className="secondary" onClick={() => onNavigate("community", { communityTab: "legend-meta" })}>Meta</button></div>
-        </article>
-
         <article className="home-card home-discord-card">
           <div className="home-card-heading"><MessageCircle size={18} /><div><h3>RiftLite Discord</h3><span>Support, tester feedback, and community chat</span></div></div>
           <p className="muted">The fastest place to get help, report bugs, find updates, and talk through new features.</p>
@@ -9812,12 +10084,14 @@ function DashboardView({
   onResetGuidedTour,
   onNavigate,
   onPlayPlatform,
+  onSetDefaultGamePlatform,
   communityTab,
   communityDeckLegendTarget,
   spotlightTargetId,
   matchFocusTarget,
   onCommunityTabChange,
   deckFocusTarget,
+  deckSelectionTarget,
   onDeckFocusChange,
   onDecksChanged,
   onAccountDataRestored,
@@ -9894,12 +10168,14 @@ function DashboardView({
   onResetGuidedTour: () => void;
   onNavigate: (view: ActiveView, options?: NavigationOptions) => void;
   onPlayPlatform: (platform: GamePlatform) => void;
+  onSetDefaultGamePlatform: (platform: GameProvider) => Promise<void>;
   communityTab: CommunityTab;
   communityDeckLegendTarget: string;
   spotlightTargetId: string;
   matchFocusTarget: MatchFocusTarget | null;
   onCommunityTabChange: (tab: CommunityTab) => void;
   deckFocusTarget: DeckFocusTarget;
+  deckSelectionTarget: string;
   onDeckFocusChange: (focus: DeckFocusTarget) => void;
   onDecksChanged: () => Promise<void>;
   onAccountDataRestored: () => Promise<void>;
@@ -9947,7 +10223,6 @@ function DashboardView({
   if (view === "home") {
     return (
       <HomeView
-        activePlatform={activePlatform}
         matches={visibleMatches}
         replays={replays}
         decks={decks}
@@ -9958,6 +10233,7 @@ function DashboardView({
         activeTestingSession={activeTestingSession}
         onNavigate={onNavigate}
         onPlayPlatform={onPlayPlatform}
+        onSetDefaultGamePlatform={onSetDefaultGamePlatform}
         onOpenReplayForMatch={onOpenReplayForMatch}
       />
     );
@@ -10001,7 +10277,7 @@ function DashboardView({
     return <StreamView overlayInfo={overlayInfo} matches={visibleMatches} decks={decks} settings={settings} onSaveSettings={onSaveSettings} />;
   }
   if (view === "decks") {
-    return <DecksView decks={decks} matches={visibleMatches} settings={settings} focusTarget={deckFocusTarget} onFocusChange={onDeckFocusChange} onDecksChanged={onDecksChanged} />;
+    return <DecksView decks={decks} matches={visibleMatches} settings={settings} focusTarget={deckFocusTarget} selectionTarget={deckSelectionTarget} onFocusChange={onDeckFocusChange} onDecksChanged={onDecksChanged} />;
   }
   if (view === "replays") {
     return (
@@ -16423,6 +16699,7 @@ function DecksView({
   matches,
   settings,
   focusTarget,
+  selectionTarget,
   onFocusChange,
   onDecksChanged
 }: {
@@ -16430,23 +16707,33 @@ function DecksView({
   matches: MatchDraft[];
   settings: UserSettings;
   focusTarget: DeckFocusTarget;
+  selectionTarget: string;
   onFocusChange: (focus: DeckFocusTarget) => void;
   onDecksChanged: () => Promise<void>;
 }) {
   const [url, setUrl] = useState("");
   const [textDeck, setTextDeck] = useState("");
-  const [selectedId, setSelectedId] = useState(decks[0]?.id ?? "");
+  const [selectedId, setSelectedId] = useState(selectionTarget || settings.activeDeckId || decks[0]?.id || "");
+  const appliedSelectionTargetRef = useRef("");
   const [status, setStatus] = useState("");
   const selected = decks.find((deck) => deck.id === selectedId) ?? decks[0];
 
   useEffect(() => {
-    if (!selectedId && decks[0]) {
-      setSelectedId(decks[0].id);
+    if (selectionTarget && selectionTarget !== appliedSelectionTargetRef.current && decks.some((deck) => deck.id === selectionTarget)) {
+      appliedSelectionTargetRef.current = selectionTarget;
+      setSelectedId(selectionTarget);
     }
-    if (selectedId && decks.length && !decks.some((deck) => deck.id === selectedId)) {
-      setSelectedId(decks[0]?.id ?? "");
+    if (!selectionTarget) {
+      appliedSelectionTargetRef.current = "";
     }
-  }, [decks, selectedId]);
+  }, [decks, selectionTarget]);
+
+  useEffect(() => {
+    setSelectedId((current) => {
+      if (!current) return decks[0]?.id ?? "";
+      return decks.some((deck) => deck.id === current) ? current : decks[0]?.id ?? "";
+    });
+  }, [decks]);
 
   useEffect(() => {
     if (focusTarget === "library") {
@@ -16458,7 +16745,9 @@ function DecksView({
     if (!selected?.id) {
       return;
     }
-    const targetId = focusTarget === "prep"
+    const targetId = focusTarget === "saved"
+      ? "deck-library-saved"
+      : focusTarget === "prep"
       ? `matchup-prep-${selected.id}`
       : focusTarget === "notebook"
         ? `deck-notebook-${selected.id}`
@@ -16532,7 +16821,7 @@ function DecksView({
   return (
     <section className="dashboard-page decks-page">
       <section className="deck-workspace-tabs" aria-label="Deck workspace sections" data-tour-target="prepare">
-        <button className="secondary" data-active={focusTarget === "library"} onClick={() => focusDeckSection("library")}>Library</button>
+        <button className="secondary" data-active={focusTarget === "library" || focusTarget === "saved"} onClick={() => focusDeckSection("library")}>Library</button>
         <button className="secondary" data-active={focusTarget === "prep"} onClick={() => focusDeckSection("prep")}><BookOpen size={15} /> Prep Guides</button>
         <button className="secondary" data-active={focusTarget === "notebook"} onClick={() => focusDeckSection("notebook")}><FileText size={15} /> Notebook</button>
         <button className="secondary" data-active={focusTarget === "performance"} onClick={() => focusDeckSection("performance")}><BarChart3 size={15} /> Performance</button>
@@ -16563,7 +16852,7 @@ function DecksView({
         {status ? <p className="muted">{status}</p> : null}
       </section>
 
-      <section className="deck-library-layout">
+      <section className="deck-library-layout" id="deck-library-saved">
         <div className="rail-card deck-list-card">
           <h2>Saved decks</h2>
           {decks.map((deck) => (

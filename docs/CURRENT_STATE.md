@@ -1,8 +1,8 @@
 # RiftLite Current Engineering State
 
-> **Current release state:** Windows v0.9.37 and macOS v0.9.37 are live. No website deployment was required. For a new chat, read `docs/HANDOVER_2026-08-07_POST_V0.9.37.md` first; `docs/release-notes-v0.9.37.md` is the customer-facing summary.
+> **Current release state:** v0.9.40 is a locally verified release candidate awaiting GitHub publication; Windows v0.9.37 and macOS v0.9.37 remain live. For current candidate scope, use `docs/release-notes-v0.9.40.md`; the post-publication handover will become authoritative after both installers are verified.
 
-Last updated: 2026-08-07
+Last updated: 2026-08-08
 
 For a new Codex chat, read `docs/HANDOVER_2026-08-07_POST_V0.9.37.md` first. This file remains the longer architecture and append-only release history; some older sections are historical rather than current operational truth.
 
@@ -10,7 +10,7 @@ For a new Codex chat, read `docs/HANDOVER_2026-08-07_POST_V0.9.37.md` first. Thi
 
 - Active cross-platform release source repo:
   `C:\Users\cdfpa\OneDrive\Documents\Claude\Projects\Riftlite Beta 0.6\desktop-v06`
-- Current local package version: `0.9.37` (customer-facing build `v0.9.37`); matching Windows and macOS releases are published
+- Current local package version: `0.9.40` (customer-facing build `v0.9.40`); publication is pending
 - Current branch: `agent/release-v0.9.12`
 - Windows GitHub release repository (`windows` remote): `cdfpartridge-web/RiftLite-Desktop`
 - macOS GitHub release repository (`origin` remote): `cdfpartridge-web/RiftLite-Desktop-mac`
@@ -18,7 +18,7 @@ For a new Codex chat, read `docs/HANDOVER_2026-08-07_POST_V0.9.37.md` first. Thi
 - Current published macOS release: `mac-v0.9.37` (2026-08-07)
 - Windows installer output:
   `C:\Users\cdfpa\OneDrive\Documents\Claude\Projects\Riftlite Beta 0.6\desktop-v06\release\RiftLiteBetaInstall.exe`
-- Current local Windows installer: v0.9.37 `release\RiftLiteBetaInstall.exe`, 216,415,717 bytes, SHA-256 `C7EF7C8E3674FB0087CB88DFB2A2C4B0035FA5860B9DC674643B9A2C744487E9`.
+- Current local Windows installer: v0.9.40 `release\RiftLiteBetaInstall.exe`, 219,381,270 bytes, SHA-256 `FDBE53238B619C2B0053AA1977AB9A5164C754F438A55C500E4B7DB62548D420`.
 
 Always name the remote explicitly when pushing: Windows source/tags go to `windows`; macOS source/tags go to `origin`. The repositories and release tags are deliberately separate.
 
@@ -29,6 +29,18 @@ Do not accidentally work from:
 - an old copied Mac source tree unless the task explicitly concerns the Mac build
 
 The active working tree may contain current work. Never reset, discard, or overwrite unrelated changes.
+
+## 2026-08-08 v0.9.40 Release Candidate (Local Windows Verified; Publication Pending)
+
+- Home is reorganized around the most recently played saved deck, official bundled card art, deck performance, My Decks, Community Decks, and a direct **View my replays** action.
+- **Play now** has a persistent Atlas/TCGA default while retaining capture-safe provider switching and routing an unresolved match to review before another game opens.
+- Frodan is the second Featured Creator with official YouTube, Twitch, and X media; the live creator-video configuration gives Frodan two weighted YouTube spots.
+- TCGA Web Replay persistence delta-encodes repeated shallow player-state snapshots. The original transport frames still determine capture identity, while the stored artifact remains semantically equivalent under the existing shallow-patch normalizer.
+- TCGA raw-JSON and gzip limits remain 32 MiB and 4 MiB. A candidate that still exceeds either limit is skipped as an optional replay artifact with bounded size diagnostics instead of blocking **Save match** or **Review later**.
+- Persistent default-platform settings are normalized on load/save and resynchronized from the durable store if a renderer save fails.
+- Focused validation passed 8 files / 80 tests. The full Windows release pipeline passed TypeScript lint, the 79-test account-sync gate, all 112 test files / 1,019 tests, the production build, installer/updater verification, executable and NSIS archive integrity checks, and the isolated packaged smoke test.
+- Windows candidate artifacts: installer 219,381,270 bytes, SHA-256 `FDBE53238B619C2B0053AA1977AB9A5164C754F438A55C500E4B7DB62548D420`; blockmap 207,215 bytes, SHA-256 `83C8E77451CDC9BECB945E4C924C801E8E9FAA022B13BA5630EEF5F67EDF4FA4`; updater manifest 344 bytes, SHA-256 `1FF38A631DF7CCD1627828061CED8A24482021BE63A899DDAE68A5BC0BED79D3`.
+- macOS artifacts must be built from the same immutable source by the native tag workflow; no stale local Mac artifact is valid for this release.
 
 ## 2026-08-07 v0.9.37 Release (Windows And macOS Live)
 

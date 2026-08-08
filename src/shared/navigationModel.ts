@@ -18,7 +18,7 @@ export const ACTIVE_VIEWS = [
 ] as const;
 
 export type ActiveView = typeof ACTIVE_VIEWS[number];
-export type DeckFocusTarget = "library" | "prep" | "notebook" | "performance";
+export type DeckFocusTarget = "library" | "saved" | "prep" | "notebook" | "performance";
 export type CommunityTab = "legend-meta" | "match-matrix" | "recent-matches" | "community-decks";
 export type NavigationDisclosureId = "review" | "prepare" | "community";
 

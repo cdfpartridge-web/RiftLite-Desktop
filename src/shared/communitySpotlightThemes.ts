@@ -1,5 +1,6 @@
 export const COMMUNITY_SPOTLIGHT_IDS = [
   "riftlab",
+  "frodan",
   "runesandrift",
   "challengertcg",
   "noveggies",
@@ -30,6 +31,7 @@ export const DEFAULT_COMMUNITY_SPOTLIGHT_THEME: CommunitySpotlightTheme = {
 
 export const COMMUNITY_SPOTLIGHT_THEMES = {
   riftlab: { primary: "#0F7AF2", secondary: "#DB2629" },
+  frodan: { primary: "#F28C00", secondary: "#17263A" },
   runesandrift: { primary: "#F3550F", secondary: "#1D2F43" },
   challengertcg: { primary: "#D52826", secondary: "#8FA0AF" },
   noveggies: { primary: "#D72700", secondary: "#7A3518" },

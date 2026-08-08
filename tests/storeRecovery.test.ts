@@ -643,6 +643,37 @@ describe("RiftLiteStore database recovery", () => {
     }
   });
 
+  it("defaults, persists, and validates the preferred game provider", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "riftlite-store-game-provider-"));
+    const dbPath = join(directory, "riftlite-v06.sqlite");
+    const legacyPath = join(directory, "riftlite-v06-store.json");
+    try {
+      await writeFile(legacyPath, JSON.stringify({
+        settings: { username: "Legacy player", defaultGamePlatform: "sim" }
+      }), "utf8");
+      const store = new RiftLiteStore(dbPath, legacyPath);
+      await store.load();
+      expect((await store.getSettings()).defaultGamePlatform).toBe("tcga");
+
+      const restarted = new RiftLiteStore(dbPath, legacyPath);
+      await restarted.load();
+      expect((await restarted.getSettings()).defaultGamePlatform).toBe("tcga");
+
+      await restarted.saveSettings({ defaultGamePlatform: "atlas" });
+
+      const atlasRestarted = new RiftLiteStore(dbPath, legacyPath);
+      await atlasRestarted.load();
+      expect((await atlasRestarted.getSettings()).defaultGamePlatform).toBe("atlas");
+
+      const validated = await atlasRestarted.saveSettings({
+        defaultGamePlatform: "sim"
+      } as unknown as Parameters<RiftLiteStore["saveSettings"]>[0]);
+      expect(validated.defaultGamePlatform).toBe("tcga");
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("migrates legacy hidden raw-capture settings to private opt-out defaults", async () => {
     const directory = await mkdtemp(join(tmpdir(), "riftlite-store-privacy-"));
     try {

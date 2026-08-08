@@ -1,4 +1,6 @@
-export type GamePlatform = "tcga" | "atlas" | "sim";
+export type GameProvider = "tcga" | "atlas";
+
+export type GamePlatform = GameProvider | "sim";
 
 export type MatchSource = "capture" | "scorepad" | "manual";
 
@@ -1451,6 +1453,7 @@ export interface UserSettings {
   username: string;
   firstRunComplete: boolean;
   lastSeenVersion: string;
+  defaultGamePlatform: GameProvider;
   syncMode: "community-and-hubs" | "community-only" | "private-hubs-only" | "local-only" | "custom";
     communitySyncEnabled: boolean;
     firebaseUid: string;

@@ -1,9 +1,9 @@
 # RiftLite Web Replay System Handover
 
-> Architecture and privacy reference only. Its release-baseline header and some later status statements are historical. For current production/repository state, start with `docs/HANDOVER_2026-08-07_POST_V0.9.37.md` and current code. TCGA Web Replay is now published but remains BO1-only; the public replay archive paginates, while the signed-in owner library remains unpaginated.
+> Architecture and privacy reference only. Its release-baseline header and some later status statements are historical. For current production/repository state, start with `docs/CURRENT_STATE.md` and current code. TCGA Web Replay is now published but remains BO1-only; the public replay archive paginates, while the signed-in owner library remains unpaginated.
 
-Architecture content last deeply verified: 2026-07-12; current-status routing corrected 2026-08-07
-Historical architecture baseline: RiftLite `v0.8.03` (package SemVer `0.8.3`); current desktop release: `v0.9.37`
+Architecture content last deeply verified: 2026-07-12; TCGA artifact persistence notes updated 2026-08-08
+Historical architecture baseline: RiftLite `v0.8.03` (package SemVer `0.8.3`); current desktop release candidate: `v0.9.40`
 Production website: `https://www.riftlite.com`
 Current high-level status: Atlas and TCGA Web Replay are live/account-linked; TCGA remains BO1-only. See the current handover and code for later implementation details.
 
@@ -298,6 +298,10 @@ Current limits:
 - source messages: 50,000;
 - default library list: 48;
 - maximum library list: 100.
+
+From desktop v0.9.40, TCGA artifact persistence delta-encodes JSON-identical shallow player-state fields across ordered `PLAYER_DATA` and `GAME_DATA` messages before writing the awaiting-result or product gzip. Replay-ready validation, transport ordering, message envelopes, privacy fields, original-frame SHA-256, and deterministic capture ID continue to use the untouched decoded capture. The website normalizer already shallow-merges these provider messages, so the compact artifact reconstructs the same canonical replay.
+
+The limits above remain security and hosting boundaries and must not be raised only on the desktop. If a compacted TCGA candidate still exceeds the 32 MiB expanded or 4 MiB gzip ceiling, the optional Web Replay is skipped with bounded raw/compressed size diagnostics. Local match persistence and Match Review completion continue; the client must not retry an impossible artifact in a way that traps **Save match** or **Review later**.
 
 There is currently no deletion API and no cursor pagination. Filters and sorting operate client-side over the fetched list.
 

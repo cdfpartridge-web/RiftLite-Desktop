@@ -2554,7 +2554,8 @@ async function finalizeTcgaWebReplayCapture(
           captureReason: result.reason,
           consideredCandidates: result.consideredCandidates,
           readyCandidates: result.readyCandidates,
-          rejectionCounts: result.rejectionCounts
+          rejectionCounts: result.rejectionCounts,
+          ...(result.artifactLimit ? { artifactLimit: result.artifactLimit } : {})
         }
       }).catch(() => undefined);
     }
@@ -8366,7 +8367,7 @@ app.whenReady().then(async () => {
           if (UI_SNAPSHOT_PLATFORM === "atlas" || UI_SNAPSHOT_PLATFORM === "tcga") {
             const platformLiteral = JSON.stringify(UI_SNAPSHOT_PLATFORM);
             await mainWindow.webContents.executeJavaScript(`(() => {
-              const button = document.querySelector('.home-top-actions button[data-platform=' + ${platformLiteral} + ']');
+              const button = document.querySelector('.home-platform-option[data-platform=' + ${platformLiteral} + ']');
               if (!(button instanceof HTMLButtonElement)) return false;
               button.click();
               return true;

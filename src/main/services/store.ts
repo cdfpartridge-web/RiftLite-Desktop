@@ -51,6 +51,7 @@ const DEFAULT_SETTINGS: UserSettings = {
   username: "",
   firstRunComplete: false,
   lastSeenVersion: "",
+  defaultGamePlatform: "tcga",
   syncMode: "community-and-hubs",
   communitySyncEnabled: true,
   firebaseUid: "",
@@ -132,6 +133,10 @@ const DEFAULT_SETTINGS: UserSettings = {
 
 function normalizeReplayVideoMode(_value: unknown): UserSettings["replayVideoMode"] {
   return "game-frame";
+}
+
+function normalizeDefaultGamePlatform(value: unknown): UserSettings["defaultGamePlatform"] {
+  return value === "atlas" ? "atlas" : "tcga";
 }
 
 function normalizeReplayFramePreset(value: unknown): UserSettings["replayFramePreset"] {
@@ -387,6 +392,7 @@ export class RiftLiteStore {
     return {
       ...DEFAULT_SETTINGS,
       ...parsed,
+      defaultGamePlatform: normalizeDefaultGamePlatform((parsed as { defaultGamePlatform?: unknown }).defaultGamePlatform),
       replayVideoMode: normalizeReplayVideoMode((parsed as { replayVideoMode?: unknown }).replayVideoMode),
       replayFramePreset: normalizeReplayFramePreset((parsed as { replayFramePreset?: unknown }).replayFramePreset),
       overlayDisplay: { ...DEFAULT_SETTINGS.overlayDisplay, ...parsed.overlayDisplay },
@@ -489,6 +495,9 @@ export class RiftLiteStore {
     patch: Partial<UserSettings>,
     current: UserSettings
   ): Promise<ProtectedSettingsResult> {
+    const defaultGamePlatform = Object.prototype.hasOwnProperty.call(patch, "defaultGamePlatform")
+      ? normalizeDefaultGamePlatform((patch as { defaultGamePlatform?: unknown }).defaultGamePlatform)
+      : current.defaultGamePlatform;
     const replayVideoMode = Object.prototype.hasOwnProperty.call(patch, "replayVideoMode")
       ? normalizeReplayVideoMode((patch as { replayVideoMode?: unknown }).replayVideoMode)
       : current.replayVideoMode;
@@ -501,6 +510,7 @@ export class RiftLiteStore {
       // The secure credential vault owns this transaction marker. Renderer or
       // restore patches cannot manufacture a credential/identity pairing.
       firebaseCredentialGeneration: current.firebaseCredentialGeneration,
+      defaultGamePlatform,
       replayVideoMode,
       replayFramePreset,
       replayCustomFlagTypes: Object.prototype.hasOwnProperty.call(patch, "replayCustomFlagTypes")

@@ -161,6 +161,15 @@
   background: rgb(6 16 29 / 78%);
 }
 
+.home-default-platform {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 12px;
+  color: #dce8f4;
+  cursor: default;
+}
+
 .home-top-play {
   min-height: 40px;
   padding: 8px 16px;
@@ -416,6 +425,265 @@
   box-shadow: -25px -14px 0 -3px rgb(8 25 41), -25px -14px 0 -1px rgb(48 176 210 / 20%);
 }
 
+.modern-home-feature-row {
+  display: grid;
+  grid-template-columns: minmax(390px, 1.35fr) minmax(310px, .95fr);
+  gap: 10px;
+  min-width: 0;
+}
+
+.modern-deck-glance {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(155px, 38%);
+  min-height: 282px;
+  border-color: rgb(52 139 185 / 56%);
+  background:
+    radial-gradient(circle at 86% 30%, rgb(40 215 255 / 12%), transparent 35%),
+    linear-gradient(135deg, rgb(8 28 47 / 97%), rgb(5 16 29 / 98%));
+}
+
+.modern-deck-glance-copy {
+  position: relative;
+  z-index: 3;
+  display: grid;
+  align-content: center;
+  justify-items: start;
+  gap: 10px;
+  min-width: 0;
+  padding: 20px;
+}
+
+.modern-deck-glance-labels {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.modern-source-badge {
+  padding: 3px 7px;
+  border: 1px solid rgb(89 132 179 / 35%);
+  border-radius: 999px;
+  background: rgb(8 31 52 / 78%);
+  color: #a8bdd2;
+  font-size: 9px;
+  font-weight: 850;
+}
+
+.modern-deck-glance-copy h2 {
+  overflow: hidden;
+  max-width: 100%;
+  color: #f4f7fb;
+  font-size: 24px;
+  letter-spacing: -.025em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.modern-deck-glance-copy > p {
+  color: #bdcad7;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.modern-deck-glance-stats {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  min-height: 56px;
+}
+
+.modern-deck-win-rate {
+  display: grid;
+  min-width: 86px;
+  gap: 2px;
+  padding-right: 18px;
+  border-right: 1px solid rgb(83 116 152 / 34%);
+}
+
+.modern-deck-win-rate strong {
+  color: #39e2b7;
+  font-size: 25px;
+  line-height: 1;
+}
+
+.modern-deck-win-rate span,
+.modern-deck-form > span {
+  color: #9baabd;
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.modern-deck-form {
+  display: grid;
+  gap: 6px;
+}
+
+.modern-deck-form > div {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.modern-deck-form i {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border: 1px solid rgb(50 224 180 / 62%);
+  border-radius: 50%;
+  background: rgb(25 123 96 / 19%);
+  color: #38e3b5;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 950;
+}
+
+.modern-deck-form i[data-result="Loss"] {
+  border-color: rgb(255 93 116 / 68%);
+  background: rgb(135 33 50 / 18%);
+  color: #ff6378;
+}
+
+.modern-deck-form i[data-result="Draw"] {
+  border-color: rgb(238 190 78 / 62%);
+  background: rgb(114 84 25 / 19%);
+  color: #f0c45c;
+}
+
+.modern-deck-form em {
+  color: #7f90a5;
+  font-size: 11px;
+  font-style: normal;
+}
+
+.modern-deck-glance .modern-deck-art,
+.modern-deck-glance .modern-deck-art-fallback {
+  min-height: 282px;
+}
+
+.modern-deck-glance .modern-deck-art-card {
+  right: 16px;
+  bottom: -20px;
+  width: min(148px, 82%);
+  max-height: 250px;
+  border-radius: 11px;
+  transform: rotate(5deg);
+}
+
+.modern-deck-glance .modern-deck-art-backdrop {
+  opacity: .72;
+}
+
+.modern-deck-destinations {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  min-width: 0;
+}
+
+.modern-deck-destination {
+  display: grid;
+  grid-template-rows: auto minmax(72px, 1fr) auto;
+  align-items: stretch;
+  gap: 9px;
+  min-width: 0;
+  min-height: 282px;
+  padding: 15px;
+  border-color: rgb(67 105 147 / 50%);
+}
+
+.modern-deck-destination > div:first-child {
+  display: grid;
+  align-content: start;
+  gap: 7px;
+}
+
+.modern-deck-destination h2 {
+  color: #f3f6fa;
+  font-size: 18px;
+  line-height: 1.08;
+}
+
+.modern-deck-destination p {
+  color: #b6c2cf;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.modern-deck-destination > button {
+  display: inline-flex;
+  width: 100%;
+  min-width: 0;
+  min-height: 38px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding-inline: 8px;
+  font-size: 11px;
+}
+
+.modern-community-deck-destination {
+  background:
+    radial-gradient(circle at 70% 48%, rgb(122 83 224 / 9%), transparent 42%),
+    linear-gradient(155deg, rgb(11 25 42 / 95%), rgb(5 15 27 / 96%));
+}
+
+.home-deck-link-art {
+  position: relative;
+  display: grid;
+  min-height: 82px;
+  place-items: center;
+  overflow: hidden;
+  color: rgb(112 181 211 / 48%);
+}
+
+.home-deck-link-art img {
+  position: absolute;
+  bottom: -19px;
+  left: 50%;
+  width: 61px;
+  max-height: 94px;
+  border: 1px solid rgb(218 178 64 / 58%);
+  border-radius: 7px;
+  object-fit: cover;
+  box-shadow: 0 9px 18px rgb(0 0 0 / 43%);
+}
+
+.home-deck-link-art img:nth-child(1) {
+  z-index: 1;
+  transform: translateX(-78%) rotate(-9deg);
+}
+
+.home-deck-link-art img:nth-child(2) {
+  z-index: 3;
+  transform: translateX(-50%);
+}
+
+.home-deck-link-art img:nth-child(3) {
+  z-index: 2;
+  transform: translateX(-22%) rotate(9deg);
+}
+
+.modern-panel-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.modern-replay-action {
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  gap: 6px;
+  border-color: rgb(46 220 255 / 68%);
+  color: #c7f7ff;
+  font-size: 11px;
+  font-weight: 900;
+}
+
 .modern-recent-panel {
   min-height: 240px;
 }
@@ -623,6 +891,59 @@
   font-size: 12px;
 }
 
+.modern-activity-summary {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 72px;
+  padding: 13px 18px;
+}
+
+.modern-activity-summary > svg {
+  color: #29ddf8;
+}
+
+.modern-activity-summary > div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.modern-activity-summary h3 {
+  overflow: hidden;
+  color: #eaf2f9;
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.modern-activity-summary p {
+  overflow: hidden;
+  color: #8999ac;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.modern-activity-summary > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #9aaabd;
+  font-size: 10px;
+  font-weight: 850;
+  white-space: nowrap;
+}
+
+.modern-activity-summary > span[data-tone="ready"] {
+  color: #38dfb4;
+}
+
+.modern-activity-summary > span[data-tone="attention"] {
+  color: #ffc164;
+}
+
 .modern-sponsor {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 60px;
@@ -698,6 +1019,110 @@
   color: #91a0b2;
   font-size: 10px;
   text-align: center;
+}
+
+.modern-play-now-card {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  min-height: 205px;
+  padding: 14px;
+  border-color: rgb(53 122 169 / 48%);
+  background:
+    radial-gradient(circle at 12% 108%, rgb(40 215 255 / 8%), transparent 42%),
+    linear-gradient(145deg, rgb(9 24 40 / 97%), rgb(5 15 27 / 98%));
+}
+
+.modern-play-now-card h2 {
+  color: #f3f7fb;
+  font-size: 18px;
+}
+
+.home-platform-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.home-platform-option {
+  display: grid;
+  grid-template-columns: 24px minmax(0, auto) auto;
+  min-width: 0;
+  min-height: 48px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 8px 10px;
+  border: 1px solid rgb(69 103 143 / 43%);
+  border-radius: 9px;
+  background: rgb(7 20 34 / 86%);
+  color: #dce7f2;
+}
+
+.home-platform-option:hover {
+  border-color: rgb(55 190 225 / 58%);
+  background: rgb(12 40 61 / 85%);
+}
+
+.home-platform-option[data-active="true"] {
+  border-color: #31dff8;
+  background: linear-gradient(135deg, rgb(28 124 165 / 34%), rgb(10 42 65 / 80%));
+  color: #f3fbff;
+  box-shadow: inset 0 0 0 1px rgb(49 223 248 / 12%);
+}
+
+.home-platform-option > svg {
+  color: #53def7;
+}
+
+.home-platform-option strong {
+  overflow: hidden;
+  font-size: 14px;
+  text-overflow: ellipsis;
+}
+
+.home-platform-option small {
+  padding: 2px 5px;
+  border-radius: 4px;
+  background: #42dff5;
+  color: #06131e;
+  font-size: 7px;
+  font-weight: 950;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+}
+
+.modern-play-now-action {
+  display: inline-flex;
+  width: 100%;
+  min-height: 40px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  font-weight: 950;
+}
+
+.modern-play-readiness {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.modern-play-readiness span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #8293a7;
+  font-size: 10px;
+}
+
+.modern-play-readiness span[data-tone="ready"] {
+  color: #42dcb6;
+}
+
+.modern-play-readiness span[data-tone="attention"] {
+  color: #ffc164;
 }
 
 .modern-active-deck-card {
@@ -1018,7 +1443,7 @@
 
 .modern-discover-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(220px, 1fr));
+  grid-template-columns: repeat(3, minmax(220px, 1fr));
   gap: 12px;
   padding-top: 4px;
   scroll-margin-top: 16px;
@@ -1040,9 +1465,19 @@
     linear-gradient(180deg, rgb(20 28 52 / 88%), rgb(9 15 28 / 96%));
 }
 
+@media (max-width: 1480px) {
+  .modern-home-feature-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 @media (max-width: 1260px) {
   .modern-home-layout {
     grid-template-columns: minmax(520px, 1.25fr) minmax(340px, .9fr);
+  }
+
+  .modern-deck-destinations {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .modern-status-item {
@@ -1171,6 +1606,33 @@
     grid-template-columns: 1fr;
   }
 
+  .modern-deck-glance,
+  .modern-deck-destinations {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .modern-deck-glance .modern-deck-art,
+  .modern-deck-glance .modern-deck-art-fallback {
+    min-height: 205px;
+  }
+
+  .modern-deck-glance .modern-deck-art-card {
+    right: 50%;
+    bottom: -40px;
+    width: 136px;
+    transform: translateX(50%) rotate(4deg);
+  }
+
+  .modern-panel-header {
+    align-items: flex-start;
+  }
+
+  .modern-panel-actions {
+    align-items: flex-end;
+    flex-direction: column;
+    gap: 2px;
+  }
+
   .modern-next-art {
     opacity: .35;
   }
@@ -1189,6 +1651,14 @@
   }
 
   .modern-insight-panel .modern-text-action {
+    grid-column: 2;
+  }
+
+  .modern-activity-summary {
+    grid-template-columns: 26px minmax(0, 1fr);
+  }
+
+  .modern-activity-summary > span {
     grid-column: 2;
   }
 

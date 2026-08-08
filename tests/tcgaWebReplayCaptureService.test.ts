@@ -59,9 +59,26 @@ function hookEvent(
   };
 }
 
-function playerState(playerId: string, setupStep: number) {
+function playerState(playerId: string, setupStep: number, repeatedPlayerMetadata = "") {
   return {
     setupStep,
+    ...(repeatedPlayerMetadata ? {
+      deck: [{
+        id: `${playerId}-deck-card`,
+        owner: playerId,
+        position: { section: "Deck", index: 0 },
+        cardData: {
+          id: `${playerId}-DECK-CODE`,
+          name: `${playerId} Deck Card`,
+          face: repeatedPlayerMetadata
+        }
+      }],
+      newToHistory: {
+        id: `${playerId}-player-history`,
+        playerId,
+        text: "play.logs.player.draw"
+      }
+    } : {}),
     visibleCards: [
       {
         id: `${playerId}-legend`,
@@ -186,7 +203,8 @@ async function addReplayReadyChannel(
   channel: string,
   sequenceStart: number,
   offsetStart: number,
-  localId: string
+  localId: string,
+  repeatedPlayerMetadata = ""
 ): Promise<void> {
   const opponentId = `${localId}-OPPONENT`;
   expect(service.ingestBindingEvent(41, channelEvent(generation, channel, "open", offsetStart))).toBe(true);
@@ -194,8 +212,8 @@ async function addReplayReadyChannel(
     type: "NEWCOMMER_GAMEDATA",
     payload: {
       players: {
-        [localId]: playerState(localId, 0),
-        [opponentId]: playerState(opponentId, 0)
+        [localId]: playerState(localId, 0, repeatedPlayerMetadata),
+        [opponentId]: playerState(opponentId, 0, repeatedPlayerMetadata)
       },
       general: { turnCount: 1 }
     }
@@ -203,18 +221,18 @@ async function addReplayReadyChannel(
   expect(service.ingestBindingEvent(41, dataEvent(generation, channel, "out", sequenceStart + 1, offsetStart + 1_000, await packed({
     type: "PLAYER_DATA",
     gameId: localId,
-    payload: playerState(localId, 1)
+    payload: playerState(localId, 1, repeatedPlayerMetadata)
   })))).toBe(true);
   expect(service.ingestBindingEvent(41, dataEvent(generation, channel, "in", sequenceStart + 2, offsetStart + 2_000, await packed({
     type: "PLAYER_DATA",
     gameId: opponentId,
-    payload: playerState(opponentId, 1)
+    payload: playerState(opponentId, 1, repeatedPlayerMetadata)
   })))).toBe(true);
   expect(service.ingestBindingEvent(41, dataEvent(generation, channel, "out", sequenceStart + 3, offsetStart + 2_500, await packed({
     type: "GAME_DATA",
     gameId: localId,
     payload: {
-      playerData: playerState(localId, 4),
+      playerData: playerState(localId, 4, repeatedPlayerMetadata),
       newToHistory: {
         id: `${localId}-mulligan`,
         playerId: localId,
@@ -226,7 +244,7 @@ async function addReplayReadyChannel(
     type: "GAME_DATA",
     gameId: localId,
     payload: {
-      playerData: playerState(localId, 10),
+      playerData: playerState(localId, 10, repeatedPlayerMetadata),
       setupStep: 10,
       turnCount: 13,
       currentPlayer: localId,
@@ -242,7 +260,7 @@ async function addReplayReadyChannel(
     type: "GAME_DATA",
     gameId: opponentId,
     payload: {
-      playerData: playerState(opponentId, 10),
+      playerData: playerState(opponentId, 10, repeatedPlayerMetadata),
       turnCount: 13,
       currentPlayer: localId
     }
@@ -376,6 +394,195 @@ describe("TCGA Web Replay capture service", () => {
 
     expect(confirmed.status).toBe("registered");
     expect(register).toHaveBeenCalledTimes(1);
+  });
+
+  it("delta-encodes repeated player snapshots before awaiting and product persistence", async () => {
+    const directory = await temporaryDirectory();
+    const register = vi.fn(async () => "registered");
+    const rawLimit = 24 * 1024;
+    const repeatedMarker = `REPEATED-PLAYER-STATE-${"x".repeat(6_000)}`;
+    const service = new TcgaWebReplayCaptureService<FinishIdentity, { id: string }, string>(
+      directory,
+      register,
+      { maxRawJsonBytes: rawLimit }
+    );
+    await service.setEnabled("account-1");
+    const generation = service.beginDocument(41);
+    await addReplayReadyChannel(
+      service,
+      generation,
+      "channel-delta-encoded",
+      1,
+      12_000,
+      "LOCAL-DELTA",
+      repeatedMarker
+    );
+    const automatic = finishIdentity("win");
+    automatic.confirmedResult = false;
+
+    const awaiting = await service.finalize(automatic, { id: "draft-replay" });
+
+    expect(awaiting.status).toBe("awaiting-result");
+    if (awaiting.status !== "awaiting-result") throw new Error("Expected awaiting-result capture");
+    const pendingRawBytes = gunzipSync(await readFile(awaiting.capture.candidatePath));
+    const pendingRawText = pendingRawBytes.toString("utf8");
+    const pendingRaw = JSON.parse(pendingRawText) as Record<string, any>;
+    expect(pendingRawBytes.byteLength).toBeLessThanOrEqual(rawLimit);
+    expect(pendingRaw.messages).toHaveLength(6);
+    expect(pendingRawText.split("REPEATED-PLAYER-STATE-")).toHaveLength(3);
+    expect(pendingRaw.messages[1].parsed.payload).toMatchObject({
+      newToHistory: { id: "LOCAL-DELTA-player-history" }
+    });
+    expect(pendingRaw.messages[3].parsed.payload.playerData).not.toHaveProperty("deck");
+    expect(pendingRaw.messages[3].parsed.payload.playerData).not.toHaveProperty("visibleCards");
+    expect(pendingRaw.messages[4].parsed.payload).toMatchObject({
+      turnCount: 13,
+      currentPlayer: "LOCAL-DELTA",
+      newToHistory: { id: "LOCAL-DELTA-draw" }
+    });
+
+    const confirmed = await service.finalize(finishIdentity("win"), { id: "confirmed-replay" });
+
+    expect(confirmed.status).toBe("registered");
+    if (confirmed.status !== "registered") throw new Error("Expected registered capture");
+    expect(confirmed.capture.captureSessionId).toBe(awaiting.capture.captureSessionId);
+    expect(confirmed.capture.rawJsonBytes).toBeLessThanOrEqual(rawLimit);
+    expect(register).toHaveBeenCalledOnce();
+    const productRaw = JSON.parse(gunzipSync(await readFile(confirmed.capture.localPath)).toString("utf8"));
+    expect(productRaw.capture.match).toMatchObject({ result: "win" });
+    expect(JSON.stringify(productRaw).split("REPEATED-PLAYER-STATE-")).toHaveLength(3);
+  });
+
+  it("delta-encodes repeated player snapshots on direct confirmed persistence", async () => {
+    const directory = await temporaryDirectory();
+    const register = vi.fn(async () => "registered");
+    const rawLimit = 24 * 1024;
+    const service = new TcgaWebReplayCaptureService<FinishIdentity, { id: string }, string>(
+      directory,
+      register,
+      { maxRawJsonBytes: rawLimit }
+    );
+    await service.setEnabled("account-1");
+    const generation = service.beginDocument(41);
+    await addReplayReadyChannel(
+      service,
+      generation,
+      "channel-direct-delta",
+      1,
+      12_000,
+      "LOCAL-DIRECT-DELTA",
+      `REPEATED-DIRECT-STATE-${"y".repeat(6_000)}`
+    );
+
+    const result = await service.finalize(finishIdentity("loss"), { id: "confirmed-replay" });
+
+    expect(result.status).toBe("registered");
+    if (result.status !== "registered") throw new Error("Expected registered capture");
+    expect(result.capture.rawJsonBytes).toBeLessThanOrEqual(rawLimit);
+    expect(register).toHaveBeenCalledOnce();
+    const productRawText = gunzipSync(await readFile(result.capture.localPath)).toString("utf8");
+    expect(productRawText.split("REPEATED-DIRECT-STATE-")).toHaveLength(3);
+  });
+
+  it("skips an oversized awaiting-result artifact without blocking match review", async () => {
+    const directory = await temporaryDirectory();
+    const register = vi.fn(async () => "unexpected");
+    const service = new TcgaWebReplayCaptureService<FinishIdentity, { id: string }, string>(
+      directory,
+      register,
+      { maxRawJsonBytes: 1 }
+    );
+    await service.setEnabled("account-1");
+    const generation = service.beginDocument(41);
+    await addReplayReadyChannel(service, generation, "channel-oversized-awaiting", 1, 12_000, "LOCAL-LARGE");
+    const automatic = finishIdentity("win");
+    automatic.confirmedResult = false;
+
+    await expect(service.finalize(automatic, { id: "draft-replay" })).resolves.toMatchObject({
+      status: "skipped",
+      reason: "artifact-too-large",
+      consideredCandidates: 1,
+      readyCandidates: 1,
+      artifactLimit: {
+        stage: "awaiting-result",
+        encoding: "raw-json",
+        actualBytes: expect.any(Number),
+        limitBytes: 1
+      }
+    });
+
+    expect(register).not.toHaveBeenCalled();
+    expect(await readdir(directory).catch(() => [])).toEqual([]);
+    await expect(service.finalize(automatic, { id: "draft-replay" })).resolves.toMatchObject({
+      status: "skipped",
+      reason: "no-match-window-candidate"
+    });
+  });
+
+  it("skips an awaiting-result artifact above the gzip limit without retrying it", async () => {
+    const directory = await temporaryDirectory();
+    const register = vi.fn(async () => "unexpected");
+    const service = new TcgaWebReplayCaptureService<FinishIdentity, { id: string }, string>(
+      directory,
+      register,
+      { maxGzipBytes: 1 }
+    );
+    await service.setEnabled("account-1");
+    const generation = service.beginDocument(41);
+    await addReplayReadyChannel(service, generation, "channel-oversized-gzip", 1, 12_000, "LOCAL-GZIP");
+    const automatic = finishIdentity("loss");
+    automatic.confirmedResult = false;
+
+    await expect(service.finalize(automatic, { id: "draft-replay" })).resolves.toMatchObject({
+      status: "skipped",
+      reason: "artifact-too-large",
+      artifactLimit: {
+        stage: "awaiting-result",
+        encoding: "gzip",
+        actualBytes: expect.any(Number),
+        limitBytes: 1
+      }
+    });
+
+    expect(register).not.toHaveBeenCalled();
+    expect(await readdir(directory).catch(() => [])).toEqual([]);
+    await expect(service.finalize(automatic, { id: "draft-replay" })).resolves.toMatchObject({
+      status: "skipped",
+      reason: "no-match-window-candidate"
+    });
+  });
+
+  it("skips an oversized confirmed product artifact without blocking match save", async () => {
+    const directory = await temporaryDirectory();
+    const register = vi.fn(async () => "unexpected");
+    const service = new TcgaWebReplayCaptureService<FinishIdentity, { id: string }, string>(
+      directory,
+      register,
+      { maxRawJsonBytes: 1 }
+    );
+    await service.setEnabled("account-1");
+    const generation = service.beginDocument(41);
+    await addReplayReadyChannel(service, generation, "channel-oversized-product", 1, 12_000, "LOCAL-PRODUCT");
+
+    await expect(service.finalize(finishIdentity("win"), { id: "confirmed-replay" })).resolves.toMatchObject({
+      status: "skipped",
+      reason: "artifact-too-large",
+      consideredCandidates: 1,
+      readyCandidates: 1,
+      artifactLimit: {
+        stage: "product",
+        encoding: "raw-json",
+        actualBytes: expect.any(Number),
+        limitBytes: 1
+      }
+    });
+
+    expect(register).not.toHaveBeenCalled();
+    expect(await readdir(directory).catch(() => [])).toEqual([]);
+    await expect(service.finalize(finishIdentity("win"), { id: "confirmed-replay" })).resolves.toMatchObject({
+      status: "skipped",
+      reason: "no-match-window-candidate"
+    });
   });
 
   it("serializes concurrent finalization so one capture is registered only once", async () => {
