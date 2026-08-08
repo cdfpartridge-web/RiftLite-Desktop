@@ -1,21 +1,21 @@
 # RiftLite Current Engineering State
 
-> **Current release state:** v0.9.40 is a locally verified release candidate awaiting GitHub publication; Windows v0.9.37 and macOS v0.9.37 remain live. For current candidate scope, use `docs/release-notes-v0.9.40.md`; the post-publication handover will become authoritative after both installers are verified.
+> **Current release state:** Windows v0.9.40 and macOS v0.9.40 are live. For a new chat, read `docs/HANDOVER_2026-08-08_POST_V0.9.40.md` first; `docs/release-notes-v0.9.40.md` is the customer-facing summary.
 
 Last updated: 2026-08-08
 
-For a new Codex chat, read `docs/HANDOVER_2026-08-07_POST_V0.9.37.md` first. This file remains the longer architecture and append-only release history; some older sections are historical rather than current operational truth.
+For a new Codex chat, read `docs/HANDOVER_2026-08-08_POST_V0.9.40.md` first. This file remains the longer architecture and append-only release history; some older sections are historical rather than current operational truth.
 
 ## Canonical Repository
 
 - Active cross-platform release source repo:
   `C:\Users\cdfpa\OneDrive\Documents\Claude\Projects\Riftlite Beta 0.6\desktop-v06`
-- Current local package version: `0.9.40` (customer-facing build `v0.9.40`); publication is pending
+- Current local package version: `0.9.40` (customer-facing build `v0.9.40`); matching Windows and macOS releases are published
 - Current branch: `agent/release-v0.9.12`
 - Windows GitHub release repository (`windows` remote): `cdfpartridge-web/RiftLite-Desktop`
 - macOS GitHub release repository (`origin` remote): `cdfpartridge-web/RiftLite-Desktop-mac`
-- Current published Windows release: `v0.9.37` (2026-08-07)
-- Current published macOS release: `mac-v0.9.37` (2026-08-07)
+- Current published Windows release: `v0.9.40` (2026-08-08)
+- Current published macOS release: `mac-v0.9.40` (2026-08-08)
 - Windows installer output:
   `C:\Users\cdfpa\OneDrive\Documents\Claude\Projects\Riftlite Beta 0.6\desktop-v06\release\RiftLiteBetaInstall.exe`
 - Current local Windows installer: v0.9.40 `release\RiftLiteBetaInstall.exe`, 219,381,270 bytes, SHA-256 `FDBE53238B619C2B0053AA1977AB9A5164C754F438A55C500E4B7DB62548D420`.
@@ -30,8 +30,11 @@ Do not accidentally work from:
 
 The active working tree may contain current work. Never reset, discard, or overwrite unrelated changes.
 
-## 2026-08-08 v0.9.40 Release Candidate (Local Windows Verified; Publication Pending)
+## 2026-08-08 v0.9.40 Release (Windows And macOS Live)
 
+- Release commit `8b75731f7e447b2b065c7d17e99a015c36066f3c` is tagged as Windows `v0.9.40` and macOS `mac-v0.9.40`; both tags dereference to that same immutable source.
+- Windows release: `https://github.com/cdfpartridge-web/RiftLite-Desktop/releases/tag/v0.9.40` and is the repository's current latest release.
+- macOS release: `https://github.com/cdfpartridge-web/RiftLite-Desktop-mac/releases/tag/mac-v0.9.40` and is the repository's current latest release. Native workflow `https://github.com/cdfpartridge-web/RiftLite-Desktop-mac/actions/runs/31253028878` completed successfully.
 - Home is reorganized around the most recently played saved deck, official bundled card art, deck performance, My Decks, Community Decks, and a direct **View my replays** action.
 - **Play now** has a persistent Atlas/TCGA default while retaining capture-safe provider switching and routing an unresolved match to review before another game opens.
 - Frodan is the second Featured Creator with official YouTube, Twitch, and X media; the live creator-video configuration gives Frodan two weighted YouTube spots.
@@ -39,8 +42,12 @@ The active working tree may contain current work. Never reset, discard, or overw
 - TCGA raw-JSON and gzip limits remain 32 MiB and 4 MiB. A candidate that still exceeds either limit is skipped as an optional replay artifact with bounded size diagnostics instead of blocking **Save match** or **Review later**.
 - Persistent default-platform settings are normalized on load/save and resynchronized from the durable store if a renderer save fails.
 - Focused validation passed 8 files / 80 tests. The full Windows release pipeline passed TypeScript lint, the 79-test account-sync gate, all 112 test files / 1,019 tests, the production build, installer/updater verification, executable and NSIS archive integrity checks, and the isolated packaged smoke test.
-- Windows candidate artifacts: installer 219,381,270 bytes, SHA-256 `FDBE53238B619C2B0053AA1977AB9A5164C754F438A55C500E4B7DB62548D420`; blockmap 207,215 bytes, SHA-256 `83C8E77451CDC9BECB945E4C924C801E8E9FAA022B13BA5630EEF5F67EDF4FA4`; updater manifest 344 bytes, SHA-256 `1FF38A631DF7CCD1627828061CED8A24482021BE63A899DDAE68A5BC0BED79D3`.
-- macOS artifacts must be built from the same immutable source by the native tag workflow; no stale local Mac artifact is valid for this release.
+- The native macOS workflow passed the same release gate plus Intel and Apple Silicon packaging, architecture-specific FFmpeg checks, updater/bundle identity validation, strict ad-hoc signature verification, DMG verification, and the packaged smoke test.
+- Windows artifacts: installer 219,381,270 bytes, SHA-256 `FDBE53238B619C2B0053AA1977AB9A5164C754F438A55C500E4B7DB62548D420`; blockmap 207,215 bytes, SHA-256 `83C8E77451CDC9BECB945E4C924C801E8E9FAA022B13BA5630EEF5F67EDF4FA4`; updater manifest 344 bytes, SHA-256 `1FF38A631DF7CCD1627828061CED8A24482021BE63A899DDAE68A5BC0BED79D3`.
+- macOS Apple Silicon DMG: 173,764,618 bytes, SHA-256 `7B70FAEA8B286B5A58720FCE352FD6126519FA292B58E8534A73C9F11EBBFC1A`; ZIP: 166,346,588 bytes, SHA-256 `C46FC02056A7BD17460A247E5C6014625C164748974515971A0B85AD0CF47B1E`.
+- macOS Intel DMG: 188,890,408 bytes, SHA-256 `78AD8E1CF72E4FB36AA4F701129282EB345E6EBD1E30409EAA82939A947F5E3D`; ZIP: 181,246,915 bytes, SHA-256 `9F5A83476AD6018683E64EC9BB2E591A2E31CB7E92D328909EF59A7C95B48AD3`; updater manifest: 830 bytes, SHA-256 `2CC5AB1E6686C3370EF3F9EF665BA1B2DEC0D9A000613E4C5C5DA25FFF409DB6`.
+- All three Windows and all five macOS assets were independently downloaded after publication and matched their public sizes and SHA-256 digests. Both updater manifests report version `0.9.40`; every referenced installer size and SHA-512 relationship matches the downloaded artifact.
+- No website code, Discord message, replay mutation, or production-data mutation was performed as part of the desktop publication. Frodan's two-slot creator-video configuration was already live before these desktop tags were created.
 
 ## 2026-08-07 v0.9.37 Release (Windows And macOS Live)
 
