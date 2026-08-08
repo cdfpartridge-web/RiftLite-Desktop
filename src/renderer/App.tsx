@@ -119,6 +119,7 @@ import type {
   ReplayAnnotationTool,
   ReplayFlagType,
   ReplayFramePreset,
+  ReplayLocalAssetKind,
   ReplayMp4ExportOptions,
   ReplayTeachingLayer,
   ReplayVoiceNote,
@@ -213,6 +214,7 @@ import {
 } from "../shared/matchCombine";
 import { localMatchesEligibleForStats, upsertMatchPreservingOrder } from "../shared/matchList";
 import { upsertReplayPreservingOrder } from "../shared/replayList";
+import { shouldBufferReplayVideoInMemory } from "../shared/replayExportPolicy";
 import { publicCommunitySyncEnabled, syncModePatch } from "../shared/syncPolicy";
 import {
   atlasExplicitRepairUrl,
@@ -19298,7 +19300,7 @@ function ReplayExportDialog({
     let objectUrl = "";
     const sourceVideo = replay?.video;
     setCropPreviewVideoUrl(sourceVideo?.url ?? "");
-    if (!sourceVideo) {
+    if (!sourceVideo || !shouldBufferReplayVideoInMemory(sourceVideo.sizeBytes)) {
       return () => undefined;
     }
     void window.riftlite.loadReplayVideo(sourceVideo)
@@ -19320,7 +19322,7 @@ function ReplayExportDialog({
         URL.revokeObjectURL(objectUrl);
       }
     };
-  }, [replay?.video?.path, replay?.video?.url, replay?.video?.mimeType]);
+  }, [replay?.video?.path, replay?.video?.url, replay?.video?.mimeType, replay?.video?.sizeBytes]);
 
   useEffect(() => {
     const element = cropPreviewVideoRef.current;
@@ -19969,6 +19971,7 @@ function ReplayDetail({
   const [addingLayer, setAddingLayer] = useState(false);
   const [layerStatus, setLayerStatus] = useState("");
   const [rawCaptureStatus, setRawCaptureStatus] = useState("");
+  const [fileRevealStatus, setFileRevealStatus] = useState("");
   const [editingReplayTitle, setEditingReplayTitle] = useState(false);
   const [replayTitleDraft, setReplayTitleDraft] = useState(model.replay.title);
   const pendingLayerIdRef = useRef<string | null>(null);
@@ -20014,6 +20017,7 @@ function ReplayDetail({
     setAddingLayer(false);
     setLayerStatus("");
     setRawCaptureStatus("");
+    setFileRevealStatus("");
     setEditingReplayTitle(false);
     setReplayTitleDraft(model.replay.title);
     setPresentationMode(false);
@@ -20511,6 +20515,23 @@ function ReplayDetail({
     setVisibleLayerIds((current) => new Set([...current, layerId]));
   }
 
+  async function revealLocalReplayFile(preferredKind?: ReplayLocalAssetKind) {
+    setFileRevealStatus("Finding the local replay file...");
+    try {
+      const result = await window.riftlite.revealReplayFile(model.replay.id, preferredKind);
+      const label = result.kind === "video"
+        ? "Replay video"
+        : result.kind === "raw-capture"
+          ? "Web Replay source"
+          : result.kind === "replay-bundle"
+            ? "Replay bundle"
+            : "Replay frame";
+      setFileRevealStatus(`${label} selected in its folder.`);
+    } catch (error) {
+      setFileRevealStatus(rendererErrorMessage(error, "No local replay file could be found."));
+    }
+  }
+
   async function saveReplayTitle() {
     const title = replayTitleDraft.trim().replace(/\s+/g, " ").slice(0, 160);
     if (!title) {
@@ -20570,6 +20591,7 @@ function ReplayDetail({
               {replayFolders.map((folder) => <option value={folder.id} key={folder.id}>{folder.name}</option>)}
             </select>
           </label>
+          {fileRevealStatus ? <p className="replay-local-file-status" role="status">{fileRevealStatus}</p> : null}
         </div>
         <div className="replay-hero-actions">
           <div className="replay-status-cluster">
@@ -20595,6 +20617,14 @@ function ReplayDetail({
           </button>
           <button type="button" className="secondary" onClick={() => onExport(replayVideoCurrentMs)}>
             <ExternalLink size={16} /> Export
+          </button>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => void revealLocalReplayFile()}
+            title="Select this replay's video, Web Replay source, bundle, or first local frame in your file manager"
+          >
+            <FolderOpen size={16} /> Show in folder
           </button>
           <button type="button" className="secondary" onClick={() => setPresentationMode((value) => !value)}>
             <Maximize2 size={16} /> {presentationMode ? "Exit presentation" : "Presentation"}
@@ -20667,6 +20697,7 @@ function ReplayDetail({
           status={rawCaptureStatus}
           onUpload={() => void uploadRawCapture()}
           onShareDiscord={() => void shareRawCaptureToDiscord()}
+          onRevealSource={() => void revealLocalReplayFile("raw-capture")}
         />
       ) : null}
 
@@ -20910,13 +20941,15 @@ function ReplayRawCapturePanel({
   settings,
   status,
   onUpload,
-  onShareDiscord
+  onShareDiscord,
+  onRevealSource
 }: {
   replay: ReplayRecord;
   settings: UserSettings;
   status: string;
   onUpload: () => void;
   onShareDiscord: () => void;
+  onRevealSource: () => void;
 }) {
   const rawCapture = replay.rawCapture;
   if (!settings.rawCapture.enabled && !rawCapture) {
@@ -21001,6 +21034,11 @@ function ReplayRawCapturePanel({
           <Upload size={14} /> Upload to web replay
         </button>
       )}
+      {rawCapture?.localPath ? (
+        <button className="secondary" type="button" onClick={onRevealSource}>
+          <FolderOpen size={14} /> Show source file
+        </button>
+      ) : null}
       {!accountReady && rawCapture?.localPath ? (
         <p className="muted">The replay is saved locally. Open Account and finish verification or reconnect the same account before retrying.</p>
       ) : null}
@@ -21850,6 +21888,10 @@ function ReplayVideoPlayer({
     setCurrentMs(0);
     setVideoPlaying(false);
     lastTimeUpdateRef.current = 0;
+    if (!shouldBufferReplayVideoInMemory(video.sizeBytes)) {
+      setStatus("Streaming replay from disk.");
+      return () => undefined;
+    }
     setStatus("Loading replay video for instant seeking...");
     void window.riftlite.loadReplayVideo(video)
       .then((buffer) => {
@@ -21872,7 +21914,7 @@ function ReplayVideoPlayer({
         URL.revokeObjectURL(objectUrl);
       }
     };
-  }, [video.path, video.url, video.mimeType]);
+  }, [video.path, video.url, video.mimeType, video.sizeBytes]);
 
   useEffect(() => () => {
     voiceRecorderRef.current?.state === "recording" && voiceRecorderRef.current.stop();

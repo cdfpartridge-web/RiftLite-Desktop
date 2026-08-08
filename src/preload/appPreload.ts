@@ -96,6 +96,7 @@ const api: RiftLiteApi = {
   restoreReplay: (id) => ipcRenderer.invoke("replays:restore", id) as Promise<ReplayRecord | null>,
   purgeReplay: (id) => ipcRenderer.invoke("replays:purge", id) as Promise<void>,
   exportReplayBundle: (replayId) => ipcRenderer.invoke("replays:export", replayId) as Promise<string>,
+  revealReplayFile: (replayId, preferredKind) => ipcRenderer.invoke("replays:reveal-file", replayId, preferredKind) as ReturnType<RiftLiteApi["revealReplayFile"]>,
   exportReplayMp4: (replayId, options) => ipcRenderer.invoke("replays:export-mp4", replayId, options) as ReturnType<RiftLiteApi["exportReplayMp4"]>,
   exportReplayPresentationMp4: (replayId, payload) => ipcRenderer.invoke("replays:export-presentation-mp4", replayId, payload) as ReturnType<RiftLiteApi["exportReplayPresentationMp4"]>,
   exportReplayFlagsText: (replayId) => ipcRenderer.invoke("replays:export-flags-text", replayId) as ReturnType<RiftLiteApi["exportReplayFlagsText"]>,

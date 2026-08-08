@@ -3,9 +3,8 @@ import type { NativeImage, OpenDialogOptions, SaveDialogOptions, WebContents } f
 import { execFile } from "node:child_process";
 import { once } from "node:events";
 import { createReadStream, createWriteStream, mkdirSync } from "node:fs";
-import { access, appendFile, copyFile, mkdir, open, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { access, appendFile, copyFile, mkdir, open, readFile, readdir, realpath, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { createInterface } from "node:readline";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { promisify } from "node:util";
@@ -39,7 +38,9 @@ import type {
   ReplayAnnotation,
   ReplayBundleFrame,
   ReplayBundleVideo,
+  ReplayFileRevealResult,
   ReplayFlag,
+  ReplayLocalAssetKind,
   ReplayMp4ExportOptions,
   ReplayPresentationRecordingPayload,
   RawCaptureAppendFramePayload,
@@ -126,6 +127,16 @@ import {
   replayMediaMimeType,
   replayMediaPlatform
 } from "../shared/replayMediaRecovery.js";
+import {
+  estimatedStreamedReplayBundleBytes,
+  MAX_IN_MEMORY_REPLAY_VIDEO_BYTES,
+  MAX_LEGACY_REPLAY_BUNDLE_BYTES,
+  MAX_LEGACY_REPLAY_VIDEO_BYTES,
+  MAX_STREAMED_REPLAY_BUNDLE_BYTES,
+  MAX_STREAMED_REPLAY_MANIFEST_BYTES,
+  MAX_STREAMED_REPLAY_VIDEO_BYTES,
+  replayMp4ExportTimeoutMs
+} from "../shared/replayExportPolicy.js";
 import { detectBrowsers } from "./services/browserDetection.js";
 import { scheduleAppUsageHeartbeat } from "./services/appUsageAnalytics.js";
 import { AtlasEmptyShellMainRecoveryGuard } from "./services/atlasEmptyShellMainRecovery.js";
@@ -181,6 +192,12 @@ import {
   RIFTLITE_REPLAY_PARTITION
 } from "./services/replayEmbedSession.js";
 import { rasterizeReplayMp4Svg } from "./services/replayMp4OverlayRasterizer.js";
+import {
+  replayLocalFileCandidates,
+  replayLocalFilePathAllowed,
+  type ReplayLocalFileCandidate,
+  type ReplayLocalFileRoots
+} from "./services/replayLocalFiles.js";
 import { RiftLiteStore } from "./services/store.js";
 import { SecureCredentialVault } from "./services/secureCredentialVault.js";
 import { SimEventReceiver } from "./services/simEventReceiver.js";
@@ -207,6 +224,7 @@ const RIFTLITE_BACKUP_EXTENSION = "riftlitebackup";
 const REPLAY_STREAM_MAGIC = "RIFTLITE_REPLAY_STREAM_V1";
 const REPLAY_STREAM_VIDEO_START = "VIDEO_DATA";
 const REPLAY_STREAM_VIDEO_END = "END_VIDEO_DATA";
+const MAX_REPLAY_STREAM_DATA_LINE_BYTES = 2 * 1024 * 1024;
 const RIFTREPLAY_CAPTURE_FEATURE_ENABLED = true;
 const TCGA_MATCH_LOGGER_SEAT_CAPTURE_ENABLED = true;
 const ATLAS_GAME_PARTITION = GAME_WEBVIEW_PARTITIONS.atlas;
@@ -780,10 +798,7 @@ const REPLAY_FRAME_DIRECTORY_CACHE_MS = 30_000;
 const REPLAY_FRAME_JPEG_QUALITY = 58;
 const REPLAY_VIDEO_DISPLAY_TARGET_MS = 120_000;
 const MAX_REPLAY_KEYFRAME_DATA_URL_BYTES = 16 * 1024 * 1024;
-const MAX_REPLAY_IMPORT_BUNDLE_BYTES = 512 * 1024 * 1024;
-const MAX_REPLAY_IMPORT_VIDEO_BYTES = 384 * 1024 * 1024;
 const MAX_REPLAY_IMPORT_SEEKABLE_BYTES = 384 * 1024 * 1024;
-const MAX_REPLAY_EXPORT_VIDEO_BYTES = 384 * 1024 * 1024;
 const MAX_REPLAY_IMPORT_FRAME_BYTES = 24 * 1024 * 1024;
 const MAX_REPLAY_EXPORT_FRAME_BYTES = 24 * 1024 * 1024;
 const MAX_REPLAY_IMPORT_FRAMES = 2500;
@@ -1065,6 +1080,120 @@ async function pathExists(filePath: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+const REPLAY_LOCAL_ASSET_KINDS = new Set<ReplayLocalAssetKind>([
+  "video",
+  "raw-capture",
+  "replay-bundle",
+  "frame"
+]);
+
+function replayLocalFileRoots(settings: UserSettings, replay: ReplayRecord): ReplayLocalFileRoots {
+  const configuredReplayRoot = replayBundleDirectory(settings);
+  const defaultReplayRoot = replayBundleDirectory();
+  const importedBundleRoot = replay.importedAt && replay.importedFrom?.toLowerCase().endsWith(".riftreplay") && isAbsolute(replay.importedFrom)
+    ? dirname(replay.importedFrom)
+    : "";
+  return {
+    video: [
+      replayVideoDirectory(settings),
+      replayVideoImportDirectory(settings),
+      replayVideoDirectory(),
+      replayVideoImportDirectory(),
+      legacyReplayVideoDirectory()
+    ],
+    "raw-capture": [
+      join(configuredReplayRoot, "Raw Capture"),
+      join(defaultReplayRoot, "Raw Capture")
+    ],
+    // A user-selected import may live in Downloads rather than managed media
+    // storage. Only the exact, typed import recorded by RiftLite grants this
+    // additional reveal root.
+    "replay-bundle": [configuredReplayRoot, defaultReplayRoot, importedBundleRoot],
+    frame: [
+      configuredReplayRoot,
+      defaultReplayRoot,
+      screenshotDirectory(settings),
+      defaultScreenshotDirectory()
+    ]
+  };
+}
+
+async function resolvedReplayLocalFileRoots(roots: ReplayLocalFileRoots): Promise<ReplayLocalFileRoots> {
+  const resolveRoots = (values: readonly string[]) => Promise.all(values.map(async (root) => (
+    realpath(root).catch(() => resolve(root))
+  )));
+  const [video, rawCapture, replayBundle, frame] = await Promise.all([
+    resolveRoots(roots.video),
+    resolveRoots(roots["raw-capture"]),
+    resolveRoots(roots["replay-bundle"]),
+    resolveRoots(roots.frame)
+  ]);
+  return {
+    video,
+    "raw-capture": rawCapture,
+    "replay-bundle": replayBundle,
+    frame
+  };
+}
+
+async function existingAllowedReplayLocalFile(
+  candidates: ReplayLocalFileCandidate[],
+  roots: ReplayLocalFileRoots
+): Promise<ReplayLocalFileCandidate | null> {
+  const resolvedRoots = await resolvedReplayLocalFileRoots(roots);
+  for (const candidate of candidates) {
+    if (!replayLocalFilePathAllowed(candidate, roots)) {
+      continue;
+    }
+    try {
+      const resolvedPath = await realpath(candidate.path);
+      const resolvedCandidate = { ...candidate, path: resolvedPath };
+      if (!replayLocalFilePathAllowed(resolvedCandidate, resolvedRoots)) {
+        continue;
+      }
+      if ((await stat(resolvedPath)).isFile()) {
+        return resolvedCandidate;
+      }
+    } catch {
+      // A stale path should not prevent another associated replay asset from
+      // being revealed.
+    }
+  }
+  return null;
+}
+
+async function revealReplayFile(
+  replayId: string,
+  preferredKind?: ReplayLocalAssetKind
+): Promise<ReplayFileRevealResult> {
+  const id = typeof replayId === "string" ? replayId.trim() : "";
+  if (!id || id.length > 240) {
+    throw new Error("Replay identity is invalid.");
+  }
+  if (preferredKind !== undefined && !REPLAY_LOCAL_ASSET_KINDS.has(preferredKind)) {
+    throw new Error("Replay file type is invalid.");
+  }
+  const [replays, settings] = await Promise.all([store.getReplays(), store.getSettings()]);
+  const replay = replays.find((candidate) => candidate.id === id);
+  if (!replay) {
+    throw new Error("Replay not found.");
+  }
+  const candidate = await existingAllowedReplayLocalFile(
+    replayLocalFileCandidates(replay, preferredKind),
+    replayLocalFileRoots(settings, replay)
+  );
+  if (!candidate) {
+    const requestedLabel = preferredKind === "raw-capture"
+      ? "Web Replay source file"
+      : preferredKind === "video"
+        ? "replay video"
+        : "local replay file";
+    throw new Error(`This replay's ${requestedLabel} is not available on this device.`);
+  }
+  shell.showItemInFolder(candidate.path);
+  return { kind: candidate.kind, filePath: candidate.path };
 }
 
 function formatByteSize(bytes: number): string {
@@ -3441,6 +3570,10 @@ async function loadReplayVideo(video: ReplayVideoAsset): Promise<ArrayBuffer> {
     throw new Error("Replay video path is missing.");
   }
   await assertReplayVideoPathAllowed(filePath);
+  const videoStats = await stat(filePath);
+  if (videoStats.size > MAX_IN_MEMORY_REPLAY_VIDEO_BYTES) {
+    throw new Error("Replay video is too large to load into memory. Use streamed playback instead.");
+  }
   if (!video.containerFinalized) {
     await makeReplayVideoSeekable(filePath, video.mimeType).catch(() => false);
   }
@@ -3605,9 +3738,6 @@ async function replayVideoExportSource(replay: ReplayRecord): Promise<ReplayVide
       await makeReplayVideoSeekable(sourcePath, video.mimeType).catch(() => false);
     }
     const videoStats = await stat(sourcePath);
-    if (videoStats.size > MAX_REPLAY_EXPORT_VIDEO_BYTES) {
-      throw new Error(`Replay video is too large to export safely (${formatByteSize(videoStats.size)}). Trim it before exporting.`);
-    }
     return {
       sourcePath,
       sourceUrl: video.url,
@@ -3618,10 +3748,7 @@ async function replayVideoExportSource(replay: ReplayRecord): Promise<ReplayVide
         containerFinalized: video.containerFinalized || await pathExists(replayVideoSeekableMarkerPath(sourcePath))
       }
     };
-  } catch (error) {
-    if (error instanceof Error && error.message.includes("too large")) {
-      throw error;
-    }
+  } catch {
     return undefined;
   }
 }
@@ -3634,7 +3761,7 @@ async function writeReplayVideoBundleJson(stream: ReturnType<typeof createWriteS
   await writeStreamText(stream, ",\"mimeType\":");
   await writeStreamText(stream, JSON.stringify(video.mimeType));
   await writeStreamText(stream, ",\"data\":");
-  await writeFileAsBase64JsonString(stream, video.sourcePath, MAX_REPLAY_EXPORT_VIDEO_BYTES);
+  await writeFileAsBase64JsonString(stream, video.sourcePath, MAX_STREAMED_REPLAY_VIDEO_BYTES);
   await writeStreamText(stream, ",\"asset\":");
   await writeStreamText(stream, JSON.stringify(video.asset));
   await writeStreamText(stream, "}");
@@ -3655,10 +3782,19 @@ async function writeReplayBundleFile(filePath: string, bundle: Omit<RiftReplayBu
         data: ""
       }
     };
+    const manifestText = JSON.stringify(manifest);
+    const manifestBytes = Buffer.byteLength(manifestText, "utf8");
+    if (manifestBytes > MAX_STREAMED_REPLAY_MANIFEST_BYTES) {
+      throw new Error(`This coaching pack's metadata is too large to export safely (${formatByteSize(manifestBytes)}).`);
+    }
+    const estimatedBundleBytes = estimatedStreamedReplayBundleBytes(manifestBytes, video.asset.sizeBytes);
+    if (estimatedBundleBytes > MAX_STREAMED_REPLAY_BUNDLE_BYTES) {
+      throw new Error(`This coaching pack is too large to export safely (${formatByteSize(estimatedBundleBytes)}).`);
+    }
     await writeStreamText(stream, `${REPLAY_STREAM_MAGIC}\n`);
-    await writeStreamText(stream, `${JSON.stringify(manifest)}\n`);
+    await writeStreamText(stream, `${manifestText}\n`);
     await writeStreamText(stream, `${REPLAY_STREAM_VIDEO_START}\n`);
-    await writeFileAsBase64Lines(stream, video.sourcePath, MAX_REPLAY_EXPORT_VIDEO_BYTES);
+    await writeFileAsBase64Lines(stream, video.sourcePath, MAX_STREAMED_REPLAY_VIDEO_BYTES);
     await writeStreamText(stream, `${REPLAY_STREAM_VIDEO_END}\n`);
     await finishWriteStream(stream);
   } catch (error) {
@@ -3726,6 +3862,11 @@ async function exportReplayBundle(replayId: string): Promise<string> {
   const search = replaySearchMetadata(replay, match);
   const coachingPack = replay.coachingPack ?? defaultReplayCoachingPack(replay, match, settings);
   const video = await replayVideoExportSource(replay);
+  if (video && video.asset.sizeBytes > MAX_STREAMED_REPLAY_VIDEO_BYTES) {
+    throw new Error(
+      `This coaching pack's video is too large to embed (${formatByteSize(video.asset.sizeBytes)}). Export the MP4 or reveal the original replay file instead.`
+    );
+  }
   const bundle: Omit<RiftReplayBundle, "video"> = {
     format: "riftlite.replay",
     version: 4,
@@ -4559,7 +4700,7 @@ async function exportReplayMp4(replayId: string, options: ReplayMp4ExportOptions
     try {
       await execFileAsync(ffmpegPath, args, {
         windowsHide: true,
-        timeout: 900_000,
+        timeout: replayMp4ExportTimeoutMs(videoDurationSec * 1000),
         maxBuffer: 1024 * 1024
       });
     } catch (error) {
@@ -4698,6 +4839,94 @@ async function replayBundleFilePrefix(bundlePath: string): Promise<string> {
   }
 }
 
+async function streamedReplayBundleHeader(bundlePath: string): Promise<{ parsed: RiftReplayBundle; bodyOffset: number }> {
+  const file = await open(bundlePath, "r");
+  const chunks: Buffer[] = [];
+  const chunkSize = 1024 * 1024;
+  const maxHeaderBytes = REPLAY_STREAM_MAGIC.length + 2 + MAX_STREAMED_REPLAY_MANIFEST_BYTES;
+  let totalBytes = 0;
+  let firstNewline = -1;
+  let secondNewline = -1;
+  try {
+    while (totalBytes <= maxHeaderBytes && secondNewline < 0) {
+      const buffer = Buffer.allocUnsafe(chunkSize);
+      const result = await file.read(buffer, 0, buffer.length, totalBytes);
+      if (!result.bytesRead) {
+        break;
+      }
+      const chunk = Buffer.from(buffer.subarray(0, result.bytesRead));
+      chunks.push(chunk);
+      for (let index = 0; index < chunk.length; index += 1) {
+        if (chunk[index] !== 0x0a) {
+          continue;
+        }
+        const absoluteIndex = totalBytes + index;
+        if (firstNewline < 0) {
+          firstNewline = absoluteIndex;
+        } else {
+          secondNewline = absoluteIndex;
+          break;
+        }
+      }
+      totalBytes += result.bytesRead;
+    }
+  } finally {
+    await file.close();
+  }
+
+  if (firstNewline < 0 || secondNewline < 0 || secondNewline - firstNewline - 1 > MAX_STREAMED_REPLAY_MANIFEST_BYTES) {
+    throw new Error("That replay file has an invalid or oversized coaching-pack manifest.");
+  }
+  const header = Buffer.concat(chunks, totalBytes);
+  if (header.subarray(0, firstNewline).toString("utf8").trim() !== REPLAY_STREAM_MAGIC) {
+    throw new Error("This is not a RiftLite replay bundle.");
+  }
+
+  let parsed: RiftReplayBundle;
+  try {
+    parsed = JSON.parse(header.subarray(firstNewline + 1, secondNewline).toString("utf8").trim()) as RiftReplayBundle;
+  } catch {
+    throw new Error("That replay file could not be read. It may be incomplete or corrupted.");
+  }
+  validateReplayBundle(parsed);
+  return { parsed, bodyOffset: secondNewline + 1 };
+}
+
+async function* streamedReplayBundleLines(bundlePath: string, start: number): AsyncGenerator<string> {
+  const stream = createReadStream(bundlePath, { start });
+  let carry = Buffer.alloc(0);
+  try {
+    for await (const rawChunk of stream) {
+      const chunk = Buffer.isBuffer(rawChunk) ? rawChunk : Buffer.from(rawChunk);
+      let cursor = 0;
+      while (cursor < chunk.length) {
+        const newline = chunk.indexOf(0x0a, cursor);
+        if (newline < 0) {
+          const remainder = chunk.subarray(cursor);
+          if (carry.length + remainder.length > MAX_REPLAY_STREAM_DATA_LINE_BYTES) {
+            throw new Error("That replay file contains an oversized video-data line.");
+          }
+          carry = carry.length ? Buffer.concat([carry, remainder]) : Buffer.from(remainder);
+          break;
+        }
+        const fragment = chunk.subarray(cursor, newline);
+        if (carry.length + fragment.length > MAX_REPLAY_STREAM_DATA_LINE_BYTES) {
+          throw new Error("That replay file contains an oversized video-data line.");
+        }
+        const line = carry.length ? Buffer.concat([carry, fragment]) : fragment;
+        carry = Buffer.alloc(0);
+        yield line.toString("utf8").trim();
+        cursor = newline + 1;
+      }
+    }
+    if (carry.length) {
+      yield carry.toString("utf8").trim();
+    }
+  } finally {
+    stream.destroy();
+  }
+}
+
 async function importReplayBundleFromPath(bundlePath: string): Promise<ReplayRecord> {
   const prefix = await replayBundleFilePrefix(bundlePath);
   if (prefix.startsWith(REPLAY_STREAM_MAGIC)) {
@@ -4705,7 +4934,7 @@ async function importReplayBundleFromPath(bundlePath: string): Promise<ReplayRec
   }
 
   const bundleStats = await stat(bundlePath);
-  if (bundleStats.size > MAX_REPLAY_IMPORT_BUNDLE_BYTES) {
+  if (bundleStats.size > MAX_LEGACY_REPLAY_BUNDLE_BYTES) {
     throw new Error(
       `That replay bundle is too large to import safely (${formatByteSize(bundleStats.size)}). Trim or re-export a smaller coaching pack.`
     );
@@ -4723,16 +4952,14 @@ async function importReplayBundleFromPath(bundlePath: string): Promise<ReplayRec
 
 async function importStreamedReplayBundleFromPath(bundlePath: string): Promise<ReplayRecord> {
   const bundleStats = await stat(bundlePath);
-  if (bundleStats.size > MAX_REPLAY_IMPORT_BUNDLE_BYTES) {
+  if (bundleStats.size > MAX_STREAMED_REPLAY_BUNDLE_BYTES) {
     throw new Error(
       `That replay bundle is too large to import safely (${formatByteSize(bundleStats.size)}). Trim or re-export a smaller coaching pack.`
     );
   }
 
-  const readStream = createReadStream(bundlePath, { encoding: "utf8" });
-  const lines = createInterface({ input: readStream, crlfDelay: Infinity });
-  let parsed: RiftReplayBundle | null = null;
-  let replayId = "";
+  const { parsed, bodyOffset } = await streamedReplayBundleHeader(bundlePath);
+  const replayId = randomUUID();
   let importedVideo: ReplayVideoAsset | undefined;
   let videoHandle: Awaited<ReturnType<typeof open>> | null = null;
   let importedPath = "";
@@ -4741,30 +4968,21 @@ async function importStreamedReplayBundleFromPath(bundlePath: string): Promise<R
   let decodedBytes = 0;
   let readingVideo = false;
 
-  try {
-    for await (const rawLine of lines) {
-      const line = rawLine.trim();
-      if (!parsed) {
-        if (line === REPLAY_STREAM_MAGIC) {
-          continue;
-        }
-        try {
-          parsed = JSON.parse(line) as RiftReplayBundle;
-        } catch {
-          throw new Error("That replay file could not be read. It may be incomplete or corrupted.");
-        }
-        validateReplayBundle(parsed);
-        replayId = randomUUID();
-        if (parsed.video?.asset) {
-          const settings = await store.getSettings();
-          videoDirectory = join(replayVideoImportDirectory(settings), safeFileComponent(replayId, "replay"));
-          await mkdir(videoDirectory, { recursive: true });
-          filename = `${safeFileComponent(parsed.video.asset.filename || parsed.replay.title || "video-replay", "video-replay")}.${replayVideoExtension(parsed.video.asset.mimeType)}`;
-          importedPath = join(videoDirectory, filename);
-        }
-        continue;
-      }
+  if (parsed.video?.asset) {
+    if (parsed.video.asset.sizeBytes > MAX_STREAMED_REPLAY_VIDEO_BYTES) {
+      throw new Error(
+        `That replay video is too large to import safely (${formatByteSize(parsed.video.asset.sizeBytes)}). Ask the sender to export a smaller replay.`
+      );
+    }
+    const settings = await store.getSettings();
+    videoDirectory = join(replayVideoImportDirectory(settings), safeFileComponent(replayId, "replay"));
+    await mkdir(videoDirectory, { recursive: true });
+    filename = `${safeFileComponent(parsed.video.asset.filename || parsed.replay.title || "video-replay", "video-replay")}.${replayVideoExtension(parsed.video.asset.mimeType)}`;
+    importedPath = join(videoDirectory, filename);
+  }
 
+  try {
+    for await (const line of streamedReplayBundleLines(bundlePath, bodyOffset)) {
       if (line === REPLAY_STREAM_VIDEO_START) {
         if (!parsed.video?.asset || !importedPath) {
           readingVideo = false;
@@ -4804,7 +5022,7 @@ async function importStreamedReplayBundleFromPath(bundlePath: string): Promise<R
       if (readingVideo && videoHandle && line) {
         const bytes = Buffer.from(line, "base64");
         decodedBytes += bytes.length;
-        if (decodedBytes > MAX_REPLAY_IMPORT_VIDEO_BYTES) {
+        if (decodedBytes > MAX_STREAMED_REPLAY_VIDEO_BYTES) {
           throw new Error(
             `That replay video is too large to import safely (${formatByteSize(decodedBytes)}). Ask the sender to trim it or export a smaller replay.`
           );
@@ -4820,13 +5038,8 @@ async function importStreamedReplayBundleFromPath(bundlePath: string): Promise<R
       await unlink(importedPath).catch(() => undefined);
     }
     throw error;
-  } finally {
-    readStream.destroy();
   }
 
-  if (!parsed) {
-    throw new Error("That replay file could not be read. It may be incomplete or corrupted.");
-  }
   if (videoHandle || readingVideo) {
     if (videoHandle) {
       await videoHandle.close().catch(() => undefined);
@@ -4912,13 +5125,13 @@ async function saveImportedReplayBundleData(
     const filename = `${safeFileComponent(parsed.video.asset.filename || parsed.replay.title || "video-replay", "video-replay")}.${replayVideoExtension(parsed.video.asset.mimeType)}`;
     const importedPath = join(videoDirectory, filename);
     const decodedBytes = estimateBase64DecodedBytes(parsed.video.data);
-    if (decodedBytes > MAX_REPLAY_IMPORT_VIDEO_BYTES) {
+    if (decodedBytes > MAX_LEGACY_REPLAY_VIDEO_BYTES) {
       throw new Error(
         `That replay video is too large to import safely (${formatByteSize(decodedBytes)}). Ask the sender to trim it or export a smaller replay.`
       );
     }
     try {
-      await writeBase64FileChunked(importedPath, parsed.video.data, MAX_REPLAY_IMPORT_VIDEO_BYTES);
+      await writeBase64FileChunked(importedPath, parsed.video.data, MAX_LEGACY_REPLAY_VIDEO_BYTES);
     } catch (error) {
       await unlink(importedPath).catch(() => undefined);
       throw error;
@@ -7579,6 +7792,7 @@ function registerIpc(): void {
   handleTrustedAppIpc("replays:restore", (_event, id: string) => store.restoreReplay(id));
   handleTrustedAppIpc("replays:purge", (_event, id: string) => store.purgeReplay(id));
   handleTrustedAppIpc("replays:export", (_event, replayId: string) => exportReplayBundle(replayId));
+  handleTrustedAppIpc("replays:reveal-file", (_event, replayId: string, preferredKind?: ReplayLocalAssetKind) => revealReplayFile(replayId, preferredKind));
   handleTrustedAppIpc("replays:export-mp4", (_event, replayId: string, options: ReplayMp4ExportOptions) => exportReplayMp4(replayId, options));
   handleTrustedAppIpc("replays:export-presentation-mp4", (_event, replayId: string, payload: ReplayPresentationRecordingPayload) => exportReplayPresentationMp4(replayId, payload));
   handleTrustedAppIpc("replays:export-flags-text", (_event, replayId: string) => exportReplayFlagsText(replayId));

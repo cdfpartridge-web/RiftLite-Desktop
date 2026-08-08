@@ -1,6 +1,6 @@
 # RiftLite Current Engineering State
 
-> **Current release state:** Windows v0.9.40 and macOS v0.9.40 are live. For a new chat, read `docs/HANDOVER_2026-08-08_POST_V0.9.40.md` first; `docs/release-notes-v0.9.40.md` is the customer-facing summary.
+> **Current release state:** v0.9.41 is a release candidate awaiting GitHub publication; Windows v0.9.40 and macOS v0.9.40 remain live. Use `docs/release-notes-v0.9.41.md` for the candidate scope and `docs/HANDOVER_2026-08-08_POST_V0.9.40.md` for the last fully published baseline.
 
 Last updated: 2026-08-08
 
@@ -10,7 +10,7 @@ For a new Codex chat, read `docs/HANDOVER_2026-08-08_POST_V0.9.40.md` first. Thi
 
 - Active cross-platform release source repo:
   `C:\Users\cdfpa\OneDrive\Documents\Claude\Projects\Riftlite Beta 0.6\desktop-v06`
-- Current local package version: `0.9.40` (customer-facing build `v0.9.40`); matching Windows and macOS releases are published
+- Current local package version: `0.9.41` (customer-facing build `v0.9.41`); publication is pending
 - Current branch: `agent/release-v0.9.12`
 - Windows GitHub release repository (`windows` remote): `cdfpartridge-web/RiftLite-Desktop`
 - macOS GitHub release repository (`origin` remote): `cdfpartridge-web/RiftLite-Desktop-mac`
@@ -18,7 +18,7 @@ For a new Codex chat, read `docs/HANDOVER_2026-08-08_POST_V0.9.40.md` first. Thi
 - Current published macOS release: `mac-v0.9.40` (2026-08-08)
 - Windows installer output:
   `C:\Users\cdfpa\OneDrive\Documents\Claude\Projects\Riftlite Beta 0.6\desktop-v06\release\RiftLiteBetaInstall.exe`
-- Current local Windows installer: v0.9.40 `release\RiftLiteBetaInstall.exe`, 219,381,270 bytes, SHA-256 `FDBE53238B619C2B0053AA1977AB9A5164C754F438A55C500E4B7DB62548D420`.
+- Current local Windows installer: v0.9.41 `release\RiftLiteBetaInstall.exe`, 219,837,016 bytes, SHA-256 `3127B1629CAF0E5C6E9E83D7CE81F887F351D968003DC23D9E47FB6A5074D372`.
 
 Always name the remote explicitly when pushing: Windows source/tags go to `windows`; macOS source/tags go to `origin`. The repositories and release tags are deliberately separate.
 
@@ -29,6 +29,16 @@ Do not accidentally work from:
 - an old copied Mac source tree unless the task explicitly concerns the Mac build
 
 The active working tree may contain current work. Never reset, discard, or overwrite unrelated changes.
+
+## 2026-08-08 v0.9.41 Release Candidate
+
+- Replay details can reveal the exact best available local file in Explorer or Finder: recorded video, raw Web Replay capture, imported `.riftreplay` pack, or captured frame. The Web Replay panel also exposes its raw source directly.
+- File reveal is handled by a main-process replay-ID lookup with file-kind, extension, allowed-root, existence, and realpath checks; the renderer cannot submit an arbitrary filesystem path.
+- MP4 and clip exports no longer share the former 384 MiB coaching-pack source limit. FFmpeg reads the source from disk and receives a duration-aware processing window.
+- Streamed v4 `.riftreplay` packs accept up to 8 GiB of video and 12 GiB total, with separate manifest and encoded-line bounds. Legacy whole-JSON import remains constrained by the previous 512 MiB bundle and 384 MiB video ceilings.
+- Playback and export preview avoid transferring video larger than 128 MiB through renderer IPC, using the existing file-URL stream instead.
+- Focused replay/version validation passes 4 files / 21 tests. The complete Windows release pipeline also passes TypeScript lint, the 79-test account-sync gate, all 114 test files / 1,028 tests, production compilation, NSIS packaging, updater/executable/archive verification, and packaged-app smoke.
+- Fresh Windows artifacts: installer 219,837,016 bytes, SHA-256 `3127B1629CAF0E5C6E9E83D7CE81F887F351D968003DC23D9E47FB6A5074D372`; blockmap 207,178 bytes, SHA-256 `AA9EC0D9C6BE1C92617F0E75605FF5C6606D49B65B479BFB95D6D8E7CFD9865F`; updater manifest 344 bytes, SHA-256 `3AD609AB67471DF4DB41415BEF7A9C86E4CC680AA89A8CD35F4421CA44E9ABAC`. Public Windows download verification and native macOS packaging remain pending.
 
 ## 2026-08-08 v0.9.40 Release (Windows And macOS Live)
 

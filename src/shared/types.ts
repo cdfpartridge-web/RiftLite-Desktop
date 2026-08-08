@@ -791,6 +791,13 @@ export interface ReplayRecord {
   importedFrom?: string;
 }
 
+export type ReplayLocalAssetKind = "video" | "raw-capture" | "replay-bundle" | "frame";
+
+export interface ReplayFileRevealResult {
+  kind: ReplayLocalAssetKind;
+  filePath: string;
+}
+
 export interface ReplayFolder {
   id: string;
   name: string;
@@ -2168,6 +2175,7 @@ export interface RiftLiteApi {
   restoreReplay(id: string): Promise<ReplayRecord | null>;
   purgeReplay(id: string): Promise<void>;
   exportReplayBundle(replayId: string): Promise<string>;
+  revealReplayFile(replayId: string, preferredKind?: ReplayLocalAssetKind): Promise<ReplayFileRevealResult>;
   exportReplayMp4(replayId: string, options: ReplayMp4ExportOptions): Promise<string>;
   exportReplayPresentationMp4(replayId: string, payload: ReplayPresentationRecordingPayload): Promise<string>;
   exportReplayFlagsText(replayId: string): Promise<string>;

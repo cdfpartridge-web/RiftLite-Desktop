@@ -12006,7 +12006,13 @@ body.matchup-prep-dragging * {
   display: flex;
   align-items: center;
   justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 12px;
+}
+
+.replay-local-file-status {
+  max-width: 520px;
+  overflow-wrap: anywhere;
 }
 
 .replay-hero-actions .secondary:disabled {
