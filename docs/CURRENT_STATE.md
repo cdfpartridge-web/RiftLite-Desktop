@@ -1,21 +1,21 @@
 # RiftLite Current Engineering State
 
-> **Current release state:** v0.9.41 is a release candidate awaiting GitHub publication; Windows v0.9.40 and macOS v0.9.40 remain live. Use `docs/release-notes-v0.9.41.md` for the candidate scope and `docs/HANDOVER_2026-08-08_POST_V0.9.40.md` for the last fully published baseline.
+> **Current release state:** Windows v0.9.41 and macOS v0.9.41 are live. For a new chat, read `docs/HANDOVER_2026-08-08_POST_V0.9.41.md` first; `docs/release-notes-v0.9.41.md` is the customer-facing summary.
 
 Last updated: 2026-08-08
 
-For a new Codex chat, read `docs/HANDOVER_2026-08-08_POST_V0.9.40.md` first. This file remains the longer architecture and append-only release history; some older sections are historical rather than current operational truth.
+For a new Codex chat, read `docs/HANDOVER_2026-08-08_POST_V0.9.41.md` first. This file remains the longer architecture and append-only release history; some older sections are historical rather than current operational truth.
 
 ## Canonical Repository
 
 - Active cross-platform release source repo:
   `C:\Users\cdfpa\OneDrive\Documents\Claude\Projects\Riftlite Beta 0.6\desktop-v06`
-- Current local package version: `0.9.41` (customer-facing build `v0.9.41`); publication is pending
+- Current local package version: `0.9.41` (customer-facing build `v0.9.41`); matching Windows and macOS releases are published
 - Current branch: `agent/release-v0.9.12`
 - Windows GitHub release repository (`windows` remote): `cdfpartridge-web/RiftLite-Desktop`
 - macOS GitHub release repository (`origin` remote): `cdfpartridge-web/RiftLite-Desktop-mac`
-- Current published Windows release: `v0.9.40` (2026-08-08)
-- Current published macOS release: `mac-v0.9.40` (2026-08-08)
+- Current published Windows release: `v0.9.41` (2026-08-08)
+- Current published macOS release: `mac-v0.9.41` (2026-08-08)
 - Windows installer output:
   `C:\Users\cdfpa\OneDrive\Documents\Claude\Projects\Riftlite Beta 0.6\desktop-v06\release\RiftLiteBetaInstall.exe`
 - Current local Windows installer: v0.9.41 `release\RiftLiteBetaInstall.exe`, 219,837,016 bytes, SHA-256 `3127B1629CAF0E5C6E9E83D7CE81F887F351D968003DC23D9E47FB6A5074D372`.
@@ -30,15 +30,23 @@ Do not accidentally work from:
 
 The active working tree may contain current work. Never reset, discard, or overwrite unrelated changes.
 
-## 2026-08-08 v0.9.41 Release Candidate
+## 2026-08-08 v0.9.41 Release (Windows And macOS Live)
+
+- Release commit `a84e9b0d971ca2b196dbeed0710183c1491d74f8` is tagged as Windows `v0.9.41` and macOS `mac-v0.9.41`; both tags dereference to that same immutable source.
+- Windows release: `https://github.com/cdfpartridge-web/RiftLite-Desktop/releases/tag/v0.9.41` and is the repository's current latest release.
+- macOS release: `https://github.com/cdfpartridge-web/RiftLite-Desktop-mac/releases/tag/mac-v0.9.41` and is the repository's current latest release. Native workflow `https://github.com/cdfpartridge-web/RiftLite-Desktop-mac/actions/runs/31280797041` completed successfully.
 
 - Replay details can reveal the exact best available local file in Explorer or Finder: recorded video, raw Web Replay capture, imported `.riftreplay` pack, or captured frame. The Web Replay panel also exposes its raw source directly.
 - File reveal is handled by a main-process replay-ID lookup with file-kind, extension, allowed-root, existence, and realpath checks; the renderer cannot submit an arbitrary filesystem path.
 - MP4 and clip exports no longer share the former 384 MiB coaching-pack source limit. FFmpeg reads the source from disk and receives a duration-aware processing window.
 - Streamed v4 `.riftreplay` packs accept up to 8 GiB of video and 12 GiB total, with separate manifest and encoded-line bounds. Legacy whole-JSON import remains constrained by the previous 512 MiB bundle and 384 MiB video ceilings.
 - Playback and export preview avoid transferring video larger than 128 MiB through renderer IPC, using the existing file-URL stream instead.
-- Focused replay/version validation passes 4 files / 21 tests. The complete Windows release pipeline also passes TypeScript lint, the 79-test account-sync gate, all 114 test files / 1,028 tests, production compilation, NSIS packaging, updater/executable/archive verification, and packaged-app smoke.
-- Fresh Windows artifacts: installer 219,837,016 bytes, SHA-256 `3127B1629CAF0E5C6E9E83D7CE81F887F351D968003DC23D9E47FB6A5074D372`; blockmap 207,178 bytes, SHA-256 `AA9EC0D9C6BE1C92617F0E75605FF5C6606D49B65B479BFB95D6D8E7CFD9865F`; updater manifest 344 bytes, SHA-256 `3AD609AB67471DF4DB41415BEF7A9C86E4CC680AA89A8CD35F4421CA44E9ABAC`. Public Windows download verification and native macOS packaging remain pending.
+- Focused replay/version validation passed 4 files / 21 tests. The complete Windows release pipeline passed TypeScript lint, the 79-test account-sync gate, all 114 test files / 1,028 tests, production compilation, NSIS packaging, updater/executable/archive verification, and packaged-app smoke.
+- The native macOS workflow passed the same release gate plus Intel and Apple Silicon packaging, architecture-specific FFmpeg checks, updater/bundle identity validation, strict ad-hoc signature verification, DMG verification, and packaged-app smoke.
+- Windows artifacts: installer 219,837,016 bytes, SHA-256 `3127B1629CAF0E5C6E9E83D7CE81F887F351D968003DC23D9E47FB6A5074D372`; blockmap 207,178 bytes, SHA-256 `AA9EC0D9C6BE1C92617F0E75605FF5C6606D49B65B479BFB95D6D8E7CFD9865F`; updater manifest 344 bytes, SHA-256 `3AD609AB67471DF4DB41415BEF7A9C86E4CC680AA89A8CD35F4421CA44E9ABAC`.
+- macOS Apple Silicon DMG: 173,769,013 bytes, SHA-256 `3C93151984AC582AAB93F99EB94514B46FC82BF6596D96F6E2A72F7686ED07BF`; ZIP: 166,351,803 bytes, SHA-256 `B3C6FB2FEC8F769555551FF1E89E7EB3F9B6699C122802E38F5C7A8DE6A66873`.
+- macOS Intel DMG: 188,926,190 bytes, SHA-256 `927A7FA0A7F5D71F51D6B76F8A435597D5EA352BD2258BB7B95523D3059AA3D2`; ZIP: 181,252,134 bytes, SHA-256 `11FF09DB65CF03219A7DC3DF73A024A1053B82938E5FC444E64EDB738A6A07A4`; updater manifest: 830 bytes, SHA-256 `2AA7063BEDDB20CB86E0ECC531E16A7A1215EBEEF1C8EC1B47E47228D1A902C2`.
+- All three Windows and all five macOS assets were independently downloaded after publication and matched their public sizes and SHA-256 digests. Both updater manifests report version `0.9.41`; every referenced installer size and SHA-512 relationship matches the downloaded artifact.
 
 ## 2026-08-08 v0.9.40 Release (Windows And macOS Live)
 
