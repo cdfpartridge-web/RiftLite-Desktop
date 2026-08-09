@@ -1,21 +1,21 @@
 # RiftLite Current Engineering State
 
-> **Current development state:** a verified local Windows v0.9.42 candidate is built but not published. Windows v0.9.41 and macOS v0.9.41 remain live. For a new chat, read `docs/HANDOVER_2026-08-08_POST_V0.9.41.md`, this file, and `docs/release-notes-v0.9.42.md`.
+> **Current development state:** RiftLite v0.9.42 is live for Windows and macOS. For a new chat, read `docs/HANDOVER_2026-08-09_POST_V0.9.42.md`, this file, and `docs/release-notes-v0.9.42.md`.
 
 Last updated: 2026-08-09
 
-For a new Codex chat, read `docs/HANDOVER_2026-08-08_POST_V0.9.41.md` first. This file remains the longer architecture and append-only release history; some older sections are historical rather than current operational truth.
+For a new Codex chat, read `docs/HANDOVER_2026-08-09_POST_V0.9.42.md` first. This file remains the longer architecture and append-only release history; some older sections are historical rather than current operational truth.
 
 ## Canonical Repository
 
 - Active cross-platform release source repo:
   `C:\Users\cdfpa\OneDrive\Documents\Claude\Projects\Riftlite Beta 0.6\desktop-v06`
-- Current local package version: `0.9.42` (customer-facing candidate `v0.9.42`); it is not published
+- Current package version: `0.9.42` (customer-facing `v0.9.42`)
 - Current branch: `agent/release-v0.9.12`
 - Windows GitHub release repository (`windows` remote): `cdfpartridge-web/RiftLite-Desktop`
 - macOS GitHub release repository (`origin` remote): `cdfpartridge-web/RiftLite-Desktop-mac`
-- Current published Windows release: `v0.9.41` (2026-08-08)
-- Current published macOS release: `mac-v0.9.41` (2026-08-08)
+- Current published Windows release: `v0.9.42` (2026-08-09)
+- Current published macOS release: `mac-v0.9.42` (2026-08-09)
 - Windows installer output:
   `C:\Users\cdfpa\OneDrive\Documents\Claude\Projects\Riftlite Beta 0.6\desktop-v06\release\RiftLiteBetaInstall.exe`
 - Current local Windows installer: v0.9.42 `release\RiftLiteBetaInstall.exe`, 221,597,813 bytes, SHA-256 `CD3BD7375ABDDECFB0D60308B34DD9DDCD5BB76CE68E2D3C4E1F8EA4EE3C3E67`.
@@ -30,7 +30,11 @@ Do not accidentally work from:
 
 The active working tree may contain current work. Never reset, discard, or overwrite unrelated changes.
 
-## 2026-08-09 v0.9.42 Local Candidate (Not Published)
+## 2026-08-09 v0.9.42 Release (Windows And macOS Live)
+
+- Release commit `cdf45b4a9e4bdb760b2d502cbfae96802afda1c8` is tagged as Windows `v0.9.42` and macOS `mac-v0.9.42`; both annotated tags dereference to that same immutable source.
+- Windows release: `https://github.com/cdfpartridge-web/RiftLite-Desktop/releases/tag/v0.9.42` and is the repository's current latest release.
+- macOS release: `https://github.com/cdfpartridge-web/RiftLite-Desktop-mac/releases/tag/mac-v0.9.42` and is the repository's current latest release. Native workflow `https://github.com/cdfpartridge-web/RiftLite-Desktop-mac/actions/runs/31316552678` completed successfully.
 
 - Desktop package/build identity is `0.9.42`; continuity identifiers, update repository, profile directory, media directory, and protocol remain unchanged.
 - Home can show a remotely controlled Twitch live takeover only while Meta Studio enables it and the exact configured channel is confirmed live. It autoplays muted in an isolated non-persistent partition, can be hidden for the current session, and falls back to the creator-video carousel.
@@ -42,7 +46,10 @@ The active working tree may contain current work. Never reset, discard, or overw
 - Desktop validation: 115 test files / 1,052 tests passed, lint passed, production build passed, Windows artifact/updater verification passed, and packaged smoke passed.
 - Website validation: 102 test files passed / 1 skipped, 715 tests passed / 9 skipped, changed-file ESLint passed, and the complete Next production build passed through the supported Webpack path. Turbopack remains unsuitable only in this junctioned local worktree.
 - Windows artifacts: installer 221,597,813 bytes / SHA-256 `CD3BD7375ABDDECFB0D60308B34DD9DDCD5BB76CE68E2D3C4E1F8EA4EE3C3E67`; blockmap 209,420 bytes / SHA-256 `AA1CEA3EA4E44379E3DFB6A7FB77273BEC7945EE3F9B86F96CB421254292D5A9`; `latest.yml` 344 bytes / SHA-256 `ECE94456CEBC2AA017B2D1D3E601F6216998ACFFC0C8EBED9E0B6D3D73D181BB`.
-- No source, website, tag, installer, or macOS update has been pushed or published. A native macOS build still requires the tag-triggered GitHub workflow after an explicit publish request.
+- macOS Apple Silicon DMG: 173,788,026 bytes / SHA-256 `5F3AAB0953E5556AC138C51121DFDE3F0968D8D539033DB71A41AE370CC5F549`; ZIP: 166,355,395 bytes / SHA-256 `80AE22DAAB216ACA91301475F0BBDD74348C008C145048E6623C34864F1F8E4F`.
+- macOS Intel DMG: 188,958,044 bytes / SHA-256 `AACC06A4798ABF64C8446292250B4DD4C733C688026EF33D502AA1E70F5254EE`; ZIP: 181,255,729 bytes / SHA-256 `67EB0C4E2FA50344923192E9B64135F107EB0D50B569F2710C06EE62912E35E3`; updater manifest: 830 bytes / SHA-256 `B3E09E15A3CC50E395DD4EABF71F99FAB99969B6338071F10F089BAF088E02A9`.
+- All three Windows and all five macOS assets are public. The downloaded Mac assets matched GitHub's SHA-256 values, and `latest-mac.yml` reports version `0.9.42` with matching size and SHA-512 data for all four installers.
+- The website live takeover, replay fullscreen, and Meta Studio normalization are already pushed and deployed from website commit `040b71e5bbc32c6095c165557b568e13cc3b09f3`.
 
 ## 2026-08-08 v0.9.41 Release (Windows And macOS Live)
 

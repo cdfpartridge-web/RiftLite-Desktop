@@ -1,9 +1,9 @@
 # RiftLite Web Replay System Handover
 
-> Architecture and privacy reference only. Its release-baseline header and some later status statements are historical. For current production/repository state, start with `docs/HANDOVER_2026-08-08_POST_V0.9.41.md`, `docs/CURRENT_STATE.md`, and current code. A verified v0.9.42 candidate exists locally but is not published. TCGA Web Replay is now published but remains BO1-only; the public replay archive paginates, while the signed-in owner library remains unpaginated.
+> Architecture and privacy reference only. Its release-baseline header and some later status statements are historical. For current production/repository state, start with `docs/HANDOVER_2026-08-09_POST_V0.9.42.md`, `docs/CURRENT_STATE.md`, and current code. RiftLite v0.9.42 is published for Windows and macOS. TCGA Web Replay remains BO1-only; the public replay archive paginates, while the signed-in owner library remains unpaginated.
 
-Architecture content last deeply verified: 2026-07-12; TCGA artifact persistence notes updated 2026-08-08
-Historical architecture baseline: RiftLite `v0.8.03` (package SemVer `0.8.3`); current published desktop release: `v0.9.41`; local candidate: `v0.9.42`
+Architecture content last deeply verified: 2026-07-12; release and replay-finalization notes updated 2026-08-09
+Historical architecture baseline: RiftLite `v0.8.03` (package SemVer `0.8.3`); current published desktop release: `v0.9.42`
 Production website: `https://www.riftlite.com`
 Current high-level status: Atlas and TCGA Web Replay are live/account-linked; TCGA remains BO1-only. See the current handover and code for later implementation details.
 
