@@ -1,8 +1,8 @@
 # RiftLite Current Engineering State
 
-> **Current release state:** Windows v0.9.41 and macOS v0.9.41 are live. For a new chat, read `docs/HANDOVER_2026-08-08_POST_V0.9.41.md` first; `docs/release-notes-v0.9.41.md` is the customer-facing summary.
+> **Current development state:** a verified local Windows v0.9.42 candidate is built but not published. Windows v0.9.41 and macOS v0.9.41 remain live. For a new chat, read `docs/HANDOVER_2026-08-08_POST_V0.9.41.md`, this file, and `docs/release-notes-v0.9.42.md`.
 
-Last updated: 2026-08-08
+Last updated: 2026-08-09
 
 For a new Codex chat, read `docs/HANDOVER_2026-08-08_POST_V0.9.41.md` first. This file remains the longer architecture and append-only release history; some older sections are historical rather than current operational truth.
 
@@ -10,7 +10,7 @@ For a new Codex chat, read `docs/HANDOVER_2026-08-08_POST_V0.9.41.md` first. Thi
 
 - Active cross-platform release source repo:
   `C:\Users\cdfpa\OneDrive\Documents\Claude\Projects\Riftlite Beta 0.6\desktop-v06`
-- Current local package version: `0.9.41` (customer-facing build `v0.9.41`); matching Windows and macOS releases are published
+- Current local package version: `0.9.42` (customer-facing candidate `v0.9.42`); it is not published
 - Current branch: `agent/release-v0.9.12`
 - Windows GitHub release repository (`windows` remote): `cdfpartridge-web/RiftLite-Desktop`
 - macOS GitHub release repository (`origin` remote): `cdfpartridge-web/RiftLite-Desktop-mac`
@@ -18,7 +18,7 @@ For a new Codex chat, read `docs/HANDOVER_2026-08-08_POST_V0.9.41.md` first. Thi
 - Current published macOS release: `mac-v0.9.41` (2026-08-08)
 - Windows installer output:
   `C:\Users\cdfpa\OneDrive\Documents\Claude\Projects\Riftlite Beta 0.6\desktop-v06\release\RiftLiteBetaInstall.exe`
-- Current local Windows installer: v0.9.41 `release\RiftLiteBetaInstall.exe`, 219,837,016 bytes, SHA-256 `3127B1629CAF0E5C6E9E83D7CE81F887F351D968003DC23D9E47FB6A5074D372`.
+- Current local Windows installer: v0.9.42 `release\RiftLiteBetaInstall.exe`, 221,597,813 bytes, SHA-256 `CD3BD7375ABDDECFB0D60308B34DD9DDCD5BB76CE68E2D3C4E1F8EA4EE3C3E67`.
 
 Always name the remote explicitly when pushing: Windows source/tags go to `windows`; macOS source/tags go to `origin`. The repositories and release tags are deliberately separate.
 
@@ -29,6 +29,20 @@ Do not accidentally work from:
 - an old copied Mac source tree unless the task explicitly concerns the Mac build
 
 The active working tree may contain current work. Never reset, discard, or overwrite unrelated changes.
+
+## 2026-08-09 v0.9.42 Local Candidate (Not Published)
+
+- Desktop package/build identity is `0.9.42`; continuity identifiers, update repository, profile directory, media directory, and protocol remain unchanged.
+- Home can show a remotely controlled Twitch live takeover only while Meta Studio enables it and the exact configured channel is confirmed live. It autoplays muted in an isolated non-persistent partition, can be hidden for the current session, and falls back to the creator-video carousel.
+- Web Replay now exposes a desktop-level fullscreen view without remounting the replay guest. The hosted frame-by-frame player also has a labelled player-only fullscreen button, live exit-state labels, and `F` / `Esc` shortcuts.
+- Atlas Stacked Deck, Deck Peek, trash-card, rewind, and setup-control labels are rejected as player identities. Same-room identities remain pinned against low-trust overlay labels, while a genuinely authoritative replacement opponent still starts a new session.
+- **Review later** returns after the pending match row is durable. Replay and Web Replay finalization continue as non-blocking background work; failures remain retryable, confirmation re-arms them, and deletion keeps its durable fence.
+- The website adds the authenticated Meta Studio control, a dedicated short-cache `/api/app/live-takeover` endpoint, fail-closed Twitch status resolution, and updated privacy/cookie disclosures.
+- Next 16 route-only export compatibility was restored by moving the legacy RiftReplay Blob/chunk storage helpers out of route modules and into `src/lib/riftreplay-storage.ts`; storage behavior and its tests are unchanged.
+- Desktop validation: 115 test files / 1,052 tests passed, lint passed, production build passed, Windows artifact/updater verification passed, and packaged smoke passed.
+- Website validation: 102 test files passed / 1 skipped, 715 tests passed / 9 skipped, changed-file ESLint passed, and the complete Next production build passed through the supported Webpack path. Turbopack remains unsuitable only in this junctioned local worktree.
+- Windows artifacts: installer 221,597,813 bytes / SHA-256 `CD3BD7375ABDDECFB0D60308B34DD9DDCD5BB76CE68E2D3C4E1F8EA4EE3C3E67`; blockmap 209,420 bytes / SHA-256 `AA1CEA3EA4E44379E3DFB6A7FB77273BEC7945EE3F9B86F96CB421254292D5A9`; `latest.yml` 344 bytes / SHA-256 `ECE94456CEBC2AA017B2D1D3E601F6216998ACFFC0C8EBED9E0B6D3D73D181BB`.
+- No source, website, tag, installer, or macOS update has been pushed or published. A native macOS build still requires the tag-triggered GitHub workflow after an explicit publish request.
 
 ## 2026-08-08 v0.9.41 Release (Windows And macOS Live)
 

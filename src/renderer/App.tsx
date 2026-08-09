@@ -35,6 +35,7 @@ import {
   Link2,
   Mail,
   Maximize2,
+  Minimize2,
   PanelLeftClose,
   PanelLeftOpen,
   MessageCircle,
@@ -294,12 +295,16 @@ import { bindGameWebviewEvents } from "./gameWebviewEvents";
 import {
   DEFAULT_HOME_FEATURED_VIDEOS,
   HOME_FEED_REFRESH_MS,
+  HOME_LIVE_TAKEOVER_REFRESH_MS,
   homeCreatorVideoDateLabel,
   homeCreatorVideoFeedFromConfig,
+  homeLiveTakeoverFromConfig,
   nextHomeCreatorVideoIndex,
   resolveHomeConfigUrl,
+  resolveHomeLiveTakeoverUrl,
   shouldAutoAdvanceHomeCreatorVideo,
-  type HomeCreatorVideoFeed
+  type HomeCreatorVideoFeed,
+  type HomeLiveTakeover
 } from "./homeCreatorVideos";
 import "./styles/app.css";
 import "./styles/ui-dev-modern.css";
@@ -478,6 +483,7 @@ type HomeFeaturedPartner = {
 const HOME_CONFIG_URL = resolveHomeConfigUrl(
   (import.meta as ImportMeta & { readonly env?: Record<string, string | undefined> }).env?.VITE_RIFTLITE_HOME_CONFIG_URL
 );
+const HOME_LIVE_TAKEOVER_URL = resolveHomeLiveTakeoverUrl(HOME_CONFIG_URL);
 const RELEASE_NOTES = {
   version: APP_VERSION_META,
   title: `RiftLite v${APP_VERSION_META}`,
@@ -8667,6 +8673,23 @@ function HomeView({
   const [featuredVideoHovering, setFeaturedVideoHovering] = useState(false);
   const [featuredVideoFocusWithin, setFeaturedVideoFocusWithin] = useState(false);
   const [playingHomeVideoId, setPlayingHomeVideoId] = useState("");
+  const [liveTakeover, setLiveTakeover] = useState<HomeLiveTakeover | null>(null);
+  const liveTakeoverRef = useRef<HomeLiveTakeover | null>(null);
+  const [dismissedLiveTakeoverKey, setDismissedLiveTakeoverKey] = useState(() => {
+    try {
+      return window.sessionStorage.getItem("riftlite:home-live-takeover-dismissed") ?? "";
+    } catch {
+      return "";
+    }
+  });
+  const dismissedLiveTakeoverKeyRef = useRef(dismissedLiveTakeoverKey);
+  const liveTakeoverKey = liveTakeover
+    ? liveTakeover.channelLogin
+    : "";
+  const activeLiveTakeover = liveTakeover && dismissedLiveTakeoverKey !== liveTakeoverKey
+    ? liveTakeover
+    : null;
+  const activeLiveTakeoverKey = activeLiveTakeover ? liveTakeoverKey : "";
   const featuredVideo = homeVideoFeed.videos[featuredVideoIndex % Math.max(1, homeVideoFeed.videos.length)] ?? DEFAULT_HOME_FEATURED_VIDEOS[0];
   const featuredVideoPlaying = playingHomeVideoId === featuredVideo?.videoId;
   const featuredVideoInteracting = featuredVideoHovering || featuredVideoFocusWithin;
@@ -8758,7 +8781,11 @@ function HomeView({
         const nextPartners = homeFeaturedPartnersFromConfig(payload);
         setHomeVideoFeed(nextFeed);
         setFeaturedVideoIndex((index) => nextHomeCreatorVideoIndex(index, 0, nextFeed.videos.length));
-        setPlayingHomeVideoId("");
+        setPlayingHomeVideoId((videoId) => (
+          !nextFeed.videos.some((video) => video.videoId === videoId)
+            ? ""
+            : videoId
+        ));
         setFeaturedPartners(nextPartners);
         setFeaturedPartnerIndex((index) => nextPartners.length ? index % nextPartners.length : 0);
       } catch (error) {
@@ -8781,8 +8808,72 @@ function HomeView({
   }, []);
 
   useEffect(() => {
+    let mounted = true;
+    let inFlight = false;
+    let consecutiveFailures = 0;
+    let controller: AbortController | null = null;
+
+    const refreshLiveTakeover = async () => {
+      if (inFlight) {
+        return;
+      }
+      inFlight = true;
+      const requestController = new AbortController();
+      controller = requestController;
+      const timeout = window.setTimeout(() => requestController.abort(), 12_000);
+      try {
+        const response = await fetch(HOME_LIVE_TAKEOVER_URL, {
+          cache: "no-store",
+          signal: requestController.signal
+        });
+        if (!response.ok) {
+          throw new Error(`Live takeover status returned ${response.status}`);
+        }
+        const payload = await response.json() as { liveTakeover?: unknown };
+        if (!mounted) {
+          return;
+        }
+        const nextLiveTakeover = homeLiveTakeoverFromConfig(payload.liveTakeover);
+        consecutiveFailures = 0;
+        const previousLiveTakeover = liveTakeoverRef.current;
+        liveTakeoverRef.current = nextLiveTakeover;
+        setLiveTakeover(nextLiveTakeover);
+        if (
+          nextLiveTakeover &&
+          previousLiveTakeover?.channelLogin !== nextLiveTakeover.channelLogin &&
+          dismissedLiveTakeoverKeyRef.current !== nextLiveTakeover.channelLogin
+        ) {
+          setPlayingHomeVideoId("");
+        }
+      } catch (error) {
+        if (mounted) {
+          consecutiveFailures += 1;
+          if (consecutiveFailures >= 3) {
+            liveTakeoverRef.current = null;
+            setLiveTakeover(null);
+          }
+        }
+      } finally {
+        window.clearTimeout(timeout);
+        inFlight = false;
+        if (controller === requestController) {
+          controller = null;
+        }
+      }
+    };
+
+    void refreshLiveTakeover();
+    const timer = window.setInterval(() => void refreshLiveTakeover(), HOME_LIVE_TAKEOVER_REFRESH_MS);
+    return () => {
+      mounted = false;
+      window.clearInterval(timer);
+      controller?.abort();
+    };
+  }, []);
+
+  useEffect(() => {
     if (!shouldAutoAdvanceHomeCreatorVideo({
-      enabled: homeVideoFeed.carousel.enabled,
+      enabled: homeVideoFeed.carousel.enabled && !activeLiveTakeover,
       explicitlyPaused: featuredVideoPaused,
       interacting: featuredVideoInteracting,
       playing: featuredVideoPlaying,
@@ -8802,6 +8893,7 @@ function HomeView({
     featuredVideoIndex,
     featuredVideoPaused,
     featuredVideoPlaying,
+    activeLiveTakeover,
     homeVideoFeed.carousel.enabled,
     homeVideoFeed.carousel.rotationSeconds,
     homeVideoFeed.videos.length
@@ -8859,6 +8951,19 @@ function HomeView({
     setFeaturedVideoIndex((index) => nextHomeCreatorVideoIndex(index, delta, homeVideoFeed.videos.length));
   }
 
+  function dismissLiveTakeover() {
+    if (!liveTakeoverKey) {
+      return;
+    }
+    dismissedLiveTakeoverKeyRef.current = liveTakeoverKey;
+    setDismissedLiveTakeoverKey(liveTakeoverKey);
+    try {
+      window.sessionStorage.setItem("riftlite:home-live-takeover-dismissed", liveTakeoverKey);
+    } catch {
+      // State still hides the takeover for this mounted Home session.
+    }
+  }
+
   return (
     <section className="dashboard-page home-page modern-home">
       <section className="modern-readiness-strip" aria-label="RiftLite readiness" data-tour-target="home">
@@ -8880,7 +8985,7 @@ function HomeView({
         </button>
       </section>
 
-      <section className="modern-home-layout">
+      <section className="modern-home-layout" data-live-takeover={Boolean(activeLiveTakeover)}>
         <div className="modern-home-main">
           <section className="modern-home-feature-row" aria-label="Deck tools">
             <article className="modern-panel modern-deck-glance">
@@ -9125,9 +9230,12 @@ function HomeView({
             id="home-creator-videos"
             className="modern-panel modern-creator-video-card"
             role="region"
-            aria-roledescription="carousel"
-            aria-label={`Creator video ${featuredVideoIndex + 1} of ${homeVideoFeed.videos.length}: ${featuredVideo.title}`}
-            data-source={homeVideoFeed.source}
+            aria-roledescription={activeLiveTakeover ? undefined : "carousel"}
+            aria-label={activeLiveTakeover
+              ? `${activeLiveTakeover.title}, live on Twitch`
+              : `Creator video ${featuredVideoIndex + 1} of ${homeVideoFeed.videos.length}: ${featuredVideo.title}`}
+            data-source={activeLiveTakeover ? "live" : homeVideoFeed.source}
+            data-live={Boolean(activeLiveTakeover)}
             onMouseEnter={() => setFeaturedVideoHovering(true)}
             onMouseLeave={() => setFeaturedVideoHovering(false)}
             onFocusCapture={() => setFeaturedVideoFocusWithin(true)}
@@ -9138,7 +9246,20 @@ function HomeView({
             }}
           >
             <div className="modern-creator-video-media">
-              {featuredVideoPlaying ? (
+              {activeLiveTakeover ? (
+                <div className="home-video-frame home-live-stream-frame">
+                  <EmbedWebview
+                    key={activeLiveTakeoverKey}
+                    className="home-embed-webview"
+                    src={activeLiveTakeover.embedUrl}
+                    allow="autoplay; fullscreen; picture-in-picture"
+                    allowpopups="true"
+                    httpreferrer="https://www.riftlite.com/"
+                    partition={`riftlite-home-live-twitch-${activeLiveTakeover.channelLogin}`}
+                    webpreferences="backgroundThrottling=false"
+                  />
+                </div>
+              ) : featuredVideoPlaying ? (
                 <div className="home-video-frame">
                   <EmbedWebview
                     key={featuredVideo.videoId}
@@ -9174,29 +9295,43 @@ function HomeView({
               )}
             </div>
             <div className="modern-creator-video-copy" role="group" aria-roledescription="slide">
-              <span className="modern-kicker">Creator videos</span>
-              <h2 title={featuredVideo.title}>{featuredVideo.title}</h2>
-              <p><strong>{featuredVideo.creatorName || "RiftLite"}</strong><span>{homeCreatorVideoDateLabel(featuredVideo.publishedAt)}</span></p>
-              <div className="modern-creator-video-actions">
-                {featuredVideo.channelUrl ? (
-                  <button className="modern-text-action" onClick={() => void window.riftlite.openExternalResource(featuredVideo.channelUrl!)}><Compass size={14} /> Creator</button>
-                ) : null}
-                <button className="modern-text-action" onClick={() => void window.riftlite.openExternalResource(featuredVideo.url)}><ExternalLink size={14} /> YouTube</button>
-              </div>
-              <div className="modern-video-controls" aria-label="Creator video carousel controls">
-                <button type="button" onClick={() => setFeaturedVideoCarouselOffset(-1)} disabled={homeVideoFeed.videos.length <= 1} aria-label="Previous creator video"><ChevronLeft size={16} /></button>
-                <span>{featuredVideoIndex + 1} / {homeVideoFeed.videos.length}</span>
-                <button
-                  type="button"
-                  onClick={() => setFeaturedVideoPaused((paused) => !paused)}
-                  disabled={!homeVideoFeed.carousel.enabled || homeVideoFeed.videos.length <= 1}
-                  aria-label={featuredVideoPaused ? "Resume creator video carousel" : "Pause creator video carousel"}
-                  aria-pressed={featuredVideoPaused}
-                >
-                  {featuredVideoPaused ? <Play size={15} /> : <Pause size={15} />}
-                </button>
-                <button type="button" onClick={() => setFeaturedVideoCarouselOffset(1)} disabled={homeVideoFeed.videos.length <= 1} aria-label="Next creator video"><ChevronRight size={16} /></button>
-              </div>
+              {activeLiveTakeover ? (
+                <>
+                  <span className="modern-live-kicker"><i aria-hidden="true" /> Live now</span>
+                  <h2 title={activeLiveTakeover.title}>{activeLiveTakeover.title}</h2>
+                  <p><strong>{activeLiveTakeover.channelLogin}</strong><span>Starts muted. Use the Twitch player controls for sound or pause.</span></p>
+                  <div className="modern-creator-video-actions modern-live-stream-actions">
+                    <button className="modern-text-action" onClick={() => void window.riftlite.openExternalResource(activeLiveTakeover.channelUrl)}><ExternalLink size={14} /> Open Twitch</button>
+                    <button className="modern-text-action" onClick={dismissLiveTakeover}><X size={14} /> Hide for this session</button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <span className="modern-kicker">Creator videos</span>
+                  <h2 title={featuredVideo.title}>{featuredVideo.title}</h2>
+                  <p><strong>{featuredVideo.creatorName || "RiftLite"}</strong><span>{homeCreatorVideoDateLabel(featuredVideo.publishedAt)}</span></p>
+                  <div className="modern-creator-video-actions">
+                    {featuredVideo.channelUrl ? (
+                      <button className="modern-text-action" onClick={() => void window.riftlite.openExternalResource(featuredVideo.channelUrl!)}><Compass size={14} /> Creator</button>
+                    ) : null}
+                    <button className="modern-text-action" onClick={() => void window.riftlite.openExternalResource(featuredVideo.url)}><ExternalLink size={14} /> YouTube</button>
+                  </div>
+                  <div className="modern-video-controls" aria-label="Creator video carousel controls">
+                    <button type="button" onClick={() => setFeaturedVideoCarouselOffset(-1)} disabled={homeVideoFeed.videos.length <= 1} aria-label="Previous creator video"><ChevronLeft size={16} /></button>
+                    <span>{featuredVideoIndex + 1} / {homeVideoFeed.videos.length}</span>
+                    <button
+                      type="button"
+                      onClick={() => setFeaturedVideoPaused((paused) => !paused)}
+                      disabled={!homeVideoFeed.carousel.enabled || homeVideoFeed.videos.length <= 1}
+                      aria-label={featuredVideoPaused ? "Resume creator video carousel" : "Pause creator video carousel"}
+                      aria-pressed={featuredVideoPaused}
+                    >
+                      {featuredVideoPaused ? <Play size={15} /> : <Pause size={15} />}
+                    </button>
+                    <button type="button" onClick={() => setFeaturedVideoCarouselOffset(1)} disabled={homeVideoFeed.videos.length <= 1} aria-label="Next creator video"><ChevronRight size={16} /></button>
+                  </div>
+                </>
+              )}
             </div>
           </article>
         </aside>
@@ -10925,6 +11060,7 @@ function EmbeddedRiftReplayView({
   onOpenAccount: () => void;
 }) {
   const [reloadKey, setReloadKey] = useState(0);
+  const [replayFullscreen, setReplayFullscreen] = useState(false);
   const [embedState, setEmbedState] = useState<{
     authenticated: boolean;
     error: string;
@@ -10932,6 +11068,23 @@ function EmbeddedRiftReplayView({
     url: string;
   }>({ authenticated: false, error: "", loading: true, url: "" });
   const RiftReplayWebview = "webview" as unknown as React.ElementType;
+  const fullscreenButtonRef = useRef<HTMLButtonElement | null>(null);
+  const ownsReplayFullscreenRef = useRef(false);
+  const replayWebviewRef = useRef<HTMLElement | null>(null);
+
+  const toggleReplayFullscreen = useCallback(async (force?: boolean) => {
+    const enabled = force ?? !replayFullscreen;
+    ownsReplayFullscreenRef.current = enabled;
+    setReplayFullscreen(enabled);
+    try {
+      await window.riftlite.setWindowFullscreen(enabled);
+    } catch {
+      // The fixed replay surface still provides an in-app fullscreen fallback.
+    }
+    if (!enabled) {
+      window.setTimeout(() => fullscreenButtonRef.current?.focus(), 0);
+    }
+  }, [replayFullscreen]);
 
   useEffect(() => {
     let cancelled = false;
@@ -10960,8 +11113,40 @@ function EmbeddedRiftReplayView({
     };
   }, [reloadKey]);
 
+  useEffect(() => {
+    if (!replayFullscreen) return;
+    const exitOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      void toggleReplayFullscreen(false);
+    };
+    window.addEventListener("keydown", exitOnEscape, true);
+    return () => window.removeEventListener("keydown", exitOnEscape, true);
+  }, [replayFullscreen, toggleReplayFullscreen]);
+
+  useEffect(() => {
+    const webview = replayWebviewRef.current;
+    if (!replayFullscreen || !webview) return;
+    const exitOnGuestEscape = (event: Event) => {
+      const input = (event as Event & { input?: { key?: string; type?: string } }).input;
+      if (input?.type !== "keyDown" || input.key !== "Escape") return;
+      if (document.fullscreenElement === webview) return;
+      event.preventDefault();
+      void toggleReplayFullscreen(false);
+    };
+    webview.addEventListener("before-input-event", exitOnGuestEscape);
+    return () => webview.removeEventListener("before-input-event", exitOnGuestEscape);
+  }, [embedState.url, reloadKey, replayFullscreen, toggleReplayFullscreen]);
+
+  useEffect(() => () => {
+    if (ownsReplayFullscreenRef.current) {
+      ownsReplayFullscreenRef.current = false;
+      void window.riftlite.setWindowFullscreen(false).catch(() => undefined);
+    }
+  }, []);
+
   return (
-    <section className="web-replay-page">
+    <section className="web-replay-page" data-fullscreen={replayFullscreen}>
       <div className="web-replay-toolbar">
         <div>
           <h2>Web Replays</h2>
@@ -10984,6 +11169,17 @@ function EmbeddedRiftReplayView({
           <button type="button" className="secondary" onClick={() => setReloadKey((value) => value + 1)}>
             <RefreshCw size={15} /> Replay library
           </button>
+          <button
+            ref={fullscreenButtonRef}
+            type="button"
+            className="secondary"
+            aria-pressed={replayFullscreen}
+            onClick={() => void toggleReplayFullscreen()}
+            title={replayFullscreen ? "Exit the full-screen replay view" : "Fill the display with Web Replays without resetting the selected frame"}
+          >
+            {replayFullscreen ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
+            {replayFullscreen ? "Exit full screen" : "Full screen"}
+          </button>
           <button type="button" className="secondary" onClick={() => void window.riftlite.openExternalResource(RIFT_REPLAY_WEB_URL)}>
             <ExternalLink size={15} /> Open in browser
           </button>
@@ -11002,6 +11198,7 @@ function EmbeddedRiftReplayView({
       <div className="web-replay-frame-shell">
         {embedState.url ? (
           <RiftReplayWebview
+            ref={replayWebviewRef}
             key={`${reloadKey}:${embedState.url}`}
             className="web-replay-webview"
             src={embedState.url}
@@ -24145,6 +24342,13 @@ function LegalNoticePanel() {
       <p className="muted">
         Community views use user-submitted match records. RiftLite does not provide skill-based matchmaking, MMR, automated rules enforcement, or a public player leaderboard.
       </p>
+      <p className="muted">
+        When the Home live takeover is enabled and Twitch confirms the channel is live, Home automatically loads Twitch's player muted. That makes a direct connection to Twitch and may use Twitch cookies or session storage.
+      </p>
+      <div className="row-actions">
+        <button className="secondary" onClick={() => void window.riftlite.openExternalResource("https://www.riftlite.com/privacy")}>Privacy</button>
+        <button className="secondary" onClick={() => void window.riftlite.openExternalResource("https://www.riftlite.com/cookies")}>Cookies</button>
+      </div>
     </div>
   );
 }

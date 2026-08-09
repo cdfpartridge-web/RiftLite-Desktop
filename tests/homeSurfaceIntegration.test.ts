@@ -59,4 +59,21 @@ describe("Home launchpad", () => {
       expect(stylesSource).toContain(className);
     }
   });
+
+  it("uses a remotely controlled, muted Twitch takeover without polling the full video feed", () => {
+    expect(homeSource).toContain("HOME_LIVE_TAKEOVER_URL");
+    expect(homeSource).toContain("HOME_LIVE_TAKEOVER_REFRESH_MS");
+    expect(homeSource).toContain("homeLiveTakeoverFromConfig(payload.liveTakeover)");
+    expect(homeSource).toContain("requestController.abort(), 12_000");
+    expect(homeSource).toContain("previousLiveTakeover?.channelLogin !== nextLiveTakeover.channelLogin");
+    expect(homeSource).not.toContain("setLiveTakeover(nextFeed.liveTakeover)");
+    expect(homeSource).toContain("riftlite-home-live-twitch-");
+    expect(homeSource).toContain("Starts muted.");
+    expect(mainSource).toContain('webContents.setAudioMuted(true)');
+    expect(mainSource).toContain('webContents.setAudioMuted(false)');
+    expect(mainSource).toContain('webPreferences.autoplayPolicy = "document-user-activation-required"');
+    expect(stylesSource).toContain('.modern-creator-video-card[data-live="true"]');
+    expect(stylesSource).toContain("min-width: 420px");
+    expect(stylesSource).toContain("min-height: 315px");
+  });
 });

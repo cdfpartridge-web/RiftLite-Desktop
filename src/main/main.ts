@@ -1814,6 +1814,17 @@ function secureHomeMediaWebContents(
   webContents: WebContents,
   policy: Extract<EmbeddedWebviewPolicy, { kind: "home-video" }>
 ): void {
+  if (policy.provider === "twitch") {
+    // Hold a guest-level mute from attachment through DOM readiness. The
+    // canonical URL keeps Twitch internally muted; releasing this extra mute
+    // lets the native player opt into sound only after a user gesture.
+    webContents.setAudioMuted(true);
+    webContents.once("dom-ready", () => {
+      if (!webContents.isDestroyed()) {
+        webContents.setAudioMuted(false);
+      }
+    });
+  }
   installRestrictedEmbeddedPermissions(
     webContents,
     policy,
@@ -7093,6 +7104,9 @@ async function createWindow(): Promise<void> {
     webPreferences.sandbox = true;
     webPreferences.webSecurity = true;
     webPreferences.allowRunningInsecureContent = false;
+    if (policy.kind === "home-video" && policy.provider === "twitch") {
+      webPreferences.autoplayPolicy = "document-user-activation-required";
+    }
     embeddedWebviewPolicyBySession.set(electronSession.fromPartition(params.partition), policy);
   });
   mainWindow.webContents.on("did-attach-webview", (_event, webContents) => {
@@ -7596,11 +7610,22 @@ function registerIpc(): void {
   });
   handleTrustedAppIpc("matches:defer-review", async (_event, draft: MatchDraft) => {
     const deferred = await store.deferMatchReview(draft);
-    // If the first pending-row write failed, replay finalization deliberately
-    // parked its prepared VOD/raw capture in memory. The new row is now
-    // durable, so secure that material before allowing Review later to close.
-    if (draft.status !== "saved") {
-      await capture.waitForReplayFinalization(deferred.id);
+    if (deferred.status !== "saved") {
+      // The pending row is durable, so Review later can close immediately.
+      // Keep prepared replay/raw-capture work retryable in the background;
+      // confirmation re-arms it and deletion fences it in CaptureCoordinator.
+      capture.markDeferredReviewReplayFinalizationBackgrounded(deferred.id);
+      const pendingReplayFinalization = new Promise<void>((resolvePending) => setImmediate(resolvePending))
+        .then(() => capture.waitForReplayFinalization(deferred.id));
+      void pendingReplayFinalization.then(
+        () => capture.markDeferredReviewReplayFinalizationComplete(deferred.id),
+        (error) => {
+          void logStartupIssue(
+            `Deferred ${deferred.platform} replay finalization will retry later (${deferred.id})`,
+            error
+          );
+        }
+      );
     }
     const latest = (await store.getMatches()).find((candidate) => candidate.id === deferred.id) ?? deferred;
     queueAccountCloudSync("Match review deferred");

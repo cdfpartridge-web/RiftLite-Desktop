@@ -16,7 +16,7 @@ function functionSource(name: string, nextName: string): string {
 }
 
 describe("match review lifecycle integration", () => {
-  it("releases main-process review state only after the last queued review closes", () => {
+  it("parks Review later durably before replay finalization continues in the background", () => {
     const dismiss = functionSource("dismissReviewDraft", "chooseGamePlatform");
 
     expect(preloadSource).toContain('dismissMatchReview: () => ipcRenderer.invoke("capture:dismiss-review")');
@@ -24,12 +24,23 @@ describe("match review lifecycle integration", () => {
     expect(mainSource).toContain('handleTrustedAppIpc("capture:dismiss-review", () => capture.dismissMatchReview())');
     expect(mainSource).toContain('handleTrustedAppIpc("matches:defer-review"');
     const deferHandlerAt = mainSource.indexOf('handleTrustedAppIpc("matches:defer-review"');
-    const deferReplayGuardAt = mainSource.indexOf('if (draft.status !== "saved")', deferHandlerAt);
-    const deferReplayAt = mainSource.indexOf("await capture.waitForReplayFinalization(deferred.id)", deferHandlerAt);
-    const deferReturnAt = mainSource.indexOf("return latest", deferHandlerAt);
-    expect(deferReplayGuardAt).toBeGreaterThan(deferHandlerAt);
-    expect(deferReplayAt).toBeGreaterThan(deferReplayGuardAt);
-    expect(deferReturnAt).toBeGreaterThan(deferReplayAt);
+    const nextHandlerAt = mainSource.indexOf('handleTrustedAppIpc("matches:confirm"', deferHandlerAt);
+    const deferHandler = mainSource.slice(deferHandlerAt, nextHandlerAt);
+    const durableDeferAt = deferHandler.indexOf("await store.deferMatchReview(draft)");
+    const deferReplayGuardAt = deferHandler.indexOf('if (deferred.status !== "saved")');
+    const backgroundMarkerAt = deferHandler.indexOf("capture.markDeferredReviewReplayFinalizationBackgrounded(deferred.id)");
+    const deferReplayAt = deferHandler.indexOf(".then(() => capture.waitForReplayFinalization(deferred.id))");
+    const completionMarkerAt = deferHandler.indexOf("capture.markDeferredReviewReplayFinalizationComplete(deferred.id)");
+    const latestReadAt = deferHandler.indexOf("await store.getMatches()");
+    const deferReturnAt = deferHandler.indexOf("return latest");
+    expect(durableDeferAt).toBeGreaterThan(-1);
+    expect(deferReplayGuardAt).toBeGreaterThan(durableDeferAt);
+    expect(backgroundMarkerAt).toBeGreaterThan(deferReplayGuardAt);
+    expect(deferReplayAt).toBeGreaterThan(backgroundMarkerAt);
+    expect(completionMarkerAt).toBeGreaterThan(deferReplayAt);
+    expect(latestReadAt).toBeGreaterThan(completionMarkerAt);
+    expect(deferReturnAt).toBeGreaterThan(latestReadAt);
+    expect(deferHandler).not.toContain("await capture.waitForReplayFinalization");
     const persistAt = dismiss.indexOf("await window.riftlite.deferMatchReview");
     const updateHistoryAt = dismiss.indexOf("setMatches(");
     const dismissMarkerAt = dismiss.indexOf("markReviewDismissed(deferred)");

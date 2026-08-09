@@ -16,15 +16,28 @@ export type HomeCreatorVideoCarouselConfig = {
   maxItems: number;
 };
 
+export type HomeLiveTakeover = {
+  provider: "twitch";
+  channelLogin: string;
+  title: string;
+  embedUrl: string;
+  channelUrl: string;
+  status: "live";
+  updatedAt?: number;
+};
+
 export type HomeCreatorVideoFeed = {
   videos: HomeFeaturedVideo[];
   carousel: HomeCreatorVideoCarouselConfig;
+  liveTakeover: HomeLiveTakeover | null;
   updatedAt: string;
   source: "creator" | "legacy";
 };
 
 export const DEFAULT_HOME_CONFIG_URL = "https://www.riftlite.com/api/app/home";
+export const DEFAULT_HOME_LIVE_TAKEOVER_URL = "https://www.riftlite.com/api/app/live-takeover";
 export const HOME_FEED_REFRESH_MS = 30 * 60 * 1_000;
+export const HOME_LIVE_TAKEOVER_REFRESH_MS = 30 * 1_000;
 
 const DEFAULT_CAROUSEL_CONFIG: HomeCreatorVideoCarouselConfig = {
   enabled: true,
@@ -55,6 +68,14 @@ export function resolveHomeConfigUrl(value: string | undefined): string {
   return DEFAULT_HOME_CONFIG_URL;
 }
 
+export function resolveHomeLiveTakeoverUrl(homeConfigUrl: string): string {
+  try {
+    return new URL("/api/app/live-takeover", homeConfigUrl).toString();
+  } catch {
+    return DEFAULT_HOME_LIVE_TAKEOVER_URL;
+  }
+}
+
 export function homeCreatorVideoFeedFromConfig(value: unknown): HomeCreatorVideoFeed {
   const payload = isRecord(value) ? value : {};
   const carousel = homeCreatorVideoCarouselFromConfig(payload.creatorVideoCarousel);
@@ -67,9 +88,47 @@ export function homeCreatorVideoFeedFromConfig(value: unknown): HomeCreatorVideo
   return {
     videos: videos.slice(0, carousel.maxItems),
     carousel,
+    liveTakeover: homeLiveTakeoverFromConfig(payload.liveTakeover),
     updatedAt: validDateString(payload.creatorVideosUpdatedAt),
     source: useCreatorFeed ? "creator" : "legacy"
   };
+}
+
+/**
+ * The public Home endpoint reports whether Studio's master switch and Twitch's
+ * live status agree. Embed and channel URLs are deliberately rebuilt here so
+ * remote content can never select a different host or inject player options.
+ */
+export function homeLiveTakeoverFromConfig(value: unknown): HomeLiveTakeover | null {
+  if (!isRecord(value) || value.enabled !== true || value.active !== true) {
+    return null;
+  }
+  if (value.provider !== "twitch" || value.status !== "live") {
+    return null;
+  }
+  const channelLogin = normalizeTwitchChannelLogin(value.channelLogin);
+  if (!channelLogin) {
+    return null;
+  }
+
+  const params = new URLSearchParams({
+    channel: channelLogin,
+    parent: "www.riftlite.com",
+    autoplay: "true",
+    muted: "true"
+  });
+  const result: HomeLiveTakeover = {
+    provider: "twitch",
+    channelLogin,
+    title: boundedCleanString(value.title, 120) || `${channelLogin} is live on Twitch`,
+    embedUrl: `https://player.twitch.tv/?${params.toString()}`,
+    channelUrl: `https://www.twitch.tv/${channelLogin}`,
+    status: "live"
+  };
+  if (typeof value.updatedAt === "number" && Number.isSafeInteger(value.updatedAt) && value.updatedAt > 0) {
+    result.updatedAt = value.updatedAt;
+  }
+  return result;
 }
 
 export function homeCreatorVideoCarouselFromConfig(value: unknown): HomeCreatorVideoCarouselConfig {
@@ -203,6 +262,11 @@ function normalizeYoutubeVideoId(value: string): string {
   return value.trim().match(/^[A-Za-z0-9_-]{11}$/)?.[0] ?? "";
 }
 
+function normalizeTwitchChannelLogin(value: unknown): string {
+  const channelLogin = cleanString(value).toLowerCase();
+  return channelLogin.match(/^[a-z0-9_]{4,25}$/)?.[0] ?? "";
+}
+
 function youtubeVideoIdFromUrl(value: string): string {
   const raw = value.trim();
   if (!raw) {
@@ -290,6 +354,10 @@ function validDateString(value: unknown): string {
 
 function cleanString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function boundedCleanString(value: unknown, maximumLength: number): string {
+  return cleanString(value).replace(/\s+/g, " ").slice(0, maximumLength);
 }
 
 function boundedInteger(value: unknown, fallback: number, minimum: number, maximum: number): number {

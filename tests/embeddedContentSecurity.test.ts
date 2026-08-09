@@ -53,14 +53,30 @@ describe("embedded content security", () => {
       .toBe(false);
 
     const twitch = embeddedWebviewPolicy(
-      "https://player.twitch.tv/?channel=bmucasts&parent=www.riftlite.com",
-      "persist:riftlite-twitch-bmucasts"
+      "https://player.twitch.tv/?channel=bmucasts&parent=www.riftlite.com&autoplay=true&muted=true",
+      "riftlite-home-live-twitch-bmucasts"
     );
     expect(twitch).toEqual({ kind: "home-video", provider: "twitch", mediaId: "bmucasts" });
     expect(embeddedWebviewPolicy(
-      "https://player.twitch.tv/?channel=another-channel",
+      "https://player.twitch.tv/?channel=another_channel&parent=www.riftlite.com&autoplay=true&muted=true",
+      "riftlite-home-live-twitch-bmucasts"
+    )).toBeNull();
+    expect(embeddedWebviewPolicy(
+      "https://player.twitch.tv/?channel=bmucasts&parent=evil.example&autoplay=true&muted=true",
+      "riftlite-home-live-twitch-bmucasts"
+    )).toBeNull();
+    expect(embeddedWebviewPolicy(
+      "https://player.twitch.tv/?channel=bmucasts&parent=www.riftlite.com&autoplay=true&muted=false",
+      "riftlite-home-live-twitch-bmucasts"
+    )).toBeNull();
+    expect(embeddedWebviewPolicy(
+      "https://player.twitch.tv/?channel=bmucasts&parent=www.riftlite.com&autoplay=true&muted=true",
       "persist:riftlite-twitch-bmucasts"
     )).toBeNull();
+    expect(twitch && isAllowedEmbeddedNavigation(
+      twitch,
+      "https://player.twitch.tv/?channel=bmucasts&parent=www.riftlite.com&autoplay=true&muted=false"
+    )).toBe(false);
     expect(embeddedWebviewPolicy(
       "https://www.youtube.com:8443/embed/XPvo24lfN9A",
       "persist:riftlite-home-video-XPvo24lfN9A"

@@ -9,8 +9,9 @@ export type EmbeddedWebviewPolicy =
 
 export const RIFTLITE_REPLAY_WEBVIEW_PARTITION = "persist:riftlite-replay";
 const YOUTUBE_PARTITION_PREFIX = "persist:riftlite-home-video-";
-const TWITCH_PARTITION_PREFIX = "persist:riftlite-twitch-";
+const TWITCH_PARTITION_PREFIX = "riftlite-home-live-twitch-";
 const SAFE_MEDIA_ID = /^[A-Za-z0-9_-]{1,80}$/;
+const SAFE_TWITCH_LOGIN = /^[a-z0-9_]{4,25}$/;
 
 export type WebFrameIdentity = {
   processId: number;
@@ -110,18 +111,29 @@ function twitchPolicy(src: string, partition: string): EmbeddedWebviewPolicy | n
   }
   const mediaId = partition.slice(TWITCH_PARTITION_PREFIX.length).toLowerCase();
   const url = parsedUrl(src);
-  const channel = url?.searchParams.get("channel")?.toLowerCase() ?? "";
   if (
     !url ||
-    !usesDefaultHttpsPort(url) ||
-    url.hostname.toLowerCase() !== "player.twitch.tv" ||
-    url.pathname !== "/" ||
-    !SAFE_MEDIA_ID.test(mediaId) ||
-    channel !== mediaId
+    !SAFE_TWITCH_LOGIN.test(mediaId) ||
+    !isTrustedTwitchPlayerUrl(url, mediaId)
   ) {
     return null;
   }
   return { kind: "home-video", provider: "twitch", mediaId };
+}
+
+function hasSingleQueryValue(url: URL, key: string, expected: string): boolean {
+  const values = url.searchParams.getAll(key);
+  return values.length === 1 && values[0]?.toLowerCase() === expected;
+}
+
+function isTrustedTwitchPlayerUrl(url: URL, mediaId: string): boolean {
+  return usesDefaultHttpsPort(url) &&
+    url.hostname.toLowerCase() === "player.twitch.tv" &&
+    url.pathname === "/" &&
+    hasSingleQueryValue(url, "channel", mediaId) &&
+    hasSingleQueryValue(url, "parent", "www.riftlite.com") &&
+    hasSingleQueryValue(url, "autoplay", "true") &&
+    hasSingleQueryValue(url, "muted", "true");
 }
 
 export function embeddedWebviewPolicy(
@@ -155,9 +167,7 @@ export function isAllowedEmbeddedNavigation(policy: EmbeddedWebviewPolicy, value
     return ["www.youtube.com", "www.youtube-nocookie.com"].includes(url.hostname.toLowerCase()) &&
       mediaId === policy.mediaId;
   }
-  return url.hostname.toLowerCase() === "player.twitch.tv" &&
-    url.pathname === "/" &&
-    url.searchParams.get("channel")?.toLowerCase() === policy.mediaId;
+  return isTrustedTwitchPlayerUrl(url, policy.mediaId);
 }
 
 export function isSecurePopupNavigation(value: string): boolean {

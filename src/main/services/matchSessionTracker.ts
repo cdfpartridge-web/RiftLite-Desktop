@@ -2,7 +2,11 @@ import type { CaptureEvent, GamePlatform, MatchDraft, MatchGame, ReplayStructure
 import { riftboundCardCodeFromValue } from "../../shared/cardIdentity.js";
 import { legendFromImageUrl } from "../../shared/legendImages.js";
 import { isCanonicalLegendName, normalizeLegendName } from "../../shared/legendNames.js";
-import { isReliableAtlasPlayerIdentityCandidate } from "../../shared/atlasPlayerIdentity.js";
+import {
+  isAtlasPlayerIdentityUiControlCandidate,
+  isAtlasPlayerIdentityUiControlValue,
+  isReliableAtlasPlayerIdentityCandidate
+} from "../../shared/atlasPlayerIdentity.js";
 import { privateHubSyncEnabled, publicCommunitySyncEnabled, teamSyncEnabled } from "../../shared/syncPolicy.js";
 import { readTcgaLocalPlayerName, readTcgaProfileName } from "../../shared/tcgaIdentity.js";
 
@@ -380,10 +384,10 @@ function shouldStartFreshSession(session: SessionState, event: CaptureEvent): bo
   const existingOpponent = normalizePlayerNameKey(readString(session.sticky.opponentName));
   const nextOpponent = normalizePlayerNameKey(readString(event.payload.opponentName));
   const existingOpponentIsNoise = isLikelyAtlasActionText(existingOpponent) ||
-    isLikelyAtlasPlayerNameNoise(existingOpponent) ||
+    isLikelyAtlasPlayerNameNoise(existingOpponent, session.sticky) ||
     isAtlasRoomCodePlayerIdentity(session.sticky, existingOpponent);
   const nextOpponentIsNoise = isLikelyAtlasActionText(nextOpponent) ||
-    isLikelyAtlasPlayerNameNoise(nextOpponent) ||
+    isLikelyAtlasPlayerNameNoise(nextOpponent, event.payload) ||
     isAtlasRoomCodePlayerIdentity(event.payload, nextOpponent);
   if (event.platform === "atlas" && (existingOpponentIsNoise || nextOpponentIsNoise)) {
     return false;
@@ -435,9 +439,9 @@ function shouldPreserveAtlasSnapshotOpponentIdentity(session: SessionState, even
   const candidates = Array.isArray(event.payload.atlasPlayerCandidates)
     ? event.payload.atlasPlayerCandidates
     : [];
-  return candidates.some((candidate) => {
+  const candidateRecords = candidates.flatMap((candidate) => {
     if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
-      return false;
+      return [];
     }
     const record = candidate as Record<string, unknown>;
     const name = readString(record.name);
@@ -446,10 +450,22 @@ function shouldPreserveAtlasSnapshotOpponentIdentity(session: SessionState, even
     const score = typeof record.score === "number" && Number.isFinite(record.score)
       ? record.score
       : undefined;
-    return side === "opponent" &&
-      normalizePlayerNameKey(name) === existingOpponent &&
-      isReliableAtlasPlayerIdentityCandidate({ name, side, source, score });
+    return [{ name, side, source, score }];
   });
+  if (candidateRecords.some((candidate) => (
+    candidate.side === "opponent" &&
+    normalizePlayerNameKey(candidate.name) === existingOpponent &&
+    isReliableAtlasPlayerIdentityCandidate(candidate)
+  ))) {
+    return true;
+  }
+
+  const nextIdentityCandidates = candidateRecords.filter((candidate) => (
+    candidate.side === "opponent" &&
+    normalizePlayerNameKey(candidate.name) === nextOpponent
+  ));
+  return nextIdentityCandidates.length > 0 &&
+    nextIdentityCandidates.every((candidate) => !isReliableAtlasPlayerIdentityCandidate(candidate));
 }
 
 function isAtlasSameOpponentBo3ContinuationCandidate(session: SessionState, event: CaptureEvent): boolean {
@@ -476,10 +492,10 @@ function isAtlasSameOpponentBo3ContinuationCandidate(session: SessionState, even
   const existingOpponent = normalizePlayerNameKey(readString(session.sticky.opponentName));
   const nextOpponent = normalizePlayerNameKey(readString(event.payload.opponentName));
   const existingOpponentIsNoise = isLikelyAtlasActionText(existingOpponent) ||
-    isLikelyAtlasPlayerNameNoise(existingOpponent) ||
+    isLikelyAtlasPlayerNameNoise(existingOpponent, session.sticky) ||
     isAtlasRoomCodePlayerIdentity(session.sticky, existingOpponent);
   const nextOpponentIsNoise = isLikelyAtlasActionText(nextOpponent) ||
-    isLikelyAtlasPlayerNameNoise(nextOpponent) ||
+    isLikelyAtlasPlayerNameNoise(nextOpponent, event.payload) ||
     isAtlasRoomCodePlayerIdentity(event.payload, nextOpponent);
   if (existingOpponent && nextOpponent && existingOpponent !== nextOpponent && !existingOpponentIsNoise && !nextOpponentIsNoise) {
     return false;
@@ -543,10 +559,10 @@ function isAtlasContinuationAfterHeldGame(session: SessionState, event: CaptureE
   const existingOpponent = normalizePlayerNameKey(readString(session.sticky.opponentName));
   const nextOpponent = normalizePlayerNameKey(readString(event.payload.opponentName));
   const existingOpponentIsNoise = isLikelyAtlasActionText(existingOpponent) ||
-    isLikelyAtlasPlayerNameNoise(existingOpponent) ||
+    isLikelyAtlasPlayerNameNoise(existingOpponent, session.sticky) ||
     isAtlasRoomCodePlayerIdentity(session.sticky, existingOpponent);
   const nextOpponentIsNoise = isLikelyAtlasActionText(nextOpponent) ||
-    isLikelyAtlasPlayerNameNoise(nextOpponent) ||
+    isLikelyAtlasPlayerNameNoise(nextOpponent, event.payload) ||
     isAtlasRoomCodePlayerIdentity(event.payload, nextOpponent);
   if (existingOpponent && nextOpponent && existingOpponent !== nextOpponent && !existingOpponentIsNoise && !nextOpponentIsNoise) {
     return false;
@@ -642,7 +658,7 @@ function mergeSticky(
       const rawOpponentName = readString(value);
       if (
         isLikelyAtlasActionText(rawOpponentName) ||
-        isLikelyAtlasPlayerNameNoise(rawOpponentName) ||
+        isLikelyAtlasPlayerNameNoise(rawOpponentName, source) ||
         isAtlasRoomCodePlayerIdentity(source, normalizePlayerNameKey(rawOpponentName))
       ) {
         continue;
@@ -2735,10 +2751,39 @@ function isLikelyAtlasActionText(value: string): boolean {
     /\b(take the first|decides who plays first|locked in|locked a battlefield|mulligan|sideboarding|sideboard|their turn|your turn)\b/.test(withoutClockPrefix);
 }
 
-function isLikelyAtlasPlayerNameNoise(value: string): boolean {
+function isLikelyAtlasPlayerNameNoise(value: string, payload?: Record<string, unknown>): boolean {
   const normalized = normalizeNameKey(value);
   if (!normalized) {
     return false;
+  }
+  if (isAtlasPlayerIdentityUiControlValue(normalized)) {
+    return true;
+  }
+  const candidates = Array.isArray(payload?.atlasPlayerCandidates) ? payload.atlasPlayerCandidates : [];
+  const matchingCandidates = candidates.flatMap((candidate) => {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+      return [];
+    }
+    const record = candidate as Record<string, unknown>;
+    const name = readString(record.name);
+    if (normalizePlayerNameKey(name) !== normalized) {
+      return [];
+    }
+    const score = typeof record.score === "number" && Number.isFinite(record.score)
+      ? record.score
+      : undefined;
+    return [{
+      name,
+      side: readString(record.side),
+      source: readString(record.source),
+      score
+    }];
+  });
+  if (
+    matchingCandidates.length > 0 &&
+    matchingCandidates.every(isAtlasPlayerIdentityUiControlCandidate)
+  ) {
+    return true;
   }
   return /^\d+\s*\/\s*\d+$/.test(normalized) ||
     /^\d+\s*locked\b/.test(normalized) ||

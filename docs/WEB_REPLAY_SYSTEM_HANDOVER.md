@@ -1,9 +1,9 @@
 # RiftLite Web Replay System Handover
 
-> Architecture and privacy reference only. Its release-baseline header and some later status statements are historical. For current production/repository state, start with `docs/HANDOVER_2026-08-08_POST_V0.9.41.md`, `docs/CURRENT_STATE.md`, and current code. TCGA Web Replay is now published but remains BO1-only; the public replay archive paginates, while the signed-in owner library remains unpaginated.
+> Architecture and privacy reference only. Its release-baseline header and some later status statements are historical. For current production/repository state, start with `docs/HANDOVER_2026-08-08_POST_V0.9.41.md`, `docs/CURRENT_STATE.md`, and current code. A verified v0.9.42 candidate exists locally but is not published. TCGA Web Replay is now published but remains BO1-only; the public replay archive paginates, while the signed-in owner library remains unpaginated.
 
 Architecture content last deeply verified: 2026-07-12; TCGA artifact persistence notes updated 2026-08-08
-Historical architecture baseline: RiftLite `v0.8.03` (package SemVer `0.8.3`); current desktop release: `v0.9.41`
+Historical architecture baseline: RiftLite `v0.8.03` (package SemVer `0.8.3`); current published desktop release: `v0.9.41`; local candidate: `v0.9.42`
 Production website: `https://www.riftlite.com`
 Current high-level status: Atlas and TCGA Web Replay are live/account-linked; TCGA remains BO1-only. See the current handover and code for later implementation details.
 
@@ -303,9 +303,13 @@ From desktop v0.9.40, TCGA artifact persistence delta-encodes JSON-identical sha
 
 The limits above remain security and hosting boundaries and must not be raised only on the desktop. If a compacted TCGA candidate still exceeds the 32 MiB expanded or 4 MiB gzip ceiling, the optional Web Replay is skipped with bounded raw/compressed size diagnostics. Local match persistence and Match Review completion continue; the client must not retry an impossible artifact in a way that traps **Save match** or **Review later**.
 
+From v0.9.42, **Review later** closes after its pending match row is durably stored. Replay and Web Replay finalization then continue in a non-blocking background lane instead of holding the modal through upload/network deadlines. Prepared work remains retryable; confirming the match re-arms it as blocking work, while deleting the review retains the existing durable and runtime fences so an in-flight finalizer cannot recreate it.
+
 From desktop v0.9.41, replay details can reveal the exact managed local artifact through a replay-ID-only IPC boundary. The main process selects the recorded video, raw capture, imported bundle, or frame, then verifies the expected file kind, extension, storage root, existence, and resolved real path before asking the operating system to show it. Raw Web Replay captures have a dedicated source-file action. Renderer requests never carry arbitrary local paths.
 
 The v0.9.41 export path also separates streamed video work from coaching-pack limits. MP4 and clip export read directly through FFmpeg without the former 384 MiB source rejection. Streamed v4 coaching packs permit up to 8 GiB of video and 12 GiB total while retaining bounded manifests and data lines; legacy whole-JSON imports keep their prior limits. Large local video playback uses the file-URL stream instead of copying the entire source through renderer IPC.
+
+The local v0.9.42 candidate adds two fullscreen layers without changing replay data or remounting the embedded guest. The desktop Web Replay page can occupy the full application display while keeping its selected replay and exact frame. Inside the hosted player, a labelled player-only control plus `F` / `Esc` uses the Fullscreen API and tracks `fullscreenchange`, so browser and Electron labels stay accurate. The replay partition already permits the narrow fullscreen permission; no broader navigation, media, or IPC permission was added.
 
 There is currently no deletion API and no cursor pagination. Filters and sorting operate client-side over the fetched list.
 

@@ -2,10 +2,15 @@ import { describe, expect, it } from "vitest";
 
 import {
   DEFAULT_HOME_CONFIG_URL,
+  DEFAULT_HOME_LIVE_TAKEOVER_URL,
+  HOME_FEED_REFRESH_MS,
+  HOME_LIVE_TAKEOVER_REFRESH_MS,
   homeCreatorVideoDateLabel,
   homeCreatorVideoFeedFromConfig,
+  homeLiveTakeoverFromConfig,
   nextHomeCreatorVideoIndex,
   resolveHomeConfigUrl,
+  resolveHomeLiveTakeoverUrl,
   shouldAutoAdvanceHomeCreatorVideo
 } from "../src/renderer/homeCreatorVideos.js";
 
@@ -71,6 +76,40 @@ describe("Home creator video feed", () => {
       creatorVideoCarousel: { rotationSeconds: 1, maxItems: 500 }
     }).carousel).toEqual({ enabled: true, rotationSeconds: 5, maxItems: 50 });
   });
+
+  it("accepts only an enabled, server-confirmed Twitch takeover and rebuilds its URLs", () => {
+    const takeover = homeLiveTakeoverFromConfig({
+      enabled: true,
+      active: true,
+      provider: "twitch",
+      status: "live",
+      channelLogin: "BMUCasts",
+      title: "  Sunday   Riftbound live  ",
+      embedUrl: "https://evil.example/player",
+      channelUrl: "https://evil.example/channel",
+      updatedAt: 1234
+    });
+
+    expect(takeover).toEqual({
+      provider: "twitch",
+      channelLogin: "bmucasts",
+      title: "Sunday Riftbound live",
+      embedUrl: "https://player.twitch.tv/?channel=bmucasts&parent=www.riftlite.com&autoplay=true&muted=true",
+      channelUrl: "https://www.twitch.tv/bmucasts",
+      status: "live",
+      updatedAt: 1234
+    });
+  });
+
+  it.each([
+    { enabled: false, active: true, provider: "twitch", status: "live", channelLogin: "bmucasts" },
+    { enabled: true, active: false, provider: "twitch", status: "live", channelLogin: "bmucasts" },
+    { enabled: true, active: true, provider: "youtube", status: "live", channelLogin: "bmucasts" },
+    { enabled: true, active: true, provider: "twitch", status: "offline", channelLogin: "bmucasts" },
+    { enabled: true, active: true, provider: "twitch", status: "live", channelLogin: "bad/channel" }
+  ])("fails closed for an invalid or unconfirmed takeover", (value) => {
+    expect(homeLiveTakeoverFromConfig(value)).toBeNull();
+  });
 });
 
 describe("Home creator video carousel behavior", () => {
@@ -117,6 +156,14 @@ describe("Home config URL override", () => {
     expect(resolveHomeConfigUrl("http://localhost:3000/api/app/home")).toBe("http://localhost:3000/api/app/home");
     expect(resolveHomeConfigUrl("http://example.com/api/app/home")).toBe(DEFAULT_HOME_CONFIG_URL);
     expect(resolveHomeConfigUrl("file:///tmp/home.json")).toBe(DEFAULT_HOME_CONFIG_URL);
+  });
+
+  it("derives the lightweight live endpoint without changing the full-feed cadence", () => {
+    expect(resolveHomeLiveTakeoverUrl("https://preview.riftlite.com/api/app/home"))
+      .toBe("https://preview.riftlite.com/api/app/live-takeover");
+    expect(resolveHomeLiveTakeoverUrl("not a URL")).toBe(DEFAULT_HOME_LIVE_TAKEOVER_URL);
+    expect(HOME_FEED_REFRESH_MS).toBe(30 * 60 * 1_000);
+    expect(HOME_LIVE_TAKEOVER_REFRESH_MS).toBe(30 * 1_000);
   });
 });
 

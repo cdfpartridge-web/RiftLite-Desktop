@@ -1049,6 +1049,22 @@ export class CaptureCoordinator {
     this.emitHealth(true);
   }
 
+  /**
+   * Review later has already committed the pending match row. Replay and Web
+   * Replay work may continue without holding the review modal or blocking the
+   * next game; failed prepared work remains in the deferred map so reopening,
+   * confirming, or deleting the review can still retry or fence it.
+   */
+  markDeferredReviewReplayFinalizationBackgrounded(matchId: string): void {
+    if (matchId) {
+      this.nonBlockingDeferredReplayFinalizationMatchIds.add(matchId);
+    }
+  }
+
+  markDeferredReviewReplayFinalizationComplete(matchId: string): void {
+    this.nonBlockingDeferredReplayFinalizationMatchIds.delete(matchId);
+  }
+
   markConfirmedReplayFinalizationQueued(matchId: string): void {
     if (matchId) {
       this.nonBlockingDeferredReplayFinalizationMatchIds.delete(matchId);

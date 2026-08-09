@@ -1960,6 +1960,144 @@ describe("MatchSessionTracker", () => {
     });
   });
 
+  it("keeps the same Atlas session when Stacked Deck hides the opponent identity entirely", () => {
+    const tracker = new MatchSessionTracker();
+    const roomCode = "ZYBSB";
+    const startedAt = "2026-08-09T12:07:33.359Z";
+    const base = {
+      active: true,
+      format: "Auto",
+      roomCode,
+      myName: "Bunana",
+      configuredUsername: "Bunana",
+      myChampionCode: "SFD-195",
+      opponentChampionCode: "UNL-193",
+      myBattlefieldCode: "OGN-289",
+      opponentBattlefieldCode: "OGN-294",
+      score: { me: "0", opp: "0", source: "atlas-score-track" },
+      rows: [{ text: "13:08Finalized mulligan (2 recycled, 2 redrawn)." }]
+    };
+    const realOpponent = {
+      name: "Rival",
+      side: "opponent",
+      source: "identity-dom",
+      score: 8
+    };
+
+    tracker.ingest(event("match-start", {
+      ...base,
+      opponentName: "Rival",
+      atlasPlayerCandidates: [realOpponent]
+    }, startedAt, "atlas"));
+
+    const deckPeekOverlay = event("match-snapshot", {
+      ...base,
+      opponentName: "Hide PopoverDeck PeekLook at more",
+      atlasPlayerCandidates: [
+        {
+          name: "Hide PopoverDeck PeekLook at more",
+          side: "opponent",
+          source: "aria-label",
+          score: 8
+        },
+        { name: "Look at", side: "opponent", source: "aria-label", score: 8 },
+        { name: roomCode, side: "opponent", source: "aria-label", score: 4 }
+      ],
+      rows: [...base.rows, { text: "1Stacked Deck1" }]
+    }, "2026-08-09T12:08:30.956Z", "atlas");
+
+    expect(tracker.shouldFinalizeBeforeNewSession(deckPeekOverlay)).toBe(false);
+    tracker.ingest(deckPeekOverlay);
+    expect(tracker.get("atlas")).toMatchObject({
+      startedAt,
+      sticky: { roomCode, opponentName: "Rival" }
+    });
+
+    const identityReturned = event("match-snapshot", {
+      ...base,
+      opponentName: "Rival",
+      atlasPlayerCandidates: [realOpponent],
+      rows: [...base.rows, { text: "1Stacked Deck1" }]
+    }, "2026-08-09T12:09:09.352Z", "atlas");
+
+    expect(tracker.shouldFinalizeBeforeNewSession(identityReturned)).toBe(false);
+    tracker.ingest(identityReturned);
+    expect(tracker.get("atlas")).toMatchObject({
+      startedAt,
+      sticky: { roomCode, opponentName: "Rival" }
+    });
+  });
+
+  it("pins a same-room Atlas opponent against an unknown low-trust replacement label", () => {
+    const tracker = new MatchSessionTracker();
+    const roomCode = "RAHJ3";
+    const startedAt = "2026-08-09T12:19:01.309Z";
+    tracker.ingest(event("match-start", {
+      active: true,
+      roomCode,
+      opponentName: "Stable Rival",
+      score: { me: "4", opp: "4", source: "atlas-score-track" }
+    }, startedAt, "atlas"));
+
+    const unknownOverlay = event("match-snapshot", {
+      active: true,
+      roomCode,
+      opponentName: "Future Overlay Control",
+      atlasPlayerCandidates: [{
+        name: "Future Overlay Control",
+        side: "opponent",
+        source: "aria-label",
+        score: 8
+      }],
+      score: { me: "0", opp: "0", source: "atlas-score-track" },
+      rows: [{ text: "Played Stacked Deck from hand." }]
+    }, "2026-08-09T12:21:09.650Z", "atlas");
+
+    expect(tracker.shouldFinalizeBeforeNewSession(unknownOverlay)).toBe(false);
+    tracker.ingest(unknownOverlay);
+    expect(tracker.get("atlas")).toMatchObject({
+      startedAt,
+      sticky: { roomCode, opponentName: "Stable Rival" }
+    });
+  });
+
+  it("allows an authoritative Atlas identity to replace an opponent in a reused room", () => {
+    const tracker = new MatchSessionTracker();
+    const roomCode = "REUSED";
+    tracker.ingest(event("match-start", {
+      active: true,
+      roomCode,
+      opponentName: "First Rival",
+      atlasPlayerCandidates: [{
+        name: "First Rival",
+        side: "opponent",
+        source: "identity-dom",
+        score: 8
+      }],
+      score: { me: "4", opp: "2", source: "atlas-score-track" }
+    }, "2026-08-09T13:00:00.000Z", "atlas"));
+
+    const replacement = event("match-snapshot", {
+      active: true,
+      roomCode,
+      opponentName: "Replacement Rival",
+      atlasPlayerCandidates: [{
+        name: "Replacement Rival",
+        side: "opponent",
+        source: "identity-dom",
+        score: 8
+      }],
+      score: { me: "0", opp: "0", source: "atlas-score-track" }
+    }, "2026-08-09T13:05:00.000Z", "atlas");
+
+    expect(tracker.shouldFinalizeBeforeNewSession(replacement)).toBe(true);
+    tracker.ingest(replacement);
+    expect(tracker.get("atlas")).toMatchObject({
+      startedAt: replacement.capturedAt,
+      sticky: { roomCode, opponentName: "Replacement Rival" }
+    });
+  });
+
   it("keeps a held Atlas BO3 session when changing room codes were misread as player names", () => {
     const tracker = new MatchSessionTracker();
     const firstRoom = "UV9VG";

@@ -838,7 +838,7 @@ describe("CaptureCoordinator", () => {
     );
   });
 
-  it("does not let an in-flight finalizer recreate work after a review is discarded", async () => {
+  it("does not let a backgrounded in-flight finalizer recreate work after a review is discarded", async () => {
     const finalizeRawCaptureForMatch = vi.fn(async () => null);
     const { coordinator, saved, savedReplays, store } = coordinatorHarness({
       replayCaptureEnabled: true,
@@ -873,6 +873,7 @@ describe("CaptureCoordinator", () => {
 
     const finalizing = internals.persistPreparedReplayFinalization(prepared);
     await parentReadStarted;
+    coordinator.markDeferredReviewReplayFinalizationBackgrounded(pending.id);
     coordinator.discardMatchReview(pending.id);
     releaseParentRead();
     await finalizing;
@@ -1037,6 +1038,47 @@ describe("CaptureCoordinator", () => {
 
     await coordinator.waitForReplayFinalization(review!.id);
     expect(finalizeRawCaptureForMatch).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps failed deferred-review finalization nonblocking and retryable until confirmation re-arms it", async () => {
+    const finalizeRawCaptureForMatch = vi.fn()
+      .mockRejectedValueOnce(new Error("initial deferred manifest failure"))
+      .mockRejectedValueOnce(new Error("background deferred manifest failure"))
+      .mockResolvedValueOnce(null);
+    const { coordinator } = coordinatorHarness({
+      replayCaptureEnabled: true,
+      finalizeRawCaptureForMatch
+    });
+
+    await coordinator.handleEvent(event("match-start", {
+      active: true,
+      myName: "BMU",
+      opponentName: "Deferred Review Retry",
+      myChampion: "Akali",
+      opponentChampion: "Irelia",
+      matchId: "deferred-review-retry",
+      score: { me: "8", opp: "4", source: "atlas-score-track" }
+    }, "2026-07-21T16:47:00.000Z", "atlas"));
+    const review = await coordinator.forceReview("atlas");
+    expect(review).not.toBeNull();
+    await coordinator.waitForAllReplayFinalizations();
+    expect(coordinator.hasActiveMatchCapture()).toBe(true);
+
+    coordinator.markDeferredReviewReplayFinalizationBackgrounded(review!.id);
+    coordinator.dismissMatchReview();
+    expect(coordinator.hasActiveMatchCapture()).toBe(false);
+
+    await expect(coordinator.waitForReplayFinalization(review!.id))
+      .rejects.toThrow("background deferred manifest failure");
+    expect(coordinator.hasActiveMatchCapture()).toBe(false);
+
+    await coordinator.confirmMatch(review!, { deferReplayFinalization: true });
+    coordinator.markConfirmedReplayFinalizationQueued(review!.id);
+    expect(coordinator.hasActiveMatchCapture()).toBe(true);
+    await expect(coordinator.waitForReplayFinalization(review!.id)).resolves.toBeUndefined();
+    coordinator.markConfirmedReplayFinalizationComplete(review!.id);
+    expect(coordinator.hasActiveMatchCapture()).toBe(false);
+    expect(finalizeRawCaptureForMatch).toHaveBeenCalledTimes(3);
   });
 
   it("releases a confirmed capture when durable remote delivery is deferred", () => {

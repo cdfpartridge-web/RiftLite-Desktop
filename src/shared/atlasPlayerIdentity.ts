@@ -51,11 +51,43 @@ export function chooseAtlasOpponentIdentityName<T extends AtlasPlayerIdentityCan
   const usable = candidates
     .filter((candidate) => {
       const key = normalizeAtlasPlayerIdentityName(candidate.name);
-      return key && key !== localKey && !excludedKeys.has(key) && finiteScore(candidate.score) >= 3;
+      return key &&
+        key !== localKey &&
+        !excludedKeys.has(key) &&
+        finiteScore(candidate.score) >= 3 &&
+        !isAtlasPlayerIdentityUiControlCandidate(candidate);
     })
     .sort(compareAtlasPlayerIdentityCandidates);
   return usable.find((candidate) => candidate.side === "opponent")?.name ??
     (usable.length === 1 ? usable[0].name : "");
+}
+
+export function isAtlasPlayerIdentityUiControlCandidate(candidate: AtlasPlayerIdentityCandidate): boolean {
+  if (isAtlasPlayerIdentityUiControlValue(candidate.name)) {
+    return true;
+  }
+  if (isReliableAtlasPlayerIdentityCandidate(candidate)) {
+    return false;
+  }
+  const source = (candidate.source ?? "").trim().toLowerCase();
+  const compact = normalizeAtlasPlayerIdentityName(candidate.name).replace(/[^a-z0-9]+/g, "");
+  return compact === "start" ||
+    compact === "starts" ||
+    ((source === "aria-label" || source === "title") && /^[a-z]$/i.test(candidate.name.trim()));
+}
+
+export function isAtlasPlayerIdentityUiControlValue(value: string): boolean {
+  const compact = normalizeAtlasPlayerIdentityName(value).replace(/[^a-z0-9]+/g, "");
+  if (!compact) {
+    return false;
+  }
+  return isStructurallyImpossibleAtlasPlayerIdentity(value) ||
+    compact === "lookat" ||
+    compact === "lookatmore" ||
+    compact === "rewind" ||
+    compact === "rewindthelastaction" ||
+    compact === "undoyourlastrewind" ||
+    compact === "nextgame";
 }
 
 export function isReliableAtlasPlayerIdentityCandidate(candidate: AtlasPlayerIdentityCandidate): boolean {
@@ -64,6 +96,12 @@ export function isReliableAtlasPlayerIdentityCandidate(candidate: AtlasPlayerIde
 
 export function normalizeAtlasPlayerIdentityName(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function isStructurallyImpossibleAtlasPlayerIdentity(value: string): boolean {
+  const compact = normalizeAtlasPlayerIdentityName(value).replace(/[^a-z0-9]+/g, "");
+  return compact.startsWith("hidepopoverdeckpeek") ||
+    compact.startsWith("hidepopovertrashcard");
 }
 
 function finiteScore(value: number | undefined): number {
