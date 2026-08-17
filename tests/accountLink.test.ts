@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { accountLinkUrlForProvider } from "../src/shared/accountLink";
+import { accountLinkErrorMessage, accountLinkUrlForProvider } from "../src/shared/accountLink";
 
 describe("accountLinkUrlForProvider", () => {
   it("adds the selected provider without changing the link session", () => {
@@ -34,5 +34,14 @@ describe("accountLinkUrlForProvider", () => {
     expect(() => accountLinkUrlForProvider("not a URL", "google")).toThrow("invalid account sign-in link");
     expect(() => accountLinkUrlForProvider("riftlite://auth/link?sessionId=session-1", "google")).toThrow("unsafe account sign-in link");
     expect(() => accountLinkUrlForProvider("http://www.riftlite.com/auth/link", "email")).toThrow("unsafe account sign-in link");
+  });
+
+  it("turns Electron and fetch failures into useful recovery guidance", () => {
+    expect(accountLinkErrorMessage(new Error(
+      "Error invoking remote method 'account:link:start': TypeError: fetch failed"
+    ))).toBe("Could not reach RiftLite account services. Check your connection, VPN, or antivirus, then try again; no account changes were made.");
+    expect(accountLinkErrorMessage(new Error(
+      "Error invoking remote method 'account:link:start': Error: Link session expired"
+    ))).toBe("Link session expired");
   });
 });

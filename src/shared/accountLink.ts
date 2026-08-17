@@ -1,5 +1,7 @@
 export type AccountLinkProvider = "google" | "email" | "discord";
 
+const ACCOUNT_LINK_TRANSPORT_MESSAGE = "Could not reach RiftLite account services. Check your connection, VPN, or antivirus, then try again; no account changes were made.";
+
 export function accountLinkUrlForProvider(loginUrl: string, provider: AccountLinkProvider): string {
   if (provider !== "google" && provider !== "email" && provider !== "discord") {
     throw new Error("Choose Google, email, or Discord to continue.");
@@ -20,4 +22,16 @@ export function accountLinkUrlForProvider(loginUrl: string, provider: AccountLin
 
   url.searchParams.set("provider", provider);
   return url.toString();
+}
+
+export function accountLinkErrorMessage(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error ?? "").trim();
+  if (/fetch failed|network request failed|network-request-failed|timed?\s*out|aborterror/i.test(raw)) {
+    return ACCOUNT_LINK_TRANSPORT_MESSAGE;
+  }
+  const cleaned = raw
+    .replace(/^Error invoking remote method '[^']+':\s*/i, "")
+    .replace(/^(?:Error|TypeError):\s*/i, "")
+    .trim();
+  return cleaned || "Could not start account sign-in. Try again; no account changes were made.";
 }

@@ -125,6 +125,7 @@ const RECENT_CAPTURE_EVENT_LIMIT = 2_000;
 // Atlas can emit a delayed "Match Complete" landing event well after the final BO3 game result.
 const RECENT_ATLAS_DRAFT_PUBLICATION_TTL_MS = 120_000;
 const HEALTH_EMIT_MIN_MS = 900;
+const FORCE_REVIEW_QUEUE_WAIT_MS = 5_000;
 
 function replayFrameIntervalMs(settings: Awaited<ReturnType<RiftLiteStore["getSettings"]>> | null): number {
   const preset = settings?.replayFramePreset ?? "standard";
@@ -1296,10 +1297,10 @@ export class CaptureCoordinator {
   }
 
   async forceReview(platform: GamePlatform): Promise<MatchDraft | null> {
-    await this.platformEventQueues.get(platform)?.catch(() => undefined);
+    await this.waitForForceReviewQueue(platform);
     const targetPlatform = this.tracker.getLatestSessionPlatform(platform);
     if (targetPlatform && targetPlatform !== platform) {
-      await this.platformEventQueues.get(targetPlatform)?.catch(() => undefined);
+      await this.waitForForceReviewQueue(targetPlatform);
     }
     const activePlatform = targetPlatform ?? platform;
     const pending = this.pendingAtlasReviews.get(activePlatform);
@@ -1366,6 +1367,43 @@ export class CaptureCoordinator {
     } finally {
       this.closingPlatforms.delete(activePlatform);
     }
+  }
+
+  private async waitForForceReviewQueue(platform: GamePlatform): Promise<void> {
+    const pending = this.platformEventQueues.get(platform);
+    if (!pending) {
+      return;
+    }
+    const settled = await withTimeout(
+      pending.then(() => true, () => true),
+      FORCE_REVIEW_QUEUE_WAIT_MS,
+      false
+    );
+    if (settled) {
+      return;
+    }
+    const capturedAt = new Date().toISOString();
+    const message = `${label(platform)} capture cleanup is still finishing. The capture is preserved; try Stop again shortly.`;
+    this.health = {
+      ...this.health,
+      platform,
+      state: "watching",
+      message,
+      lastEventAt: capturedAt
+    };
+    this.emitHealth(true);
+    void this.diagnostics.record({
+      id: randomUUID(),
+      platform,
+      kind: "debug",
+      capturedAt,
+      url: "",
+      payload: {
+        reason: "manual-force-review-queue-timeout",
+        timeoutMs: FORCE_REVIEW_QUEUE_WAIT_MS
+      }
+    }).catch(() => undefined);
+    throw new Error(message);
   }
 
   async syncPrivateHubs(): Promise<PrivateHubSyncResult> {

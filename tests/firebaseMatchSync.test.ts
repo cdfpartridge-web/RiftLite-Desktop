@@ -301,6 +301,45 @@ describe("FirebaseSyncService match synchronization", () => {
     expect(store.saveMatch).not.toHaveBeenCalled();
   });
 
+  it("commits a successful hub report even when the optional Web Replay grant fails", async () => {
+    const { service, getActive, editActive, settings: currentSettings } = harness();
+    currentSettings.activeHubs = [
+      { id: "hub-1", name: "Hub one", sync: true, claimed: true, role: "member" }
+    ];
+    editActive({
+      webReplayId: "rl2_optional_grant",
+      webReplayAccountUid: "account-1",
+      sync: { community: "disabled", hubs: { "hub-1": "pending" }, teams: {} }
+    });
+    const firestoreRequest = vi.fn(async () => ({
+      name: "projects/test/databases/(default)/documents/hubs/hub-1/matches/local-match-1"
+    }));
+    const updatePrivateHubAggregate = vi.fn(async () => undefined);
+    const websiteRequestWithIdToken = vi.fn(async () => {
+      throw Object.assign(new Error("replay not ready"), {
+        status: 409,
+        code: "replay_not_ready",
+        retryable: false
+      });
+    });
+    Object.assign(service, {
+      firestoreRequest,
+      updatePrivateHubAggregate,
+      websiteRequestWithIdToken,
+      reconcilePrivateHubWebReplayForMatch: vi.fn(async () => {
+        throw new Error("optional replay grant failed");
+      })
+    });
+
+    await expect(service.syncMatch(getActive()[0], { quiet: true })).resolves.toMatchObject({
+      sync: { community: "disabled", hubs: { "hub-1": "synced" } }
+    });
+
+    expect(firestoreRequest).toHaveBeenCalledOnce();
+    expect(updatePrivateHubAggregate).toHaveBeenCalledOnce();
+    expect(websiteRequestWithIdToken).not.toHaveBeenCalled();
+  });
+
   it("does not save another account's sync result when the linked account changes mid-upload", async () => {
     const { service, store, getActive, settings: currentSettings } = harness();
     let releaseUpload!: () => void;

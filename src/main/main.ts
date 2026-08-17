@@ -102,6 +102,7 @@ import {
   activeDiscordReplayHubIds,
   rawCaptureSettingsForDiscordHubSelection
 } from "../shared/replaySharing.js";
+import { publicCommunitySyncEnabled } from "../shared/syncPolicy.js";
 import {
   RawCaptureIngressLimiter,
   validatedCaptureEvent,
@@ -139,6 +140,7 @@ import {
 } from "../shared/replayExportPolicy.js";
 import { detectBrowsers } from "./services/browserDetection.js";
 import { scheduleAppUsageHeartbeat } from "./services/appUsageAnalytics.js";
+import { queueLiveTakeoverTelemetry } from "./services/liveTakeoverAnalytics.js";
 import { AtlasEmptyShellMainRecoveryGuard } from "./services/atlasEmptyShellMainRecovery.js";
 import {
   emptyAtlasConnectionDiagnostics,
@@ -283,6 +285,10 @@ app.commandLine.appendSwitch("disable-features", "WebRtcAllowInputVolumeAdjustme
 const gotSingleInstanceLock = IS_PACKAGED_SMOKE_TEST || app.requestSingleInstanceLock();
 
 let mainWindow: BrowserWindow | null = null;
+let startupWindow: BrowserWindow | null = null;
+let mainServicesReady = false;
+let startupWindowStatus = "Preparing local data...";
+let startupWindowFailed = false;
 let pendingAppNavigation: AppNavigationRequest | null = protocolNavigationFromArgs(process.argv);
 let deckTrackerWindow: BrowserWindow | null = null;
 let riftLiteReplayWebContents: WebContents | null = null;
@@ -430,6 +436,115 @@ async function logStartupIssue(label: string, error: unknown): Promise<void> {
   ].join("\n");
   await mkdir(app.getPath("userData"), { recursive: true }).catch(() => undefined);
   await appendFile(startupLogPath(), line, "utf8").catch(() => undefined);
+}
+
+const STARTUP_STAGE_SLOW_MS = 15_000;
+
+function updateStartupWindowStatus(status: string, failed = false): void {
+  startupWindowStatus = status;
+  startupWindowFailed = failed;
+  const window = startupWindow;
+  if (!window || window.isDestroyed() || window.webContents.isDestroyed()) {
+    return;
+  }
+  window.setTitle(`${RIFTLITE_BUILD_IDENTITY.appName} - ${status}`);
+  const statusLiteral = JSON.stringify(status);
+  const failedLiteral = JSON.stringify(failed);
+  void window.webContents.executeJavaScript(`(() => {
+    const status = document.getElementById('startup-status');
+    if (status) status.textContent = ${statusLiteral};
+    document.body.classList.toggle('startup-failed', ${failedLiteral});
+  })()`, true).catch(() => undefined);
+}
+
+function createStartupWindow(): BrowserWindow | null {
+  if (!app.isReady()) {
+    return null;
+  }
+  if (startupWindow && !startupWindow.isDestroyed()) {
+    if (startupWindow.isMinimized()) startupWindow.restore();
+    startupWindow.show();
+    startupWindow.focus();
+    return startupWindow;
+  }
+
+  const createdStartupWindow = new BrowserWindow({
+    width: 460,
+    height: 280,
+    minWidth: 420,
+    minHeight: 250,
+    title: RIFTLITE_BUILD_IDENTITY.appName,
+    backgroundColor: "#0c101a",
+    autoHideMenuBar: true,
+    show: true,
+    center: true,
+    resizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true
+    }
+  });
+  startupWindow = createdStartupWindow;
+  createdStartupWindow.setMenu(null);
+  createdStartupWindow.setMenuBarVisibility(false);
+  createdStartupWindow.once("closed", () => {
+    if (startupWindow === createdStartupWindow) {
+      startupWindow = null;
+    }
+  });
+  createdStartupWindow.webContents.once("did-finish-load", () => {
+    updateStartupWindowStatus(startupWindowStatus, startupWindowFailed);
+  });
+  createdStartupWindow.webContents.on("did-fail-load", (_event, errorCode, errorDescription) => {
+    void logStartupIssue("startup window did-fail-load", `${errorCode} ${errorDescription}`);
+  });
+  const startupHtml = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">
+<title>${RIFTLITE_BUILD_IDENTITY.appName}</title><style>
+html,body{height:100%;margin:0;background:#0c101a;color:#f4f7ff;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+body{display:grid;place-items:center}.panel{text-align:center;padding:28px;max-width:360px}.mark{display:grid;place-items:center;width:64px;height:64px;margin:0 auto 20px;border:1px solid #8c74ff;border-radius:18px;background:linear-gradient(145deg,#2c2359,#14192b);box-shadow:0 0 34px #7557ff55;color:#dcd5ff;font-size:31px;font-weight:800}.eyebrow{margin:0 0 8px;color:#a99aff;font-size:12px;font-weight:750;letter-spacing:.16em;text-transform:uppercase}h1{margin:0 0 10px;font-size:25px}#startup-status{min-height:22px;margin:0;color:#b8c1d8;font-size:14px;line-height:1.55}.dots{display:flex;justify-content:center;gap:7px;margin-top:22px}.dots i{width:7px;height:7px;border-radius:50%;background:#8c74ff;animation:pulse 1.2s infinite ease-in-out}.dots i:nth-child(2){animation-delay:.15s}.dots i:nth-child(3){animation-delay:.3s}.startup-failed .mark{border-color:#ff6b77;box-shadow:0 0 34px #ff465555}.startup-failed #startup-status{color:#ffc4c9}.startup-failed .dots{display:none}@keyframes pulse{0%,80%,100%{opacity:.28;transform:scale(.78)}40%{opacity:1;transform:scale(1)}}@media(prefers-reduced-motion:reduce){.dots i{animation:none}}
+</style></head><body><main class="panel"><div class="mark">R</div><p class="eyebrow">RiftLite Beta</p><h1>Starting RiftLite</h1><p id="startup-status">Preparing local data...</p><div class="dots" aria-hidden="true"><i></i><i></i><i></i></div></main></body></html>`;
+  void createdStartupWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(startupHtml)}`).catch((error) => {
+    void logStartupIssue("startup window load failed", error);
+  });
+  createdStartupWindow.show();
+  return createdStartupWindow;
+}
+
+function closeStartupWindow(): void {
+  const window = startupWindow;
+  if (!window || window.isDestroyed()) {
+    return;
+  }
+  startupWindow = null;
+  window.close();
+}
+
+async function runStartupStage<T>(label: string, operation: () => Promise<T> | T): Promise<T> {
+  const startedAt = Date.now();
+  updateStartupWindowStatus(label);
+  await logStartupIssue(`startup stage begin: ${label}`, "");
+  const slowTimer = setTimeout(() => {
+    updateStartupWindowStatus(`${label} is taking longer than usual. Your data is safe...`);
+    void logStartupIssue(
+      `startup stage still running: ${label}`,
+      `${Date.now() - startedAt}ms elapsed`
+    );
+  }, STARTUP_STAGE_SLOW_MS);
+  try {
+    const result = await operation();
+    await logStartupIssue(`startup stage complete: ${label}`, `${Date.now() - startedAt}ms`);
+    return result;
+  } catch (error) {
+    await logStartupIssue(`startup stage failed: ${label}`, error);
+    throw error;
+  } finally {
+    clearTimeout(slowTimer);
+  }
 }
 
 function refreshAtlasWebviewRuntime(
@@ -739,7 +854,12 @@ async function uploadPendingRawCapturesWithAccountRefresh(forceRetry = false): P
 }
 
 async function syncSettledMatchReports(): Promise<{ syncedCount: number; blocked: boolean }> {
-  const candidates = selectConfirmedMatchReportRetries(await store.getMatches(), 10).matches;
+  const settings = await store.getSettings();
+  const candidates = selectConfirmedMatchReportRetries(await store.getMatches(), 10, {
+    community: publicCommunitySyncEnabled(settings),
+    hubIds: new Set(settings.activeHubs.filter((hub) => hub.sync).map((hub) => hub.id)),
+    teamIds: new Set((settings.activeTeams ?? []).filter((team) => team.sync).map((team) => team.id))
+  }).matches;
   const result = await runConfirmedMatchReportRetryBatch(candidates, async (match) => {
     const synced = await syncService.syncMatch(match, { quiet: true });
     if (mainWindow && !mainWindow.isDestroyed()) {
@@ -7020,6 +7140,12 @@ function handleAtlasShellStatusEvent(sender: WebContents, event: CaptureEvent): 
 }
 
 async function createWindow(): Promise<void> {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+    return;
+  }
   const iconPath = assetPath("riftlite-app.ico");
   const icon = nativeImage.createFromPath(iconPath);
   const bounds = getMainWindowBounds();
@@ -7054,11 +7180,13 @@ async function createWindow(): Promise<void> {
   configureDisplayMediaCapture();
 
   const showMainWindow = () => {
-    mainWindow?.show();
+    if (createdMainWindow.isDestroyed()) return;
+    createdMainWindow.show();
+    closeStartupWindow();
   };
   mainWindow.once("ready-to-show", showMainWindow);
   setTimeout(() => {
-    if (mainWindow && !mainWindow.isVisible()) {
+    if (!createdMainWindow.isDestroyed() && !createdMainWindow.isVisible()) {
       showMainWindow();
     }
   }, 5000);
@@ -8237,6 +8365,7 @@ function registerIpc(): void {
     return mainWindow.isFullScreen();
   });
   handleTrustedAppIpc("analytics:spotlight-click", (_event, payload: SpotlightClickPayload) => trackSpotlightClick(payload));
+  handleTrustedAppIpc("analytics:live-takeover", (_event, payload) => queueLiveTakeoverTelemetry(store, payload));
   handleTrustedAppIpc("assets:url", (_event, relativePath: string) => assetDataUrl(relativePath));
   handleTrustedAppIpc("battlefields:get", () => loadBattlefields());
   handleTrustedAppIpc("game-webview:focus", (_event, platform: GamePlatform) => {
@@ -8388,29 +8517,50 @@ function registerIpc(): void {
   });
 }
 
+function showOrCreateAppWindow(): void {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+    return;
+  }
+  if (!mainServicesReady) {
+    const window = createStartupWindow();
+    if (window?.isMinimized()) window.restore();
+    window?.show();
+    window?.focus();
+    return;
+  }
+  void createWindow().catch((error) => {
+    void logStartupIssue("show or recreate main window failed", error);
+    updateStartupWindowStatus("RiftLite could not open. Check the startup log.", true);
+  });
+}
+
 if (!gotSingleInstanceLock) {
   app.quit();
 } else {
   app.on("second-instance", (_event, argv) => {
     queueAppNavigation(protocolNavigationFromArgs(argv));
-    if (mainWindow) {
-      if (mainWindow.isMinimized()) {
-        mainWindow.restore();
-      }
-      mainWindow.focus();
-    }
+    showOrCreateAppWindow();
   });
 }
 
 app.on("open-url", (event, url) => {
   event.preventDefault();
   queueAppNavigation(protocolNavigationFromArgs([url]));
+  showOrCreateAppWindow();
+});
+
+app.on("activate", () => {
+  showOrCreateAppWindow();
 });
 
 app.whenReady().then(async () => {
   if (!gotSingleInstanceLock) {
     return;
   }
+  createStartupWindow();
   try {
     Menu.setApplicationMenu(null);
     await logStartupIssue("startup begin", `${RIFTLITE_BUILD_IDENTITY.appName} ${app.getVersion()}`);
@@ -8425,51 +8575,44 @@ app.whenReady().then(async () => {
       }),
       !IS_PACKAGED_SMOKE_TEST
     );
-    await store.load();
-    await clearRiftLiteReplayEmbedCookies().catch((error) => {
-      void logStartupIssue("replay embed cookie cleanup failed", error);
-    });
-    tcgaResolver = new TcgaResolver(assetPath("tcga_card_lookup.json"));
-    syncService = new FirebaseSyncService(store, () => mainWindow);
-    deckService = new DeckService(store);
-    deckTrackerService = new DeckTrackerService(store, tcgaResolver);
-    rawCaptureService = new RawCaptureService(
-      store,
-      (expectedAccountUid) => syncService.refreshLinkedAccountIdToken(expectedAccountUid),
-      async (localMatchId, webReplayId, expectedAccountUid) => {
-        const match = (await store.getMatches()).find((candidate) => candidate.id === localMatchId);
-        if (match?.platform === "tcga") {
-          const synced = await syncService.syncMatch(match, { quiet: true });
+    await runStartupStage("Loading local data", () => store.load());
+    await runStartupStage("Cleaning the replay session", () => (
+      clearRiftLiteReplayEmbedCookies().catch((error) => {
+        void logStartupIssue("replay embed cookie cleanup failed", error);
+      })
+    ));
+    await runStartupStage("Initializing core services", () => {
+      tcgaResolver = new TcgaResolver(assetPath("tcga_card_lookup.json"));
+      syncService = new FirebaseSyncService(store, () => mainWindow);
+      deckService = new DeckService(store);
+      deckTrackerService = new DeckTrackerService(store, tcgaResolver);
+      rawCaptureService = new RawCaptureService(
+        store,
+        (expectedAccountUid) => syncService.refreshLinkedAccountIdToken(expectedAccountUid),
+        async (localMatchId, webReplayId, expectedAccountUid) => {
+          const match = (await store.getMatches()).find((candidate) => candidate.id === localMatchId);
+          if (match?.platform === "tcga") {
+            const synced = await syncService.syncMatch(match, { quiet: true });
+            await syncService.attachWebReplayToSyncedHubMatches(localMatchId, webReplayId, expectedAccountUid);
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              mainWindow.webContents.send("match:draft", synced);
+            }
+            if (typeof capture !== "undefined") {
+              capture.markConfirmedReplayFinalizationComplete(localMatchId);
+            }
+            queueAccountCloudSync("TCGA Web Replay delivered");
+            return;
+          }
           await syncService.attachWebReplayToSyncedHubMatches(localMatchId, webReplayId, expectedAccountUid);
-          if (mainWindow && !mainWindow.isDestroyed()) {
-            mainWindow.webContents.send("match:draft", synced);
+        },
+        (replay) => {
+          const window = mainWindow;
+          if (window && !window.isDestroyed() && !window.webContents.isDestroyed()) {
+            window.webContents.send("replay:updated", replay);
           }
-          if (typeof capture !== "undefined") {
-            capture.markConfirmedReplayFinalizationComplete(localMatchId);
-          }
-          queueAccountCloudSync("TCGA Web Replay delivered");
-          return;
         }
-        await syncService.attachWebReplayToSyncedHubMatches(localMatchId, webReplayId, expectedAccountUid);
-      },
-      (replay) => {
-        const window = mainWindow;
-        if (window && !window.isDestroyed() && !window.webContents.isDestroyed()) {
-          window.webContents.send("replay:updated", replay);
-        }
-      }
-    );
-    if (!IS_PACKAGED_SMOKE_TEST) {
-      void syncService.backfillPrivateHubWebReplayIds().catch((error) => {
-        void logStartupIssue("private hub web replay backfill failed", error);
-      });
-    }
-    if (RIFTREPLAY_CAPTURE_FEATURE_ENABLED && !IS_PACKAGED_SMOKE_TEST) {
-      void retryPendingRawCapturesAndMatchReports().catch((error) => {
-        void logStartupIssue("raw capture pending upload on startup failed", error);
-      });
-      startRawCaptureUploadRetry();
-    }
+      );
+    });
     overlayServer = new OverlayServer(store, () => {
       if (typeof capture === "undefined") {
         return null;
@@ -8477,7 +8620,9 @@ app.whenReady().then(async () => {
       return capture.getLiveOverlayMatch();
     });
     if (!IS_PACKAGED_SMOKE_TEST) {
-      await overlayServer.start().catch((error) => logStartupIssue("overlay server startup failed", error));
+      await runStartupStage("Starting the local overlay", () => (
+        overlayServer.start().catch((error) => logStartupIssue("overlay server startup failed", error))
+      ));
     }
     diagnostics = new CaptureDiagnostics();
     store.setPerformanceReporter((event) => {
@@ -8510,8 +8655,12 @@ app.whenReady().then(async () => {
         maxRecords: 50_000
       }
     );
+    const captureDirectory = await runStartupStage(
+      "Preparing local capture storage",
+      () => rawCaptureService.captureDirectory()
+    );
     tcgaWebReplayCaptureService = new TcgaWebReplayCaptureService(
-      await rawCaptureService.captureDirectory(),
+      captureDirectory,
       (prepared, identity, replay) => rawCaptureService.registerPreparedTcgaCapture(
         prepared,
         identity,
@@ -8519,7 +8668,7 @@ app.whenReady().then(async () => {
         { deferDelivery: true }
       )
     );
-    await configureTcgaWebReplayProductCapture();
+    await runStartupStage("Configuring replay capture", () => configureTcgaWebReplayProductCapture());
     updater = new UpdaterService(() => mainWindow, {
       enabled: RIFTLITE_BUILD_IDENTITY.updatesEnabled && !IS_PACKAGED_SMOKE_TEST,
       disabledMessage: IS_PACKAGED_SMOKE_TEST
@@ -8545,7 +8694,7 @@ app.whenReady().then(async () => {
         tcgaResearchQuitAllowed = false;
       }
     });
-    await diagnostics.ensureFile();
+    await runStartupStage("Preparing diagnostics", () => diagnostics.ensureFile());
     capture = new CaptureCoordinator(
       store,
       () => mainWindow,
@@ -8565,14 +8714,26 @@ app.whenReady().then(async () => {
     installAtlasSessionDiagnostics();
     if (!IS_PACKAGED_SMOKE_TEST && simEventReceiverEnabled()) {
       simEventReceiver = new SimEventReceiver((event) => capture.handleEvent(event));
-      await simEventReceiver.start().catch(async (error) => {
-        await logStartupIssue("sim event receiver startup failed", error);
-        simEventReceiver = null;
-      });
+      await runStartupStage("Starting the local event receiver", () => (
+        simEventReceiver!.start().catch(async (error) => {
+          await logStartupIssue("sim event receiver startup failed", error);
+          simEventReceiver = null;
+        })
+      ));
     }
     registerIpc();
-    await createWindow();
+    mainServicesReady = true;
+    await runStartupStage("Opening the main window", () => createWindow());
     if (!IS_PACKAGED_SMOKE_TEST) {
+      void syncService.backfillPrivateHubWebReplayIds().catch((error) => {
+        void logStartupIssue("private hub web replay backfill failed", error);
+      });
+      if (RIFTREPLAY_CAPTURE_FEATURE_ENABLED) {
+        void retryPendingRawCapturesAndMatchReports().catch((error) => {
+          void logStartupIssue("raw capture pending upload on startup failed", error);
+        });
+        startRawCaptureUploadRetry();
+      }
       void recoverInterruptedReplayVideosOnStartup().catch((error) => {
         void logStartupIssue("interrupted replay video startup recovery failed", error);
       });
@@ -8717,13 +8878,10 @@ app.whenReady().then(async () => {
     }
     await logStartupIssue("startup complete", `${RIFTLITE_BUILD_IDENTITY.appName} ${app.getVersion()}`);
 
-    app.on("activate", () => {
-      if (BrowserWindow.getAllWindows().length === 0) {
-        void createWindow().catch((error) => logStartupIssue("activate createWindow failed", error));
-      }
-    });
   } catch (error) {
     await logStartupIssue("fatal startup failure", error);
+    updateStartupWindowStatus("RiftLite could not start. Check the startup log for details.", true);
+    createStartupWindow();
     dialog.showErrorBox(
       "RiftLite could not start",
       `RiftLite hit a startup problem and wrote details to:\n${startupLogPath()}\n\n${formatStartupError(error).split("\n")[0]}`

@@ -1,6 +1,6 @@
 {
   "name": "riftlite-desktop-v09",
-  "version": "0.9.42",
+  "version": "0.9.51",
   "private": true,
   "description": "RiftLite 0.9 desktop companion app.",
   "main": "dist/main/main.js",
@@ -52,7 +52,7 @@
     "concurrently": "^9.2.1",
     "cross-env": "^10.1.0",
     "electron": "^39.2.7",
-    "electron-builder": "^26.0.12",
+    "electron-builder": "26.15.3",
     "esbuild": "^0.28.1",
     "typescript": "^5.9.3",
     "vite": "^7.3.6",
@@ -119,6 +119,9 @@
       "icon": "build/icon.icns",
       "identity": "-",
       "artifactName": "RiftLiteBetaInstall-${arch}.${ext}"
+    },
+    "toolsets": {
+      "nsis": "1.2.1"
     },
     "nsis": {
       "oneClick": false,

@@ -725,6 +725,44 @@ describe("CaptureCoordinator", () => {
     });
   });
 
+  it("bounds manual force review when an earlier capture event is stuck", async () => {
+    vi.useFakeTimers();
+    let releaseQueue!: () => void;
+    const blockedQueue = new Promise<void>((resolve) => {
+      releaseQueue = resolve;
+    });
+    const { coordinator, diagnostics } = coordinatorHarness();
+    const queues = (coordinator as unknown as {
+      platformEventQueues: Map<GamePlatform, Promise<void>>;
+    }).platformEventQueues;
+    queues.set("atlas", blockedQueue);
+
+    try {
+      const forced = coordinator.forceReview("atlas");
+      const rejection = expect(forced).rejects.toThrow(
+        "Atlas capture cleanup is still finishing. The capture is preserved; try Stop again shortly."
+      );
+      await vi.advanceTimersByTimeAsync(5_000);
+      await rejection;
+      expect(coordinator.getHealth()).toMatchObject({
+        platform: "atlas",
+        state: "watching",
+        message: expect.stringContaining("capture is preserved")
+      });
+      expect(diagnostics.record).toHaveBeenCalledWith(expect.objectContaining({
+        platform: "atlas",
+        kind: "debug",
+        payload: expect.objectContaining({
+          reason: "manual-force-review-queue-timeout",
+          timeoutMs: 5_000
+        })
+      }));
+    } finally {
+      releaseQueue();
+      vi.useRealTimers();
+    }
+  });
+
   it("finalizes the raw match when video replay capture is disabled", async () => {
     const finalizeRawCaptureForMatch = vi.fn(async () => null);
     const { coordinator } = coordinatorHarness({ finalizeRawCaptureForMatch });

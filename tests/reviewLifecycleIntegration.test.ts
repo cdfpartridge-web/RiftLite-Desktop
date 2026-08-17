@@ -73,6 +73,15 @@ describe("match review lifecycle integration", () => {
     expect(discardAt).toBeGreaterThan(durableDeleteAt);
   });
 
+  it("keeps manual Stop recoverable when capture cleanup cannot finish promptly", () => {
+    const force = functionSource("forceCaptureReview", "dismissReviewDraft");
+
+    expect(force).toContain("try {");
+    expect(force).toContain("await window.riftlite.forceCaptureReview(activePlatform)");
+    expect(force).toContain("catch (error)");
+    expect(force).toContain("The capture is preserved; try Stop again shortly.");
+  });
+
   it("shows accessible staged feedback while a durable match save is running", () => {
     const modal = functionSource("MatchReviewModal", "healthLabel");
 

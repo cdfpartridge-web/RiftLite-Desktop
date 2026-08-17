@@ -643,6 +643,30 @@ describe("RiftLiteStore database recovery", () => {
     }
   });
 
+  it("defaults active-deck Home theming off and persists an explicit opt-in", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "riftlite-store-home-theme-"));
+    const dbPath = join(directory, "riftlite-v06.sqlite");
+    const legacyPath = join(directory, "riftlite-v06-store.json");
+    try {
+      const store = new RiftLiteStore(dbPath, legacyPath);
+      await store.load();
+      expect((await store.getSettings()).homeDeckThemeEnabled).toBe(false);
+
+      await store.saveSettings({ homeDeckThemeEnabled: true });
+
+      const restarted = new RiftLiteStore(dbPath, legacyPath);
+      await restarted.load();
+      expect((await restarted.getSettings()).homeDeckThemeEnabled).toBe(true);
+
+      const validated = await restarted.saveSettings({
+        homeDeckThemeEnabled: "bright"
+      } as unknown as Parameters<RiftLiteStore["saveSettings"]>[0]);
+      expect(validated.homeDeckThemeEnabled).toBe(true);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("defaults, persists, and validates the preferred game provider", async () => {
     const directory = await mkdtemp(join(tmpdir(), "riftlite-store-game-provider-"));
     const dbPath = join(directory, "riftlite-v06.sqlite");

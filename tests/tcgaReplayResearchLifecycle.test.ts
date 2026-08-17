@@ -110,7 +110,8 @@ describe("TCGA replay monitor lifecycle", () => {
     expect(source).toContain("retryPendingRawCapturesAndMatchReports");
     expect(source).toContain("retryDeferredConfirmedMatchDeliveries();");
     expect(queue).toContain("job.pending = null");
-    expect(source).toContain("selectConfirmedMatchReportRetries(await store.getMatches(), 10)");
+    expect(source).toContain("selectConfirmedMatchReportRetries(await store.getMatches(), 10, {");
+    expect(source).toContain("hubIds: new Set(settings.activeHubs.filter((hub) => hub.sync)");
   });
 
   it("bounds systemic report failures to one attempt per coalesced recovery sweep", () => {

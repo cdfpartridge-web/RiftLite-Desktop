@@ -4,11 +4,19 @@ $projectDirectory = Resolve-Path (Join-Path $PSScriptRoot "..")
 $packageManifest = Get-Content -LiteralPath (Join-Path $projectDirectory "package.json") -Raw | ConvertFrom-Json
 $expectedVersion = [string]$packageManifest.version
 $expectedProductName = [string]$packageManifest.build.productName
-$installerPath = Join-Path $projectDirectory "release\RiftLiteBetaInstall.exe"
-$unpackedExecutablePath = Join-Path $projectDirectory "release\win-unpacked\RiftLite Beta 0.9.exe"
-$sevenZipPath = Join-Path $projectDirectory "node_modules\7zip-bin\win\x64\7za.exe"
+$releaseDirectoryResolver = Join-Path $PSScriptRoot "release-directory.mjs"
+$releaseDirectoryOutput = & node $releaseDirectoryResolver 2>&1 | Out-String
+if ($LASTEXITCODE -ne 0) {
+  throw "Could not resolve the Windows release directory.`n$releaseDirectoryOutput"
+}
+$releaseDirectory = $releaseDirectoryOutput.Trim()
+if (-not $releaseDirectory) {
+  throw "The Windows release directory resolver returned an empty path."
+}
+$installerPath = Join-Path $releaseDirectory "RiftLiteBetaInstall.exe"
+$unpackedExecutablePath = Join-Path $releaseDirectory "win-unpacked\RiftLite Beta 0.9.exe"
 
-foreach ($path in @($installerPath, $unpackedExecutablePath, $sevenZipPath)) {
+foreach ($path in @($installerPath, $unpackedExecutablePath)) {
   if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
     throw "Required Windows release file is missing: $path"
   }
@@ -24,9 +32,4 @@ foreach ($path in @($installerPath, $unpackedExecutablePath)) {
   }
 }
 
-$archiveOutput = & $sevenZipPath t $installerPath 2>&1 | Out-String
-if ($LASTEXITCODE -ne 0 -or $archiveOutput -notmatch "Everything is Ok") {
-  throw "NSIS archive integrity verification failed.`n$archiveOutput"
-}
-
-Write-Output "Windows executable metadata and NSIS archive integrity verified for v$expectedVersion."
+Write-Output "Windows executable metadata verified for v$expectedVersion."

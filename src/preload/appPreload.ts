@@ -232,6 +232,7 @@ const api: RiftLiteApi = {
   openExternalResource: (url: string) => ipcRenderer.invoke("external:open", url) as Promise<void>,
   setWindowFullscreen: (enabled) => ipcRenderer.invoke("window:fullscreen", enabled) as Promise<boolean>,
   trackSpotlightClick: (payload) => ipcRenderer.invoke("analytics:spotlight-click", payload) as Promise<void>,
+  trackLiveTakeover: (payload) => ipcRenderer.invoke("analytics:live-takeover", payload) as Promise<void>,
   reportRendererEvent: (event) => ipcRenderer.invoke("capture:renderer-event", event) as Promise<void>,
   onCaptureEvent: (callback) => {
     const listener = (_event: Electron.IpcRendererEvent, payload: CaptureEvent) => callback(payload);

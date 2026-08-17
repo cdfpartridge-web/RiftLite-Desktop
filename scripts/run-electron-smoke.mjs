@@ -6,6 +6,8 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { resolveReleaseDirectory } from "./release-directory.mjs";
+
 const require = createRequire(import.meta.url);
 const projectDirectory = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const development = process.argv.includes("--development");
@@ -13,6 +15,7 @@ const packaged = process.argv.includes("--packaged");
 if (development === packaged) {
   throw new Error("Use exactly one of --development or --packaged.");
 }
+const releaseDirectory = packaged ? resolveReleaseDirectory(projectDirectory) : null;
 
 const smokeRoot = await mkdtemp(join(tmpdir(), "riftlite-smoke-"));
 const snapshotPath = join(smokeRoot, "artifacts", "home.png");
@@ -124,11 +127,11 @@ try {
 
 function packagedExecutable() {
   if (process.platform === "win32") {
-    return join(projectDirectory, "release", "win-unpacked", "RiftLite Beta 0.9.exe");
+    return join(releaseDirectory, "win-unpacked", "RiftLite Beta 0.9.exe");
   }
   if (process.platform === "darwin") {
     const archDirectory = process.arch === "arm64" ? "mac-arm64" : "mac";
-    return join(projectDirectory, "release", archDirectory, "RiftLite Beta 0.9.app", "Contents", "MacOS", "RiftLite Beta 0.9");
+    return join(releaseDirectory, archDirectory, "RiftLite Beta 0.9.app", "Contents", "MacOS", "RiftLite Beta 0.9");
   }
   throw new Error(`Packaged smoke is not configured for ${process.platform}.`);
 }

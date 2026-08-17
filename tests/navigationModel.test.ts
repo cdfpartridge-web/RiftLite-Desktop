@@ -47,6 +47,8 @@ describe("desktop navigation model", () => {
     expect(PREPARE_NAVIGATION_ITEMS).toEqual([
       { id: "deck-library", label: "Deck Library", target: { view: "decks", deckFocus: "library" } },
       { id: "matchup-prep", label: "Matchup Prep", target: { view: "decks", deckFocus: "prep" } },
+      { id: "mulligan-lab", label: "Mulligan Lab", target: { view: "mulligan-lab" } },
+      { id: "sideboard-lab", label: "Sideboard Lab", target: { view: "sideboard-lab" } },
       { id: "matchup-lab", label: "Matchup Lab", target: { view: "matchup-lab" } }
     ]);
   });
@@ -92,6 +94,8 @@ describe("desktop navigation model", () => {
     [{ view: "decks", deckFocus: "prep" }, "prepare", "matchup-prep"],
     [{ view: "decks", deckFocus: "notebook" }, "prepare", "deck-library"],
     [{ view: "decks", deckFocus: "performance" }, "prepare", "deck-library"],
+    [{ view: "mulligan-lab" }, "prepare", "mulligan-lab"],
+    [{ view: "sideboard-lab" }, "prepare", "sideboard-lab"],
     [{ view: "matchup-lab" }, "prepare", "matchup-lab"],
     [{ view: "community", communityTab: "community-decks" }, "community", "community-decks"],
     [{ view: "community", communityTab: "legend-meta" }, "community", "meta-matrix"],

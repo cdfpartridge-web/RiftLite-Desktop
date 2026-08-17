@@ -7,6 +7,9 @@ type RegistryCard = {
   printId: string;
   name: string;
   type: string;
+  supertype?: string | null;
+  costEnergy?: number | null;
+  costPower?: number | null;
   champion?: string | null;
   imageUrl?: string | null;
   variants: {
@@ -70,5 +73,32 @@ describe("packaged Riftbound registry", () => {
     for (const card of setupCards) {
       expect(card.imageUrl, card.printId).toMatch(/^https:\/\//);
     }
+  });
+
+  it("contains validated printed costs for every collectible main-deck card", () => {
+    const mainDeckCards = cards.filter((card) =>
+      ["unit", "spell", "gear"].includes(card.type.toLowerCase())
+      && card.supertype?.toLowerCase() !== "token"
+    );
+
+    expect(mainDeckCards.length).toBeGreaterThan(900);
+    for (const card of mainDeckCards) {
+      expect(Number.isInteger(card.costEnergy), `${card.printId} Energy cost`).toBe(true);
+      expect(card.costEnergy ?? -1, `${card.printId} Energy cost`).toBeGreaterThanOrEqual(0);
+      expect(
+        card.costPower === null
+          || (typeof card.costPower === "number" && Number.isInteger(card.costPower) && card.costPower >= 0),
+        `${card.printId} Power cost`,
+      ).toBe(true);
+    }
+  });
+
+  it("identifies a known two-Energy Unit even when it has a Power cost", () => {
+    expect(cards.find((card) => card.printId === "OGN-036")).toMatchObject({
+      name: "Vi, Destructive",
+      type: "Unit",
+      costEnergy: 2,
+      costPower: 1,
+    });
   });
 });

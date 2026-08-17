@@ -280,6 +280,31 @@ function replaceFirestoreRequest(
 }
 
 describe("FirebaseSyncService account cloud sync", () => {
+  it("retries a transient account-link transport failure once", async () => {
+    const { service } = harness();
+    const request = vi.fn()
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockResolvedValueOnce({
+        sessionId: "link-session",
+        code: "RIFT-1234",
+        loginUrl: "https://www.riftlite.com/link-device?session=link-session",
+        expiresAt: Date.now() + 60_000
+      });
+    Object.assign(service, { authenticatedWebsiteRequest: request });
+
+    await expect(service.startAccountLink()).resolves.toMatchObject({ sessionId: "link-session" });
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("replaces repeated account-link transport failures with actionable guidance", async () => {
+    const { service } = harness();
+    const request = vi.fn(async () => { throw new TypeError("fetch failed"); });
+    Object.assign(service, { authenticatedWebsiteRequest: request });
+
+    await expect(service.startAccountLink()).rejects.toThrow(/connection, VPN, or antivirus/i);
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
   it("does not overwrite an existing backup when sync is enabled", async () => {
     const { service, store, getSettings } = harness();
     const request = replaceFirestoreRequest(service, async (_path, _token, options) => {

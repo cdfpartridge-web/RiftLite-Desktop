@@ -24,6 +24,10 @@ export type HomeLiveTakeover = {
   channelUrl: string;
   status: "live";
   updatedAt?: number;
+  analytics?: {
+    runId: string;
+    token: string;
+  };
 };
 
 export type HomeCreatorVideoFeed = {
@@ -37,7 +41,10 @@ export type HomeCreatorVideoFeed = {
 export const DEFAULT_HOME_CONFIG_URL = "https://www.riftlite.com/api/app/home";
 export const DEFAULT_HOME_LIVE_TAKEOVER_URL = "https://www.riftlite.com/api/app/live-takeover";
 export const HOME_FEED_REFRESH_MS = 30 * 60 * 1_000;
-export const HOME_LIVE_TAKEOVER_REFRESH_MS = 30 * 1_000;
+export const HOME_LIVE_TAKEOVER_REFRESH_MS = 60 * 1_000;
+export const HOME_LIVE_TAKEOVER_IDLE_REFRESH_MS = 5 * 60 * 1_000;
+export const HOME_LIVE_TAKEOVER_BACKGROUND_REFRESH_MS = 15 * 60 * 1_000;
+export const HOME_LIVE_TAKEOVER_FAILURE_MAX_REFRESH_MS = 30 * 60 * 1_000;
 
 const DEFAULT_CAROUSEL_CONFIG: HomeCreatorVideoCarouselConfig = {
   enabled: true,
@@ -74,6 +81,23 @@ export function resolveHomeLiveTakeoverUrl(homeConfigUrl: string): string {
   } catch {
     return DEFAULT_HOME_LIVE_TAKEOVER_URL;
   }
+}
+
+export function homeLiveTakeoverRefreshMs(input: {
+  visible: boolean;
+  focused: boolean;
+  online: boolean;
+  live: boolean;
+  consecutiveFailures: number;
+}): number {
+  if (!input.visible || !input.focused || !input.online) {
+    return HOME_LIVE_TAKEOVER_BACKGROUND_REFRESH_MS;
+  }
+  const base = input.live ? HOME_LIVE_TAKEOVER_REFRESH_MS : HOME_LIVE_TAKEOVER_IDLE_REFRESH_MS;
+  const failures = Math.max(0, Math.min(5, Math.trunc(input.consecutiveFailures)));
+  return failures
+    ? Math.min(HOME_LIVE_TAKEOVER_FAILURE_MAX_REFRESH_MS, base * (2 ** failures))
+    : base;
 }
 
 export function homeCreatorVideoFeedFromConfig(value: unknown): HomeCreatorVideoFeed {
@@ -127,6 +151,13 @@ export function homeLiveTakeoverFromConfig(value: unknown): HomeLiveTakeover | n
   };
   if (typeof value.updatedAt === "number" && Number.isSafeInteger(value.updatedAt) && value.updatedAt > 0) {
     result.updatedAt = value.updatedAt;
+  }
+  if (isRecord(value.analytics)) {
+    const runId = cleanString(value.analytics.runId);
+    const token = cleanString(value.analytics.token);
+    if (/^[a-zA-Z0-9_-]{16,80}$/.test(runId) && token.length >= 40 && token.length <= 200) {
+      result.analytics = { runId, token };
+    }
   }
   return result;
 }

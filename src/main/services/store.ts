@@ -3,7 +3,7 @@ import { copyFile, mkdir, readFile, readdir, rename, stat, unlink, writeFile } f
 import { existsSync, renameSync } from "node:fs";
 import { createRequire } from "node:module";
 import { randomUUID } from "node:crypto";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import initSqlJs, { type Database, type SqlJsStatic } from "sql.js";
 import { deckNotebookWithCurrentVersion, deckSnapshotHash, emptyDeckNotebook, normalizeDeckNotebook, sanitizeDeckNotebookForDeck } from "../../shared/deckNotebook.js";
@@ -44,14 +44,19 @@ export interface StorePerformanceEvent {
 const require = createRequire(import.meta.url);
 const DATABASE_BACKUP_RETENTION = 10;
 const DATABASE_BACKUP_MIN_INTERVAL_MS = 5 * 60 * 1000;
+const LEGACY_IMPORT_METADATA_KEY = "legacy-import-fingerprint-v1";
+const STORED_PAYLOAD_MIGRATION_METADATA_KEY = "stored-payload-migration-version";
+const STORED_PAYLOAD_MIGRATION_VERSION = "1";
 const OLD_RAW_CAPTURE_ENDPOINT = "https://test.riftreplay.com/api/v1/replays";
 const DEFAULT_RAW_CAPTURE_ENDPOINT = "https://riftreplay.com/api/v1/replays";
+const PRIVATE_HUB_WEB_REPLAY_GRANT_RETRY_LIMIT = 2_000;
 
 const DEFAULT_SETTINGS: UserSettings = {
   username: "",
   firstRunComplete: false,
   lastSeenVersion: "",
   defaultGamePlatform: "tcga",
+  homeDeckThemeEnabled: false,
   syncMode: "community-and-hubs",
   communitySyncEnabled: true,
   firebaseUid: "",
@@ -139,8 +144,46 @@ function normalizeDefaultGamePlatform(value: unknown): UserSettings["defaultGame
   return value === "atlas" ? "atlas" : "tcga";
 }
 
+function normalizeHomeDeckThemeEnabled(value: unknown, fallback = false): boolean {
+  return typeof value === "boolean" ? value : fallback;
+}
+
 function normalizeReplayFramePreset(value: unknown): UserSettings["replayFramePreset"] {
   return value === "light" || value === "detailed" ? value : "standard";
+}
+
+function normalizePrivateHubWebReplayGrantRetries(
+  value: unknown
+): NonNullable<UserSettings["privateHubWebReplayGrantRetries"]> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const entries = Object.entries(value)
+    .map(([key, candidate]) => {
+      if (!key || !candidate || typeof candidate !== "object" || Array.isArray(candidate)) return null;
+      const retry = candidate as Record<string, unknown>;
+      const attempts = Math.max(1, Math.min(6, Math.trunc(Number(retry.attempts)) || 1));
+      const nextAttemptAt = typeof retry.nextAttemptAt === "string" && Number.isFinite(Date.parse(retry.nextAttemptAt))
+        ? retry.nextAttemptAt
+        : "";
+      const updatedAt = typeof retry.updatedAt === "string" && Number.isFinite(Date.parse(retry.updatedAt))
+        ? retry.updatedAt
+        : nextAttemptAt;
+      if (!nextAttemptAt || !updatedAt) return null;
+      const status = Number(retry.status);
+      return [key, {
+        attempts,
+        nextAttemptAt,
+        terminal: retry.terminal === true,
+        ...(Number.isInteger(status) && status >= 100 && status <= 599 ? { status } : {}),
+        ...(typeof retry.code === "string" && retry.code.trim()
+          ? { code: retry.code.trim().slice(0, 80) }
+          : {}),
+        updatedAt
+      }] as const;
+    })
+    .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
+    .sort((left, right) => Date.parse(left[1].updatedAt) - Date.parse(right[1].updatedAt))
+    .slice(-PRIVATE_HUB_WEB_REPLAY_GRANT_RETRY_LIMIT);
+  return Object.fromEntries(entries);
 }
 
 function uniqueReplayCustomFlagTypes(value: unknown): string[] {
@@ -329,7 +372,8 @@ export class RiftLiteStore {
     dbPath = join(app.getPath("userData"), "riftlite-v06.sqlite"),
     legacyJsonPath = join(app.getPath("userData"), "riftlite-v06-store.json"),
     private readonly credentialVault?: SecureCredentialVault,
-    private readonly legacyImportEnabled = false
+    private readonly legacyImportEnabled = false,
+    private readonly legacyDatabasePath = join(homedir(), ".riftlite", "riftlite.db")
   ) {
     this.dbPath = dbPath;
     this.legacyJsonPath = legacyJsonPath;
@@ -393,6 +437,7 @@ export class RiftLiteStore {
       ...DEFAULT_SETTINGS,
       ...parsed,
       defaultGamePlatform: normalizeDefaultGamePlatform((parsed as { defaultGamePlatform?: unknown }).defaultGamePlatform),
+      homeDeckThemeEnabled: normalizeHomeDeckThemeEnabled((parsed as { homeDeckThemeEnabled?: unknown }).homeDeckThemeEnabled),
       replayVideoMode: normalizeReplayVideoMode((parsed as { replayVideoMode?: unknown }).replayVideoMode),
       replayFramePreset: normalizeReplayFramePreset((parsed as { replayFramePreset?: unknown }).replayFramePreset),
       overlayDisplay: { ...DEFAULT_SETTINGS.overlayDisplay, ...parsed.overlayDisplay },
@@ -414,6 +459,7 @@ export class RiftLiteStore {
       privateHubWebReplayGrantKeys: Array.isArray(parsed.privateHubWebReplayGrantKeys)
         ? [...new Set(parsed.privateHubWebReplayGrantKeys.filter((value): value is string => typeof value === "string" && value.length > 0))].slice(-10_000)
         : [],
+      privateHubWebReplayGrantRetries: normalizePrivateHubWebReplayGrantRetries(parsed.privateHubWebReplayGrantRetries),
       activeTeams: Array.isArray(parsed.activeTeams) ? parsed.activeTeams : []
     };
   }
@@ -498,6 +544,9 @@ export class RiftLiteStore {
     const defaultGamePlatform = Object.prototype.hasOwnProperty.call(patch, "defaultGamePlatform")
       ? normalizeDefaultGamePlatform((patch as { defaultGamePlatform?: unknown }).defaultGamePlatform)
       : current.defaultGamePlatform;
+    const homeDeckThemeEnabled = Object.prototype.hasOwnProperty.call(patch, "homeDeckThemeEnabled")
+      ? normalizeHomeDeckThemeEnabled((patch as { homeDeckThemeEnabled?: unknown }).homeDeckThemeEnabled, current.homeDeckThemeEnabled)
+      : current.homeDeckThemeEnabled;
     const replayVideoMode = Object.prototype.hasOwnProperty.call(patch, "replayVideoMode")
       ? normalizeReplayVideoMode((patch as { replayVideoMode?: unknown }).replayVideoMode)
       : current.replayVideoMode;
@@ -511,6 +560,7 @@ export class RiftLiteStore {
       // restore patches cannot manufacture a credential/identity pairing.
       firebaseCredentialGeneration: current.firebaseCredentialGeneration,
       defaultGamePlatform,
+      homeDeckThemeEnabled,
       replayVideoMode,
       replayFramePreset,
       replayCustomFlagTypes: Object.prototype.hasOwnProperty.call(patch, "replayCustomFlagTypes")
@@ -526,6 +576,9 @@ export class RiftLiteStore {
       privateHubWebReplayGrantKeys: Object.prototype.hasOwnProperty.call(patch, "privateHubWebReplayGrantKeys")
         ? [...new Set((patch.privateHubWebReplayGrantKeys ?? []).filter((value) => typeof value === "string" && value.length > 0))].slice(-10_000)
         : current.privateHubWebReplayGrantKeys,
+      privateHubWebReplayGrantRetries: Object.prototype.hasOwnProperty.call(patch, "privateHubWebReplayGrantRetries")
+        ? normalizePrivateHubWebReplayGrantRetries(patch.privateHubWebReplayGrantRetries)
+        : normalizePrivateHubWebReplayGrantRetries(current.privateHubWebReplayGrantRetries),
       activeTeams: patch.activeTeams ? [...patch.activeTeams] : current.activeTeams
     };
     const sanitizedNext = stripLegacyHubSecrets(next);
@@ -1435,6 +1488,7 @@ export class RiftLiteStore {
             activeHubs: currentSettings.activeHubs,
             activeTeams: currentSettings.activeTeams,
             privateHubWebReplayGrantKeys: currentSettings.privateHubWebReplayGrantKeys,
+            privateHubWebReplayGrantRetries: currentSettings.privateHubWebReplayGrantRetries,
             rawCapture: currentSettings.rawCapture,
             scorepadDeviceId: currentSettings.scorepadDeviceId,
             scorepadDeviceSecret: currentSettings.scorepadDeviceSecret,
@@ -1567,10 +1621,17 @@ export class RiftLiteStore {
     }
   }
 
-  async importLegacyData(sourcePath = join(homedir(), ".riftlite", "riftlite.db")): Promise<ImportSummary> {
+  async importLegacyData(
+    sourcePath = this.legacyDatabasePath,
+    options: { skipIfUnchanged?: boolean } = {}
+  ): Promise<ImportSummary> {
     await this.database();
     const emptySummary: ImportSummary = { importedMatches: 0, importedHubs: 0, importedSettings: 0, sourcePath };
-    if (!this.sql || !existsSync(sourcePath)) {
+    const sourceFingerprint = await this.legacyDatabaseFingerprint(sourcePath);
+    if (!this.sql || !sourceFingerprint) {
+      return emptySummary;
+    }
+    if (options.skipIfUnchanged && this.readStoreMetadata(LEGACY_IMPORT_METADATA_KEY) === sourceFingerprint) {
       return emptySummary;
     }
 
@@ -1625,6 +1686,10 @@ export class RiftLiteStore {
           );
           if (!exists) summary.importedMatches += 1;
         }
+        db.run(
+          "INSERT OR REPLACE INTO store_metadata (key, value, updated_at) VALUES (?, ?, ?)",
+          [LEGACY_IMPORT_METADATA_KEY, sourceFingerprint, Date.now()]
+        );
         return { summary, runtimeSettings: protectedSettings.runtimeSettings };
       }, {
         invalidateMatches: true,
@@ -1638,6 +1703,19 @@ export class RiftLiteStore {
     }
   }
 
+  private async legacyDatabaseFingerprint(sourcePath: string): Promise<string | null> {
+    const info = await stat(sourcePath).catch(() => null);
+    if (!info?.isFile()) {
+      return null;
+    }
+    return JSON.stringify({
+      version: 1,
+      sourcePath: resolve(sourcePath),
+      size: info.size,
+      modifiedAtMs: Math.trunc(info.mtimeMs)
+    });
+  }
+
   private async open(): Promise<void> {
     await mkdir(dirname(this.dbPath), { recursive: true });
     this.sql = await this.initializeSqlJs();
@@ -1648,9 +1726,9 @@ export class RiftLiteStore {
       this.migrateSchema();
       await this.migrateLegacyJson();
       if (this.legacyImportEnabled) {
-        await this.importLegacyData().catch(() => undefined);
+        await this.importLegacyData(this.legacyDatabasePath, { skipIfUnchanged: true }).catch(() => undefined);
       }
-      await this.migrateStoredPayloads();
+      await this.migrateStoredPayloadsIfNeeded();
       await this.repairDatabaseIfNeeded("post-migration-integrity-check");
       // Hydrate/migrate credentials before taking the startup snapshot so a
       // newly-created recovery backup does not preserve legacy plaintext.
@@ -1681,6 +1759,11 @@ export class RiftLiteStore {
       CREATE TABLE IF NOT EXISTS settings (
         key TEXT PRIMARY KEY,
         value_json TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS store_metadata (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
         updated_at INTEGER NOT NULL
       );
       CREATE TABLE IF NOT EXISTS matches (
@@ -1821,6 +1904,25 @@ export class RiftLiteStore {
         await writeFile(path, redactCorruptSettingsText(raw), { encoding: "utf8", mode: 0o600 }).catch(() => undefined);
       }
     }
+  }
+
+  private readStoreMetadata(key: string): string {
+    if (!this.db) {
+      return "";
+    }
+    const value = this.db.exec("SELECT value FROM store_metadata WHERE key=?", [key])[0]?.values[0]?.[0];
+    return typeof value === "string" ? value : "";
+  }
+
+  private async migrateStoredPayloadsIfNeeded(): Promise<void> {
+    if (this.readStoreMetadata(STORED_PAYLOAD_MIGRATION_METADATA_KEY) === STORED_PAYLOAD_MIGRATION_VERSION) {
+      return;
+    }
+    await this.migrateStoredPayloads();
+    this.db?.run(
+      "INSERT OR REPLACE INTO store_metadata (key, value, updated_at) VALUES (?, ?, ?)",
+      [STORED_PAYLOAD_MIGRATION_METADATA_KEY, STORED_PAYLOAD_MIGRATION_VERSION, Date.now()]
+    );
   }
 
   private async migrateStoredPayloads(): Promise<void> {
@@ -2217,9 +2319,9 @@ export class RiftLiteStore {
     this.replaysCache = null;
     this.migrateSchema();
     await this.migrateLegacyJson().catch(() => undefined);
-    await this.migrateStoredPayloads().catch(() => undefined);
+    await this.migrateStoredPayloadsIfNeeded().catch(() => undefined);
     if (this.legacyImportEnabled) {
-      await this.importLegacyData().catch(() => undefined);
+      await this.importLegacyData(this.legacyDatabasePath, { skipIfUnchanged: true }).catch(() => undefined);
     }
     await this.getSettings();
     await this.persist();
@@ -2350,7 +2452,7 @@ export class RiftLiteStore {
         this.settingsCache = null;
         this.migrateSchema();
         await this.migrateLegacyJson().catch(() => undefined);
-        await this.migrateStoredPayloads().catch(() => undefined);
+        await this.migrateStoredPayloadsIfNeeded().catch(() => undefined);
         await this.getSettings();
         await this.repairDatabaseIfNeeded(`restore-${context}`);
         await this.persist();

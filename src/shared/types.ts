@@ -542,6 +542,15 @@ export interface PrivateHubSyncResult {
   message: string;
 }
 
+export interface PrivateHubWebReplayGrantRetry {
+  attempts: number;
+  nextAttemptAt: string;
+  terminal: boolean;
+  status?: number;
+  code?: string;
+  updatedAt: string;
+}
+
 export type ReplayStructuredEventType =
   | "setup"
   | "mulligan"
@@ -1461,6 +1470,7 @@ export interface UserSettings {
   firstRunComplete: boolean;
   lastSeenVersion: string;
   defaultGamePlatform: GameProvider;
+  homeDeckThemeEnabled: boolean;
   syncMode: "community-and-hubs" | "community-only" | "private-hubs-only" | "local-only" | "custom";
     communitySyncEnabled: boolean;
     firebaseUid: string;
@@ -1524,6 +1534,7 @@ export interface UserSettings {
   activeDeckId: string;
   activeHubs: PrivateHub[];
   privateHubWebReplayGrantKeys: string[];
+  privateHubWebReplayGrantRetries?: Record<string, PrivateHubWebReplayGrantRetry>;
   activeTeams: TeamSyncTarget[];
 }
 
@@ -1767,6 +1778,26 @@ export interface AccountLinkStatus {
   displayName?: string;
   message?: string;
   adoptedAnonymousAccount?: boolean;
+}
+
+export type LiveTakeoverTelemetryEvent =
+  | "impression"
+  | "playing"
+  | "checkpoint"
+  | "paused"
+  | "stopped"
+  | "dismissed";
+
+export interface LiveTakeoverTelemetryPayload {
+  runId: string;
+  token: string;
+  sessionId: string;
+  channelLogin: string;
+  event: LiveTakeoverTelemetryEvent;
+  hasPlayed: boolean;
+  watchedSeconds: number;
+  startedAt: string;
+  occurredAt: string;
 }
 
 export interface AppNavigationRequest {
@@ -2306,6 +2337,7 @@ export interface RiftLiteApi {
   openExternalResource(url: string): Promise<void>;
   setWindowFullscreen(enabled: boolean): Promise<boolean>;
   trackSpotlightClick(payload: SpotlightClickPayload): Promise<void>;
+  trackLiveTakeover(payload: LiveTakeoverTelemetryPayload): Promise<void>;
   onCaptureEvent(callback: (event: CaptureEvent) => void): () => void;
   onCaptureHealth(callback: (health: CaptureHealth) => void): () => void;
   onGameWebviewFailure(callback: (failure: GameWebviewFailure) => void): () => void;

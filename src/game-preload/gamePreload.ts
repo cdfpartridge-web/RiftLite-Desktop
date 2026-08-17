@@ -4,7 +4,13 @@ import {
   atlasBattlefieldZonesForSeat,
   type AtlasPlayerSeat
 } from "../shared/atlasBattlefieldOwnership.js";
-import { isAtlasActiveRoomBoundary } from "../shared/atlasCaptureLifecycle.js";
+import {
+  atlasInactiveEndGraceMs,
+  isAtlasActiveRoomBoundary,
+  isAtlasGameRouteUrl,
+  isAtlasRootLandingUrl,
+  isAtlasTransientOverlayDescriptor
+} from "../shared/atlasCaptureLifecycle.js";
 import {
   chooseAtlasOpponentIdentityName,
   compareAtlasPlayerIdentityCandidates
@@ -1229,6 +1235,7 @@ function readAtlasSnapshot(): Record<string, unknown> {
     '[data-zone-owner="opponent"], [data-zone-owner="self"], [data-zone-owner="player"], [data-owner="opponent"], [data-owner="self"], [data-owner="player"]'
   );
   const realZoneCards = zoneCards.some((card) => Boolean(card.zoneOwner) && hasRealAtlasCardIdentity(card));
+  const transientOverlay = isAtlasTransientGameOverlay(terminalText, sideboarding);
   const cardZoneOverlay = Boolean(
     !terminalText &&
       !sideboarding &&
@@ -1238,16 +1245,20 @@ function readAtlasSnapshot(): Record<string, unknown> {
         "[role='dialog'], [class*='modal' i], [class*='dialog' i], [class*='drawer' i], [class*='overlay' i], [class*='trash' i], [class*='discard' i], [data-drop-zone*='trash' i], [data-drop-zone*='discard' i]"
       )
   );
-  const hardLobby = /paste a deck|host room|join room|find random match|quick match|choose deck|import deck|new deck|save deck/i.test(bodyText) &&
-    !inGameText &&
-    !terminalText &&
-    !cardZoneOverlay &&
-    !ownedBoardSelector &&
-    !realZoneCards &&
-    !gameplayRows &&
-    !hasScoreEvidence;
+  const hardLobby = isAtlasRootLandingUrl(location.href) || (
+    /paste a deck|paste or import decklists|host room|join room|private room codes|find random match|quick match|choose deck|import deck|new deck|save deck|practice hands/i.test(bodyText) &&
+      !inGameText &&
+      !terminalText &&
+      !cardZoneOverlay &&
+      !transientOverlay &&
+      !ownedBoardSelector &&
+      !realZoneCards &&
+      !gameplayRows &&
+      !hasScoreEvidence
+  );
   const boardEvidence = Boolean(
-    !nonGamePage &&
+    transientOverlay ||
+    (!nonGamePage &&
       !hardLobby &&
       (ownedBoardSelector ||
       realZoneCards ||
@@ -1255,10 +1266,11 @@ function readAtlasSnapshot(): Record<string, unknown> {
       gameplayRows ||
       hasScoreEvidence ||
       (boardSelector && inGameText) ||
-      terminalText)
+      terminalText))
   );
   const active = Boolean(
-    !nonGamePage &&
+    transientOverlay ||
+    (!nonGamePage &&
       boardEvidence &&
       (ownedBoardSelector ||
         realZoneCards ||
@@ -1266,7 +1278,7 @@ function readAtlasSnapshot(): Record<string, unknown> {
         logRows.length ||
         hasScoreEvidence ||
         inGameText ||
-        terminalText)
+        terminalText))
   );
   const roomCode = readRoomCode(bodyText) || atlasBattlefieldSeatRoomCode;
   const atlasPlayers = nonGamePage
@@ -1299,6 +1311,7 @@ function readAtlasSnapshot(): Record<string, unknown> {
     atlasBo3GameNumber: atlasBo3GameNumberValue,
     pageText: atlasContinuationText ? bodyText.slice(0, 1200) : "",
     atlasCardZoneOverlay: cardZoneOverlay,
+    atlasTransientOverlay: transientOverlay,
     atlasResultKind: classifyAtlasResult(terminalText),
     myName: atlasPlayers.me,
     opponentName: atlasPlayers.opponent,
@@ -1327,6 +1340,44 @@ function readAtlasSnapshot(): Record<string, unknown> {
     ...(DECK_TRACKER_FEATURE_ENABLED ? { deckTrackerCards: collectAtlasDeckTrackerCards(zoneCards) } : {}),
     endText: terminalText
   };
+}
+
+function isAtlasTransientGameOverlay(terminalText: string, sideboarding: boolean): boolean {
+  if (
+    !isAtlasGameRouteUrl(location.href) ||
+    !previousActive ||
+    (!lastActiveRoomCode && !atlasBattlefieldSeatRoomCode) ||
+    terminalText ||
+    sideboarding
+  ) {
+    return false;
+  }
+  const selectors = [
+    "[role='dialog']",
+    "[aria-modal='true']",
+    "[role='listbox']",
+    "[role='menu']",
+    "[class*='modal' i]",
+    "[class*='dialog' i]",
+    "[class*='drawer' i]",
+    "[class*='popover' i]",
+    "[class*='popper' i]",
+    "[class*='picker' i]",
+    "[class*='overlay' i]",
+    "[data-radix-popper-content-wrapper]"
+  ].join(", ");
+  return Array.from(document.querySelectorAll(selectors)).some((element) =>
+    isVisibleAtlasElement(element) &&
+    isAtlasTransientOverlayDescriptor({
+      role: attr(element, "role"),
+      ariaModal: attr(element, "aria-modal"),
+      id: attr(element, "id"),
+      classes: attr(element, "class"),
+      title: attr(element, "title"),
+      ariaLabel: attr(element, "aria-label"),
+      text: textOf(element)
+    })
+  );
 }
 
 function isAtlasNonGamePage(): boolean {
@@ -1906,7 +1957,7 @@ function collectAtlasPlayerCandidates(): AtlasPlayerCandidate[] {
   ].join(", ");
   const byKey = new Map<string, AtlasPlayerCandidate>();
   for (const element of Array.from(document.querySelectorAll(selectors)).slice(0, 700)) {
-    if (!isVisibleAtlasNameElement(element) || element.closest("[data-card-id], [data-drop-zone], [data-card-counter]")) {
+    if (!isVisibleAtlasElement(element) || element.closest("[data-card-id], [data-drop-zone], [data-card-counter]")) {
       continue;
     }
     const rect = element.getBoundingClientRect();
@@ -1938,7 +1989,7 @@ function collectAtlasPlayerCandidates(): AtlasPlayerCandidate[] {
     .slice(0, 12);
 }
 
-function isVisibleAtlasNameElement(element: Element): boolean {
+function isVisibleAtlasElement(element: Element): boolean {
   const rect = element.getBoundingClientRect();
   if (rect.width < 4 || rect.height < 4) {
     return false;
@@ -2477,6 +2528,7 @@ function publishSnapshot(reason: string): void {
     turnText: data.turnText,
     tcgaPhase: data.tcgaPhase,
     tcgaCardZoneOverlay: data.tcgaCardZoneOverlay,
+    atlasTransientOverlay: data.atlasTransientOverlay,
     deckTrackerCards: cardSnapshotSignature(data.deckTrackerCards),
     endText: data.endText
   });
@@ -2535,7 +2587,7 @@ function publishSnapshot(reason: string): void {
         lastActiveRoomCode = "";
       }
       endTimer = undefined;
-    }, platform === "atlas" ? 1800 : 3000);
+    }, platform === "atlas" ? atlasInactiveEndGraceMs(location.href, data.format) : 3000);
   }
 
   if (signature !== lastSnapshotSignature) {

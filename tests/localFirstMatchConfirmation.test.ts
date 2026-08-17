@@ -168,6 +168,35 @@ describe("local-first match confirmation", () => {
     ]);
   });
 
+  it("ignores stale failed destinations that are no longer enabled", () => {
+    const candidates = [
+      {
+        id: "disabled-only",
+        platform: "atlas",
+        source: "capture",
+        status: "saved",
+        capturedAt: "2026-07-01T00:00:00.000Z",
+        updatedAt: "2026-07-01T00:00:00.000Z",
+        sync: { community: "failed", hubs: { "old-hub": "failed" }, teams: { "old-team": "pending" } }
+      },
+      {
+        id: "enabled-hub",
+        platform: "tcga",
+        source: "capture",
+        status: "saved",
+        capturedAt: "2026-07-02T00:00:00.000Z",
+        updatedAt: "2026-07-02T00:00:00.000Z",
+        sync: { community: "synced", hubs: { "active-hub": "pending" }, teams: {} }
+      }
+    ];
+
+    expect(selectConfirmedMatchReportRetries(candidates, 10, {
+      community: false,
+      hubIds: new Set(["active-hub"]),
+      teamIds: new Set()
+    }).matches.map((match) => match.id)).toEqual(["enabled-hub"]);
+  });
+
   it("stops a report retry batch on the first thrown infrastructure failure", async () => {
     const candidates = [
       { id: "match-1", state: "pending" },

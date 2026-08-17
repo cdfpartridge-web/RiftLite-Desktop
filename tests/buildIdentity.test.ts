@@ -53,8 +53,8 @@ describe("RiftLite v0.9 production build identity", () => {
       userDataDirectory: PRODUCTION_CONTINUITY.userDataDirectory,
       mediaDirectoryName: PRODUCTION_CONTINUITY.mediaDirectoryName,
       protocol: PRODUCTION_CONTINUITY.protocol,
-      packageVersion: "0.9.42",
-      displayVersion: "0.9.42",
+      packageVersion: "0.9.51",
+      displayVersion: "0.9.51",
       updatesEnabled: true,
       usageAnalyticsEnabled: true
     });
@@ -74,7 +74,7 @@ describe("RiftLite v0.9 production build identity", () => {
     const build = packageManifest.build;
 
     expect(packageManifest.name).toBe("riftlite-desktop-v09");
-    expect(packageManifest.version).toBe("0.9.42");
+    expect(packageManifest.version).toBe("0.9.51");
     expect(build?.appId).toBe(PRODUCTION_CONTINUITY.appId);
     expect(build?.productName).toBe(RIFTLITE_BUILD_IDENTITY.appName);
     expect(build?.executableName).toBe(RIFTLITE_BUILD_IDENTITY.appName);

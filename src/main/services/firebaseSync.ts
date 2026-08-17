@@ -39,6 +39,7 @@ import type {
   PrivateHub,
   PublicProfileSearchResult,
   MatchDraft,
+  PrivateHubWebReplayGrantRetry,
   ReplayRecord,
   RiftLiteBackupFile,
   SocialTeamApplication,
@@ -61,6 +62,17 @@ const COMMUNITY_API_BASES = ["https://www.riftlite.com", "https://riftlite.com"]
 const COMMUNITY_FIRESTORE_FALLBACK_LIMIT = 500;
 const COMMUNITY_MATCH_CACHE_TTL_MS = 30_000;
 const PRIVATE_HUB_WEB_REPLAY_GRANT_KEY_LIMIT = 10_000;
+const PRIVATE_HUB_WEB_REPLAY_GRANT_RETRY_LIMIT = 2_000;
+const PRIVATE_HUB_WEB_REPLAY_GRANT_MAX_ATTEMPTS = 6;
+const PRIVATE_HUB_WEB_REPLAY_BACKFILL_ATTEMPT_LIMIT = 10;
+const PRIVATE_HUB_WEB_REPLAY_RETRY_DELAYS_MS = [
+  5 * 60_000,
+  15 * 60_000,
+  60 * 60_000,
+  6 * 60 * 60_000,
+  24 * 60 * 60_000,
+  24 * 60 * 60_000
+] as const;
 const TOKEN_FRESH_SECONDS = 300;
 const ACCOUNT_CLOUD_SYNC_FORMAT = "riftlite.account-cloud-sync";
 const ACCOUNT_CLOUD_SYNC_LEGACY_VERSION = 1;
@@ -135,6 +147,35 @@ function normalizedPrivateHubWebReplayGrantKeys(settings: UserSettings): string[
   if (!Array.isArray(value)) return [];
   return [...new Set(value.filter((key) => typeof key === "string" && key.length > 0))]
     .slice(-PRIVATE_HUB_WEB_REPLAY_GRANT_KEY_LIMIT);
+}
+
+function normalizedPrivateHubWebReplayGrantRetries(
+  settings: UserSettings
+): Record<string, PrivateHubWebReplayGrantRetry> {
+  const value = settings.privateHubWebReplayGrantRetries;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter((entry): entry is [string, PrivateHubWebReplayGrantRetry] => (
+        Boolean(entry[0]) &&
+        Boolean(entry[1]) &&
+        typeof entry[1] === "object" &&
+        Number.isFinite(entry[1].attempts) &&
+        typeof entry[1].nextAttemptAt === "string" &&
+        typeof entry[1].updatedAt === "string"
+      ))
+      .sort((left, right) => Date.parse(left[1].updatedAt) - Date.parse(right[1].updatedAt))
+      .slice(-PRIVATE_HUB_WEB_REPLAY_GRANT_RETRY_LIMIT)
+  );
+}
+
+function privateHubCanReceiveWebReplay(hub: PrivateHub): boolean {
+  return hub.sync === true && hub.claimed === true;
+}
+
+interface PrivateHubWebReplayGrantOutcome {
+  attempted: boolean;
+  granted: boolean;
 }
 
 interface LocalWebReplayAssociation {
@@ -229,6 +270,7 @@ export class FirebaseSyncService {
   private accountCloudRestoreIntent = false;
   private activeAccountCloudRestoreFence: AccountCloudRestoreFence | null = null;
   private readonly matchSyncTails = new Map<string, Promise<void>>();
+  private readonly privateHubWebReplayGrantRequests = new Map<string, Promise<PrivateHubWebReplayGrantOutcome>>();
   private communityMatchesCache: { key: string; expiresAt: number; matches: CommunityMatch[] } | null = null;
   private readonly communityMatchesRequests = new Map<string, {
     forceRefresh: boolean;
@@ -905,68 +947,141 @@ export class FirebaseSyncService {
     ) {
       return 0;
     }
-    const activeHubIds = new Set(settings.activeHubs.map((hub) => hub.id));
+    const activeHubIds = new Set(settings.activeHubs.filter(privateHubCanReceiveWebReplay).map((hub) => hub.id));
     const hubIds = Object.entries(match.sync.hubs)
       .filter(([hubId, state]) => state === "synced" && activeHubIds.has(hubId))
       .map(([hubId]) => hubId);
     if (!hubIds.length) return 0;
-    const completedKeys = new Set(normalizedPrivateHubWebReplayGrantKeys(settings));
-    let completedKeysChanged = false;
     let updated = 0;
     for (const hubId of hubIds) {
-      const grantKey = privateHubWebReplayGrantKey(hubId, normalizedMatchId, normalizedReplayId);
-      if (completedKeys.has(grantKey)) continue;
-      const grantPath = `/api/hubs/${encodeURIComponent(hubId)}/matches/${encodeURIComponent(normalizedMatchId)}/web-replay`;
-      try {
-        await this.requireMatchSyncIdentity(pinnedIdentity);
-        if (!await this.store.hasActiveRawCaptureParent(localReplayId || undefined, match.id)) {
-          continue;
-        }
-        await this.websiteRequestWithIdToken(
-          grantPath,
-          { method: "PUT", body: { replayId: normalizedReplayId } },
-          pinnedIdentity.auth.idToken
-        );
-        if (!await this.store.hasActiveRawCaptureParent(localReplayId || undefined, match.id)) {
-          await this.websiteRequestWithIdToken(
-            grantPath,
-            { method: "DELETE" },
-            pinnedIdentity.auth.idToken
-          );
-          continue;
-        }
-        await this.requireMatchSyncIdentity(pinnedIdentity);
-        completedKeys.add(grantKey);
-        completedKeysChanged = true;
-        updated += 1;
-      } catch (error) {
-        if (error instanceof LinkedAccountMismatchError) throw error;
-        // The website verifies replay ownership, match ownership, and current hub access.
-        // A later startup backfill can retry transient failures without recreating deleted rows.
-      }
-    }
-    if (completedKeysChanged) {
-      await this.store.updateSettings((current) => {
-        if (
-          !this.isLinkedAccountAuthGenerationCurrent(pinnedIdentity.generation) ||
-          current.accountUid !== pinnedIdentity.accountUid ||
-          current.firebaseUid !== pinnedIdentity.firebaseUid ||
-          current.firebaseRefreshToken !== pinnedIdentity.refreshToken ||
-          current.firebaseCredentialGeneration !== pinnedIdentity.credentialGeneration
-        ) {
-          return {};
-        }
-        return {
-          privateHubWebReplayGrantKeys: [
-            ...new Set([
-              ...normalizedPrivateHubWebReplayGrantKeys(current),
-              ...completedKeys
-            ])
-          ].slice(-PRIVATE_HUB_WEB_REPLAY_GRANT_KEY_LIMIT)
-        };
+      const outcome = await this.ensurePrivateHubWebReplayGrant({
+        hubId,
+        matchId: normalizedMatchId,
+        replayId: normalizedReplayId,
+        localReplayId,
+        pinnedIdentity
       });
+      if (outcome.granted) updated += 1;
     }
     return updated;
+  }
+
+  private async ensurePrivateHubWebReplayGrant(input: {
+    hubId: string;
+    matchId: string;
+    replayId: string;
+    localReplayId: string;
+    pinnedIdentity: PinnedMatchSyncIdentity;
+  }): Promise<PrivateHubWebReplayGrantOutcome> {
+    const grantKey = privateHubWebReplayGrantKey(input.hubId, input.matchId, input.replayId);
+    const requestKey = `${input.pinnedIdentity.accountUid}:${grantKey}`;
+    const existing = this.privateHubWebReplayGrantRequests.get(requestKey);
+    if (existing) {
+      await existing;
+      return { attempted: false, granted: false };
+    }
+    const request = this.ensurePrivateHubWebReplayGrantUnlocked(input, grantKey);
+    this.privateHubWebReplayGrantRequests.set(requestKey, request);
+    try {
+      return await request;
+    } finally {
+      if (this.privateHubWebReplayGrantRequests.get(requestKey) === request) {
+        this.privateHubWebReplayGrantRequests.delete(requestKey);
+      }
+    }
+  }
+
+  private async ensurePrivateHubWebReplayGrantUnlocked(
+    input: {
+      hubId: string;
+      matchId: string;
+      replayId: string;
+      localReplayId: string;
+      pinnedIdentity: PinnedMatchSyncIdentity;
+    },
+    grantKey: string
+  ): Promise<PrivateHubWebReplayGrantOutcome> {
+    const { hubId, matchId, replayId, localReplayId, pinnedIdentity } = input;
+    await this.requireMatchSyncIdentity(pinnedIdentity);
+    const settings = await this.store.getSettings();
+    const hub = settings.activeHubs.find((candidate) => candidate.id === hubId);
+    if (!hub || !privateHubCanReceiveWebReplay(hub)) {
+      return { attempted: false, granted: false };
+    }
+    if (normalizedPrivateHubWebReplayGrantKeys(settings).includes(grantKey)) {
+      return { attempted: false, granted: false };
+    }
+    const retry = normalizedPrivateHubWebReplayGrantRetries(settings)[grantKey];
+    if (
+      retry?.terminal ||
+      (retry && Date.parse(retry.nextAttemptAt) > Date.now()) ||
+      (retry?.attempts ?? 0) >= PRIVATE_HUB_WEB_REPLAY_GRANT_MAX_ATTEMPTS
+    ) {
+      return { attempted: false, granted: false };
+    }
+    if (!await this.store.hasActiveRawCaptureParent(localReplayId || undefined, matchId)) {
+      return { attempted: false, granted: false };
+    }
+
+    const grantPath = `/api/hubs/${encodeURIComponent(hubId)}/matches/${encodeURIComponent(matchId)}/web-replay`;
+    try {
+      await this.websiteRequestWithIdToken(
+        grantPath,
+        { method: "PUT", body: { replayId } },
+        pinnedIdentity.auth.idToken
+      );
+      if (!await this.store.hasActiveRawCaptureParent(localReplayId || undefined, matchId)) {
+        await this.websiteRequestWithIdToken(
+          grantPath,
+          { method: "DELETE" },
+          pinnedIdentity.auth.idToken
+        ).catch(() => undefined);
+        return { attempted: true, granted: false };
+      }
+      await this.requireMatchSyncIdentity(pinnedIdentity);
+      await this.store.updateSettings((current) => {
+        if (!this.matchesPinnedIdentity(current, pinnedIdentity)) return {};
+        const retries = normalizedPrivateHubWebReplayGrantRetries(current);
+        delete retries[grantKey];
+        return {
+          privateHubWebReplayGrantKeys: [
+            ...new Set([...normalizedPrivateHubWebReplayGrantKeys(current), grantKey])
+          ].slice(-PRIVATE_HUB_WEB_REPLAY_GRANT_KEY_LIMIT),
+          privateHubWebReplayGrantRetries: retries
+        };
+      });
+      return { attempted: true, granted: true };
+    } catch (error) {
+      if (error instanceof LinkedAccountMismatchError) throw error;
+      const nextRetry = privateHubWebReplayGrantRetry(error, retry?.attempts ?? 0);
+      await this.store.updateSettings((current) => {
+        if (!this.matchesPinnedIdentity(current, pinnedIdentity)) return {};
+        if (!current.activeHubs.some((candidate) => candidate.id === hubId && privateHubCanReceiveWebReplay(candidate))) {
+          return {};
+        }
+        if (normalizedPrivateHubWebReplayGrantKeys(current).includes(grantKey)) return {};
+        const retries = {
+          ...normalizedPrivateHubWebReplayGrantRetries(current),
+          [grantKey]: nextRetry
+        };
+        return {
+          privateHubWebReplayGrantRetries: Object.fromEntries(
+            Object.entries(retries)
+              .sort((left, right) => Date.parse(left[1].updatedAt) - Date.parse(right[1].updatedAt))
+              .slice(-PRIVATE_HUB_WEB_REPLAY_GRANT_RETRY_LIMIT)
+          )
+        };
+      });
+      return { attempted: true, granted: false };
+    }
+  }
+
+  private matchesPinnedIdentity(current: UserSettings, identity: PinnedMatchSyncIdentity): boolean {
+    return this.isLinkedAccountAuthGenerationCurrent(identity.generation) &&
+      current.accountUid === identity.accountUid &&
+      current.firebaseUid === identity.firebaseUid &&
+      current.firebaseRefreshToken === identity.refreshToken &&
+      current.firebaseCredentialGeneration === identity.credentialGeneration;
   }
 
   private async reconcilePrivateHubWebReplayForMatch(localMatchId: string): Promise<number> {
@@ -993,11 +1108,9 @@ export class FirebaseSyncService {
       this.store.getReplays()
     ]);
     await this.requireMatchSyncIdentity(pinnedIdentity);
-    const activeHubIds = new Set(settings.activeHubs.map((hub) => hub.id));
-    const previouslyCompletedKeys = normalizedPrivateHubWebReplayGrantKeys(settings);
-    const completedKeys = new Set(previouslyCompletedKeys);
-    const relevantKeys = new Set<string>();
+    const activeHubIds = new Set(settings.activeHubs.filter(privateHubCanReceiveWebReplay).map((hub) => hub.id));
     let updated = 0;
+    let attempted = 0;
     for (const match of matches) {
       const association = localWebReplayAssociationForMatch(match, replays, pinnedIdentity.accountUid);
       if (!association) continue;
@@ -1006,62 +1119,17 @@ export class FirebaseSyncService {
         .filter(([hubId, state]) => state === "synced" && activeHubIds.has(hubId))
         .map(([hubId]) => hubId);
       for (const hubId of hubIds) {
-        const grantKey = privateHubWebReplayGrantKey(hubId, match.id, replayId);
-        relevantKeys.add(grantKey);
-        if (completedKeys.has(grantKey)) continue;
-        const grantPath = `/api/hubs/${encodeURIComponent(hubId)}/matches/${encodeURIComponent(match.id)}/web-replay`;
-        try {
-          await this.requireMatchSyncIdentity(pinnedIdentity);
-          if (!await this.store.hasActiveRawCaptureParent(localReplayId || undefined, match.id)) {
-            continue;
-          }
-          await this.websiteRequestWithIdToken(
-            grantPath,
-            { method: "PUT", body: { replayId } },
-            pinnedIdentity.auth.idToken
-          );
-          if (!await this.store.hasActiveRawCaptureParent(localReplayId || undefined, match.id)) {
-            await this.websiteRequestWithIdToken(
-              grantPath,
-              { method: "DELETE" },
-              pinnedIdentity.auth.idToken
-            );
-            continue;
-          }
-          await this.requireMatchSyncIdentity(pinnedIdentity);
-          completedKeys.add(grantKey);
-          updated += 1;
-        } catch (error) {
-          if (error instanceof LinkedAccountMismatchError) throw error;
-          // Leave failed pairs unmarked so a later launch retries only those pairs.
-        }
+        if (attempted >= PRIVATE_HUB_WEB_REPLAY_BACKFILL_ATTEMPT_LIMIT) return updated;
+        const outcome = await this.ensurePrivateHubWebReplayGrant({
+          hubId,
+          matchId: match.id,
+          replayId,
+          localReplayId,
+          pinnedIdentity
+        });
+        if (outcome.attempted) attempted += 1;
+        if (outcome.granted) updated += 1;
       }
-    }
-    const nextCompletedKeys = [...relevantKeys]
-      .filter((key) => completedKeys.has(key))
-      .slice(-PRIVATE_HUB_WEB_REPLAY_GRANT_KEY_LIMIT);
-    if (JSON.stringify(nextCompletedKeys) !== JSON.stringify(previouslyCompletedKeys)) {
-      const previousKeys = new Set(previouslyCompletedKeys);
-      await this.store.updateSettings((current) => {
-        if (
-          !this.isLinkedAccountAuthGenerationCurrent(pinnedIdentity.generation) ||
-          current.accountUid !== pinnedIdentity.accountUid ||
-          current.firebaseUid !== pinnedIdentity.firebaseUid ||
-          current.firebaseRefreshToken !== pinnedIdentity.refreshToken ||
-          current.firebaseCredentialGeneration !== pinnedIdentity.credentialGeneration
-        ) {
-          return {};
-        }
-        return {
-          privateHubWebReplayGrantKeys: [
-            ...new Set([
-              ...nextCompletedKeys,
-              ...normalizedPrivateHubWebReplayGrantKeys(current)
-                .filter((key) => !previousKeys.has(key))
-            ])
-          ].slice(-PRIVATE_HUB_WEB_REPLAY_GRANT_KEY_LIMIT)
-        };
-      });
     }
     return updated;
   }
@@ -1213,11 +1281,29 @@ export class FirebaseSyncService {
   }
 
   async startAccountLink(): Promise<AccountLinkSession> {
-    const settings = await this.store.getSettings();
-    const payload = await this.authenticatedWebsiteRequest("/api/auth/link/start", {
-      method: "POST",
-      body: { expectedUid: settings.accountUid }
-    }, "account-link");
+    let payload: Record<string, unknown> | null = null;
+    let transportError: unknown;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        const settings = await this.store.getSettings();
+        payload = await this.authenticatedWebsiteRequest("/api/auth/link/start", {
+          method: "POST",
+          body: { expectedUid: settings.accountUid }
+        }, "account-link");
+        break;
+      } catch (error) {
+        if (!isAccountLinkTransportError(error)) {
+          throw error;
+        }
+        transportError = error;
+      }
+    }
+    if (!payload) {
+      throw new Error(
+        "Could not reach RiftLite account services. Check your connection, VPN, or antivirus, then try again; no account changes were made.",
+        { cause: transportError }
+      );
+    }
     return {
       sessionId: readString(payload.sessionId),
       code: readString(payload.code),
@@ -1230,7 +1316,18 @@ export class FirebaseSyncService {
     const startedSettings = await this.store.getSettings();
     const linkGeneration = this.linkedAccountAuthGeneration;
     const query = new URLSearchParams({ sessionId });
-    const payload = await this.authenticatedWebsiteRequest(`/api/auth/link/status?${query}`, { method: "GET" }, "account-link");
+    let payload: Record<string, unknown>;
+    try {
+      payload = await this.authenticatedWebsiteRequest(`/api/auth/link/status?${query}`, { method: "GET" }, "account-link");
+    } catch (error) {
+      if (!isAccountLinkTransportError(error)) {
+        throw error;
+      }
+      throw new Error(
+        "RiftLite could not check the browser sign-in yet. Keep this link open; it will retry automatically when the connection recovers.",
+        { cause: error }
+      );
+    }
     const status = readString(payload.status) as AccountLinkStatus["status"];
     const customToken = readString(payload.customToken);
     const anonymousAdoptionSourceUid = readString(payload.anonymousAdoptionSourceUid);
@@ -1301,6 +1398,9 @@ export class FirebaseSyncService {
               privateHubWebReplayGrantKeys: preserveLocalAccountData
                 ? current.privateHubWebReplayGrantKeys
                 : [],
+              privateHubWebReplayGrantRetries: preserveLocalAccountData
+                ? current.privateHubWebReplayGrantRetries
+                : {},
               accountEmail: readString(payload.email),
               accountHandle: preserveLocalAccountData ? current.accountHandle : "",
               accountProfilePublic: preserveLocalAccountData ? current.accountProfilePublic : false,
@@ -2570,6 +2670,7 @@ export class FirebaseSyncService {
         activeHubs: [],
         activeTeams: [],
         privateHubWebReplayGrantKeys: [],
+        privateHubWebReplayGrantRetries: {},
         rawCapture: {
           ...current.rawCapture,
           // Local capture is device-owned and does not require an account. Only
@@ -2971,11 +3072,6 @@ export class FirebaseSyncService {
 
   private async uploadHubMatch(hubId: string, match: MatchDraft, settings: UserSettings, pinnedAuth?: AuthState): Promise<string> {
     const auth = pinnedAuth ?? await this.getCanonicalOrAnonymousAuth(settings);
-    const webReplayAssociation = localWebReplayAssociationForMatch(
-      match,
-      await this.store.getReplays(),
-      settings.accountUid
-    );
     const doc = buildSyncDoc(match, settings, auth.uid, { includeFlags: true });
     const safeHubId = encodeURIComponent(hubId);
     const safeMatchId = encodeURIComponent(match.id);
@@ -2988,20 +3084,6 @@ export class FirebaseSyncService {
       uid: auth.uid,
       username: readString(doc.username)
     }).catch(() => undefined);
-    if (
-      webReplayAssociation &&
-      await this.store.hasActiveRawCaptureParent(webReplayAssociation.localReplayId || undefined, match.id)
-    ) {
-      const grantPath = `/api/hubs/${safeHubId}/matches/${safeMatchId}/web-replay`;
-      await this.websiteRequestWithIdToken(
-        grantPath,
-        { method: "PUT", body: { replayId: webReplayAssociation.replayId } },
-        auth.idToken
-      );
-      if (!await this.store.hasActiveRawCaptureParent(webReplayAssociation.localReplayId || undefined, match.id)) {
-        await this.websiteRequestWithIdToken(grantPath, { method: "DELETE" }, auth.idToken);
-      }
-    }
     const name = typeof response.name === "string" ? response.name : "";
     return name.split("/").pop() ?? "";
   }
@@ -3254,7 +3336,8 @@ export class FirebaseSyncService {
       accountCloudSyncRemoteGenerationId: "",
       accountCloudSyncLastError: "",
       // This is a device-local idempotency cache, not user data.
-      privateHubWebReplayGrantKeys: []
+      privateHubWebReplayGrantKeys: [],
+      privateHubWebReplayGrantRetries: {}
     };
     return {
       ...backup,
@@ -3470,6 +3553,7 @@ export class FirebaseSyncService {
       `https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${FIREBASE_API_KEY}`,
       {
         method: "POST",
+        signal: AbortSignal.timeout(20_000),
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ returnSecureToken: true })
       }
@@ -3491,6 +3575,7 @@ export class FirebaseSyncService {
       `https://securetoken.googleapis.com/v1/token?key=${FIREBASE_API_KEY}`,
       {
         method: "POST",
+        signal: AbortSignal.timeout(20_000),
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: new URLSearchParams({ grant_type: "refresh_token", refresh_token: refreshToken })
       }
@@ -3512,6 +3597,7 @@ export class FirebaseSyncService {
       `https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=${FIREBASE_API_KEY}`,
       {
         method: "POST",
+        signal: AbortSignal.timeout(20_000),
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ token: customToken, returnSecureToken: true })
       }
@@ -3550,6 +3636,7 @@ export class FirebaseSyncService {
   ): Promise<Record<string, unknown>> {
     const response = await fetch(`${COMMUNITY_API_BASE}${path}`, {
       method: options.method,
+      signal: AbortSignal.timeout(20_000),
       headers: {
         "Authorization": `Bearer ${idToken}`,
         "Content-Type": "application/json"
@@ -3580,7 +3667,12 @@ export class FirebaseSyncService {
       }
       throw new WebsiteApiResponseError(
         readString(payload.error) || `RiftLite API ${response.status}`,
-        response.status
+        response.status,
+        readString(payload.code),
+        typeof payload.retryable === "boolean" ? payload.retryable : undefined,
+        typeof payload.retryAfterMs === "number" && Number.isFinite(payload.retryAfterMs)
+          ? Math.max(0, payload.retryAfterMs)
+          : undefined
       );
     }
     return payload;
@@ -3746,10 +3838,86 @@ function countAccountCloudBackup(backup: RiftLiteBackupFile): AccountCloudSyncCo
 }
 
 class WebsiteApiResponseError extends Error {
-  constructor(message: string, readonly status: number) {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly code = "",
+    readonly retryable?: boolean,
+    readonly retryAfterMs?: number
+  ) {
     super(message);
     this.name = "WebsiteApiResponseError";
   }
+}
+
+function privateHubWebReplayGrantRetry(
+  error: unknown,
+  previousAttempts: number,
+  now = Date.now()
+): PrivateHubWebReplayGrantRetry {
+  const attempts = Math.min(
+    PRIVATE_HUB_WEB_REPLAY_GRANT_MAX_ATTEMPTS,
+    Math.max(0, Math.trunc(previousAttempts)) + 1
+  );
+  const responseError = error instanceof WebsiteApiResponseError
+    ? error
+    : error instanceof Error && typeof (error as Error & { status?: unknown }).status === "number"
+      ? error as Error & {
+        status: number;
+        code?: string;
+        retryable?: boolean;
+        retryAfterMs?: number;
+      }
+      : null;
+  const status = responseError?.status;
+  const code = responseError?.code ?? "";
+  const terminalCodes = new Set([
+    "account_hub_required",
+    "hub_deleting",
+    "hub_match_not_found",
+    "hub_match_owner_required",
+    "hub_membership_required",
+    "hub_not_found",
+    "replay_match_mismatch",
+    "replay_not_found",
+    "replay_owner_required"
+  ]);
+  const retryable = code === "replay_not_ready" || (
+    !terminalCodes.has(code) && (
+      responseError?.retryable === true ||
+      status === 401 ||
+      status === 408 ||
+      status === 425 ||
+      status === 429 ||
+      (typeof status === "number" && status >= 500) ||
+      responseError === null
+    )
+  );
+  const terminal = !retryable || attempts >= PRIVATE_HUB_WEB_REPLAY_GRANT_MAX_ATTEMPTS;
+  const configuredDelay = PRIVATE_HUB_WEB_REPLAY_RETRY_DELAYS_MS[
+    Math.min(attempts - 1, PRIVATE_HUB_WEB_REPLAY_RETRY_DELAYS_MS.length - 1)
+  ];
+  const retryAfterMs = Math.min(24 * 60 * 60_000, Math.max(0, responseError?.retryAfterMs ?? 0));
+  const delayMs = terminal ? 0 : Math.max(configuredDelay, retryAfterMs);
+  const updatedAt = new Date(now).toISOString();
+  return {
+    attempts,
+    nextAttemptAt: new Date(now + delayMs).toISOString(),
+    terminal,
+    ...(typeof status === "number" ? { status } : {}),
+    ...(code ? { code } : {}),
+    updatedAt
+  };
+}
+
+function isAccountLinkTransportError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  if (error.name === "AbortError" || error.name === "TimeoutError") return true;
+  if (/fetch failed|network request failed|network-request-failed|timed?\s*out/i.test(error.message)) return true;
+  const cause = error.cause;
+  if (!(cause instanceof Error)) return false;
+  return cause.name === "AbortError" || cause.name === "TimeoutError" ||
+    /fetch failed|network|timed?\s*out|ENOTFOUND|ECONNRESET|ECONNREFUSED|EAI_AGAIN/i.test(`${cause.message} ${(cause as Error & { code?: string }).code ?? ""}`);
 }
 
 function normalizeAccountCloudSyncConflictSummary(value: unknown): AccountCloudSyncConflictSummary {

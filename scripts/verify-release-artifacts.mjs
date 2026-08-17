@@ -7,9 +7,13 @@ import { fileURLToPath } from "node:url";
 import { gunzipSync } from "node:zlib";
 
 import { extractFile, listPackage } from "@electron/asar";
+import { buildBlockMap } from "app-builder-lib/out/targets/blockmap/blockmap.js";
+import { getPath7za } from "app-builder-lib/out/toolsets/7zip.js";
+
+import { resolveReleaseDirectory } from "./release-directory.mjs";
 
 const projectDirectory = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const releaseDirectory = join(projectDirectory, "release");
+const releaseDirectory = resolveReleaseDirectory(projectDirectory);
 const installerPath = join(releaseDirectory, "RiftLiteBetaInstall.exe");
 const blockmapPath = `${installerPath}.blockmap`;
 const manifestPath = join(releaseDirectory, "latest.yml");
@@ -18,7 +22,6 @@ const asarPath = join(unpackedDirectory, "resources", "app.asar");
 const packagedUpdaterPath = join(unpackedDirectory, "resources", "app-update.yml");
 const ffmpegPath = join(unpackedDirectory, "resources", "ffmpeg", "ffmpeg.exe");
 const ffmpegLicensePath = `${ffmpegPath}.LICENSE`;
-const appBuilderPath = join(projectDirectory, "node_modules", "app-builder-bin", "win", "x64", "app-builder.exe");
 
 const packageManifest = JSON.parse(readFileSync(join(projectDirectory, "package.json"), "utf8"));
 const expectedVersion = packageManifest.version;
@@ -34,7 +37,7 @@ const expectedIdentity = {
   updateRepository: "RiftLite-Desktop",
 };
 
-for (const path of [installerPath, blockmapPath, manifestPath, asarPath, packagedUpdaterPath, ffmpegPath, ffmpegLicensePath, appBuilderPath]) {
+for (const path of [installerPath, blockmapPath, manifestPath, asarPath, packagedUpdaterPath, ffmpegPath, ffmpegLicensePath]) {
   assert(existsSync(path), `Required release artifact is missing: ${path}`);
 }
 assert(expectedArtifactName === "RiftLiteBetaInstall.exe", "The canonical Windows installer name changed.");
@@ -125,13 +128,28 @@ for (const entry of blockmap.files) {
     "The installer blockmap does not describe the packaged installer bytes."
   );
 }
+
+const sevenZipPath = await getPath7za();
+assert(existsSync(sevenZipPath), `The electron-builder 7-Zip toolset is missing: ${sevenZipPath}`);
+let archiveOutput = "";
+try {
+  archiveOutput = execFileSync(sevenZipPath, ["t", installerPath], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    windowsHide: true,
+  });
+} catch (error) {
+  const details = [error?.stdout, error?.stderr]
+    .filter((value) => typeof value === "string" && value.trim())
+    .join("\n");
+  throw new Error(`NSIS archive integrity verification failed.${details ? `\n${details}` : ""}`, { cause: error });
+}
+assert(archiveOutput.includes("Everything is Ok"), "The NSIS archive integrity check did not report success.");
+
 const blockmapAuditDirectory = mkdtempSync(join(tmpdir(), "riftlite-blockmap-verify-"));
 try {
   const regeneratedBlockmapPath = join(blockmapAuditDirectory, "installer.blockmap");
-  execFileSync(appBuilderPath, ["blockmap", "--input", installerPath, "--output", regeneratedBlockmapPath], {
-    stdio: ["ignore", "ignore", "pipe"],
-    windowsHide: true,
-  });
+  await buildBlockMap(installerPath, "gzip", regeneratedBlockmapPath);
   const regeneratedBlockmap = JSON.parse(gunzipSync(readFileSync(regeneratedBlockmapPath)).toString("utf8"));
   assert(
     JSON.stringify(regeneratedBlockmap) === JSON.stringify(blockmap),

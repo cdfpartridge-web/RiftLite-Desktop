@@ -79,6 +79,8 @@ export function normalizeSourceCard(rawCard, expectedSetCode = "") {
   const parsed = normalizePrintId(readString(rawCard.riftbound_id), setCode);
   const type = readRequiredString(rawCard.classification?.type, `${parsed.printId} type`);
   const supertype = readNullableString(rawCard.classification?.supertype);
+  const costEnergy = readNullableNonNegativeInteger(rawCard.attributes?.energy, `${parsed.printId} Energy cost`);
+  const costPower = readNullableNonNegativeInteger(rawCard.attributes?.power, `${parsed.printId} Power cost`);
   const rawName = readRequiredString(rawCard.name, `${parsed.printId} name`);
   const imageUrl = readRequiredHttpUrl(rawCard.media?.image_url, `${parsed.printId} image_url`);
   const tags = uniqueStrings(rawCard.tags);
@@ -115,6 +117,8 @@ export function normalizeSourceCard(rawCard, expectedSetCode = "") {
     name,
     type,
     supertype,
+    costEnergy,
+    costPower,
     tags,
     champion,
     imageUrl,
@@ -191,6 +195,11 @@ export function dedupeCards(cards) {
     const types = uniqueStrings(group.map((card) => card.type.toLocaleLowerCase()));
     if (types.length > 1) {
       throw new Error(`${printId} maps to multiple card types: ${types.join(", ")}`);
+    }
+
+    const costs = new Set(group.map((card) => JSON.stringify([card.costEnergy, card.costPower])));
+    if (costs.size > 1) {
+      throw new Error(`${printId} maps to multiple printed costs; refusing an unsafe dedupe`);
     }
 
     const selected = [...group].sort(compareCardFreshness).at(-1);
@@ -324,6 +333,12 @@ function normalizeOverlayCard(rawCard) {
     name,
     type,
     supertype: readNullableString(rawCard.supertype),
+    costEnergy: rawCard.costEnergy === undefined
+      ? undefined
+      : readNullableNonNegativeInteger(rawCard.costEnergy, `${parsed.printId} overlay Energy cost`),
+    costPower: rawCard.costPower === undefined
+      ? undefined
+      : readNullableNonNegativeInteger(rawCard.costPower, `${parsed.printId} overlay Power cost`),
     tags: uniqueStrings(rawCard.tags),
     champion: readNullableString(rawCard.champion),
     imageUrl,
@@ -476,6 +491,12 @@ function assertNormalizedCard(card) {
   if (card.collectorCode !== parsed.collectorCode) throw new Error(`Invalid collectorCode for ${card.printId}`);
   readRequiredString(card.name, `${card.printId} name`);
   readRequiredString(card.type, `${card.printId} type`);
+  if (card.costEnergy !== undefined && card.costEnergy !== null) {
+    readNonNegativeInteger(card.costEnergy, `${card.printId} Energy cost`);
+  }
+  if (card.costPower !== undefined && card.costPower !== null) {
+    readNonNegativeInteger(card.costPower, `${card.printId} Power cost`);
+  }
   if (!card.variants || typeof card.variants !== "object") {
     throw new Error(`${card.printId} is missing variant metadata`);
   }
@@ -644,6 +665,11 @@ function readNonNegativeInteger(value, label) {
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed < 0) throw new Error(`${label} must be a non-negative integer`);
   return parsed;
+}
+
+function readNullableNonNegativeInteger(value, label) {
+  if (value === null || value === undefined || value === "") return null;
+  return readNonNegativeInteger(value, label);
 }
 
 function readPositiveInteger(value, label) {

@@ -4,10 +4,14 @@ import {
   DEFAULT_HOME_CONFIG_URL,
   DEFAULT_HOME_LIVE_TAKEOVER_URL,
   HOME_FEED_REFRESH_MS,
+  HOME_LIVE_TAKEOVER_BACKGROUND_REFRESH_MS,
+  HOME_LIVE_TAKEOVER_FAILURE_MAX_REFRESH_MS,
+  HOME_LIVE_TAKEOVER_IDLE_REFRESH_MS,
   HOME_LIVE_TAKEOVER_REFRESH_MS,
   homeCreatorVideoDateLabel,
   homeCreatorVideoFeedFromConfig,
   homeLiveTakeoverFromConfig,
+  homeLiveTakeoverRefreshMs,
   nextHomeCreatorVideoIndex,
   resolveHomeConfigUrl,
   resolveHomeLiveTakeoverUrl,
@@ -87,7 +91,11 @@ describe("Home creator video feed", () => {
       title: "  Sunday   Riftbound live  ",
       embedUrl: "https://evil.example/player",
       channelUrl: "https://evil.example/channel",
-      updatedAt: 1234
+      updatedAt: 1234,
+      analytics: {
+        runId: "run_1234567890123456",
+        token: "signed-token-".repeat(5)
+      }
     });
 
     expect(takeover).toEqual({
@@ -97,7 +105,11 @@ describe("Home creator video feed", () => {
       embedUrl: "https://player.twitch.tv/?channel=bmucasts&parent=www.riftlite.com&autoplay=true&muted=true",
       channelUrl: "https://www.twitch.tv/bmucasts",
       status: "live",
-      updatedAt: 1234
+      updatedAt: 1234,
+      analytics: {
+        runId: "run_1234567890123456",
+        token: "signed-token-".repeat(5)
+      }
     });
   });
 
@@ -163,7 +175,24 @@ describe("Home config URL override", () => {
       .toBe("https://preview.riftlite.com/api/app/live-takeover");
     expect(resolveHomeLiveTakeoverUrl("not a URL")).toBe(DEFAULT_HOME_LIVE_TAKEOVER_URL);
     expect(HOME_FEED_REFRESH_MS).toBe(30 * 60 * 1_000);
-    expect(HOME_LIVE_TAKEOVER_REFRESH_MS).toBe(30 * 1_000);
+    expect(HOME_LIVE_TAKEOVER_REFRESH_MS).toBe(60 * 1_000);
+  });
+
+  it("slows live checks when offline, unfocused, hidden, or repeatedly failing", () => {
+    const foreground = {
+      visible: true,
+      focused: true,
+      online: true,
+      live: true,
+      consecutiveFailures: 0
+    };
+    expect(homeLiveTakeoverRefreshMs(foreground)).toBe(HOME_LIVE_TAKEOVER_REFRESH_MS);
+    expect(homeLiveTakeoverRefreshMs({ ...foreground, live: false })).toBe(HOME_LIVE_TAKEOVER_IDLE_REFRESH_MS);
+    expect(homeLiveTakeoverRefreshMs({ ...foreground, visible: false })).toBe(HOME_LIVE_TAKEOVER_BACKGROUND_REFRESH_MS);
+    expect(homeLiveTakeoverRefreshMs({ ...foreground, focused: false })).toBe(HOME_LIVE_TAKEOVER_BACKGROUND_REFRESH_MS);
+    expect(homeLiveTakeoverRefreshMs({ ...foreground, online: false })).toBe(HOME_LIVE_TAKEOVER_BACKGROUND_REFRESH_MS);
+    expect(homeLiveTakeoverRefreshMs({ ...foreground, live: false, consecutiveFailures: 5 }))
+      .toBe(HOME_LIVE_TAKEOVER_FAILURE_MAX_REFRESH_MS);
   });
 });
 

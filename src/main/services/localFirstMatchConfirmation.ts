@@ -22,6 +22,12 @@ type ConfirmedMatchReportRetryCandidate = ConfirmedMatchDeliveryCandidate & {
   };
 };
 
+export type ConfirmedMatchReportRetryDestinations = {
+  community: boolean;
+  hubIds: ReadonlySet<string>;
+  teamIds: ReadonlySet<string>;
+};
+
 export type ConfirmedMatchReportRetrySelection<Saved> = {
   matches: Saved[];
 };
@@ -45,14 +51,21 @@ export function confirmedMatchSupportsBackgroundDelivery(match: ConfirmedMatchDe
 }
 
 /** Selects durable automatic matches whose remote report state still needs a retry. */
-export function confirmedMatchNeedsReportRetry(match: ConfirmedMatchReportRetryCandidate): boolean {
+export function confirmedMatchNeedsReportRetry(
+  match: ConfirmedMatchReportRetryCandidate,
+  destinations?: ConfirmedMatchReportRetryDestinations
+): boolean {
   if (!confirmedMatchSupportsBackgroundDelivery(match) || match.status !== "saved") {
     return false;
   }
   const retryable = (state: string) => state === "pending" || state === "failed";
-  return retryable(match.sync.community) ||
-    Object.values(match.sync.hubs).some(retryable) ||
-    Object.values(match.sync.teams ?? {}).some(retryable);
+  return (destinations?.community !== false && retryable(match.sync.community)) ||
+    Object.entries(match.sync.hubs).some(([hubId, state]) => (
+      retryable(state) && (!destinations || destinations.hubIds.has(hubId))
+    )) ||
+    Object.entries(match.sync.teams ?? {}).some(([teamId, state]) => (
+      retryable(state) && (!destinations || destinations.teamIds.has(teamId))
+    ));
 }
 
 /**
@@ -63,10 +76,11 @@ export function confirmedMatchNeedsReportRetry(match: ConfirmedMatchReportRetryC
  */
 export function selectConfirmedMatchReportRetries<Saved extends ConfirmedMatchReportRetryCandidate>(
   matches: Saved[],
-  limit = 10
+  limit = 10,
+  destinations?: ConfirmedMatchReportRetryDestinations
 ): ConfirmedMatchReportRetrySelection<Saved> {
   const boundedLimit = Math.max(1, Math.trunc(limit));
-  const eligible = matches.filter(confirmedMatchNeedsReportRetry);
+  const eligible = matches.filter((match) => confirmedMatchNeedsReportRetry(match, destinations));
   if (eligible.length <= boundedLimit) {
     return {
       matches: [...eligible].sort((left, right) => timestamp(right.capturedAt) - timestamp(left.capturedAt))

@@ -50,6 +50,9 @@ describe("RiftLiteStore replay payload migration", () => {
           JSON.stringify(legacyReplay())
         ]
       );
+      // Recreate a pre-marker database: normal saves made after the migration
+      // gate exists already use external replay payload files.
+      internals.db?.run("DELETE FROM store_metadata WHERE key='stored-payload-migration-version'");
       await internals.writeDatabaseFile(internals.db as object);
 
       const reopened = new RiftLiteStore(dbPath, legacyPath);

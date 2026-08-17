@@ -106,6 +106,34 @@ describe("secure credential storage", () => {
         "hub-a|match-a|replay-a",
         "hub-b|match-b|replay-b"
       ]);
+      await restarted.saveSettings({
+        privateHubWebReplayGrantRetries: {
+          '["hub-c","match-c","replay-c"]': {
+            attempts: 2,
+            nextAttemptAt: "2026-08-15T12:15:00.000Z",
+            terminal: false,
+            status: 503,
+            code: "firebase_unavailable",
+            updatedAt: "2026-08-15T12:00:00.000Z"
+          }
+        }
+      });
+      const retryRestart = new RiftLiteStore(
+        join(directory, "riftlite-v06.sqlite"),
+        join(directory, "riftlite-v06-store.json"),
+        new SecureCredentialVault(join(directory, "vault.json"), encryption)
+      );
+      await retryRestart.load();
+      expect((await retryRestart.getSettings()).privateHubWebReplayGrantRetries).toEqual({
+        '["hub-c","match-c","replay-c"]': {
+          attempts: 2,
+          nextAttemptAt: "2026-08-15T12:15:00.000Z",
+          terminal: false,
+          status: 503,
+          code: "firebase_unavailable",
+          updatedAt: "2026-08-15T12:00:00.000Z"
+        }
+      });
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

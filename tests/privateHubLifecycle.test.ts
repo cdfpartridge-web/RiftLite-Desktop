@@ -34,8 +34,12 @@ function settings(): UserSettings {
   } as UserSettings;
 }
 
-function harness(matches: MatchDraft[] = [], replays: ReplayRecord[] = []) {
-  let current = settings();
+function harness(
+  matches: MatchDraft[] = [],
+  replays: ReplayRecord[] = [],
+  initialSettings: UserSettings = settings()
+) {
+  let current = initialSettings;
   const store = {
     getSettings: vi.fn(async () => current),
     saveSettings: vi.fn(async (patch: Partial<UserSettings>) => {
@@ -178,6 +182,94 @@ describe("FirebaseSyncService private hub lifecycle", () => {
     await expect(service.attachWebReplayToSyncedHubMatches("match-1", "../../account", "account-1")).resolves.toBe(0);
   });
 
+  it("skips disabled and legacy hubs that cannot receive account Web Replay grants", async () => {
+    const match = {
+      id: "match-ineligible-hubs",
+      myName: "Player",
+      sync: {
+        community: "disabled",
+        hubs: { "disabled-hub": "synced", "legacy-hub": "synced" },
+        teams: {}
+      }
+    } as MatchDraft;
+    const replay = uploadedReplay(match.id, "local-ineligible", "rl2_ineligible_hubs");
+    const { service, store, websiteRequest } = harness([match], [replay]);
+    await store.saveSettings({
+      activeHubs: [
+        { id: "disabled-hub", name: "Disabled", sync: false, claimed: true },
+        { id: "legacy-hub", name: "Legacy", sync: true, claimed: false }
+      ]
+    });
+
+    await expect(service.attachWebReplayToSyncedHubMatches(match.id, "rl2_ineligible_hubs", "account-1"))
+      .resolves.toBe(0);
+    await expect(service.backfillPrivateHubWebReplayIds()).resolves.toBe(0);
+
+    expect(websiteRequest).not.toHaveBeenCalled();
+  });
+
+  it("records terminal grant responses and never retries them on a later service instance", async () => {
+    const match = {
+      id: "terminal-grant",
+      myName: "Player",
+      sync: { community: "disabled", hubs: { "member-hub": "synced" }, teams: {} }
+    } as MatchDraft;
+    const replay = uploadedReplay(match.id, "local-terminal", "rl2_terminal_grant");
+    const firstLaunch = harness([match], [replay]);
+    firstLaunch.websiteRequest.mockRejectedValueOnce(Object.assign(new Error("legacy hub"), {
+      status: 409,
+      code: "account_hub_required",
+      retryable: false
+    }));
+
+    await expect(firstLaunch.service.attachWebReplayToSyncedHubMatches(match.id, "rl2_terminal_grant", "account-1"))
+      .resolves.toBe(0);
+    expect(Object.values(firstLaunch.current().privateHubWebReplayGrantRetries ?? {})).toEqual([
+      expect.objectContaining({ attempts: 1, terminal: true, status: 409, code: "account_hub_required" })
+    ]);
+
+    const restarted = harness(firstLaunch.matches(), [replay], firstLaunch.current());
+    await expect(restarted.service.backfillPrivateHubWebReplayIds()).resolves.toBe(0);
+    expect(restarted.websiteRequest).not.toHaveBeenCalled();
+  });
+
+  it("single-flights concurrent grant requests for the same hub match and replay", async () => {
+    const match = {
+      id: "single-flight-grant",
+      myName: "Player",
+      sync: { community: "disabled", hubs: { "member-hub": "synced" }, teams: {} }
+    } as MatchDraft;
+    const replay = uploadedReplay(match.id, "local-single-flight", "rl2_single_flight");
+    const { service, websiteRequest } = harness([match], [replay]);
+    let release!: () => void;
+    websiteRequest.mockImplementationOnce(() => new Promise<Record<string, unknown>>((resolve) => {
+      release = () => resolve({ ok: true });
+    }));
+
+    const first = service.attachWebReplayToSyncedHubMatches(match.id, "rl2_single_flight", "account-1");
+    const second = service.attachWebReplayToSyncedHubMatches(match.id, "rl2_single_flight", "account-1");
+    await vi.waitFor(() => expect(websiteRequest).toHaveBeenCalledOnce());
+    release();
+
+    await expect(Promise.all([first, second])).resolves.toEqual(expect.arrayContaining([0, 1]));
+    expect(websiteRequest).toHaveBeenCalledOnce();
+  });
+
+  it("bounds startup grant backfill to ten network attempts", async () => {
+    const matches = Array.from({ length: 12 }, (_, index) => ({
+      id: `bounded-match-${index}`,
+      myName: "Player",
+      sync: { community: "disabled", hubs: { "member-hub": "synced" }, teams: {} }
+    })) as MatchDraft[];
+    const replays = matches.map((match, index) => (
+      uploadedReplay(match.id, `bounded-replay-${index}`, `rl2_bounded_${index}`)
+    ));
+    const { service, websiteRequest } = harness(matches, replays);
+
+    await expect(service.backfillPrivateHubWebReplayIds()).resolves.toBe(10);
+    expect(websiteRequest).toHaveBeenCalledTimes(10);
+  });
+
   it("durably associates a TCGA Web Replay even when no local ReplayRecord was kept", async () => {
     const match = {
       id: "tcga-no-local-replay",
@@ -230,7 +322,13 @@ describe("FirebaseSyncService private hub lifecycle", () => {
       webReplayAccountUid: "account-1"
     });
 
-    const restarted = harness(firstLaunch.matches(), []);
+    const retryState = Object.fromEntries(Object.entries(firstLaunch.current().privateHubWebReplayGrantRetries ?? {}).map(
+      ([key, value]) => [key, { ...value, nextAttemptAt: "2026-07-01T00:00:00.000Z" }]
+    ));
+    const restarted = harness(firstLaunch.matches(), [], {
+      ...firstLaunch.current(),
+      privateHubWebReplayGrantRetries: retryState
+    });
     await expect(restarted.service.backfillPrivateHubWebReplayIds()).resolves.toBe(1);
     expect(restarted.websiteRequest).toHaveBeenCalledWith(
       "/api/hubs/member-hub/matches/transient-association/web-replay",
@@ -385,11 +483,19 @@ describe("FirebaseSyncService private hub lifecycle", () => {
         uploadId: `rl2_historical_${index + 1}`
       }
     })) as ReplayRecord[];
-    const { service, websiteRequest } = harness(matches, replays);
+    const { service, store, websiteRequest, current } = harness(matches, replays);
     websiteRequest.mockRejectedValueOnce(new Error("temporary failure"));
 
     await expect(service.backfillPrivateHubWebReplayIds()).resolves.toBe(1);
     websiteRequest.mockClear();
+    await expect(service.backfillPrivateHubWebReplayIds()).resolves.toBe(0);
+    expect(websiteRequest).not.toHaveBeenCalled();
+
+    await store.saveSettings({
+      privateHubWebReplayGrantRetries: Object.fromEntries(Object.entries(current().privateHubWebReplayGrantRetries ?? {}).map(
+        ([key, value]) => [key, { ...value, nextAttemptAt: "2026-07-01T00:00:00.000Z" }]
+      ))
+    });
     await expect(service.backfillPrivateHubWebReplayIds()).resolves.toBe(1);
 
     expect(websiteRequest).toHaveBeenCalledOnce();

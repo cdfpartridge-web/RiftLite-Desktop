@@ -12,6 +12,7 @@ describe("release packaging continuity", () => {
   it("keeps the installed identity, protocol, updater, and installer name stable", () => {
     const manifest = JSON.parse(readFileSync(resolve(projectDirectory, "package.json"), "utf8")) as {
       version: string;
+      devDependencies: Record<string, string>;
       build: {
         appId: string;
         productName: string;
@@ -19,10 +20,13 @@ describe("release packaging continuity", () => {
         artifactName: string;
         protocols: Array<{ schemes: string[] }>;
         publish: Array<{ provider: string; owner: string; repo: string }>;
+        toolsets: { nsis: string };
       };
     };
 
-    expect(manifest.version).toBe("0.9.42");
+    expect(manifest.version).toBe("0.9.51");
+    expect(manifest.devDependencies["electron-builder"]).toBe("26.15.3");
+    expect(manifest.build.toolsets.nsis).toBe("1.2.1");
     expect(manifest.build).toMatchObject({
       appId: "com.riftlite.desktop.beta06",
       productName: "RiftLite Beta 0.9",
@@ -146,6 +150,7 @@ describe("release packaging continuity", () => {
     };
     const smokeRunner = readFileSync(resolve(projectDirectory, "scripts", "run-electron-smoke.mjs"), "utf8");
     const windowsVerifier = readFileSync(resolve(projectDirectory, "scripts", "verify-release-artifacts.mjs"), "utf8");
+    const windowsMetadataVerifier = readFileSync(resolve(projectDirectory, "scripts", "verify-windows-release.ps1"), "utf8");
 
     expect(manifest.scripts["electron:smoke"]).toContain("run-electron-smoke.mjs --development");
     expect(manifest.scripts["release:smoke:packaged"]).toContain("run-electron-smoke.mjs --packaged");
@@ -155,9 +160,16 @@ describe("release packaging continuity", () => {
     expect(smokeRunner).toContain("RIFTLITE_SMOKE_ROOT_PATH: smokeRoot");
     expect(smokeRunner).toContain('join(smokeRoot, "UserData", "riftlite-startup.log")');
     expect(smokeRunner).toContain("rendererReady !== true");
+    expect(smokeRunner).toContain("resolveReleaseDirectory(projectDirectory)");
     expect(windowsVerifier).toContain('join(unpackedDirectory, "resources", "app-update.yml")');
     expect(windowsVerifier).toContain("gunzipSync(readFileSync(blockmapPath))");
-    expect(windowsVerifier).toContain('["blockmap", "--input", installerPath, "--output", regeneratedBlockmapPath]');
+    expect(windowsVerifier).toContain('await buildBlockMap(installerPath, "gzip", regeneratedBlockmapPath)');
+    expect(windowsVerifier).toContain("const sevenZipPath = await getPath7za()");
+    expect(windowsVerifier).toContain('execFileSync(sevenZipPath, ["t", installerPath]');
     expect(windowsVerifier).toContain('execFileSync(ffmpegPath, ["-version"]');
+    expect(windowsVerifier).toContain("resolveReleaseDirectory(projectDirectory)");
+    expect(windowsVerifier).not.toContain("app-builder-bin");
+    expect(windowsMetadataVerifier).toContain('Join-Path $PSScriptRoot "release-directory.mjs"');
+    expect(windowsMetadataVerifier).not.toContain("7zip-bin");
   });
 });

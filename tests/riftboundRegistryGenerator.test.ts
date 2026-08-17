@@ -12,6 +12,7 @@ function sourceCard(overrides: Record<string, unknown> = {}) {
     id: "source-1",
     name: "Defender of Tomorrow",
     riftbound_id: "ven-194-166",
+    attributes: { energy: null, might: null, power: null },
     classification: { type: "Legend", supertype: null },
     set: { set_id: "VEN", label: "Vendetta" },
     media: {
@@ -87,6 +88,31 @@ describe("RiftCodex registry generator", () => {
     });
   });
 
+  it("preserves validated printed Energy and Power costs", () => {
+    const normalized = normalizeSourceCard(sourceCard({
+      name: "Vi - Destructive",
+      riftbound_id: "ogn-036-298",
+      attributes: { energy: 2, might: 3, power: 1 },
+      classification: { type: "Unit", supertype: "Champion" },
+      set: { set_id: "OGN", label: "Origins" },
+      tags: ["Vi", "Piltover"],
+    }), "OGN");
+
+    expect(normalized).toMatchObject({
+      printId: "OGN-036",
+      type: "Unit",
+      costEnergy: 2,
+      costPower: 1,
+    });
+
+    expect(() => normalizeSourceCard(sourceCard({
+      attributes: { energy: -1, might: null, power: null },
+    }), "VEN")).toThrow(/Energy cost must be a non-negative integer/i);
+    expect(() => normalizeSourceCard(sourceCard({
+      attributes: { energy: 2, might: null, power: 1.5 },
+    }), "VEN")).toThrow(/Power cost must be a non-negative integer/i);
+  });
+
   it("deduplicates repeated source rows without losing aliases or source ids", () => {
     const first = normalizeSourceCard(sourceCard(), "VEN");
     const second = normalizeSourceCard(sourceCard({
@@ -115,6 +141,18 @@ describe("RiftCodex registry generator", () => {
       imageHash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     };
     expect(() => dedupeCards([first, second])).toThrow(/multiple images/i);
+  });
+
+  it("fails closed when duplicate source rows disagree on printed costs", () => {
+    const first = normalizeSourceCard(sourceCard({
+      attributes: { energy: 2, might: 3, power: 1 },
+    }), "VEN");
+    const second = normalizeSourceCard(sourceCard({
+      id: "source-2",
+      attributes: { energy: 3, might: 3, power: 1 },
+    }), "VEN");
+
+    expect(() => dedupeCards([first, second])).toThrow(/multiple printed costs/i);
   });
 
   it("keeps observed TCGA alternate artwork hashes attached to their exact print", () => {

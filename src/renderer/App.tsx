@@ -1,9 +1,11 @@
 import React, { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import QRCode from "qrcode";
+import cardRegistryData from "../../resources/riftbound_card_registry.json";
 import {
   Activity,
   AlertTriangle,
+  ArrowLeftRight,
   BarChart3,
   Bell,
   BookOpen,
@@ -155,7 +157,7 @@ import type {
 } from "../shared/types";
 import { buildAtlasReplay, replaySnapshotCardCount, type AtlasReplayViewModel, type ReplayTimelineEvent, type ReplayTurnView } from "../shared/atlasReplay";
 import { getRiftLiteAccountState, hasVerifiedRiftLiteAccount, isGenericAccountDisplayName } from "../shared/accountIdentity";
-import { accountLinkUrlForProvider, type AccountLinkProvider } from "../shared/accountLink";
+import { accountLinkErrorMessage, accountLinkUrlForProvider, type AccountLinkProvider } from "../shared/accountLink";
 import {
   accountMigrationProgress,
   activeDeckSyncConfidence,
@@ -249,8 +251,76 @@ import {
   shouldRestoreGameWebviewFocus
 } from "../shared/gameWebview";
 import { communitySpotlightTheme } from "../shared/communitySpotlightThemes";
+import { HOME_DECK_DOMAIN_COLORS, homeDeckThemeForLegend } from "../shared/homeDeckTheme";
+import {
+  HOME_THEME_INTRO_LOCAL_STORAGE_KEY,
+  initialHomeThemeIntroState,
+  parseHomeThemeIntroState,
+  seenHomeThemeIntroState,
+  serializeHomeThemeIntroState,
+  type HomeThemeIntroState
+} from "../shared/homeThemeIntro";
+import {
+  TRAINING_LABS_INTRO_LOCAL_STORAGE_KEY,
+  initialTrainingLabsIntroState,
+  parseTrainingLabsIntroState,
+  seenTrainingLabsIntroState,
+  serializeTrainingLabsIntroState,
+  type TrainingLabsIntroState
+} from "../shared/trainingLabsIntro";
 import { communitySpotlightTarget } from "../shared/communitySpotlightNavigation";
 import { buildSymmetricMatchupMatrix } from "../shared/matchupMatrix";
+import {
+  MULLIGAN_LAB_INTRO_LOCAL_STORAGE_KEY,
+  parseMulliganLabIntroState,
+  seenMulliganLabIntroState,
+  serializeMulliganLabIntroState
+} from "../shared/mulliganLabIntro";
+import {
+  consumeLabTrainingHandoff,
+  createLabTrainingHandoff,
+  resolveLabTrainingDeckId,
+  storeLabTrainingHandoff,
+  type LabTrainingDestination
+} from "../shared/labTrainingHandoff";
+import {
+  MULLIGAN_LAB_MIN_ELIGIBLE_HANDS,
+  MULLIGAN_LAB_MIN_UNIQUE_PLAYERS,
+  MULLIGAN_LAB_TRAINING_STORAGE_KEY,
+  buildMulliganLabRegistry,
+  completeMulliganLabTrainingSession,
+  initialMulliganLabTrainingState,
+  mulliganLabApiDeckFingerprintFromSnapshot,
+  mulliganLabChoiceEvidence,
+  mulliganLabCurveCheck,
+  mulliganLabDeckCurveProfile,
+  mulliganLabIdentityDecisions,
+  mulliganLabLegendCodeFromSnapshot,
+  mulliganLabLegendOptions,
+  mulliganLabMasterySummary,
+  mulliganLabReplacementOddsForDrill,
+  mulliganLabReviewProgressForAnswer,
+  mulliganLabReviewDrillIds,
+  mulliganLabScenarioUsefulness,
+  rankMulliganLabDailyDrills,
+  parseMulliganLabApiResponse,
+  parseMulliganLabTargetPackResponse,
+  parseMulliganLabTrainingState,
+  recordMulliganLabTrainingAnswer,
+  serializeMulliganLabTrainingState,
+  type MulliganLabApiDrill,
+  type MulliganLabApiParseResult,
+  type MulliganLabCardStats,
+  type MulliganLabCurveCheck,
+  type MulliganLabDeckCurveProfile,
+  type MulliganLabDecisionEvidence,
+  type MulliganLabExerciseCard,
+  type MulliganLabIdentityDecision,
+  type MulliganLabRegistryCard,
+  type MulliganLabReplacementOdds,
+  type MulliganLabTrainingState
+} from "../shared/mulliganLab";
+import { labWilsonInterval, type LabDecisionConfidence } from "../shared/labTraining";
 import {
   invalidateAccountRestoreCommunityCaches,
   loadAccountRestoreLocalData
@@ -283,6 +353,14 @@ import {
   type NavigationTarget
 } from "../shared/navigationModel";
 import { GuidedTour } from "./GuidedTour";
+import { HomeDeckThemeIntro } from "./HomeDeckThemeIntro";
+import {
+  HomeLiveTakeoverPlayer,
+  type HomeLiveTakeoverPlayerHandle,
+} from "./HomeLiveTakeoverPlayer";
+import { MulliganLabIntro } from "./MulliganLabIntro";
+import { SideboardLabView } from "./SideboardLabView";
+import { TrainingLabsIntro } from "./TrainingLabsIntro";
 import { resolveBundledReplayCardImage, RiftLiteReplayViewer } from "./RiftLiteReplayViewer";
 import { SettingsAccordionSection } from "./SettingsAccordionSection";
 import {
@@ -295,10 +373,10 @@ import { bindGameWebviewEvents } from "./gameWebviewEvents";
 import {
   DEFAULT_HOME_FEATURED_VIDEOS,
   HOME_FEED_REFRESH_MS,
-  HOME_LIVE_TAKEOVER_REFRESH_MS,
   homeCreatorVideoDateLabel,
   homeCreatorVideoFeedFromConfig,
   homeLiveTakeoverFromConfig,
+  homeLiveTakeoverRefreshMs,
   nextHomeCreatorVideoIndex,
   resolveHomeConfigUrl,
   resolveHomeLiveTakeoverUrl,
@@ -364,6 +442,7 @@ const FALLBACK_BOOT_SETTINGS: UserSettings = {
   firstRunComplete: true,
   lastSeenVersion: RIFTLITE_BUILD_IDENTITY.displayVersion,
   defaultGamePlatform: "tcga",
+  homeDeckThemeEnabled: false,
   syncMode: "community-and-hubs",
   communitySyncEnabled: true,
   firebaseUid: "",
@@ -480,10 +559,20 @@ type HomeFeaturedPartner = {
   imageUrl?: string;
 };
 
+type MulliganLabMode = "daily" | "active-deck" | "matchup" | "mixed" | "review";
+
 const HOME_CONFIG_URL = resolveHomeConfigUrl(
   (import.meta as ImportMeta & { readonly env?: Record<string, string | undefined> }).env?.VITE_RIFTLITE_HOME_CONFIG_URL
 );
 const HOME_LIVE_TAKEOVER_URL = resolveHomeLiveTakeoverUrl(HOME_CONFIG_URL);
+const MULLIGAN_LAB_URL = new URL("/api/app/mulligan-lab", HOME_CONFIG_URL).toString();
+const MULLIGAN_LAB_TARGET_URL = new URL("/api/app/mulligan-lab/v2", HOME_CONFIG_URL).toString();
+const SIDEBOARD_LAB_URL = new URL("/api/app/sideboard-lab", HOME_CONFIG_URL).toString();
+const MULLIGAN_LAB_REGISTRY = buildMulliganLabRegistry(cardRegistryData);
+const LAB_TRAINING_LEGEND_NAME_BY_CANONICAL = new Map(
+  mulliganLabLegendOptions(MULLIGAN_LAB_REGISTRY).map((card) => [normalizeLegendName(card.name), card.name])
+);
+const LAB_TRAINING_LEGEND_NAMES = new Set(LAB_TRAINING_LEGEND_NAME_BY_CANONICAL.keys());
 const RELEASE_NOTES = {
   version: APP_VERSION_META,
   title: `RiftLite v${APP_VERSION_META}`,
@@ -641,6 +730,38 @@ function clearGuidedTourState() {
     window.localStorage.removeItem(GUIDED_TOUR_LOCAL_STORAGE_KEY);
   } catch {
     // Resetting help should never block the rest of the app.
+  }
+}
+
+function readHomeThemeIntroState(): HomeThemeIntroState {
+  try {
+    return parseHomeThemeIntroState(window.localStorage.getItem(HOME_THEME_INTRO_LOCAL_STORAGE_KEY));
+  } catch {
+    return initialHomeThemeIntroState();
+  }
+}
+
+function writeHomeThemeIntroState(state: HomeThemeIntroState) {
+  try {
+    window.localStorage.setItem(HOME_THEME_INTRO_LOCAL_STORAGE_KEY, serializeHomeThemeIntroState(state));
+  } catch {
+    // This one-time presentation remains dismissible for the current session.
+  }
+}
+
+function readTrainingLabsIntroState(): TrainingLabsIntroState {
+  try {
+    return parseTrainingLabsIntroState(window.localStorage.getItem(TRAINING_LABS_INTRO_LOCAL_STORAGE_KEY));
+  } catch {
+    return initialTrainingLabsIntroState();
+  }
+}
+
+function writeTrainingLabsIntroState(state: TrainingLabsIntroState) {
+  try {
+    window.localStorage.setItem(TRAINING_LABS_INTRO_LOCAL_STORAGE_KEY, serializeTrainingLabsIntroState(state));
+  } catch {
+    // The guide remains dismissible for this session when presentation state cannot be persisted.
   }
 }
 
@@ -2902,6 +3023,9 @@ function App() {
   const [updatePromptDismissedFor, setUpdatePromptDismissedFor] = useState("");
   const [releaseNotesOpen, setReleaseNotesOpen] = useState(false);
   const [guidedTourState, setGuidedTourState] = useState<GuidedTourState | null>(null);
+  const [homeThemeIntroState, setHomeThemeIntroState] = useState<HomeThemeIntroState | null>(null);
+  const [trainingLabsIntroState, setTrainingLabsIntroState] = useState<TrainingLabsIntroState | null>(null);
+  const [homeThemeIntroBusy, setHomeThemeIntroBusy] = useState(false);
   const [firstMatchOnboarding, setFirstMatchOnboarding] = useState<FirstMatchOnboardingState | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [expandedNavGroup, setExpandedNavGroup] = useState<NavigationDisclosureId | null>(null);
@@ -2914,6 +3038,8 @@ function App() {
   const [matchFocusTarget, setMatchFocusTarget] = useState<MatchFocusTarget | null>(null);
   const [focusedReplayId, setFocusedReplayId] = useState("");
   const guidedTourInitializedRef = useRef(false);
+  const homeThemeIntroInitializedRef = useRef(false);
+  const trainingLabsIntroInitializedRef = useRef(false);
   const firstMatchOnboardingInitializedRef = useRef(false);
   const guidedTourReplayRef = useRef(false);
   const guidedTourRestoreRef = useRef<{
@@ -2973,6 +3099,16 @@ function App() {
   const playActiveDeck = useMemo(
     () => settings?.activeDeckId ? decks.find((deck) => deck.id === settings.activeDeckId) ?? null : null,
     [decks, settings?.activeDeckId]
+  );
+  const homeDeckThemePreview = useMemo(
+    () => homeDeckThemeForLegend(playActiveDeck?.legend),
+    [playActiveDeck?.legend]
+  );
+  const activeHomeDeckTheme = useMemo(
+    () => settings?.homeDeckThemeEnabled && activeView === "home"
+      ? homeDeckThemePreview
+      : null,
+    [activeView, homeDeckThemePreview, settings?.homeDeckThemeEnabled]
   );
   const previousMatchFlags = useMemo(() => previousFlagsFromMatches(matches), [matches]);
   const activeTestingSession = useMemo(
@@ -3119,6 +3255,52 @@ function App() {
     showActionFeedback("The first-launch tour will open the next time RiftLite starts.");
   }
 
+  function finishHomeThemeIntro() {
+    const next = seenHomeThemeIntroState();
+    writeHomeThemeIntroState(next);
+    setHomeThemeIntroState(next);
+  }
+
+  function finishTrainingLabsIntro() {
+    const next = seenTrainingLabsIntroState();
+    writeTrainingLabsIntroState(next);
+    setTrainingLabsIntroState(next);
+  }
+
+  function openTrainingLabFromIntro(view: "mulligan-lab" | "sideboard-lab") {
+    finishTrainingLabsIntro();
+    openView(view);
+  }
+
+  function reopenTrainingLabsIntro() {
+    setReleaseNotesOpen(false);
+    setTrainingLabsIntroState(initialTrainingLabsIntroState());
+  }
+
+  async function enableHomeDeckThemeFromIntro() {
+    if (homeThemeIntroBusy) return;
+    setHomeThemeIntroBusy(true);
+    try {
+      await saveSettings({ homeDeckThemeEnabled: true });
+      finishHomeThemeIntro();
+      showActionFeedback("Home will now follow your active deck's two-domain palette.");
+    } catch (error) {
+      showActionFeedback(error instanceof Error ? error.message : "The Home theme could not be enabled.", 5_000);
+    } finally {
+      setHomeThemeIntroBusy(false);
+    }
+  }
+
+  function openHomeThemeSettingsFromIntro() {
+    finishHomeThemeIntro();
+    openView("settings");
+    window.setTimeout(() => {
+      const card = document.getElementById("home-theme-settings");
+      card?.scrollIntoView({ behavior: "smooth", block: "center" });
+      card?.querySelector<HTMLElement>('input[type="checkbox"]')?.focus({ preventScroll: true });
+    }, 120);
+  }
+
   function persistFirstMatchOnboarding(next: FirstMatchOnboardingState) {
     writeFirstMatchOnboardingState(next);
     setFirstMatchOnboarding(next);
@@ -3263,6 +3445,38 @@ function App() {
     setSidebarCollapsed(false);
     setGuidedTourState(stored);
   }, [settings]);
+
+  useEffect(() => {
+    if (!settings || homeThemeIntroInitializedRef.current) {
+      return;
+    }
+    homeThemeIntroInitializedRef.current = true;
+    const stored = readHomeThemeIntroState();
+    if (settings.homeDeckThemeEnabled && stored.status === "pending") {
+      const seen = seenHomeThemeIntroState();
+      writeHomeThemeIntroState(seen);
+      setHomeThemeIntroState(seen);
+      return;
+    }
+    setHomeThemeIntroState(stored);
+  }, [settings]);
+
+  useEffect(() => {
+    if (!settings || trainingLabsIntroInitializedRef.current) {
+      return;
+    }
+    trainingLabsIntroInitializedRef.current = true;
+    setTrainingLabsIntroState(readTrainingLabsIntroState());
+  }, [settings]);
+
+  useEffect(() => {
+    if (!settings?.homeDeckThemeEnabled || homeThemeIntroState?.status !== "pending") {
+      return;
+    }
+    const seen = seenHomeThemeIntroState();
+    writeHomeThemeIntroState(seen);
+    setHomeThemeIntroState(seen);
+  }, [homeThemeIntroState?.status, settings?.homeDeckThemeEnabled]);
 
   useEffect(() => {
     if (!settings || firstMatchOnboardingInitializedRef.current) {
@@ -4000,17 +4214,26 @@ function App() {
 
   async function forceCaptureReview() {
     showActionFeedback("Opening review from retained capture data...");
-    const draft = await window.riftlite.forceCaptureReview(activePlatform);
-    if (!draft) {
-      await openLatestPendingReview();
-      showActionFeedback(`No active ${activePlatform === "tcga" ? "TCGA" : "Atlas"} capture data to force yet.`);
-      return;
+    try {
+      const draft = await window.riftlite.forceCaptureReview(activePlatform);
+      if (!draft) {
+        await openLatestPendingReview();
+        showActionFeedback(`No active ${activePlatform === "tcga" ? "TCGA" : "Atlas"} capture data to force yet.`);
+        return;
+      }
+      const repairedDraft = prepareDraftForReview(draft);
+      clearDismissedReview(repairedDraft);
+      setReviewDraft(repairedDraft);
+      setMatches((current) => upsertMatchPreservingOrder(current, repairedDraft));
+      showActionFeedback("Review popup opened.");
+    } catch (error) {
+      showActionFeedback(
+        error instanceof Error
+          ? error.message
+          : "Capture cleanup is still finishing. The capture is preserved; try Stop again shortly.",
+        8_000
+      );
     }
-    const repairedDraft = prepareDraftForReview(draft);
-    clearDismissedReview(repairedDraft);
-    setReviewDraft(repairedDraft);
-    setMatches((current) => upsertMatchPreservingOrder(current, repairedDraft));
-    showActionFeedback("Review popup opened.");
   }
 
   async function dismissReviewDraft(draft: MatchDraft) {
@@ -6430,6 +6653,8 @@ function App() {
     scorepad: "Scorepad",
     matches: "Matches",
     stats: "Stats",
+    "mulligan-lab": "Mulligan Lab",
+    "sideboard-lab": "Sideboard Lab",
     "matchup-lab": "Matchup Lab",
     spotlight: "Spotlight",
     community: activeCommunityTab === "community-decks" ? "Community Decks" : activeCommunityTab === "recent-matches" ? "Community Matches" : "Meta & Matrix",
@@ -6449,6 +6674,8 @@ function App() {
     scorepad: "Score table games or quick-log event matches without sending them to public community stats.",
     matches: "Review, correct, and track locally captured matches.",
     stats: "Personal performance from local RiftLite history.",
+    "mulligan-lab": "Practise opening-hand choices against exact, anonymised RiftLite capture data.",
+    "sideboard-lab": "Practise balanced Game 2 swaps against finalized, anonymous community sideboard patterns.",
     "matchup-lab": "Study your toughest pairings with personal stats, community context, prep notes, and replay evidence.",
     spotlight: "Featured Riftbound creators, teams, and community projects.",
     community: activeCommunityTab === "community-decks" ? "Visual deck meta from public community-submitted deck data." : "Community data remains compatible with the existing RiftLite website.",
@@ -6471,6 +6698,24 @@ function App() {
   const showUpdatePrompt =
     (updateStatus.state === "available" || updateStatus.state === "downloading" || updateStatus.state === "downloaded") &&
     updatePromptDismissedFor !== updatePromptKey;
+  const showHomeThemeIntro = homeThemeIntroState?.status === "pending"
+    && activeView === "home"
+    && !settings.homeDeckThemeEnabled
+    && trainingLabsIntroState?.status !== "pending"
+    && !releaseNotesOpen
+    && guidedTourState?.status !== "active"
+    && !showUpdatePrompt
+    && !reviewDraft
+    && !atlasRecoverySuggested
+    && !captureNotice;
+  const showTrainingLabsIntro = trainingLabsIntroState?.status === "pending"
+    && activeView === "home"
+    && !releaseNotesOpen
+    && guidedTourState?.status !== "active"
+    && !showUpdatePrompt
+    && !reviewDraft
+    && !atlasRecoverySuggested
+    && !captureNotice;
   const navOwner = navigationOwner({
     view: activeView,
     deckFocus: deckFocusTarget,
@@ -6502,10 +6747,21 @@ function App() {
   const atlasKnownHandTitle = atlasKnownHandShortcutAvailable
     ? "Known opponent hand (F12)"
     : "Known opponent hand (F12 is assigned to another RiftLite shortcut)";
+  const homeDeckThemeStyle = activeHomeDeckTheme ? {
+    "--home-theme-primary": activeHomeDeckTheme.primary,
+    "--home-theme-secondary": activeHomeDeckTheme.secondary,
+    "--home-theme-primary-rgb": activeHomeDeckTheme.primaryRgb,
+    "--home-theme-secondary-rgb": activeHomeDeckTheme.secondaryRgb,
+    "--home-theme-button-start": activeHomeDeckTheme.buttonStart,
+    "--home-theme-button-end": activeHomeDeckTheme.buttonEnd,
+    "--home-theme-button-text": activeHomeDeckTheme.buttonText
+  } as React.CSSProperties : undefined;
 
   return (
     <main
       className={`app-shell ui-dev-modern ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}
+      data-home-deck-theme={activeHomeDeckTheme?.id}
+      style={homeDeckThemeStyle}
       onPointerDownCapture={() => {
         if (activeViewRef.current === "play") {
           void armReplayVideoSource(activePlatform, true);
@@ -6604,10 +6860,29 @@ function App() {
           </div>
           {activeView === "home" ? (
             <div className="top-actions home-top-actions">
-              <span className="segmented home-default-platform" title="Change the default game from Play now on Home">
+              <button
+                type="button"
+                className="segmented home-default-platform"
+                data-platform={settings.defaultGamePlatform}
+                onClick={() => void saveDefaultGamePlatform(settings.defaultGamePlatform === "atlas" ? "tcga" : "atlas")}
+                title={`Switch default game to ${settings.defaultGamePlatform === "atlas" ? "TCGA" : "Atlas"}`}
+                aria-label={`Default game is ${settings.defaultGamePlatform === "atlas" ? "Atlas" : "TCGA"}. Switch default to ${settings.defaultGamePlatform === "atlas" ? "TCGA" : "Atlas"}`}
+              >
                 <Globe2 size={16} /> Default: {settings.defaultGamePlatform === "atlas" ? "Atlas" : "TCGA"}
-              </span>
+              </button>
               <button className="segmented icon-segment" onClick={() => openView("settings")} title="Settings" aria-label="Settings"><Settings size={17} /></button>
+              <button
+                type="button"
+                className="segmented icon-segment home-training-labs-guide"
+                onClick={reopenTrainingLabsIntro}
+                title="Training Labs guide"
+                aria-label="Open the Mulligan Lab and Sideboard Lab guide"
+                aria-haspopup="dialog"
+                aria-controls="training-labs-intro-dialog"
+                aria-expanded={showTrainingLabsIntro}
+              >
+                <Sparkles size={17} />
+              </button>
               <button className="primary home-top-play" onClick={() => health.state === "review-needed" ? openView("matches") : void chooseGamePlatform(settings.defaultGamePlatform, true)}>
                 {health.state === "review-needed" ? <ClipboardList size={17} /> : <Play size={17} />}
                 {health.state === "review-needed" ? "Open review" : `Play on ${settings.defaultGamePlatform === "atlas" ? "Atlas" : "TCGA"}`}
@@ -6929,6 +7204,23 @@ function App() {
           onFinish={finishGuidedTour}
         />
       ) : null}
+      {showTrainingLabsIntro ? (
+        <TrainingLabsIntro
+          onOpenMulligan={() => openTrainingLabFromIntro("mulligan-lab")}
+          onOpenSideboard={() => openTrainingLabFromIntro("sideboard-lab")}
+          onDismiss={finishTrainingLabsIntro}
+        />
+      ) : null}
+      {showHomeThemeIntro ? (
+          <HomeDeckThemeIntro
+            legend={normalizeLegendName(playActiveDeck?.legend ?? "")}
+            theme={homeDeckThemePreview}
+            busy={homeThemeIntroBusy}
+            onEnable={() => void enableHomeDeckThemeFromIntro()}
+            onOpenSettings={openHomeThemeSettingsFromIntro}
+            onDismiss={finishHomeThemeIntro}
+          />
+        ) : null}
       {atlasRecoverySuggested && activePlatform === "atlas" ? (
         <div className="atlas-recovery-prompt" role="alert" data-atlas-recovery-prompt>
           <AlertTriangle size={20} />
@@ -6964,7 +7256,7 @@ function App() {
           </div>
         </div>
       ) : null}
-      {firstMatchOnboarding?.status === "pending" && guidedTourState?.status !== "active" ? (
+      {firstMatchOnboarding?.status === "pending" && guidedTourState?.status !== "active" && !showTrainingLabsIntro && !showHomeThemeIntro ? (
         <aside className="first-match-onboarding" role="status" aria-live="polite" data-view={activeView}>
           <span className="first-match-onboarding-icon" aria-hidden="true"><Sparkles size={19} /></span>
           <div>
@@ -7196,6 +7488,8 @@ function navigationIcon(id: string): React.ReactNode {
     case "prepare":
     case "matchup-prep": return <BookOpen size={19} />;
     case "deck-library": return <Layers size={19} />;
+    case "mulligan-lab": return <RotateCcw size={19} />;
+    case "sideboard-lab": return <ArrowLeftRight size={19} />;
     case "matchup-lab":
     case "meta-matrix": return <Activity size={19} />;
     case "community":
@@ -8634,14 +8928,14 @@ function HomeView({
     () => [...decks].sort((left, right) => right.lastImportedAt.localeCompare(left.lastImportedAt))[0] ?? null,
     [decks]
   );
-  const featuredDeck = mostRecentlyPlayedPerformance?.deck ?? activeDeck ?? mostRecentlyImportedDeck;
+  const featuredDeck = activeDeck ?? mostRecentlyPlayedPerformance?.deck ?? mostRecentlyImportedDeck;
   const featuredDeckPerformance = featuredDeck
     ? deckPerformances.find((performance) => performance.deck.id === featuredDeck.id) ?? buildDeckPerformance(featuredDeck, matches)
     : null;
-  const featuredDeckSource = mostRecentlyPlayedPerformance?.deck.id === featuredDeck?.id
-    ? "Recently played"
-    : activeDeck?.id === featuredDeck?.id
-      ? "Active deck"
+  const featuredDeckSource = activeDeck?.id === featuredDeck?.id
+    ? "Active deck"
+    : mostRecentlyPlayedPerformance?.deck.id === featuredDeck?.id
+      ? "Recently played"
       : featuredDeck
         ? "Latest import"
         : "Your deck at a glance";
@@ -8675,6 +8969,7 @@ function HomeView({
   const [playingHomeVideoId, setPlayingHomeVideoId] = useState("");
   const [liveTakeover, setLiveTakeover] = useState<HomeLiveTakeover | null>(null);
   const liveTakeoverRef = useRef<HomeLiveTakeover | null>(null);
+  const liveTakeoverPlayerRef = useRef<HomeLiveTakeoverPlayerHandle | null>(null);
   const [dismissedLiveTakeoverKey, setDismissedLiveTakeoverKey] = useState(() => {
     try {
       return window.sessionStorage.getItem("riftlite:home-live-takeover-dismissed") ?? "";
@@ -8811,19 +9106,47 @@ function HomeView({
     let mounted = true;
     let inFlight = false;
     let consecutiveFailures = 0;
+    let lastRequestAt = 0;
+    let timer: number | null = null;
     let controller: AbortController | null = null;
+
+    const canRefreshLiveTakeover = () => (
+      document.visibilityState === "visible" && document.hasFocus() && navigator.onLine
+    );
+    const nextRefreshDelay = () => homeLiveTakeoverRefreshMs({
+      visible: document.visibilityState === "visible",
+      focused: document.hasFocus(),
+      online: navigator.onLine,
+      live: Boolean(liveTakeoverRef.current),
+      consecutiveFailures
+    });
+    const scheduleRefresh = (delay = nextRefreshDelay()) => {
+      if (timer !== null) {
+        window.clearTimeout(timer);
+      }
+      if (!mounted) return;
+      timer = window.setTimeout(() => {
+        timer = null;
+        void refreshLiveTakeover();
+      }, Math.max(0, delay));
+    };
 
     const refreshLiveTakeover = async () => {
       if (inFlight) {
         return;
       }
+      if (!canRefreshLiveTakeover()) {
+        scheduleRefresh();
+        return;
+      }
       inFlight = true;
+      lastRequestAt = Date.now();
       const requestController = new AbortController();
       controller = requestController;
       const timeout = window.setTimeout(() => requestController.abort(), 12_000);
       try {
         const response = await fetch(HOME_LIVE_TAKEOVER_URL, {
-          cache: "no-store",
+          cache: "default",
           signal: requestController.signal
         });
         if (!response.ok) {
@@ -8859,14 +9182,35 @@ function HomeView({
         if (controller === requestController) {
           controller = null;
         }
+        if (mounted) {
+          scheduleRefresh();
+        }
       }
     };
 
-    void refreshLiveTakeover();
-    const timer = window.setInterval(() => void refreshLiveTakeover(), HOME_LIVE_TAKEOVER_REFRESH_MS);
+    const handleAvailabilityChange = () => {
+      if (!canRefreshLiveTakeover()) {
+        scheduleRefresh();
+        return;
+      }
+      const delay = nextRefreshDelay();
+      scheduleRefresh(Math.max(0, delay - (Date.now() - lastRequestAt)));
+    };
+
+    document.addEventListener("visibilitychange", handleAvailabilityChange);
+    window.addEventListener("focus", handleAvailabilityChange);
+    window.addEventListener("online", handleAvailabilityChange);
+    window.addEventListener("offline", handleAvailabilityChange);
+    scheduleRefresh(0);
     return () => {
       mounted = false;
-      window.clearInterval(timer);
+      if (timer !== null) {
+        window.clearTimeout(timer);
+      }
+      document.removeEventListener("visibilitychange", handleAvailabilityChange);
+      window.removeEventListener("focus", handleAvailabilityChange);
+      window.removeEventListener("online", handleAvailabilityChange);
+      window.removeEventListener("offline", handleAvailabilityChange);
       controller?.abort();
     };
   }, []);
@@ -8955,6 +9299,7 @@ function HomeView({
     if (!liveTakeoverKey) {
       return;
     }
+    liveTakeoverPlayerRef.current?.dismiss();
     dismissedLiveTakeoverKeyRef.current = liveTakeoverKey;
     setDismissedLiveTakeoverKey(liveTakeoverKey);
     try {
@@ -9107,7 +9452,11 @@ function HomeView({
                 ? `${focusMatchup.record} across ${focusMatchup.total} recorded match${focusMatchup.total === 1 ? "" : "es"}. Compare community data, then add a sideboard or mulligan note.`
                 : "RiftLite uses your saved matches, deck prep, and community context to surface the next useful matchup."}</p>
             </div>
-            <button className="modern-text-action" onClick={() => onNavigate("matchup-lab")}>Open lab</button>
+            <div className="modern-insight-actions">
+              <button className="modern-text-action" onClick={() => onNavigate("mulligan-lab")}><RotateCcw size={14} /> Train mulligans</button>
+              <button className="modern-text-action" onClick={() => onNavigate("sideboard-lab")}><ArrowLeftRight size={14} /> Train sideboarding</button>
+              <button className="modern-text-action" onClick={() => onNavigate("matchup-lab")}>Matchup lab</button>
+            </div>
           </article>
 
           <article className="modern-panel modern-activity-summary">
@@ -9248,15 +9597,10 @@ function HomeView({
             <div className="modern-creator-video-media">
               {activeLiveTakeover ? (
                 <div className="home-video-frame home-live-stream-frame">
-                  <EmbedWebview
+                  <HomeLiveTakeoverPlayer
+                    ref={liveTakeoverPlayerRef}
                     key={activeLiveTakeoverKey}
-                    className="home-embed-webview"
-                    src={activeLiveTakeover.embedUrl}
-                    allow="autoplay; fullscreen; picture-in-picture"
-                    allowpopups="true"
-                    httpreferrer="https://www.riftlite.com/"
-                    partition={`riftlite-home-live-twitch-${activeLiveTakeover.channelLogin}`}
-                    webpreferences="backgroundThrottling=false"
+                    takeover={activeLiveTakeover}
                   />
                 </div>
               ) : featuredVideoPlaying ? (
@@ -9573,6 +9917,1089 @@ function buildDeckComparisonRows(left: DeckComparisonSource | null, right: DeckC
     const statusOrder = { "right-only": 0, shared: 1, "left-only": 2 } as const;
     return statusOrder[a.status] - statusOrder[b.status] || b.importance - a.importance || a.name.localeCompare(b.name);
   });
+}
+
+type MulliganLabLoadState = "loading" | "ready" | "unavailable" | "error";
+type MulliganLabSeatFilter = "all" | "1st" | "2nd";
+
+function MulliganLabView({ decks, settings, onNavigate }: {
+  decks: SavedDeck[];
+  settings: UserSettings;
+  onNavigate: (view: ActiveView, options?: NavigationOptions) => void;
+}) {
+  const [trainingHandoff] = useState(() => {
+    try {
+      return consumeLabTrainingHandoff(window.localStorage, "mulligan");
+    } catch {
+      return null;
+    }
+  });
+  const handoffDeck = trainingHandoff?.deckId ? decks.find((deck) => deck.id === trainingHandoff.deckId) ?? null : null;
+  const activeDeck = handoffDeck ?? (settings.activeDeckId ? decks.find((deck) => deck.id === settings.activeDeckId) ?? null : null);
+  const activeLegend = normalizeLegendName(activeDeck?.legend ?? "");
+  const activeDeckFingerprint = useMemo(
+    () => activeDeck?.snapshotJson
+      ? mulliganLabApiDeckFingerprintFromSnapshot(activeDeck.snapshotJson, MULLIGAN_LAB_REGISTRY)
+      : "",
+    [activeDeck?.snapshotJson]
+  );
+  const activeDeckHasSideboard = useMemo(
+    () => Boolean(activeDeck?.snapshotJson && parseCommunityDeckSnapshot(activeDeck.snapshotJson)?.sideboard.length),
+    [activeDeck?.snapshotJson]
+  );
+  const activeLegendCodeFromSnapshot = useMemo(
+    () => activeDeck?.snapshotJson ? mulliganLabLegendCodeFromSnapshot(activeDeck.snapshotJson, MULLIGAN_LAB_REGISTRY) : "",
+    [activeDeck?.snapshotJson]
+  );
+  const [loadState, setLoadState] = useState<MulliganLabLoadState>("loading");
+  const [pack, setPack] = useState<MulliganLabApiParseResult | null>(null);
+  const [loadMessage, setLoadMessage] = useState("");
+  const [loadNonce, setLoadNonce] = useState(0);
+  const [targetLoadState, setTargetLoadState] = useState<MulliganLabLoadState>("loading");
+  const [targetPack, setTargetPack] = useState<MulliganLabApiParseResult | null>(null);
+  const [targetLoadMessage, setTargetLoadMessage] = useState("");
+  const [targetLoadNonce, setTargetLoadNonce] = useState(0);
+  const [mode, setMode] = useState<MulliganLabMode>(() => trainingHandoff
+    ? handoffDeck && activeDeckFingerprint ? "active-deck" : "matchup"
+    : "daily");
+  const [playerLegend, setPlayerLegend] = useState(() => LAB_TRAINING_LEGEND_NAME_BY_CANONICAL.get(normalizeLegendName(trainingHandoff?.playerLegend ?? "")) ?? "");
+  const [opponentLegend, setOpponentLegend] = useState(() => LAB_TRAINING_LEGEND_NAME_BY_CANONICAL.get(normalizeLegendName(trainingHandoff?.opponentLegend ?? "")) ?? "");
+  const [seat, setSeat] = useState<MulliganLabSeatFilter>(() => trainingHandoff?.wentFirst ?? "all");
+  const [roundIndex, setRoundIndex] = useState(0);
+  const [selectedCardIndexes, setSelectedCardIndexes] = useState<number[]>([]);
+  const [submitted, setSubmitted] = useState(false);
+  const [decisions, setDecisions] = useState<Record<string, number[]>>({});
+  const [reviewQueue, setReviewQueue] = useState<string[]>([]);
+  const [runComplete, setRunComplete] = useState(false);
+  const [selectionNotice, setSelectionNotice] = useState("");
+  const [decisionConfidence, setDecisionConfidence] = useState<LabDecisionConfidence | null>(null);
+  const [decisionStartedAt, setDecisionStartedAt] = useState(() => Date.now());
+  const [zoomedCard, setZoomedCard] = useState<MulliganLabRegistryCard | null>(null);
+  const closeMulliganCardZoom = useCallback(() => setZoomedCard(null), []);
+  const [sessionStartedAt, setSessionStartedAt] = useState(() => new Date().toISOString());
+  const [trainingState, setTrainingState] = useState<MulliganLabTrainingState>(() => {
+    try {
+      return parseMulliganLabTrainingState(window.localStorage.getItem(MULLIGAN_LAB_TRAINING_STORAGE_KEY));
+    } catch {
+      return initialMulliganLabTrainingState();
+    }
+  });
+  const [introOpen, setIntroOpen] = useState(() => {
+    try {
+      return parseMulliganLabIntroState(window.localStorage.getItem(MULLIGAN_LAB_INTRO_LOCAL_STORAGE_KEY)).status === "pending";
+    } catch {
+      return true;
+    }
+  });
+
+  function saveTrainingState(next: MulliganLabTrainingState) {
+    setTrainingState(next);
+    try {
+      window.localStorage.setItem(MULLIGAN_LAB_TRAINING_STORAGE_KEY, serializeMulliganLabTrainingState(next));
+    } catch {
+      // Training remains usable for this session when local storage is unavailable.
+    }
+  }
+
+  useEffect(() => {
+    const controller = new AbortController();
+    let currentDailyRequest = true;
+    const timeout = window.setTimeout(() => controller.abort(), 15_000);
+    setLoadState("loading");
+    setLoadMessage("");
+    void fetch(MULLIGAN_LAB_URL, { cache: "no-store", signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`Community trainer returned ${response.status}.`);
+        const payload = await response.json();
+        if (!currentDailyRequest) return;
+        const parsed = parseMulliganLabApiResponse(payload, MULLIGAN_LAB_REGISTRY);
+        if (!currentDailyRequest) return;
+        setPack(parsed);
+        if (parsed.status === "ready") {
+          setLoadState("ready");
+        } else if (parsed.status === "unavailable") {
+          setLoadState("unavailable");
+        } else {
+          setLoadMessage("The community trainer pack did not pass RiftLite's validation checks.");
+          setLoadState("error");
+        }
+      })
+      .catch((error) => {
+        if (!currentDailyRequest) return;
+        if (controller.signal.aborted) {
+          setLoadMessage("The community trainer did not respond in time.");
+        } else {
+          setLoadMessage(error instanceof Error ? error.message : "The community trainer could not be loaded.");
+        }
+        setPack(null);
+        setLoadState("error");
+      })
+      .finally(() => window.clearTimeout(timeout));
+    return () => {
+      currentDailyRequest = false;
+      window.clearTimeout(timeout);
+      controller.abort();
+    };
+  }, [loadNonce]);
+
+  const registryLegendOptions = useMemo(() => mulliganLabLegendOptions(MULLIGAN_LAB_REGISTRY), []);
+  const playerLegendOptions = useMemo(() => registryLegendOptions.map((card) => card.name), [registryLegendOptions]);
+  const activeLegendOption = registryLegendOptions.find((card) => normalizeLegendName(card.name) === activeLegend) ?? null;
+  const effectivePlayerLegend = playerLegendOptions.includes(playerLegend)
+    ? playerLegend
+    : activeLegendOption
+      ? activeLegendOption.name
+      : playerLegendOptions[0] ?? "";
+  const opponentLegendOptions = playerLegendOptions;
+  const effectiveOpponentLegend = opponentLegendOptions.includes(opponentLegend)
+    ? opponentLegend
+    : opponentLegendOptions[0] ?? "";
+  const selectedPlayerLegendCard = registryLegendOptions.find((card) => card.name === effectivePlayerLegend) ?? null;
+  const selectedOpponentLegendCard = registryLegendOptions.find((card) => card.name === effectiveOpponentLegend) ?? null;
+  const activeDeckLegendCode = activeLegendCodeFromSnapshot || activeLegendOption?.code || "";
+  const targetedMode = mode === "active-deck" || mode === "matchup";
+  const targetPlayerLegendCode = mode === "active-deck" ? activeDeckLegendCode : selectedPlayerLegendCard?.code ?? "";
+  const targetOpponentLegendCode = selectedOpponentLegendCard?.code ?? "";
+
+  useEffect(() => {
+    if (!targetedMode) {
+      setTargetPack(null);
+      setTargetLoadMessage("");
+      return;
+    }
+    if (!targetPlayerLegendCode) {
+      setTargetPack(null);
+      setTargetLoadMessage(mode === "active-deck" ? "Choose an active deck with a registry-confirmed Legend first." : "Choose a registry-confirmed Legend first.");
+      setTargetLoadState("unavailable");
+      return;
+    }
+    const controller = new AbortController();
+    let currentRequest = true;
+    const timeout = window.setTimeout(() => controller.abort(), 15_000);
+    const url = new URL(MULLIGAN_LAB_TARGET_URL);
+    url.searchParams.set("playerLegend", targetPlayerLegendCode);
+    if (targetOpponentLegendCode) url.searchParams.set("opponentLegend", targetOpponentLegendCode);
+    if (mode === "active-deck" && activeDeckFingerprint) url.searchParams.set("deckFingerprint", activeDeckFingerprint);
+    if (seat !== "all") url.searchParams.set("initiative", seat === "1st" ? "first" : "second");
+    url.searchParams.set("limit", "12");
+    setTargetLoadState("loading");
+    setTargetLoadMessage("");
+    setTargetPack(null);
+    void fetch(url.toString(), { cache: "no-store", signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`Full-corpus trainer returned ${response.status}.`);
+        const payload = await response.json();
+        if (!currentRequest) return;
+        const parsed = parseMulliganLabTargetPackResponse(payload, MULLIGAN_LAB_REGISTRY);
+        if (!currentRequest) return;
+        setTargetPack(parsed);
+        if (parsed.status === "ready") setTargetLoadState("ready");
+        else if (parsed.status === "unavailable") setTargetLoadState("unavailable");
+        else {
+          setTargetLoadMessage("The targeted community pack did not pass RiftLite's validation checks.");
+          setTargetLoadState("error");
+        }
+      })
+      .catch((error) => {
+        if (!currentRequest) return;
+        setTargetLoadMessage(controller.signal.aborted
+          ? "The full-corpus trainer did not respond in time."
+          : error instanceof Error ? error.message : "The full-corpus trainer could not be loaded.");
+        setTargetPack(null);
+        setTargetLoadState("error");
+      })
+      .finally(() => window.clearTimeout(timeout));
+    return () => {
+      currentRequest = false;
+      window.clearTimeout(timeout);
+      controller.abort();
+    };
+  }, [activeDeckFingerprint, mode, seat, targetLoadNonce, targetOpponentLegendCode, targetPlayerLegendCode, targetedMode]);
+
+  const effectivePack = targetedMode ? targetPack : pack;
+  const effectiveLoadState = targetedMode ? targetLoadState : loadState;
+  const effectiveLoadMessage = targetedMode ? targetLoadMessage : loadMessage;
+  const readyPack = effectivePack?.status === "ready" ? effectivePack : null;
+  const registryConfirmedDrills = readyPack?.drills ?? [];
+  const reviewDrillIds = useMemo(() => new Set(mulliganLabReviewDrillIds(trainingState)), [trainingState]);
+
+  const filteredDrills = useMemo(() => {
+    let drills = registryConfirmedDrills;
+    if (seat !== "all") drills = drills.filter((drill) => drill.wentFirst === seat);
+    if (mode === "daily") {
+      drills = rankMulliganLabDailyDrills(drills, 5);
+    } else if (mode === "active-deck" || mode === "matchup") {
+      // The targeted endpoint already resolves exact-deck -> matchup ->
+      // player-Legend fallback against the full indexed corpus.
+      drills = drills.slice(0, 12);
+    } else if (mode === "review") {
+      // Freeze this run's queue. Correcting an answer updates future Review
+      // runs without removing the current hand before its reveal can be read.
+      drills = drills.filter((drill) => reviewQueue.includes(drill.id)).slice(0, 10);
+    }
+    return drills;
+  }, [mode, registryConfirmedDrills, reviewQueue, seat]);
+
+  const safeRoundIndex = filteredDrills.length ? Math.min(roundIndex, filteredDrills.length - 1) : 0;
+  const drill = filteredDrills[safeRoundIndex] ?? null;
+  const drillKey = drill ? `${mode}:${drill.id}` : `${mode}:empty`;
+  const runKey = readyPack
+    ? [
+        readyPack.generatedAt,
+        mode,
+        seat,
+        readyPack.targetQuery?.requested.playerLegend ?? (mode === "matchup" ? effectivePlayerLegend : ""),
+        readyPack.targetQuery?.requested.opponentLegend ?? (mode === "matchup" ? effectiveOpponentLegend : ""),
+        readyPack.targetQuery?.requested.deckFingerprint ?? "",
+        readyPack.targetQuery?.requested.initiative ?? "",
+        filteredDrills.map((item) => item.id).join(",")
+      ].join("|")
+    : "";
+  const identityDecisions = drill
+    ? mulliganLabIdentityDecisions(drill.cards, selectedCardIndexes)
+    : [];
+  const curveCheck = drill ? mulliganLabCurveCheck(drill.cards, drill.wentFirst) : null;
+  const deckCurveProfile = drill ? mulliganLabDeckCurveProfile(drill.deck.mainDeck) : null;
+  const oneRedrawOdds = drill ? mulliganLabReplacementOddsForDrill(drill, 1) : null;
+  const twoRedrawOdds = drill ? mulliganLabReplacementOddsForDrill(drill, 2) : null;
+  const drillUsefulness = drill ? mulliganLabScenarioUsefulness(drill) : null;
+  const identityDecisionByCardIndex = new Map<number, MulliganLabIdentityDecision>();
+  identityDecisions.forEach((decision) => {
+    decision.cardIndexes.forEach((cardIndex) => identityDecisionByCardIndex.set(cardIndex, decision));
+  });
+
+  useEffect(() => {
+    if (!runKey) return;
+    const savedRun = trainingState.activeRun?.runKey === runKey ? trainingState.activeRun : null;
+    const savedDecisions = savedRun?.decisions ?? {};
+    const firstUnanswered = filteredDrills.findIndex((item) => !savedDecisions[item.id]);
+    setDecisions(savedDecisions);
+    setSessionStartedAt(savedRun?.startedAt ?? new Date().toISOString());
+    setRoundIndex(firstUnanswered >= 0 ? firstUnanswered : 0);
+    setRunComplete(Boolean(filteredDrills.length) && firstUnanswered < 0);
+    setSelectedCardIndexes([]);
+    setSubmitted(false);
+    setSelectionNotice("");
+    setDecisionConfidence(null);
+    setDecisionStartedAt(Date.now());
+  }, [runKey]);
+
+  useEffect(() => {
+    setSelectedCardIndexes([]);
+    setSubmitted(false);
+    setSelectionNotice("");
+    setDecisionConfidence(null);
+    setDecisionStartedAt(Date.now());
+  }, [drillKey]);
+
+  function toggleMulliganCard(index: number) {
+    if (!drill || submitted) return;
+    if (selectedCardIndexes.includes(index)) {
+      setSelectionNotice("");
+      setSelectedCardIndexes(selectedCardIndexes.filter((value) => value !== index));
+      return;
+    }
+    if (selectedCardIndexes.length >= 2) {
+      setSelectionNotice("You can send back at most two cards. Clear one selection before choosing another.");
+      return;
+    }
+    setSelectionNotice("");
+    setSelectedCardIndexes([...selectedCardIndexes, index]);
+  }
+
+  function submitMulliganDecision() {
+    if (!drill || submitted) return;
+    const decision = [...selectedCardIndexes].sort((left, right) => left - right);
+    const nextDecisions = { ...decisions, [drill.id]: decision };
+    const feedback = mulliganLabIdentityDecisions(drill.cards, decision).map((item) => item.feedback);
+    const aligned = feedback.filter((value) => value === "aligned").length;
+    const conflicts = feedback.filter((value) => value === "conflicts").length;
+    const general = feedback.filter((value) => value === "general-aligned" || value === "general-different").length;
+    setDecisions(nextDecisions);
+    const answeredAt = new Date().toISOString();
+    const answerBase = {
+      drillId: drill.id,
+      answeredAt,
+      playerLegendCode: drill.playerLegend.code,
+      opponentLegendCode: drill.opponentLegend.code,
+      wentFirst: drill.wentFirst,
+      selectedCardIndexes: decision,
+      aligned,
+      conflicts,
+      general,
+      ungraded: feedback.length - aligned - conflicts - general,
+      confidence: decisionConfidence,
+      evidenceTier: drillUsefulness?.kind ?? "explore" as const,
+      decisionMs: Math.max(0, Date.now() - decisionStartedAt),
+    };
+    const answer = {
+      ...answerBase,
+      review: mulliganLabReviewProgressForAnswer(trainingState, answerBase, mode === "review"),
+    };
+    saveTrainingState(recordMulliganLabTrainingAnswer(trainingState, answer, {
+      runKey,
+      startedAt: sessionStartedAt,
+      decisions: nextDecisions
+    }));
+    setSelectionNotice("");
+    setSubmitted(true);
+  }
+
+  function nextMulliganHand() {
+    if (!filteredDrills.length) return;
+    if (safeRoundIndex < filteredDrills.length - 1) {
+      setRoundIndex((current) => current + 1);
+      return;
+    }
+    const totals = mulliganLabRunTotals(filteredDrills, decisions);
+    const completedAt = new Date().toISOString();
+    saveTrainingState(completeMulliganLabTrainingSession(trainingState, {
+      id: `mls_${Date.now().toString(36)}_${filteredDrills.length}`,
+      runKey,
+      mode,
+      startedAt: sessionStartedAt,
+      completedAt,
+      handsCompleted: totals.hands,
+      aligned: totals.aligned,
+      conflicts: totals.conflicts,
+      general: totals.general,
+      ungraded: totals.ungraded
+    }));
+    setRunComplete(true);
+  }
+
+  function restartMulliganRun() {
+    const startedAt = new Date().toISOString();
+    setDecisions({});
+    setRoundIndex(0);
+    setRunComplete(false);
+    setSubmitted(false);
+    setSelectedCardIndexes([]);
+    setSelectionNotice("");
+    setDecisionConfidence(null);
+    setDecisionStartedAt(Date.now());
+    setSessionStartedAt(startedAt);
+    if (mode === "review") setReviewQueue(mulliganLabReviewDrillIds(trainingState));
+    saveTrainingState({
+      ...trainingState,
+      activeRun: runKey ? { runKey, startedAt, decisions: {} } : null
+    });
+  }
+
+  function startMulliganReviewRun() {
+    setReviewQueue(mulliganLabReviewDrillIds(trainingState));
+    setMode("review");
+  }
+
+  function continueToSideboardLab() {
+    const context = filteredDrills[0];
+    if (!context) return;
+    const contextualDeckId = activeDeckHasSideboard && activeDeck && normalizeLegendName(activeDeck.legend) === normalizeLegendName(context.playerLegend.name)
+      ? activeDeck.id
+      : "";
+    try {
+      storeLabTrainingHandoff(window.localStorage, createLabTrainingHandoff({
+        destination: "sideboard",
+        source: "mulligan-complete",
+        playerLegend: context.playerLegend.name,
+        opponentLegend: context.opponentLegend.name,
+        deckId: contextualDeckId,
+        format: null,
+        wentFirst: null,
+        priorGameResult: null
+      }));
+    } catch {
+      // The destination remains usable without preselected local context.
+    }
+    onNavigate("sideboard-lab");
+  }
+
+  function finishMulliganLabIntro() {
+    try {
+      window.localStorage.setItem(
+        MULLIGAN_LAB_INTRO_LOCAL_STORAGE_KEY,
+        serializeMulliganLabIntroState(seenMulliganLabIntroState())
+      );
+    } catch {
+      // The introduction remains dismissible for this session when storage is unavailable.
+    }
+    setIntroOpen(false);
+  }
+
+  useEffect(() => {
+    function handleTrainerKeyDown(event: KeyboardEvent) {
+      const target = event.target instanceof HTMLElement ? event.target : null;
+      const editing = target && (target.isContentEditable || ["INPUT", "SELECT", "TEXTAREA"].includes(target.tagName));
+      const interactive = target?.closest('button, a[href], input, select, textarea, summary, [role="button"], [role="link"], [contenteditable="true"], [tabindex]:not([tabindex="-1"])');
+      if (event.defaultPrevented || event.repeat || editing || introOpen || zoomedCard || !drill || runComplete) return;
+      if (/^[1-4]$/.test(event.key) && !submitted) {
+        event.preventDefault();
+        toggleMulliganCard(Number(event.key) - 1);
+      } else if (event.key === "Enter") {
+        if (interactive) return;
+        event.preventDefault();
+        if (submitted) nextMulliganHand();
+        else submitMulliganDecision();
+      }
+    }
+    window.addEventListener("keydown", handleTrainerKeyDown);
+    return () => window.removeEventListener("keydown", handleTrainerKeyDown);
+  });
+
+  const answeredVisibleHands = filteredDrills.filter((item) => decisions[item.id]).length;
+  const runTotals = mulliganLabRunTotals(filteredDrills, decisions);
+  const lifetimeHands = trainingState.answers.length;
+  const completedSessions = trainingState.sessions.length;
+  const reviewItemsAvailable = registryConfirmedDrills.filter((item) => reviewDrillIds.has(item.id)).length;
+  const mastery = mulliganLabMasterySummary(trainingState);
+  const targetQuery = readyPack?.targetQuery;
+  const dataDate = readyPack?.generatedAt ? new Date(readyPack.generatedAt) : null;
+  const dataDateLabel = dataDate && !Number.isNaN(dataDate.getTime())
+    ? dataDate.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })
+    : "Waiting for first daily pack";
+  const observedThroughDate = readyPack?.observedThrough
+    ? new Date(`${readyPack.observedThrough}T00:00:00.000Z`)
+    : null;
+  const observedThroughLabel = observedThroughDate && !Number.isNaN(observedThroughDate.getTime())
+    ? observedThroughDate.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" })
+    : "the latest verified snapshot";
+  const observedFromDate = readyPack?.observedFrom
+    ? new Date(`${readyPack.observedFrom}T00:00:00.000Z`)
+    : null;
+  const observedFromLabel = observedFromDate && !Number.isNaN(observedFromDate.getTime())
+    ? observedFromDate.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" })
+    : "the earliest verified replay";
+  const seasonCoverage = readyPack?.seasonCoverage ?? null;
+  const includedPeriods = new Set(readyPack?.includedPeriods ?? []);
+  const includesBothSeasonPeriods = includedPeriods.has("preseason") && includedPeriods.has("current-season");
+  const hasAllHistoryPolicy = readyPack?.coveragePolicy === "all-available-history";
+  const allHistoryComplete = hasAllHistoryPolicy && includesBothSeasonPeriods && readyPack?.backfillComplete === true && !readyPack.coverageTruncated;
+  const coveragePeriodLabel = seasonCoverage
+    ? `Pre-season ${seasonCoverage.preseasonFacts.toLocaleString()} · current season ${seasonCoverage.currentSeasonFacts.toLocaleString()}`
+    : "Season split unavailable for this older pack";
+
+  return (
+    <section className="dashboard-page mulligan-lab-page">
+      <section className="mulligan-lab-hero">
+        <div>
+          <span className="eyebrow">RiftLite training</span>
+          <h2>Mulligan Lab</h2>
+          <p>Train the decision before turn one with matchup-wide patterns from anonymous community Web Replays across the available pre-season and current-season history.</p>
+        </div>
+        <div className="mulligan-lab-hero-actions">
+          <div className="mulligan-lab-freshness" data-state={effectiveLoadState}>
+            <RefreshCw size={17} />
+          <span><small>{targetedMode ? "Full-corpus query" : "Rotating daily pack"}</small><strong>{effectiveLoadState === "loading" ? "Checking…" : dataDateLabel}</strong></span>
+          </div>
+          <button
+            type="button"
+            className="secondary mulligan-lab-help-button"
+            aria-haspopup="dialog"
+            aria-expanded={introOpen}
+            aria-controls="mulligan-lab-intro-dialog"
+            onClick={() => setIntroOpen(true)}
+          >
+            <Lightbulb size={15} /> How it works
+          </button>
+        </div>
+      </section>
+
+      <section className="mulligan-lab-mode-bar" aria-label="Mulligan training modes">
+        <button type="button" data-active={mode === "daily"} onClick={() => setMode("daily")}><Star size={15} /> Daily 5</button>
+        <button type="button" data-active={mode === "active-deck"} onClick={() => setMode("active-deck")}><Layers size={15} /> {handoffDeck ? "Match deck" : "My active deck"}</button>
+        <button type="button" data-active={mode === "matchup"} onClick={() => setMode("matchup")}><SlidersHorizontal size={15} /> Choose matchup</button>
+        <button type="button" data-active={mode === "mixed"} onClick={() => setMode("mixed")}><Sparkles size={15} /> Mixed practice</button>
+        <button type="button" data-active={mode === "review"} onClick={startMulliganReviewRun}><History size={15} /> Review items <small>{reviewItemsAvailable}</small></button>
+      </section>
+
+      {trainingHandoff ? (
+        <section className="mulligan-lab-handoff-note" aria-live="polite">
+          <Sparkles size={16} />
+          <span><strong>Match context loaded</strong> {trainingHandoff.playerLegend} vs {trainingHandoff.opponentLegend}{handoffDeck ? ` · ${handoffDeck.title}` : ""}</span>
+        </section>
+      ) : null}
+
+      <section className="mulligan-lab-filter-bar">
+        <label>
+          My legend ({targetedMode ? "full corpus" : "today’s pack"})
+          <select
+            value={mode === "daily" || mode === "review" ? "" : mode === "active-deck" ? activeLegendOption?.name ?? "" : effectivePlayerLegend}
+            disabled={mode === "daily" || mode === "review" || mode === "active-deck" || !playerLegendOptions.length}
+            onChange={(event) => { setPlayerLegend(event.target.value); setOpponentLegend(""); }}
+          >
+            {mode === "daily" ? <option value="">Daily mix</option> : mode === "review" ? <option value="">Review mix</option> : null}
+            {!playerLegendOptions.length ? <option value="">No qualifying legends</option> : null}
+            {playerLegendOptions.map((legend) => <option value={legend} key={legend}>{legend}</option>)}
+          </select>
+        </label>
+        <label>
+          Opponent ({targetedMode ? "full corpus" : "today’s pack"})
+          <select
+            value={mode === "daily" || mode === "review" ? "" : effectiveOpponentLegend}
+            disabled={mode === "daily" || mode === "review" || !opponentLegendOptions.length}
+            onChange={(event) => setOpponentLegend(event.target.value)}
+          >
+            {mode === "daily" ? <option value="">Daily mix</option> : mode === "review" ? <option value="">Review mix</option> : null}
+            {!opponentLegendOptions.length && mode !== "daily" ? <option value="">No qualifying opponents</option> : null}
+            {opponentLegendOptions.map((legend) => <option value={legend} key={legend}>{legend}</option>)}
+          </select>
+        </label>
+        <label>
+          Initiative
+          <select value={seat} onChange={(event) => setSeat(event.target.value as MulliganLabSeatFilter)}>
+            <option value="all">Going first or second</option>
+            <option value="1st">Going first</option>
+            <option value="2nd">Going second</option>
+          </select>
+        </label>
+        <div className="mulligan-lab-source-note">
+          <Shield size={15} /> Real observed hand · {hasAllHistoryPolicy ? "pre-season + current-season corpus" : "verified replay corpus"} · {readyPack?.targetQuery?.resolved.scope === "exact-deck" ? "exact-deck hand filter · card guidance scope shown separately" : readyPack?.targetQuery?.resolved.scope === "matchup" ? "full-corpus matchup hand filter" : readyPack?.targetQuery ? "legend-wide hand fallback · not graded" : "daily hand rotation · card guidance scope shown per card"}
+        </div>
+      </section>
+
+      {effectiveLoadState !== "ready" ? (
+        <MulliganLabUnavailableState
+          state={effectiveLoadState}
+          message={effectiveLoadMessage}
+          reason={effectivePack?.reason}
+          onRetry={() => targetedMode ? setTargetLoadNonce((value) => value + 1) : setLoadNonce((value) => value + 1)}
+        />
+      ) : runComplete && filteredDrills.length ? (
+        <section className="mulligan-lab-completion" aria-live="polite">
+          <span className="mulligan-lab-completion-mark"><Star size={34} /></span>
+          <div>
+            <span className="eyebrow">Run complete</span>
+            <h3>{runTotals.hands} opening {runTotals.hands === 1 ? "hand" : "hands"} trained</h3>
+            <p>You finished this run. Reliable matchup patterns are separated from broad legend tendencies, so the recap never turns general behaviour into a right-or-wrong grade.</p>
+          </div>
+          <div className="mulligan-lab-completion-stats" aria-label="Completed run recap">
+            <span data-kind="aligned"><strong>{runTotals.aligned}</strong><small>Matched matchup patterns</small></span>
+            <span data-kind="conflicts"><strong>{runTotals.conflicts}</strong><small>Review items</small></span>
+            <span data-kind="general"><strong>{runTotals.general}</strong><small>General tendencies</small></span>
+            <span data-kind="ungraded"><strong>{runTotals.ungraded}</strong><small>Ungraded signals</small></span>
+          </div>
+          <div className="mulligan-lab-completion-actions">
+            {reviewItemsAvailable ? <button type="button" className="secondary" onClick={startMulliganReviewRun}><History size={15} /> Review differences</button> : null}
+            {targetedMode ? <button type="button" className="secondary" onClick={continueToSideboardLab}><ArrowLeftRight size={15} /> Continue to Sideboard Lab</button> : null}
+            <button type="button" className="primary" onClick={restartMulliganRun}><RotateCcw size={15} /> Practice this run again</button>
+          </div>
+          <small>Training history stays on this device. It is never added to community gameplay data.</small>
+        </section>
+      ) : !drill ? (
+        <section className="mulligan-lab-empty-panel">
+          <span className="mulligan-lab-empty-icon"><RotateCcw size={30} /></span>
+          <div>
+            <span className="eyebrow">No qualifying cohort</span>
+            <h3>{mode === "review" ? "No review items are available in today’s pack." : "No community training hands match these filters in today’s rotating pack."}</h3>
+            <p>{mode === "review"
+              ? "Reliable matchup differences become review items on this device. Train a few hands first; items return here when their drill is present in the rotating pack."
+              : `RiftLite only includes exact observed four-card openings with registry-confirmed artwork. Eligible matchup cohorts rotate through successive daily packs; early cohorts stay clearly labelled until they reach ${MULLIGAN_LAB_MIN_ELIGIBLE_HANDS} hands from ${MULLIGAN_LAB_MIN_UNIQUE_PLAYERS} players.`}</p>
+          </div>
+          {mode === "active-deck" && !activeDeck ? (
+            <button type="button" className="secondary" onClick={() => onNavigate("decks", { deckFocus: "saved" })}>Choose an active deck</button>
+          ) : <button type="button" className="secondary" onClick={() => { setMode("daily"); setSeat("all"); }}>Try Daily 5</button>}
+        </section>
+      ) : (
+        <section className="mulligan-lab-workspace">
+          <main className="mulligan-lab-table">
+            <div className="mulligan-lab-stage-track" aria-label={submitted ? "Challenge stage 3 of 3: reveal evidence" : "Challenge stage 2 of 3: choose redraws"}>
+              <span data-complete="true"><b>1</b><em>Read the matchup</em></span>
+              <i />
+              <span data-active={!submitted} data-complete={submitted}><b>2</b><em>Choose redraws</em></span>
+              <i />
+              <span data-active={submitted}><b>3</b><em>Reveal evidence</em></span>
+            </div>
+            <header className="mulligan-lab-round-header">
+              <div>
+                <span className="eyebrow">Hand {safeRoundIndex + 1} of {filteredDrills.length}</span>
+                <span className="mulligan-lab-tier" data-tier={drillUsefulness?.kind ?? "explore"}>
+                  {drillUsefulness?.kind === "challenge" ? "Matchup challenge" : drillUsefulness?.kind === "guided" ? "Guided tendency" : "Explore the data"}
+                </span>
+                <h3>{submitted ? "Community evidence" : "What would you send back?"}</h3>
+                <p>{submitted
+                  ? `Community behaviour for each card, using the most specific reliable evidence pool available.`
+                  : "Select up to two cards. Everything else stays in your opening hand."}</p>
+              </div>
+              <div className="mulligan-lab-matchup" aria-label={`${drill.playerLegend.name} versus ${drill.opponentLegend.name}`}>
+                <MulliganLabLegend card={drill.playerLegend} />
+                <span><strong>{drill.playerLegend.name}</strong><small>{drill.wentFirst === "1st" ? "Going first" : "Going second"}</small></span>
+                <b>vs</b>
+                <MulliganLabLegend card={drill.opponentLegend} />
+                <span><strong>{drill.opponentLegend.name}</strong><small>Opponent</small></span>
+              </div>
+            </header>
+
+            {drill.context?.battlefields.player || drill.context?.battlefields.opponent ? (
+              <section className="mulligan-lab-battlefield-context" aria-label="Known battlefield context">
+                <span className="eyebrow">Known setup</span>
+                <div>{drill.context.battlefields.player ? <span><img src={drill.context.battlefields.player.imageUrl} alt="" /><small>Your battlefield</small><strong>{drill.context.battlefields.player.name}</strong></span> : null}{drill.context.battlefields.opponent ? <span><img src={drill.context.battlefields.opponent.imageUrl} alt="" /><small>Opponent battlefield</small><strong>{drill.context.battlefields.opponent.name}</strong></span> : null}</div>
+              </section>
+            ) : null}
+
+            <div className="mulligan-lab-hand" aria-label="Opening hand">
+              {drill.cards.map((card, index) => {
+                const selected = selectedCardIndexes.includes(index);
+                return (
+                  <MulliganLabCardChoice
+                    card={card}
+                    index={index}
+                    key={`${card.code}-${index}`}
+                    selected={selected}
+                    submitted={submitted}
+                    playerLegendName={drill.playerLegend.name}
+                    identityDecision={identityDecisionByCardIndex.get(index)!}
+                    onToggle={() => toggleMulliganCard(index)}
+                    onZoom={() => setZoomedCard(card)}
+                  />
+                );
+              })}
+            </div>
+
+            {curveCheck && (curveCheck.status === "missing" || curveCheck.status === "alternative-early-unit") ? (
+              <MulliganLabCurveAdvisory
+                check={curveCheck}
+                deckProfile={deckCurveProfile!}
+                selectedCount={selectedCardIndexes.length}
+                submitted={submitted}
+                oneRedrawOdds={oneRedrawOdds}
+                twoRedrawOdds={twoRedrawOdds}
+              />
+            ) : null}
+
+            {submitted && drill.decisionEvidence ? <MulliganLabHandDecisionEvidence evidence={drill.decisionEvidence} selectedCount={selectedCardIndexes.length} /> : null}
+
+            {!submitted ? (
+              <footer className="mulligan-lab-decision-bar">
+                <div>
+                  <strong>{selectedCardIndexes.length ? `${selectedCardIndexes.length} of 2 selected` : "Keeping all four is allowed"}</strong>
+                  <span>Keys 1–4 select cards · Enter locks in · magnify any card to read it</span>
+                  <span className="mulligan-lab-selection-notice" aria-live="polite">{selectionNotice}</span>
+                </div>
+                <div className="mulligan-lab-confidence" aria-label="How confident are you in this choice?">
+                  <small>Before reveal</small>
+                  {(["certain", "unsure", "guess"] as const).map((value) => (
+                    <button type="button" key={value} data-active={decisionConfidence === value} aria-pressed={decisionConfidence === value} onClick={() => setDecisionConfidence(value)}>
+                      {value === "certain" ? "Certain" : value === "unsure" ? "Unsure" : "Guess"}
+                    </button>
+                  ))}
+                </div>
+                <button type="button" className="secondary" disabled={!selectedCardIndexes.length} onClick={() => { setSelectedCardIndexes([]); setSelectionNotice(""); }}>Clear selection</button>
+                <button type="button" className="primary" onClick={submitMulliganDecision}><Check size={16} /> Lock in choice</button>
+              </footer>
+            ) : (
+              <MulliganLabRevealSummary
+                drill={drill}
+                identityDecisions={identityDecisions}
+                onNext={nextMulliganHand}
+                nextLabel={safeRoundIndex === filteredDrills.length - 1 ? "Finish run" : "Next hand"}
+                onOpenPrep={() => onNavigate("decks", { deckFocus: "prep" })}
+              />
+            )}
+          </main>
+
+          <aside className="mulligan-lab-session-rail">
+            <section>
+              <span className="eyebrow">This run</span>
+              <strong>{answeredVisibleHands} / {filteredDrills.length}</strong>
+              <p>hands completed in today’s filtered community pack</p>
+              <div className="mulligan-lab-progress"><i style={{ width: `${filteredDrills.length ? (answeredVisibleHands / filteredDrills.length) * 100 : 0}%` }} /></div>
+              <div className="mulligan-lab-round-pips" aria-hidden="true">{filteredDrills.map((item, index) => <i key={item.id} data-done={Boolean(decisions[item.id])} data-current={index === safeRoundIndex} />)}</div>
+              <small>{lifetimeHands.toLocaleString()} local answers across {completedSessions.toLocaleString()} completed {completedSessions === 1 ? "run" : "runs"} · {reviewItemsAvailable} review {reviewItemsAvailable === 1 ? "item" : "items"} available today</small>
+            </section>
+            <section className="mulligan-lab-mastery-card">
+              <span className="eyebrow"><Star size={12} /> Matchup mastery</span>
+              <div><span><strong>{mastery.contextsPractised}</strong><small>Practised</small></span><span><strong>{mastery.masteredContexts}</strong><small>Mastered</small></span><span><strong>{mastery.reviewDue}</strong><small>Due</small></span></div>
+              <small>{mastery.uncertainContexts} context{mastery.uncertainContexts === 1 ? "" : "s"} marked Unsure or Guess. Progress rewards deliberate practice, never agreement with weak evidence.</small>
+            </section>
+            <section>
+              <span className="eyebrow">Card guidance · {drill.evidence.scope === "matchup-initiative" ? "matchup + initiative" : "matchup"}{drill.evidence.deckScope === "all-observed-decks" ? " · all observed decks" : ""}</span>
+              <strong>{drill.evidence.hands} evidence hands</strong>
+              <p>{drill.evidence.players} contributing players · {drill.playerLegend.name} into {drill.opponentLegend.name}</p>
+              {targetQuery ? (
+                <span className="mulligan-lab-evidence-status" data-status="scope">
+                  {targetQuery.resolved.scope === "exact-deck"
+                    ? "Hand filter · exact registered 40-card deck"
+                    : targetQuery.fallbackReason === "insufficient-private-cohort"
+                      ? "Hand filter · matchup fallback (deck cohort too small)"
+                      : targetQuery.fallbackReason === "deck-not-observed"
+                        ? "Hand filter · matchup fallback (deck not observed)"
+                        : targetQuery.resolved.scope === "matchup"
+                          ? "Hand filter · requested matchup"
+                          : "Hand filter · player-Legend fallback"}
+                </span>
+              ) : null}
+              <span className="mulligan-lab-evidence-status" data-status={drill.evidence.status}>{drill.evidence.status === "early" ? "Early data" : "Evidence threshold met"}</span>
+              {targetQuery?.resolved.scope === "exact-deck" ? <small>The exact deck chooses eligible hands. Card guidance still uses the separately labelled matchup or contextual evidence pool.</small> : null}
+              <small>{drill.evidence.scope === "matchup-initiative" ? "Card evidence is restricted to the same initiative." : "Both initiatives are pooled for the base matchup evidence."}</small>
+              <span className="mulligan-lab-evidence-status" data-status={allHistoryComplete ? "sufficient" : "early"}>
+                {allHistoryComplete ? "All available history indexed" : hasAllHistoryPolicy ? "All-history backfill in progress" : "Verified replay window"}
+              </span>
+              <small>{hasAllHistoryPolicy
+                ? `${coveragePeriodLabel} · ${readyPack.includedFacts.toLocaleString()} eligible observations indexed from ${observedFromLabel} through ${observedThroughLabel}.`
+                : `Observed from ${observedFromLabel} through ${observedThroughLabel}.`}</small>
+              <small>Daily hands rotate, but every shown percentage is rebuilt from the full indexed corpus—not only today’s exercises.</small>
+              {!allHistoryComplete && hasAllHistoryPolicy ? <small>RiftLite will keep adding older eligible replays automatically until the complete pre-season and current-season corpus is indexed.</small> : null}
+              {!hasAllHistoryPolicy && readyPack?.coverageTruncated ? <small>Historical coverage is still being backfilled; this pack contains {readyPack.includedFacts.toLocaleString()} eligible observations.</small> : null}
+              <small>Names, replay IDs, and exact timestamps are not shown in the trainer.</small>
+            </section>
+            <section className="mulligan-lab-trust-note">
+              <Lightbulb size={18} />
+              <div><strong>Patterns, not prescriptions</strong><p>Green and red are reserved for reliable matchup or matching-context evidence—not broad Legend behaviour, and never proof that a choice is always correct. Deck version and pilot skill still matter.</p></div>
+            </section>
+          </aside>
+        </section>
+      )}
+      {zoomedCard ? <MulliganLabCardZoom card={zoomedCard} onClose={closeMulliganCardZoom} /> : null}
+      {introOpen ? (
+        <MulliganLabIntro
+          onStart={finishMulliganLabIntro}
+          onDismiss={finishMulliganLabIntro}
+        />
+      ) : null}
+    </section>
+  );
+}
+
+function MulliganLabCardZoom({ card, onClose }: { card: MulliganLabRegistryCard; onClose: () => void }) {
+  const dialogRef = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    if (!dialog) return;
+    const activeDialog: HTMLElement = dialog;
+    const focusableSelector = 'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+    const focusable = () => Array.from(activeDialog.querySelectorAll<HTMLElement>(focusableSelector));
+    (focusable()[0] ?? activeDialog).focus();
+
+    function handleDialogKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        onClose();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const items = focusable();
+      if (!items.length) {
+        event.preventDefault();
+        activeDialog.focus();
+        return;
+      }
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (event.shiftKey && (document.activeElement === first || !activeDialog.contains(document.activeElement))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (document.activeElement === last || !activeDialog.contains(document.activeElement))) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    document.addEventListener("keydown", handleDialogKeyDown);
+    return () => {
+      document.removeEventListener("keydown", handleDialogKeyDown);
+      if (previousFocus?.isConnected) previousFocus.focus();
+    };
+  }, [onClose]);
+
+  return (
+    <div className="mulligan-lab-card-zoom-layer" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) onClose(); }}>
+      <section ref={dialogRef} className="mulligan-lab-card-zoom" role="dialog" aria-modal="true" aria-labelledby="mulligan-lab-card-zoom-title" aria-describedby="mulligan-lab-card-zoom-description" tabIndex={-1}>
+        <button type="button" className="mulligan-lab-card-zoom-close" aria-label="Close card view" onClick={onClose}><X size={19} /></button>
+        <img src={card.imageUrl} alt={card.name} draggable={false} />
+        <div>
+          <span className="eyebrow">Packaged official card image</span>
+          <h3 id="mulligan-lab-card-zoom-title">{card.name}</h3>
+          <p>{card.type}{card.supertype ? ` · ${card.supertype}` : ""} · {card.code}</p>
+          <small id="mulligan-lab-card-zoom-description">The enlarged official image preserves the printed rules text. Press Escape to close.</small>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function MulliganLabUnavailableState({ state, message, reason, onRetry }: {
+  state: MulliganLabLoadState;
+  message: string;
+  reason?: string;
+  onRetry: () => void;
+}) {
+  const title = state === "loading" ? "Checking community trainer data…" : "Community trainer data is not available yet.";
+  const detail = message || ({
+    snapshot_not_configured: "The daily community snapshot has not been configured.",
+    snapshot_invalid: "The latest community snapshot did not pass validation.",
+    snapshot_expired: "The latest community snapshot is stale and will not be used for training.",
+    data_unavailable: "There are not yet enough qualifying exact community hands to publish a pack.",
+    matchup_not_observed: "No qualifying full-corpus observations were found for this matchup."
+  } as const)[reason ?? "data_unavailable"];
+  return (
+    <section className="mulligan-lab-empty-panel" data-state={state}>
+      <span className="mulligan-lab-empty-icon">{state === "loading" ? <RefreshCw size={30} className="spin" /> : <AlertTriangle size={30} />}</span>
+      <div>
+        <span className="eyebrow">Community data</span>
+        <h3>{title}</h3>
+        <p>{detail} No sample hands or statistics are substituted.</p>
+      </div>
+      {state !== "loading" ? <button type="button" className="secondary" onClick={onRetry}><RefreshCw size={15} /> Check again</button> : null}
+    </section>
+  );
+}
+
+function MulliganLabLegend({ card }: { card: MulliganLabRegistryCard }) {
+  return <span className="mulligan-lab-legend-art"><img src={card.imageUrl} alt="" /></span>;
+}
+
+function MulliganLabCurveAdvisory({ check, deckProfile, selectedCount, submitted, oneRedrawOdds, twoRedrawOdds }: {
+  check: MulliganLabCurveCheck;
+  deckProfile: MulliganLabDeckCurveProfile;
+  selectedCount: number;
+  submitted: boolean;
+  oneRedrawOdds: MulliganLabReplacementOdds | null;
+  twoRedrawOdds: MulliganLabReplacementOdds | null;
+}) {
+  const baselineApplied = selectedCount === 2;
+  const hasAlternative = check.status === "alternative-early-unit";
+  const deckHasNoTwoDrops = deckProfile.metadataComplete && deckProfile.twoDropCopies === 0;
+  const deckMetadataUnknown = !deckProfile.metadataComplete;
+  const result = deckHasNoTwoDrops || deckMetadataUnknown
+    ? "deck-exception"
+    : submitted
+      ? baselineApplied ? "baseline" : "opportunity"
+      : baselineApplied ? "selected" : "consider";
+  const statusLabel = deckHasNoTwoDrops
+    ? "Deck-specific plan"
+    : deckMetadataUnknown
+      ? "Curve not graded"
+      : submitted
+        ? baselineApplied
+          ? "Curve baseline applied · 2/2"
+          : `Curve opportunity · ${selectedCount}/2`
+        : `${selectedCount}/2 redraws selected`;
+  return (
+    <aside className="mulligan-lab-curve-check" data-result={result} data-status={check.status} aria-live={submitted ? "polite" : "off"}>
+      <span className="mulligan-lab-curve-icon"><Lightbulb size={17} /></span>
+      <div>
+        <span className="eyebrow">Curve check · gameplay heuristic</span>
+        <strong>No printed 2-cost Unit in this hand</strong>
+        <p>{deckHasNoTwoDrops
+          ? "This registered deck contains no printed 2-cost Units, so the usual search baseline does not apply. Follow its specific early-game plan."
+          : deckMetadataUnknown
+            ? "RiftLite cannot verify every Unit cost in this registered deck, so it will not grade the whole-hand curve choice."
+            : hasAlternative
+              ? "RiftLite found an alternative early Unit: a 1-cost Unit, or a 3-cost Unit while going second. The usual two-redraw baseline can be overridden by that line or a specific Champion or deck plan."
+              : "The usual baseline is to use both redraws to look for one. Specific Champion or deck plans can override this; community patterns can help choose which two."}</p>
+        {oneRedrawOdds && twoRedrawOdds ? <div className="mulligan-lab-redraw-odds"><span><small>Redraw 1</small><strong>{Math.round(oneRedrawOdds.probability * 100)}%</strong></span><span><small>Redraw 2</small><strong>{Math.round(twoRedrawOdds.probability * 100)}%</strong></span><em>{twoRedrawOdds.liveTwoDrops} live 2-drops in the proven 35-card replacement pool</em></div> : null}
+        <small>This whole-hand curve check is separate from the card-by-card community evidence.{oneRedrawOdds ? " Exact odds use the captured face-up Chosen Champion and registered deck." : " Odds stay hidden until the draw pool is proven."}</small>
+      </div>
+      <span className="mulligan-lab-curve-status">{statusLabel}</span>
+    </aside>
+  );
+}
+
+function MulliganLabHandDecisionEvidence({ evidence, selectedCount }: {
+  evidence: MulliganLabDecisionEvidence;
+  selectedCount: number;
+}) {
+  return <section className="mulligan-lab-hand-evidence" data-status={evidence.evidenceStatus}>
+    <header><span className="eyebrow"><BarChart3 size={12} /> Whole-hand pattern</span><small>{evidence.scope === "matching-curve" ? "Same curve state" : "Matchup-wide fallback"} · descriptive only</small></header>
+    <div>
+      {evidence.redrawCountHistogram.map((bucket) => <span key={bucket.redraws} data-current={bucket.redraws === selectedCount}><b>{bucket.redraws}</b><i style={{ height: `${Math.max(8, bucket.hands / evidence.hands * 100)}%` }} /><small>{bucket.hands} hands</small></span>)}
+    </div>
+    <p><strong>Your choice: {selectedCount} redraw{selectedCount === 1 ? "" : "s"}</strong><span>{Math.round(evidence.twoRedrawRate * 100)}% of these {evidence.hands} hands used both redraws · {evidence.players} players</span></p>
+    <small>{evidence.evidenceStatus === "robust" ? "Reliable whole-hand context; still not an objective verdict." : "Developing whole-hand context; shown for exploration and not graded."}</small>
+  </section>;
+}
+
+function MulliganLabCardChoice({ card, index, selected, submitted, playerLegendName, identityDecision, onToggle, onZoom }: {
+  card: MulliganLabExerciseCard;
+  index: number;
+  selected: boolean;
+  submitted: boolean;
+  playerLegendName: string;
+  identityDecision: MulliganLabIdentityDecision;
+  onToggle: () => void;
+  onZoom: () => void;
+}) {
+  const { offeredCount: offered, keptCount: kept, redrawnCount: redrawn } = card.stats;
+  const keptPercent = Math.round(card.stats.keepRate * 100);
+  const redrawnPercent = 100 - keptPercent;
+  const choiceEvidence = mulliganLabChoiceEvidence(card.stats);
+  const guidanceKeepPercent = Math.round(choiceEvidence.guidanceKeepRate * 100);
+  const confidenceRange = labWilsonInterval(choiceEvidence.guidanceKept, choiceEvidence.guidancePlayers);
+  const feedback = identityDecision.feedback;
+  const signal = mulliganLabCardSignal(card.stats);
+  const preseason = card.stats.slices?.preseason ?? null;
+  const currentSeason = card.stats.slices?.currentSeason ?? null;
+  const periodShift = preseason?.evidenceStatus === "robust" && currentSeason?.evidenceStatus === "robust"
+    ? Math.round((currentSeason.guidanceKeepRate - preseason.guidanceKeepRate) * 100)
+    : null;
+  return (
+    <article className="mulligan-lab-card-slot" data-selected={selected} data-submitted={submitted} data-feedback={submitted ? feedback : undefined}>
+      <button type="button" className="mulligan-lab-card-pick" aria-pressed={selected} disabled={submitted} onClick={onToggle}>
+        <span className="mulligan-lab-card-number">{index + 1}</span>
+        <img src={card.imageUrl} alt={card.name} draggable={false} />
+        <span className="mulligan-lab-card-choice">{selected ? "Send back" : "Keep"}</span>
+        {submitted ? (
+          <span className="mulligan-lab-card-verdict" data-feedback={feedback}>
+            {feedback === "aligned" ? <Check size={15} /> : feedback === "conflicts" ? <X size={15} /> : <BarChart3 size={15} />}
+            {feedback === "aligned"
+              ? `Matched ${mulliganLabEvidenceScopeLabel(choiceEvidence.scope).toLowerCase()} · ${identityDecision.userAction}`
+              : feedback === "conflicts"
+                ? `Different from ${mulliganLabEvidenceScopeLabel(choiceEvidence.scope).toLowerCase()}`
+                : feedback === "general-aligned"
+                  ? "Matches general tendency · not graded"
+                  : feedback === "general-different"
+                    ? "Different from general tendency · not graded"
+                : feedback === "mixed-copy"
+                  ? "Mixed duplicate choice · not graded"
+                  : feedback === "developing"
+                    ? "Early signal — not graded"
+                    : "No clear signal"}
+          </span>
+        ) : null}
+      </button>
+      <button type="button" className="mulligan-lab-card-zoom-button" onClick={onZoom} aria-label={`Read ${card.name}`}><Maximize2 size={13} /> Read card</button>
+      {submitted ? (
+        <div className="mulligan-lab-card-evidence">
+          <span data-signal={signal.direction}>{signal.label}</span>
+          {choiceEvidence.guidancePlayers ? (
+            <div className="mulligan-lab-guidance-rate" data-scope={choiceEvidence.scope}>
+              <small>{choiceEvidence.scope === "player-legend" ? `General ${playerLegendName} tendency · not graded` : `Contributor-balanced ${mulliganLabEvidenceScopeLabel(choiceEvidence.scope)}`}</small>
+              <strong>{guidanceKeepPercent}% keep</strong>
+              <em>{choiceEvidence.guidancePlayers} players · one vote each{confidenceRange ? ` · likely range ${Math.round(confidenceRange.lower * 100)}–${Math.round(confidenceRange.upper * 100)}%` : ""}</em>
+            </div>
+          ) : (
+            <div className="mulligan-lab-guidance-rate" data-legacy="true">
+              <small>Legacy cached evidence</small>
+              <strong>Not graded</strong>
+              <em>Contributor-balanced guidance is unavailable</em>
+            </div>
+          )}
+          <div className="mulligan-lab-evidence-bar" aria-label={`${keptPercent}% of observed hands kept and ${redrawnPercent}% redrawn`}><i data-choice="keep" style={{ width: `${keptPercent}%` }} /><i data-choice="redraw" style={{ width: `${redrawnPercent}%` }} /></div>
+          <div className="mulligan-lab-choice-rates">
+            <span data-choice="keep"><small>Observed hands kept</small><strong>{keptPercent}%</strong><em>{kept} of {offered}</em></span>
+            <span data-choice="redraw"><small>Observed hands redrawn</small><strong>{redrawnPercent}%</strong><em>{redrawn} of {offered}</em></span>
+          </div>
+          {card.stats.slices ? (
+            <div className="mulligan-lab-context-slices">
+              {card.stats.slices.matchingCurve ? <span><small>Same curve shape</small><strong>{Math.round(card.stats.slices.matchingCurve.guidanceKeepRate * 100)}% keep</strong><em>{card.stats.slices.matchingCurve.guidancePlayers} players · {card.stats.slices.matchingCurve.evidenceStatus}</em></span> : null}
+              {card.stats.slices.matchingInitiative ? <span><small>Same initiative</small><strong>{Math.round(card.stats.slices.matchingInitiative.guidanceKeepRate * 100)}% keep</strong><em>{card.stats.slices.matchingInitiative.guidancePlayers} players · {card.stats.slices.matchingInitiative.evidenceStatus}</em></span> : null}
+              {periodShift !== null ? <span data-shift={Math.abs(periodShift) >= 15}><small>Meta movement</small><strong>{periodShift > 0 ? "+" : ""}{periodShift} pts keep</strong><em>current season vs pre-season</em></span> : null}
+            </div>
+          ) : null}
+          {card.stats.outcomeStatus === "comparable" ? (
+            <>
+              <div className="mulligan-lab-outcome-rates">
+                <span><small>Observed win rate · kept</small><strong>{card.stats.keptWinRate === null ? "—" : `${Math.round(card.stats.keptWinRate * 100)}%`}</strong><em>n={kept}</em></span>
+                <span><small>Observed win rate · redrawn</small><strong>{card.stats.redrawnWinRate === null ? "—" : `${Math.round(card.stats.redrawnWinRate * 100)}%`}</strong><em>n={redrawn}</em></span>
+              </div>
+              <small className="mulligan-lab-outcome-caveat">Descriptive association only; outcomes are not used to grade this choice.</small>
+            </>
+          ) : (
+            <>
+              <span className="mulligan-lab-outcome-unavailable">Outcome comparison unavailable</span>
+              <small className="mulligan-lab-outcome-caveat">Keep and redraw branches have not both reached the outcome sample gate.</small>
+            </>
+          )}
+          <small className="mulligan-lab-scope-label">{choiceEvidence.scope === "matching-curve"
+            ? `Same curve shape · ${choiceEvidence.guidancePlayers} contributor-balanced players · context grade`
+            : choiceEvidence.scope === "matching-initiative"
+              ? `Same initiative · ${choiceEvidence.guidancePlayers} contributor-balanced players · context grade`
+              : card.stats.scope === "matchup"
+                ? `Matchup evidence · both initiatives · ${card.stats.scopeHands} hands / ${card.stats.scopePlayers} players`
+                : `Across all ${playerLegendName} matchups · both initiatives · broader fallback`}</small>
+          <small>{offered} observed hands from {card.stats.playerCount} anonymous players · raw pool baseline {Math.round(card.stats.baselineKeepRate * 100)}% kept.</small>
+        </div>
+      ) : <strong className="mulligan-lab-card-name">{card.name}</strong>}
+    </article>
+  );
+}
+
+function mulliganLabCardSignal(stats: MulliganLabCardStats): { direction: "keep" | "redraw" | "mixed" | "developing" | "limited" | "general"; label: string } {
+  const evidence = mulliganLabChoiceEvidence(stats);
+  if (evidence.evidenceStatus === "limited") return { direction: "limited", label: "Not enough evidence" };
+  if (evidence.scope === "player-legend") {
+    const tendency = evidence.guidance === "strong_keep" || evidence.guidance === "keep"
+      ? "keep"
+      : evidence.guidance === "strong_redraw" || evidence.guidance === "redraw"
+        ? "redraw"
+        : "mixed";
+    return { direction: "general", label: `General legend tendency · ${tendency} · not graded` };
+  }
+  const context = evidence.scope === "matching-curve" ? "same-curve " : evidence.scope === "matching-initiative" ? "same-initiative " : "";
+  const suffix = evidence.evidenceStatus === "developing" ? " · developing" : "";
+  if (evidence.guidance === "strong_keep") return { direction: evidence.evidenceStatus === "robust" ? "keep" : "developing", label: `Strong ${context}keep signal${suffix}` };
+  if (evidence.guidance === "keep") return { direction: evidence.evidenceStatus === "robust" ? "keep" : "developing", label: `Community-backed ${context}keep signal${suffix}` };
+  if (evidence.guidance === "strong_redraw") return { direction: evidence.evidenceStatus === "robust" ? "redraw" : "developing", label: `Strong ${context}redraw signal${suffix}` };
+  if (evidence.guidance === "redraw") return { direction: evidence.evidenceStatus === "robust" ? "redraw" : "developing", label: `Community-backed ${context}redraw signal${suffix}` };
+  return { direction: evidence.evidenceStatus === "developing" ? "developing" : "mixed", label: evidence.guidance === "mixed" ? `Split ${context}community signal${suffix}` : `Unclear ${context || "matchup "}signal${suffix}` };
+}
+
+function mulliganLabEvidenceScopeLabel(scope: ReturnType<typeof mulliganLabChoiceEvidence>["scope"]): string {
+  if (scope === "matching-curve") return "Same-curve pattern";
+  if (scope === "matching-initiative") return "Same-initiative pattern";
+  if (scope === "matchup") return "Matchup pattern";
+  return "General legend tendency";
+}
+
+function mulliganLabRunTotals(drills: MulliganLabApiDrill[], decisions: Record<string, number[]>): {
+  hands: number;
+  aligned: number;
+  conflicts: number;
+  general: number;
+  ungraded: number;
+} {
+  const totals = { hands: 0, aligned: 0, conflicts: 0, general: 0, ungraded: 0 };
+  for (const drill of drills) {
+    const selected = decisions[drill.id];
+    if (!selected) continue;
+    totals.hands += 1;
+    for (const decision of mulliganLabIdentityDecisions(drill.cards, selected)) {
+      if (decision.feedback === "aligned") totals.aligned += 1;
+      else if (decision.feedback === "conflicts") totals.conflicts += 1;
+      else if (decision.feedback === "general-aligned" || decision.feedback === "general-different") totals.general += 1;
+      else totals.ungraded += 1;
+    }
+  }
+  return totals;
+}
+
+function MulliganLabRevealSummary({ drill, identityDecisions, onNext, nextLabel, onOpenPrep }: {
+  drill: MulliganLabApiDrill;
+  identityDecisions: MulliganLabIdentityDecision[];
+  onNext: () => void;
+  nextLabel: "Next hand" | "Finish run";
+  onOpenPrep: () => void;
+}) {
+  const feedback = identityDecisions.map((decision) => decision.feedback);
+  const aligned = feedback.filter((value) => value === "aligned").length;
+  const conflicts = feedback.filter((value) => value === "conflicts").length;
+  const developing = feedback.filter((value) => value === "developing").length;
+  const unclear = feedback.filter((value) => value === "unclear").length;
+  const mixedCopies = feedback.filter((value) => value === "mixed-copy").length;
+  const general = feedback.filter((value) => value === "general-aligned" || value === "general-different").length;
+  const ungraded = developing + unclear + mixedCopies;
+  const graded = aligned + conflicts;
+  const result = !graded ? "ungraded" : !conflicts ? "aligned" : !aligned ? "conflicts" : "mixed";
+  return (
+    <footer className="mulligan-lab-reveal-bar" data-result={result} aria-live="polite">
+      <div>
+        <span className="eyebrow">Card-by-card community evidence</span>
+        <strong>{graded ? `${aligned} matched community pattern · ${conflicts} different from pattern` : "This hand does not have a reliable card-level grade yet"}</strong>
+        <p>This is not a whole-hand grade. Each gameplay card identity is counted once. Green and red feedback is reserved for reliable {drill.playerLegend.name} vs {drill.opponentLegend.name} matchup or matching-context evidence. Legend-wide fallbacks are shown only as neutral general tendencies and never affect the grade. This never uses the decision or result from the sampled replay. {ungraded ? `${ungraded} signal${ungraded === 1 ? " is" : "s are"} ungraded.` : ""} {general ? `${general} card${general === 1 ? " uses" : "s use"} broader context.` : ""} {mixedCopies ? `${mixedCopies} duplicate-card choice${mixedCopies === 1 ? " was" : "s were"} split between keep and redraw.` : ""}</p>
+      </div>
+      <div className="mulligan-lab-summary-score" aria-label="Choice feedback summary">
+        <span data-kind="aligned"><strong>{aligned}</strong><small>Aligned</small></span>
+        <span data-kind="conflicts"><strong>{conflicts}</strong><small>Conflicts</small></span>
+        <span data-kind="general"><strong>{general}</strong><small>General</small></span>
+        <span data-kind="unclear"><strong>{ungraded}</strong><small>Ungraded</small></span>
+      </div>
+      <button type="button" className="secondary" onClick={onOpenPrep}><BookOpen size={15} /> Open matchup prep</button>
+      <button type="button" className="primary" onClick={onNext}>{nextLabel} <ChevronRight size={16} /></button>
+    </footer>
+  );
 }
 
 function MatchupLabView({
@@ -10388,6 +11815,7 @@ function DashboardView({
         activeTestingSession={activeTestingSession}
         settings={settings}
         focusTarget={matchFocusTarget}
+        onNavigate={onNavigate}
         onReview={onReview}
         onDelete={onDelete}
         onOpenReplay={onOpenReplayForMatch}
@@ -10403,6 +11831,12 @@ function DashboardView({
   }
   if (view === "stats") {
     return <StatsView matches={visibleMatches} />;
+  }
+  if (view === "mulligan-lab") {
+    return <MulliganLabView decks={decks} settings={settings} onNavigate={onNavigate} />;
+  }
+  if (view === "sideboard-lab") {
+    return <SideboardLabView decks={decks} activeDeckId={settings.activeDeckId} endpoint={SIDEBOARD_LAB_URL} registry={MULLIGAN_LAB_REGISTRY} onNavigate={onNavigate} />;
   }
   if (view === "matchup-lab") {
     return <MatchupLabView matches={visibleMatches} communityMatches={communityMatches} decks={decks} replays={replays} settings={settings} onNavigate={onNavigate} onRefreshCommunity={onRefreshCommunity} />;
@@ -13375,7 +14809,7 @@ function AccountView({
             setLinkQr("");
             linkStartedAsFirstConnection.current = false;
           } else {
-            setStatus(error instanceof Error ? error.message : "Could not check account link.");
+            setStatus(accountLinkErrorMessage(error));
           }
         }
       } finally {
@@ -13417,7 +14851,7 @@ function AccountView({
       }
     } catch (error) {
       linkStartedAsFirstConnection.current = false;
-      setStatus(error instanceof Error ? error.message : "Could not start account link.");
+      setStatus(accountLinkErrorMessage(error));
     } finally {
       setLinkBusy(false);
     }
@@ -13771,7 +15205,7 @@ function AccountView({
               <Mail size={16} /> Continue with email
             </button>
             <button type="button" className="secondary account-provider-button" disabled={linkBusy} onClick={() => void startLink("discord")}>
-              <MessageCircle size={16} /> Continue with Discord
+              <MessageCircle size={16} /> Recover with Discord
             </button>
           </> : null}
           {accountLinked ? <button className="secondary" disabled={connectionBusy} onClick={() => void checkAccountConnection()}><RefreshCw size={16} /> Check connection</button> : null}
@@ -13780,6 +15214,7 @@ function AccountView({
             <RefreshCw size={16} /> Refresh matches
           </button>
         </div>
+        {showAccountSignInActions ? <p className="muted account-provider-help">Use the same Google or email method that created your account. Discord only recovers an account you previously connected to Discord; a profile handle is not a sign-in method.</p> : null}
         {linkSession ? (
           <div className="account-link-box account-link-waiting">
             <span className="account-link-status-icon" aria-hidden="true"><RefreshCw size={24} /></span>
@@ -15021,6 +16456,7 @@ function MatchesView({
   activeTestingSession,
   settings,
   focusTarget,
+  onNavigate,
   onReview,
   onDelete,
   onOpenReplay,
@@ -15039,6 +16475,7 @@ function MatchesView({
   activeTestingSession: TestingSession | null;
   settings: UserSettings;
   focusTarget: MatchFocusTarget | null;
+  onNavigate: (view: ActiveView, options?: NavigationOptions) => void;
   onReview: (draft: MatchDraft) => void;
   onDelete: (id: string) => Promise<void>;
   onOpenReplay: (matchId: string) => void;
@@ -15078,6 +16515,10 @@ function MatchesView({
   );
   const selectedMatch = selectedMatchId ? filteredMatches.find((match) => match.id === selectedMatchId) : undefined;
   const selectedAnalyticsMatch = useMemo(() => selectedMatch ? localToAnalytics(selectedMatch) : null, [selectedMatch]);
+  const selectedLabTrainingContext = useMemo(
+    () => selectedMatch ? labTrainingContextFromMatch(selectedMatch, decks) : null,
+    [decks, selectedMatch]
+  );
   const replayByMatch = useMemo(() => new Map(replays.map((replay) => [replay.matchId, replay])), [replays]);
   const matchById = useMemo(() => new Map(matches.map((match) => [match.id, match])), [matches]);
   const allMatchIds = useMemo(() => new Set(matches.map((match) => match.id)), [matches]);
@@ -15139,6 +16580,26 @@ function MatchesView({
   function setFilter(key: keyof MatchHistoryFilters, value: string) {
     setFilters((current) => ({ ...current, [key]: value }));
     setSelectedMatchId("");
+  }
+
+  function openLabTrainingFromMatch(destination: LabTrainingDestination) {
+    if (!selectedLabTrainingContext) return;
+    try {
+      storeLabTrainingHandoff(window.localStorage, createLabTrainingHandoff({
+        destination,
+        source: "match-detail",
+        playerLegend: selectedLabTrainingContext.playerLegend,
+        opponentLegend: selectedLabTrainingContext.opponentLegend,
+        deckId: selectedLabTrainingContext.deckId,
+        format: selectedLabTrainingContext.format,
+        wentFirst: selectedLabTrainingContext.wentFirst,
+        priorGameResult: selectedLabTrainingContext.priorGameResult
+      }));
+    } catch {
+      // The lab still opens safely on its normal defaults when storage is unavailable.
+    }
+    setSelectedMatchId("");
+    onNavigate(destination === "mulligan" ? "mulligan-lab" : "sideboard-lab");
   }
 
   function toggleSyncMatch(id: string, checked: boolean) {
@@ -15574,6 +17035,8 @@ function MatchesView({
               matchTimerLabel={matchTimerLabelFromReplay(selectedReplaySegments[0]?.replay)}
               onOpenReplay={() => openReplayForMatchRow(selectedMatch)}
               onUndoCombinedMatch={() => void undoCombinedSelectedMatch(selectedMatch.id)}
+              onOpenMulliganLab={selectedLabTrainingContext ? () => openLabTrainingFromMatch("mulligan") : undefined}
+              onOpenSideboardLab={selectedLabTrainingContext?.sideboardEligible ? () => openLabTrainingFromMatch("sideboard") : undefined}
               onClose={() => setSelectedMatchId("")}
             />
           ) : null}
@@ -15775,6 +17238,37 @@ function TestingSessionSummary({ session, matches, replays }: { session: Testing
   );
 }
 
+function labTrainingContextFromMatch(match: MatchDraft, decks: SavedDeck[]): {
+  playerLegend: string;
+  opponentLegend: string;
+  deckId: string;
+  format: MatchDraft["format"];
+  wentFirst: "1st" | "2nd" | null;
+  priorGameResult: "win" | "loss" | null;
+  sideboardEligible: boolean;
+} | null {
+  const playerLegend = normalizeLegendName(match.myChampion);
+  const opponentLegend = normalizeLegendName(match.opponentChampion);
+  if (!LAB_TRAINING_LEGEND_NAMES.has(playerLegend) || !LAB_TRAINING_LEGEND_NAMES.has(opponentLegend)) return null;
+  const firstSeat = match.games.find((game) => game.gameNumber === 1)?.wentFirst;
+  const firstResult = match.games.find((game) => game.gameNumber === 1)?.result;
+  return {
+    playerLegend,
+    opponentLegend,
+    deckId: resolveLabTrainingDeckId({
+      deckSourceId: match.deckSourceId,
+      deckSourceKey: match.deckSourceKey,
+      deckSourceUrl: match.deckSourceUrl,
+      deckName: match.deckName,
+      playerLegend
+    }, decks),
+    format: match.format,
+    wentFirst: firstSeat === "1st" || firstSeat === "2nd" ? firstSeat : null,
+    priorGameResult: firstResult === "Win" ? "win" : firstResult === "Loss" ? "loss" : null,
+    sideboardEligible: match.format === "Bo3" || match.games.length > 1
+  };
+}
+
 function LocalMatchDrilldown({
   match,
   relatedMatches,
@@ -15784,6 +17278,8 @@ function LocalMatchDrilldown({
   matchTimerLabel = "",
   onOpenReplay,
   onUndoCombinedMatch,
+  onOpenMulliganLab,
+  onOpenSideboardLab,
   onClose
 }: {
   match: AnalyticsMatch;
@@ -15794,6 +17290,8 @@ function LocalMatchDrilldown({
   matchTimerLabel?: string;
   onOpenReplay?: () => void;
   onUndoCombinedMatch?: () => void;
+  onOpenMulliganLab?: () => void;
+  onOpenSideboardLab?: () => void;
   onClose: () => void;
 }) {
   const games = match.games.length || 1;
@@ -15811,6 +17309,16 @@ function LocalMatchDrilldown({
           <LegendAvatar legend={match.opponentChampion || "Unknown"} size="large" />
         </div>
         <div className="row-actions">
+          {onOpenMulliganLab ? (
+            <button className="secondary" onClick={onOpenMulliganLab}>
+              <Lightbulb size={16} /> Train mulligan
+            </button>
+          ) : null}
+          {onOpenSideboardLab ? (
+            <button className="secondary" onClick={onOpenSideboardLab}>
+              <ArrowLeftRight size={16} /> Train sideboarding
+            </button>
+          ) : null}
           {combinedRepair ? (
             <button className="secondary" onClick={onUndoCombinedMatch}>
               <RotateCcw size={16} /> Undo combine
@@ -23885,6 +25393,27 @@ function SettingsView({
             />
           </label>
           <p className="muted">Helps measure daily active users, versions, platform, and replay settings. No usernames, emails, match notes, deck lists, or replay files are sent.</p>
+        </div>
+        <div className="rail-card home-theme-settings-card" id="home-theme-settings">
+          <h2>Home appearance</h2>
+          <p className="muted">Use a restrained colour treatment from your active deck's legend. Themes only affect Home and never recolour results, warnings, creator branding, or card art.</p>
+          <label className="toggle-row">
+            <span><Sparkles size={16} /> Theme Home from active deck</span>
+            <input
+              type="checkbox"
+              checked={settings.homeDeckThemeEnabled}
+              onChange={(event) => void onSave({ homeDeckThemeEnabled: event.target.checked })}
+            />
+          </label>
+          <div className="home-theme-preview-list" aria-label="Riftbound domain colours">
+            {Object.entries(HOME_DECK_DOMAIN_COLORS).map(([domain, colour]) => (
+              <span title={`${domain} domain`} key={domain}>
+                <i style={{ "--theme-swatch": colour.hex } as React.CSSProperties} />
+                {domain}
+              </span>
+            ))}
+          </div>
+          <p className="muted">Available for every currently recognised legend. Legends with the same two domains share one consistent palette.</p>
         </div>
         </SettingsAccordionSection>
         <SettingsAccordionSection
