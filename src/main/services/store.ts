@@ -9,6 +9,7 @@ import initSqlJs, { type Database, type SqlJsStatic } from "sql.js";
 import { deckNotebookWithCurrentVersion, deckSnapshotHash, emptyDeckNotebook, normalizeDeckNotebook, sanitizeDeckNotebookForDeck } from "../../shared/deckNotebook.js";
 import { normalizeLegendName } from "../../shared/legendNames.js";
 import { buildCombinedBo3Match, buildMatchCombinePreview, markOriginalAsCombined, restoreCombinedOriginal, type MatchCombinePreview, type MatchCombineSavePayload } from "../../shared/matchCombine.js";
+import { replayWithIntelligence } from "../../shared/replayIntelligence.js";
 import type { CaptureEvent, DeckNotebook, ImportSummary, MatchDraft, OverlayDisplayOptions, ReplayFolder, ReplayRecord, RiftLiteBackupFile, RiftLiteBackupOptions, SavedDeck, UserSettings } from "../../shared/types.js";
 import { sanitizeBackupFile } from "./backupSanitizer.js";
 import { redactCorruptSettingsText, redactSensitiveSettings, sensitiveCredentialPatch, stripLegacyHubSecrets, type ProtectedSettingsResult, type SecureCredentialVault } from "./secureCredentialVault.js";
@@ -847,18 +848,19 @@ export class RiftLiteStore {
   }
 
   async getSavedDecks(): Promise<SavedDeck[]> {
-    const db = await this.database();
-    const result = db.exec(
-      `SELECT id, source_url, source_key, title, legend, snapshot_json,
-              last_imported_at, last_refresh_status, last_refresh_error
-       FROM saved_decks
-       ORDER BY title COLLATE NOCASE ASC, last_imported_at DESC`
-    );
-    return (result[0]?.values ?? []).map(savedDeckFromRow);
+    return this.enqueueDatabaseRead("get-saved-decks", (db) => {
+      const result = db.exec(
+        `SELECT id, source_url, source_key, title, legend, snapshot_json,
+                last_imported_at, last_refresh_status, last_refresh_error
+         FROM saved_decks
+         ORDER BY title COLLATE NOCASE ASC, last_imported_at DESC`
+      );
+      return (result[0]?.values ?? []).map(savedDeckFromRow);
+    });
   }
 
   async getSavedDeck(id: string): Promise<SavedDeck | null> {
-    return this.readSavedDeckFromDatabase(await this.database(), id);
+    return this.enqueueDatabaseRead("get-saved-deck", (db) => this.readSavedDeckFromDatabase(db, id));
   }
 
   private readSavedDeckFromDatabase(db: Database, id: string): SavedDeck | null {
@@ -878,7 +880,10 @@ export class RiftLiteStore {
     if (!key) {
       return null;
     }
-    return this.readSavedDeckBySourceKeyFromDatabase(await this.database(), key);
+    return this.enqueueDatabaseRead(
+      "get-saved-deck-by-source-key",
+      (db) => this.readSavedDeckBySourceKeyFromDatabase(db, key)
+    );
   }
 
   private readSavedDeckBySourceKeyFromDatabase(db: Database, sourceKey: string): SavedDeck | null {
@@ -1047,7 +1052,7 @@ export class RiftLiteStore {
   }
 
   async saveReplay(replay: ReplayRecord): Promise<ReplayRecord> {
-    const next = compactReplayForStorage(replay);
+    const next = compactReplayForStorage(replayWithIntelligence(replay));
     const prepared = await this.replayPayloadStore.prepare(next);
     return this.enqueueAtomicDatabaseMutation("save-replay", (db) => {
       db.run(
@@ -1146,7 +1151,7 @@ export class RiftLiteStore {
    * leave an orphaned replay behind.
    */
   async saveReplayIfMatchActive(replay: ReplayRecord): Promise<ReplayRecord | null> {
-    const next = compactReplayForStorage(replay);
+    const next = compactReplayForStorage(replayWithIntelligence(replay));
     const prepared = await this.replayPayloadStore.prepare(next);
     return this.enqueueAtomicDatabaseMutation("save-replay-if-match-active", (db) => {
       const purged = db.exec("SELECT 1 FROM replay_purge_tombstones WHERE replay_id=?", [next.id])[0]?.values[0]?.[0];
@@ -1246,14 +1251,14 @@ export class RiftLiteStore {
       }
       const candidate = update(current);
       const payloadUnchanged = replayPayloadFieldsShareIdentity(current, candidate);
-      const next = compactReplayForStorage({
+      const next = compactReplayForStorage(replayWithIntelligence({
         ...candidate,
         id: current.id,
         matchId: current.matchId,
         platform: current.platform,
         capturedAt: current.capturedAt,
         deletedAt: undefined
-      });
+      }));
       const persisted = await this.prepareStoredReplayUpdate(stored, next, payloadUnchanged);
       db.run("UPDATE replays SET data_json=? WHERE id=?", [JSON.stringify(persisted), id]);
       return next;
@@ -1273,13 +1278,13 @@ export class RiftLiteStore {
       const current = await this.hydrateStoredReplay(stored);
       const candidate = update(current);
       const payloadUnchanged = replayPayloadFieldsShareIdentity(current, candidate);
-      const next = compactReplayForStorage({
+      const next = compactReplayForStorage(replayWithIntelligence({
         ...candidate,
         id: current.id,
         matchId: current.matchId,
         platform: current.platform,
         capturedAt: current.capturedAt
-      });
+      }));
       const persisted = await this.prepareStoredReplayUpdate(stored, next, payloadUnchanged);
       db.run("UPDATE replays SET data_json=? WHERE id=?", [JSON.stringify(persisted), id]);
       return next;
@@ -1556,7 +1561,7 @@ export class RiftLiteStore {
       if (!options.preserveReplays) {
         const replays = [...(backup.replays ?? []), ...(backup.deletedReplays ?? [])];
         for (const replay of replays) {
-          const next = compactReplayForStorage(replay);
+          const next = compactReplayForStorage(replayWithIntelligence(replay));
           const prepared = await this.replayPayloadStore.prepare(next);
           candidateDb.run(
             `INSERT OR REPLACE INTO replays
@@ -2065,6 +2070,16 @@ export class RiftLiteStore {
     return operation;
   }
 
+  private enqueueDatabaseRead<T>(
+    context: string,
+    action: (database: Database) => T | Promise<T>
+  ): Promise<T> {
+    return this.enqueueDatabaseOperation(() => this.withDatabaseRepair(
+      context,
+      async () => action(await this.database())
+    ));
+  }
+
   private enqueueAtomicDatabaseMutation<T>(
     context: string,
     action: (database: Database) => T | Promise<T>,
@@ -2208,11 +2223,30 @@ export class RiftLiteStore {
         // fails, leave the canonical file untouched and require an app restart.
         return action();
       }
-      if (!isDatabaseMalformedError(error)) {
-        throw error;
+      if (isDatabaseMalformedError(error)) {
+        await this.repairDatabase(context);
+        return action();
       }
-      await this.repairDatabase(context);
-      return action();
+      // A poisoned WASM heap can surface arbitrary bytes as the first error
+      // message. Probe the active database before trusting an unrecognized
+      // exception; a failed SELECT 1 proves the runtime itself must be reopened.
+      if (this.databaseRuntimeProbeFailure()) {
+        await this.reopenCanonicalDatabaseAfterRuntimeFailure(context);
+        return action();
+      }
+      throw error;
+    }
+  }
+
+  private databaseRuntimeProbeFailure(): unknown | null {
+    if (!this.db) {
+      return null;
+    }
+    try {
+      this.db.exec("SELECT 1");
+      return null;
+    } catch (error) {
+      return error;
     }
   }
 
@@ -2633,7 +2667,9 @@ function compactReplayForStorage(replay: ReplayRecord): ReplayRecord {
   return {
     ...replay,
     events: compactCaptureEvents(replay.events ?? [], 24),
-    structuredEvents: replay.structuredEvents?.slice(-300),
+    // MatchSessionTracker caps this stream at 420. Retain the whole stream so
+    // Replay Intelligence never loses the opening turns of a long match.
+    structuredEvents: replay.structuredEvents?.slice(-600),
     visualFrames: replay.visualFrames ?? [],
     video: compactReplayVideoAsset(replay.video),
     matchSnapshot: replay.matchSnapshot ? compactMatchForStorage(replay.matchSnapshot) : undefined

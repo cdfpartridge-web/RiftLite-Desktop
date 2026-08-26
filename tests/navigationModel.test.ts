@@ -24,10 +24,11 @@ describe("desktop navigation model", () => {
     }
   });
 
-  it("defines Home and Play followed by the three approved disclosures", () => {
+  it("defines Home, Play and Insights followed by the three approved disclosures", () => {
     expect(PRIMARY_NAVIGATION.map((entry) => [entry.kind, entry.id, entry.label])).toEqual([
       ["route", "home", "Home"],
       ["route", "play", "Play"],
+      ["route", "insights", "Insights"],
       ["disclosure", "review", "Review"],
       ["disclosure", "prepare", "Prepare"],
       ["disclosure", "community", "Community"]
@@ -114,7 +115,7 @@ describe("desktop navigation model", () => {
   );
 
   it("does not assign primary routes or utilities to a disclosure", () => {
-    for (const view of ["home", "play", "stream", "account", "settings"] as const) {
+    for (const view of ["home", "play", "insights", "stream", "account", "settings"] as const) {
       expect(owningNavigationDisclosure({ view })).toBeNull();
     }
   });

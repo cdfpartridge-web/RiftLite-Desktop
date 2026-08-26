@@ -5,6 +5,7 @@ export interface AtlasShellEvidence {
   interactiveText: string;
   interactiveCount: number;
   gameSurfaceCount: number;
+  lobbyPlaySurfaceCount: number;
   lobbyHeadingCount: number;
   authHeadingCount: number;
   authFormCount: number;
@@ -28,6 +29,8 @@ export interface AtlasShellAssessment {
   routeKind: AtlasShellRouteKind;
   readyReason: AtlasShellReadyReason;
   lobbyActionCount: number;
+  lobbyPlayActionCount: number;
+  lobbyPlaySurfaceCount: number;
   authMarkerCount: number;
   gameMarkerCount: number;
 }
@@ -40,17 +43,25 @@ export interface AtlasAuthSurfaceEvidence {
   text: string;
 }
 
-const LOBBY_ACTION_MARKERS = [
+const LOBBY_PLAY_ACTION_MARKERS = [
   /\bhost room\b/i,
   /\bsolo room\b/i,
   /\bfind random match\b/i,
   /\bquick match\b/i,
   /\bjoin\s*(?:\/|or)\s*spectate\b/i,
-  /\bjoin room\b/i,
+  /\bjoin room\b/i
+];
+
+const LOBBY_DECK_ACTION_MARKERS = [
   /\bchoose deck\b/i,
   /\bimport deck\b/i,
   /\bnew deck\b/i,
   /\bpaste a deck\b/i
+];
+
+const LOBBY_ACTION_MARKERS = [
+  ...LOBBY_PLAY_ACTION_MARKERS,
+  ...LOBBY_DECK_ACTION_MARKERS
 ];
 
 const AUTH_MARKERS = [
@@ -90,39 +101,48 @@ const GAME_MARKERS = [
  */
 export function assessAtlasShell(evidence: AtlasShellEvidence): AtlasShellAssessment {
   const hostname = evidence.hostname.trim().toLowerCase();
-  const pathname = normalizePathname(evidence.pathname);
+  const pathname = stripAtlasLocalePrefix(normalizePathname(evidence.pathname));
   const routeKind = atlasShellRouteKind(hostname, pathname);
   const lobbyActionCount = markerCount(evidence.interactiveText, LOBBY_ACTION_MARKERS);
+  const lobbyPlayActionCount = markerCount(evidence.interactiveText, LOBBY_PLAY_ACTION_MARKERS);
+  const lobbyPlaySurfaceCount = Number.isFinite(evidence.lobbyPlaySurfaceCount)
+    ? Math.max(0, Math.trunc(evidence.lobbyPlaySurfaceCount))
+    : 0;
   const authMarkerCount = markerCount(evidence.visibleText, AUTH_MARKERS);
   const gameMarkerCount = markerCount(evidence.visibleText, GAME_MARKERS);
-  const lobbyReady =
-    (evidence.lobbyHeadingCount > 0 && lobbyActionCount > 0) ||
-    lobbyActionCount >= 2;
+  // Deck management can render before Atlas's matchmaking subtree when a
+  // cached frontend update only mounts part of the lobby. Do not report the
+  // shell as healthy until at least one actual way to play is visible.
+  const lobbyReady = lobbyPlaySurfaceCount > 0 || (
+    lobbyPlayActionCount > 0 && (evidence.lobbyHeadingCount > 0 || lobbyActionCount >= 2)
+  );
 
   if (isAtlasAuthTransition(hostname, pathname)) {
-    return assessment(true, routeKind, "auth-transition", lobbyActionCount, authMarkerCount, gameMarkerCount);
+    return assessment(true, routeKind, "auth-transition", lobbyActionCount, lobbyPlayActionCount, lobbyPlaySurfaceCount, authMarkerCount, gameMarkerCount);
   }
 
-  if (evidence.gameSurfaceCount > 0) {
-    return assessment(true, routeKind, "game-content", lobbyActionCount, authMarkerCount, gameMarkerCount);
+  // Atlas's lobby deck list may also expose card-like data attributes. Those
+  // are not proof that the actual game board or matchmaking controls mounted.
+  if (evidence.gameSurfaceCount > 0 && (routeKind === "game" || routeKind === "other")) {
+    return assessment(true, routeKind, "game-content", lobbyActionCount, lobbyPlayActionCount, lobbyPlaySurfaceCount, authMarkerCount, gameMarkerCount);
   }
 
   if (routeKind === "lobby") {
-    return assessment(lobbyReady, routeKind, lobbyReady ? "lobby-content" : "none", lobbyActionCount, authMarkerCount, gameMarkerCount);
+    return assessment(lobbyReady, routeKind, lobbyReady ? "lobby-content" : "none", lobbyActionCount, lobbyPlayActionCount, lobbyPlaySurfaceCount, authMarkerCount, gameMarkerCount);
   }
 
   if (routeKind === "auth") {
     const authReady = evidence.authFormCount > 0 || evidence.authHeadingCount > 0;
-    return assessment(authReady, routeKind, authReady ? "auth-content" : "none", lobbyActionCount, authMarkerCount, gameMarkerCount);
+    return assessment(authReady, routeKind, authReady ? "auth-content" : "none", lobbyActionCount, lobbyPlayActionCount, lobbyPlaySurfaceCount, authMarkerCount, gameMarkerCount);
   }
 
   if (routeKind === "game") {
     const gameReady = gameMarkerCount > 0;
-    return assessment(gameReady, routeKind, gameReady ? "game-content" : "none", lobbyActionCount, authMarkerCount, gameMarkerCount);
+    return assessment(gameReady, routeKind, gameReady ? "game-content" : "none", lobbyActionCount, lobbyPlayActionCount, lobbyPlaySurfaceCount, authMarkerCount, gameMarkerCount);
   }
 
   const otherReady = lobbyReady || (evidence.authFormCount > 0 && authMarkerCount > 0) || gameMarkerCount > 0;
-  return assessment(otherReady, routeKind, otherReady ? "other-app-content" : "none", lobbyActionCount, authMarkerCount, gameMarkerCount);
+  return assessment(otherReady, routeKind, otherReady ? "other-app-content" : "none", lobbyActionCount, lobbyPlayActionCount, lobbyPlaySurfaceCount, authMarkerCount, gameMarkerCount);
 }
 
 export function isAtlasAuthSurfaceEvidence(evidence: AtlasAuthSurfaceEvidence): boolean {
@@ -145,10 +165,12 @@ function assessment(
   routeKind: AtlasShellRouteKind,
   readyReason: AtlasShellReadyReason,
   lobbyActionCount: number,
+  lobbyPlayActionCount: number,
+  lobbyPlaySurfaceCount: number,
   authMarkerCount: number,
   gameMarkerCount: number
 ): AtlasShellAssessment {
-  return { ready, routeKind, readyReason, lobbyActionCount, authMarkerCount, gameMarkerCount };
+  return { ready, routeKind, readyReason, lobbyActionCount, lobbyPlayActionCount, lobbyPlaySurfaceCount, authMarkerCount, gameMarkerCount };
 }
 
 function atlasShellRouteKind(hostname: string, pathname: string): AtlasShellRouteKind {
@@ -176,6 +198,11 @@ function normalizePathname(value: string): string {
   const trimmed = value.trim();
   if (!trimmed || trimmed === "/") return "/";
   return `/${trimmed.replace(/^\/+|\/+$/g, "")}`;
+}
+
+function stripAtlasLocalePrefix(pathname: string): string {
+  const localized = pathname.replace(/^\/[a-z]{2}(?:-[a-z]{2})?(?=\/|$)/i, "");
+  return localized || "/";
 }
 
 function markerCount(text: string, markers: RegExp[]): number {

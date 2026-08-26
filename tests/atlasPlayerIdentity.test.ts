@@ -69,6 +69,59 @@ describe("Atlas player identity ranking", () => {
     expect(chooseAtlasOpponentIdentityName([controlCandidate], "Bunana", ["ZYBSB"])).toBe("");
   });
 
+  it.each([
+    "2/2010FloatingEnergy0Power0340",
+    "Draw (D)LookCtrlBurn39",
+    "Recycle 2 Fury runes.",
+    "20Send",
+    "Omurice menu",
+    "Main",
+    "Game settings"
+  ])("rejects current RiftAtlas board text as an opponent identity: %s", (name) => {
+    const boardCandidate = {
+      name,
+      side: "opponent" as const,
+      source: "identity-dom",
+      score: 8,
+      top: 5,
+      left: 5
+    };
+
+    expect(isAtlasPlayerIdentityUiControlValue(name)).toBe(true);
+    expect(isAtlasPlayerIdentityUiControlCandidate(boardCandidate)).toBe(true);
+    expect(chooseAtlasOpponentIdentityName([boardCandidate], "BMU", ["H8YTM"])).toBe("");
+  });
+
+  it("rejects Gold from the board-status root without blacklisting a player named Gold", () => {
+    const boardStatus = {
+      name: "Gold.",
+      side: "opponent" as const,
+      source: "identity-dom",
+      score: 8,
+      top: 5,
+      left: 5
+    };
+    const realPlayer = { ...boardStatus, name: "Gold", top: 13, left: 1469 };
+
+    expect(isAtlasPlayerIdentityUiControlValue("Gold.")).toBe(false);
+    expect(isAtlasPlayerIdentityUiControlCandidate(boardStatus)).toBe(true);
+    expect(isAtlasPlayerIdentityUiControlCandidate(realPlayer)).toBe(false);
+    expect(chooseAtlasOpponentIdentityName([boardStatus], "BMU", ["H8YTM"])).toBe("");
+    expect(chooseAtlasOpponentIdentityName([realPlayer], "BMU", ["H8YTM"])).toBe("Gold");
+  });
+
+  it("keeps the real opponent from the current RiftAtlas candidate set", () => {
+    expect(chooseAtlasOpponentIdentityName([
+      { name: "Gold.", side: "opponent", source: "identity-dom", score: 8, top: 5, left: 5 },
+      { name: "4/715FloatingEnergy0Power0276No", side: "opponent", source: "player-dom", score: 6, top: 6, left: 32 },
+      { name: "Omurice menu", side: "opponent", source: "aria-label", score: 8, top: 13, left: 1469 },
+      { name: "Omurice", side: "opponent", source: "aria-label", score: 8, top: 13, left: 1469 },
+      { name: "Draw (D)LookCtrlBurn28", side: "opponent", source: "aria-label", score: 8, top: 812, left: 1388 },
+      { name: "Main", side: "opponent", source: "aria-label", score: 8, top: 812, left: 1388 },
+      { name: "BMU", side: "opponent", source: "aria-label", score: 8, top: 889, left: 18 }
+    ], "BMU", ["H8YTM"])).toBe("Omurice");
+  });
+
   it.each(["R", "Starts"])("rejects an ambiguous low-trust control without rejecting an authoritative identity: %s", (name) => {
     const rewindHotkey = {
       name,

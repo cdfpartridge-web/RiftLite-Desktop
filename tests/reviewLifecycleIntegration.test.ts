@@ -73,6 +73,21 @@ describe("match review lifecycle integration", () => {
     expect(discardAt).toBeGreaterThan(durableDeleteAt);
   });
 
+  it("uses a non-blocking in-app delete confirmation so Atlas input focus can recover", () => {
+    const modal = functionSource("MatchReviewModal", "healthLabel");
+
+    expect(modal).not.toContain("window.confirm");
+    expect(modal).toContain("const [deleteConfirmationOpen, setDeleteConfirmationOpen] = useState(false)");
+    expect(modal).toContain("deleteCancelButtonRef.current?.focus({ preventScroll: true })");
+    expect(modal).toContain("if (!deleteConfirmationOpen)");
+    expect(modal).toContain("Delete this captured match?");
+    expect(modal).toContain("Keep reviewing");
+    expect(modal).toContain("Delete capture now");
+    expect(styleSource).toContain('.review-modal footer[data-delete-confirmation="true"]');
+    expect(appSource).toContain("shouldRestoreGameWebviewFocus(");
+    expect(appSource).toContain("const timers = [0, 100, 350].map");
+  });
+
   it("keeps manual Stop recoverable when capture cleanup cannot finish promptly", () => {
     const force = functionSource("forceCaptureReview", "dismissReviewDraft");
 
@@ -109,11 +124,15 @@ describe("match review lifecycle integration", () => {
     expect(appSource).toContain("key={reviewDraft.id}");
   });
 
-  it("shows a bounded underlying error instead of hiding every save failure", () => {
+  it("keeps internal save details out of the review and contains long errors", () => {
     const modal = functionSource("MatchReviewModal", "healthLabel");
 
     expect(modal).toContain('setSaveError(matchReviewErrorMessage(error, "Save did not complete."))');
-    expect(appSource).toContain("raw.slice(0, 280)");
+    expect(appSource).not.toContain("raw.slice(0, 280)");
+    expect(modal).toContain("Resolve the issue above, then try again.");
+    expect(styleSource).toContain(".review-form-alert > span");
+    expect(styleSource).toContain("overflow-wrap: anywhere");
+    expect(styleSource).toContain("min-width: 0");
   });
 
   it("keeps durable pending reviews out of local aggregate statistics", () => {

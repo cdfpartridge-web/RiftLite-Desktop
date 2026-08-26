@@ -90,6 +90,87 @@ describe("RiftLiteStore database recovery", () => {
     }
   });
 
+  it("recovers a poisoned sql.js runtime from the periodic saved-deck read path", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "riftlite-store-deck-read-runtime-reopen-"));
+    try {
+      const dbPath = join(directory, "riftlite-v06.sqlite");
+      const legacyPath = join(directory, "riftlite-v06-store.json");
+      const store = new RiftLiteStore(dbPath, legacyPath);
+      await store.load();
+      const deck = await store.upsertSavedDeck({
+        title: "Overlay deck",
+        legend: "Diana",
+        snapshotJson: "{}"
+      });
+
+      interface StoreRuntimeInternals {
+        db: {
+          exec(sql: string, params?: unknown[]): Array<{ values: unknown[][] }>;
+        } | null;
+        sql: object | null;
+      }
+      const internals = store as unknown as StoreRuntimeInternals;
+      const originalRuntime = internals.sql;
+      const execSpy = vi.spyOn(internals.db!, "exec").mockImplementationOnce(() => {
+        throw new WebAssembly.RuntimeError("null function or function signature mismatch");
+      });
+
+      await expect(store.getSavedDeck(deck.id)).resolves.toMatchObject({
+        id: deck.id,
+        title: "Overlay deck"
+      });
+      expect(execSpy).toHaveBeenCalledOnce();
+      expect(internals.sql).not.toBe(originalRuntime);
+      await expect(store.saveMatch(savedMatch("saved-after-deck-read-recovery"))).resolves.toMatchObject({
+        id: "saved-after-deck-read-recovery"
+      });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("uses a failed database probe to recover when a poisoned heap emits opaque payload text", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "riftlite-store-opaque-runtime-reopen-"));
+    try {
+      const dbPath = join(directory, "riftlite-v06.sqlite");
+      const legacyPath = join(directory, "riftlite-v06-store.json");
+      const store = new RiftLiteStore(dbPath, legacyPath);
+      await store.load();
+      await store.saveMatch(savedMatch("durable-before-opaque-runtime-failure"));
+
+      interface StoreRuntimeInternals {
+        db: {
+          exec(sql: string, params?: unknown[]): Array<{ values: unknown[][] }>;
+          export(): Uint8Array;
+        } | null;
+        sql: object | null;
+      }
+      const internals = store as unknown as StoreRuntimeInternals;
+      const originalRuntime = internals.sql;
+      vi.spyOn(internals.db!, "export").mockImplementationOnce(() => {
+        throw new Error('["configuredUsername","endText","format","myBattlefield","myBattlefieldImage"]');
+      });
+      const probeSpy = vi.spyOn(internals.db!, "exec").mockImplementationOnce(() => {
+        throw new WebAssembly.RuntimeError("memory access out of bounds");
+      });
+
+      await expect(store.saveMatch(savedMatch("saved-after-opaque-runtime-recovery"))).resolves.toMatchObject({
+        id: "saved-after-opaque-runtime-recovery"
+      });
+      expect(probeSpy).toHaveBeenCalledOnce();
+      expect(internals.sql).not.toBe(originalRuntime);
+
+      const restarted = new RiftLiteStore(dbPath, legacyPath);
+      await restarted.load();
+      expect((await restarted.getMatches()).map((match) => match.id)).toEqual(expect.arrayContaining([
+        "durable-before-opaque-runtime-failure",
+        "saved-after-opaque-runtime-recovery"
+      ]));
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("bounds sql.js runtime recovery to one retry", async () => {
     const directory = await mkdtemp(join(tmpdir(), "riftlite-store-sqljs-runtime-bounded-"));
     try {

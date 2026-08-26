@@ -29,5 +29,11 @@ describe("UI Dev modern styles", () => {
       .toMatch(/max-height\s*:/);
     expect(declarationsForSelector(baseStyles, ".atlas-known-hand-grid").join("\n"))
       .toMatch(/overflow-y\s*:\s*auto/);
+    expect(declarationsForSelector(baseStyles, ".atlas-known-hand-preview").join("\n"))
+      .toMatch(/position\s*:\s*absolute/);
+    expect(declarationsForSelector(baseStyles, ".atlas-known-hand-preview").join("\n"))
+      .toMatch(/max-height\s*:/);
+    expect(declarationsForSelector(baseStyles, ".atlas-known-hand-preview").join("\n"))
+      .toMatch(/pointer-events\s*:\s*none/);
   });
 });

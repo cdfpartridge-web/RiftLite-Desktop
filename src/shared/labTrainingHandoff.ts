@@ -3,7 +3,7 @@ export const LAB_TRAINING_HANDOFF_VERSION = 1 as const;
 export const LAB_TRAINING_HANDOFF_MAX_AGE_MS = 30 * 60 * 1_000;
 
 export type LabTrainingDestination = "mulligan" | "sideboard";
-export type LabTrainingHandoffSource = "match-detail" | "mulligan-complete" | "sideboard-complete";
+export type LabTrainingHandoffSource = "match-detail" | "insights" | "mulligan-complete" | "sideboard-complete";
 
 export interface LabTrainingHandoff {
   version: typeof LAB_TRAINING_HANDOFF_VERSION;
@@ -91,7 +91,7 @@ export function parseLabTrainingHandoff(
   if (!isRecord(value) || value.version !== LAB_TRAINING_HANDOFF_VERSION) return null;
   if (value.destination !== "mulligan" && value.destination !== "sideboard") return null;
   if (destination && value.destination !== destination) return null;
-  if (value.source !== "match-detail" && value.source !== "mulligan-complete" && value.source !== "sideboard-complete") return null;
+  if (value.source !== "match-detail" && value.source !== "insights" && value.source !== "mulligan-complete" && value.source !== "sideboard-complete") return null;
   const createdAt = cleanIso(value.createdAt);
   const playerLegend = cleanText(value.playerLegend, 100);
   const opponentLegend = cleanText(value.opponentLegend, 100);

@@ -16,6 +16,20 @@ function sourceBetween(source: string, startMarker: string, endMarker: string): 
 }
 
 describe("Atlas empty-shell recovery integration", () => {
+  it("counts visible Atlas play surfaces independently of translated button labels", () => {
+    const shellStatus = sourceBetween(
+      gamePreloadSource,
+      "function reportAtlasShellStatusIfNeeded",
+      "function isAtlasAuthSurface"
+    );
+
+    expect(shellStatus).toContain(".lobby-quick-match-actions button");
+    expect(shellStatus).toContain(".lobby-private-play-actions button");
+    expect(shellStatus).toContain(".lobby-room-code-actions button");
+    expect(shellStatus).toContain("lobbyPlaySurfaceCount: lobbyPlaySurfaceElements.length");
+    expect(shellStatus).toContain("lobbyPlaySurfaceCount: assessment.lobbyPlaySurfaceCount");
+  });
+
   it("keeps the detected guest alive so the main-process repair is not cancelled", () => {
     const handler = sourceBetween(
       rendererSource,

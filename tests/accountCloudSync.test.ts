@@ -2021,7 +2021,7 @@ describe("FirebaseSyncService account cloud sync", () => {
   });
 
   it("sends the exact legacy password while rejecting whitespace-only input", async () => {
-    const { service, store } = harness();
+    const { service, store, getSettings } = harness();
     await store.saveSettings({
       activeHubs: [{ id: "legacy-hub", name: "Legacy Hub", sync: true, claimed: false }]
     });
@@ -2037,6 +2037,9 @@ describe("FirebaseSyncService account cloud sync", () => {
       method: "POST",
       body: expect.objectContaining({ password: "  intentional spaces  " })
     });
+    expect(getSettings().activeHubs).toEqual([
+      expect.objectContaining({ id: "legacy-hub", role: "owner", claimed: true })
+    ]);
     await expect(service.claimHub("legacy-hub", "   ")).rejects.toThrow("Enter the hub password");
   });
 

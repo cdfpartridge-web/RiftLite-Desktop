@@ -1,6 +1,7 @@
 import { BrowserWindow, Notification } from "electron";
 import { randomUUID } from "node:crypto";
 import type { CaptureEvent, CaptureHealth, GamePlatform, MatchDraft, MatchGame, PrivateHubSyncResult, ReplayRecord, ReplayScreenshotFrame } from "../../shared/types.js";
+import { replayWithIntelligence } from "../../shared/replayIntelligence.js";
 import { CaptureDiagnostics } from "./captureDiagnostics.js";
 import { DeckService } from "./deckService.js";
 import { DeckTrackerService } from "./deckTrackerService.js";
@@ -225,6 +226,12 @@ export class CaptureCoordinator {
   }
 
   handleEvent(event: CaptureEvent): Promise<void> {
+    // The game preload reports through both the direct guest IPC route and the
+    // host renderer route. Deduplicate before queueing so a slow finalizer
+    // cannot hold the second copy until the processing-time TTL has expired.
+    if (this.isDuplicateEvent(event)) {
+      return Promise.resolve();
+    }
     const maintenanceGate = this.captureMaintenanceGate?.promise;
     const previous = this.platformEventQueues.get(event.platform) ?? Promise.resolve();
     const next = previous
@@ -244,9 +251,6 @@ export class CaptureCoordinator {
   }
 
   private async handleEventNow(event: CaptureEvent): Promise<void> {
-    if (this.isDuplicateEvent(event)) {
-      return;
-    }
     const settings = await this.store.getSettings().catch(() => null);
     const trackedEvent = withConfiguredCaptureContext(event, settings?.username ?? "");
     if (this.shouldIgnoreAtlasNonGameEvent(trackedEvent)) {
@@ -2418,12 +2422,12 @@ export class CaptureCoordinator {
     visualFrames: ReplayScreenshotFrame[] = [],
     deckTrackerSnapshots: ReplayRecord["deckTrackerSnapshots"] = []
   ): ReplayRecord {
-    return {
+    return replayWithIntelligence({
       id: `replay-${draft.id}`,
       matchId: draft.id,
       platform: draft.platform,
       capturedAt: draft.capturedAt,
-      schemaVersion: structuredEvents.length ? 2 : 1,
+      schemaVersion: 5,
       title: `${draft.myChampion || "Unknown"} vs ${draft.opponentChampion || "Unknown"}`,
       players: {
         me: draft.myName,
@@ -2434,7 +2438,7 @@ export class CaptureCoordinator {
       visualFrames,
       deckTrackerSnapshots,
       matchSnapshot: draft
-    };
+    }, draft);
   }
 
   private messageFor(event: CaptureEvent): string {
@@ -2648,6 +2652,8 @@ function compactPayload(payload: Record<string, unknown> = {}): Record<string, u
     "visibleTextLength",
     "bodyTextLength",
     "lobbyActionCount",
+    "lobbyPlayActionCount",
+    "lobbyPlaySurfaceCount",
     "authMarkerCount",
     "gameMarkerCount",
     "errorCode",

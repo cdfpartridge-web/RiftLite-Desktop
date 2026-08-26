@@ -127,6 +127,7 @@ function coordinatorHarness(options: {
   failSaveCount?: number;
   replayCaptureEnabled?: boolean;
   finalizeRawCaptureForMatch?: ReturnType<typeof vi.fn>;
+  getSettingsGate?: Promise<void>;
 } = {}): {
   coordinator: CaptureCoordinator;
   saved: MatchDraft[];
@@ -149,10 +150,13 @@ function coordinatorHarness(options: {
   const sent: Array<{ channel: string; payload: unknown }> = [];
   let remainingSaveFailures = options.failSave ? Number.POSITIVE_INFINITY : options.failSaveCount ?? 0;
   const store = {
-    getSettings: vi.fn(async () => ({
-      ...settings,
-      replayCaptureEnabled: options.replayCaptureEnabled ?? settings.replayCaptureEnabled
-    })),
+    getSettings: vi.fn(async () => {
+      await options.getSettingsGate;
+      return {
+        ...settings,
+        replayCaptureEnabled: options.replayCaptureEnabled ?? settings.replayCaptureEnabled
+      };
+    }),
     getMatches: vi.fn(async () => saved),
     saveMatch: vi.fn(async (draft: MatchDraft) => {
       if (remainingSaveFailures > 0) {
@@ -214,6 +218,33 @@ function coordinatorHarness(options: {
 }
 
 describe("CaptureCoordinator", () => {
+  it("deduplicates dual-route capture events before a slow processing queue", async () => {
+    vi.useFakeTimers({ now: new Date("2026-08-26T11:17:00.000Z") });
+    let releaseSettings: () => void = () => undefined;
+    const getSettingsGate = new Promise<void>((resolve) => {
+      releaseSettings = resolve;
+    });
+    try {
+      const { coordinator, diagnostics } = coordinatorHarness({ getSettingsGate });
+      const repeated = event("debug", {
+        reason: "meaningful-dom-mutation",
+        active: true,
+        roomCode: "H8YTM"
+      }, "2026-08-26T11:17:05.374Z", "atlas");
+
+      const directRoute = coordinator.handleEvent(repeated);
+      await Promise.resolve();
+      const hostRoute = coordinator.handleEvent(repeated);
+      vi.setSystemTime(new Date("2026-08-26T11:17:36.000Z"));
+      releaseSettings();
+      await Promise.all([directRoute, hostRoute]);
+
+      expect(diagnostics.record).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps useful Atlas loading diagnostics while compacting raw page data", async () => {
     const { coordinator, diagnostics } = coordinatorHarness();
 
@@ -229,6 +260,8 @@ describe("CaptureCoordinator", () => {
       visibleTextLength: 180,
       bodyTextLength: 490,
       lobbyActionCount: 0,
+      lobbyPlayActionCount: 0,
+      lobbyPlaySurfaceCount: 0,
       authMarkerCount: 2,
       gameMarkerCount: 0,
       errorCode: -105,
@@ -270,6 +303,8 @@ describe("CaptureCoordinator", () => {
       gameSurfaceCount: 0,
       visibleTextLength: 180,
       bodyTextLength: 490,
+      lobbyPlayActionCount: 0,
+      lobbyPlaySurfaceCount: 0,
       errorCode: -105,
       errorDescription: "net::ERR_NAME_NOT_RESOLVED",
       loadDurationMs: 8_200,
@@ -1291,6 +1326,72 @@ describe("CaptureCoordinator", () => {
       opponentName: "Tsaysana"
     });
     expect(saved).toHaveLength(1);
+    expect(sent.filter((item) => item.channel === "match:draft")).toHaveLength(1);
+  });
+
+  it("opens exactly one review when current RiftAtlas board labels rotate during a game", async () => {
+    const { coordinator, saved, sent } = coordinatorHarness();
+    const roomCode = "H8YTM";
+    const stableOpponent = {
+      name: "Omurice",
+      side: "opponent",
+      source: "aria-label",
+      score: 8,
+      top: 13,
+      left: 1469
+    };
+    const base = {
+      active: true,
+      format: "Auto",
+      roomCode,
+      myName: "BMU",
+      configuredUsername: "BMU",
+      myChampionCode: "SFD-195",
+      opponentChampionCode: "UNL-228",
+      myBattlefieldCode: "UNL-205",
+      opponentBattlefieldCode: "OGN-296",
+      score: { me: "", opp: "", source: "none" },
+      rows: [{ text: "12:19Played Pyke, Dockside Butcher from hand." }]
+    };
+
+    await coordinator.handleEvent(event("match-start", {
+      ...base,
+      opponentName: "Omurice",
+      atlasPlayerCandidates: [stableOpponent]
+    }, "2026-08-26T11:17:05.374Z", "atlas"));
+
+    const noisySnapshots = [
+      ["2/2010FloatingEnergy0Power0340", "player-dom", "2026-08-26T11:17:57.845Z"],
+      ["Recycle 2 Fury runes.", "identity-dom", "2026-08-26T11:18:29.087Z"],
+      ["Gold.", "identity-dom", "2026-08-26T11:18:59.760Z"],
+      ["20Send", "identity-dom", "2026-08-26T11:19:30.550Z"]
+    ] as const;
+    for (const [opponentName, source, capturedAt] of noisySnapshots) {
+      await coordinator.handleEvent(event("match-snapshot", {
+        ...base,
+        opponentName,
+        atlasPlayerCandidates: [
+          { name: opponentName, side: "opponent", source, score: 8, top: 5, left: 5 },
+          stableOpponent
+        ]
+      }, capturedAt, "atlas"));
+    }
+
+    expect(saved).toHaveLength(0);
+    expect(sent.filter((item) => item.channel === "match:draft")).toHaveLength(0);
+
+    await coordinator.handleEvent(atlasMatchComplete({
+      ...base,
+      opponentName: "Omurice",
+      atlasPlayerCandidates: [stableOpponent],
+      score: { me: "7", opp: "5", source: "atlas-score-track" }
+    }, "2026-08-26T11:27:22.918Z"));
+
+    expect(saved).toHaveLength(1);
+    expect(saved[0]).toMatchObject({
+      platform: "atlas",
+      opponentName: "Omurice"
+    });
     expect(sent.filter((item) => item.channel === "match:draft")).toHaveLength(1);
   });
 

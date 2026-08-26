@@ -126,12 +126,14 @@ function apiDrill() {
 }
 
 function apiResponse(drills: unknown[] = [apiDrill()]) {
+  const generatedAt = new Date(Date.now() - 60 * 60 * 1_000).toISOString();
+  const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1_000).toISOString();
   return {
     schema: "riftlite-mulligan-lab",
     version: 1,
     status: "ready",
-    generatedAt: "2026-08-12T08:00:00.000Z",
-    expiresAt: "2026-08-20T20:00:00.000Z",
+    generatedAt,
+    expiresAt,
     source: {
       kind: "precomputed-observed-replays",
       corpus: "anonymized-canonical-web-replays",

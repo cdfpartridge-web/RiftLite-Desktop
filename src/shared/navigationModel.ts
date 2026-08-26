@@ -1,6 +1,7 @@
 export const ACTIVE_VIEWS = [
   "home",
   "play",
+  "insights",
   "scorepad",
   "matches",
   "stats",
@@ -99,6 +100,7 @@ export const NAVIGATION_DISCLOSURES = {
 export const PRIMARY_NAVIGATION = [
   { kind: "route", id: "home", label: "Home", target: { view: "home" } },
   { kind: "route", id: "play", label: "Play", target: { view: "play" } },
+  { kind: "route", id: "insights", label: "Insights", target: { view: "insights" } },
   NAVIGATION_DISCLOSURES.review,
   NAVIGATION_DISCLOSURES.prepare,
   NAVIGATION_DISCLOSURES.community
@@ -117,7 +119,7 @@ export interface NavigationContext {
 }
 
 export type NavigationOwner =
-  | { readonly kind: "primary"; readonly itemId: "home" | "play" }
+  | { readonly kind: "primary"; readonly itemId: "home" | "play" | "insights" }
   | { readonly kind: "disclosure"; readonly disclosureId: NavigationDisclosureId; readonly itemId: string }
   | { readonly kind: "utility"; readonly itemId: "overlay" | "account-integrations" | "settings" };
 
@@ -127,6 +129,8 @@ export function navigationOwner(context: NavigationContext): NavigationOwner {
       return { kind: "primary", itemId: "home" };
     case "play":
       return { kind: "primary", itemId: "play" };
+    case "insights":
+      return { kind: "primary", itemId: "insights" };
     case "matches":
       return disclosureOwner("review", "match-history");
     case "replays":

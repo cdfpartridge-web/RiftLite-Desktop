@@ -1,4 +1,5 @@
 import type { CaptureEvent, MatchDraft, ReplayRecord, ReplayStructuredEvent } from "./types.js";
+import { parseReplayCardActionText } from "./replayCardText.js";
 
 export type ReplaySide = "me" | "opponent" | "system" | "unknown";
 
@@ -402,6 +403,8 @@ function eventFromRow(row: RawReplayRow, players: ReplayRecord["players"]): Repl
     text: parsed.text,
     cardName: card.name,
     destination: card.destination,
+    fromZone: card.fromZone,
+    toZone: card.toZone,
     battlefield,
     score,
     pointsScored: extractPointsScored(parsed.text)
@@ -1208,20 +1211,11 @@ function classifyReplayText(value: string): ReplayEventType {
   return "action";
 }
 
-function extractCard(value: string): { name: string; destination: string } {
-  const played = value.match(/\bPlayed\s+(.+?)(?:\s+to\s+(.+?))?\.?$/i);
-  if (played) {
-    return { name: cleanCardName(played[1]), destination: cleanDestination(played[2] ?? "") };
-  }
-  const moved = value.match(/\bMoved\s+(.+?)\s+to\s+(.+?)(?:\.|$)/i);
-  if (moved) {
-    return { name: cleanCardName(moved[1]), destination: cleanDestination(moved[2]) };
-  }
-  const revealed = value.match(/\bRevealed\s+(.+?)(?:\.|$)/i);
-  if (revealed) {
-    return { name: cleanCardName(revealed[1]), destination: "" };
-  }
-  return { name: "", destination: "" };
+function extractCard(value: string): { name: string; destination: string; fromZone?: string; toZone?: string } {
+  const parsed = parseReplayCardActionText(value);
+  return parsed
+    ? { name: cleanCardName(parsed.name), destination: cleanDestination(parsed.destination), fromZone: parsed.fromZone, toZone: parsed.toZone }
+    : { name: "", destination: "" };
 }
 
 function extractBattlefield(value: string): string {

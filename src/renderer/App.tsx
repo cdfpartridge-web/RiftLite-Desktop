@@ -123,7 +123,11 @@ import type {
   ReplayFlagType,
   ReplayFramePreset,
   ReplayLocalAssetKind,
+  ReplayMp4ExportProgress,
   ReplayMp4ExportOptions,
+  ReplayIntelligenceConfidence,
+  ReplayIntelligenceCorrection,
+  ReplayPresentationRecordingPayload,
   ReplayTeachingLayer,
   ReplayVoiceNote,
   ReplayRecord,
@@ -156,6 +160,7 @@ import type {
   WebReplayUploadQueueItem
 } from "../shared/types";
 import { buildAtlasReplay, replaySnapshotCardCount, type AtlasReplayViewModel, type ReplayTimelineEvent, type ReplayTurnView } from "../shared/atlasReplay";
+import { buildReplayIntelligence, replayWithIntelligence, type ReplayIntelligenceEvent, type ReplayIntelligenceResult } from "../shared/replayIntelligence";
 import { getRiftLiteAccountState, hasVerifiedRiftLiteAccount, isGenericAccountDisplayName } from "../shared/accountIdentity";
 import { accountLinkErrorMessage, accountLinkUrlForProvider, type AccountLinkProvider } from "../shared/accountLink";
 import {
@@ -216,6 +221,7 @@ import {
   type MatchCombineWarning
 } from "../shared/matchCombine";
 import { localMatchesEligibleForStats, upsertMatchPreservingOrder } from "../shared/matchList";
+import { matchReviewErrorMessage } from "../shared/matchReviewError";
 import { upsertReplayPreservingOrder } from "../shared/replayList";
 import { shouldBufferReplayVideoInMemory } from "../shared/replayExportPolicy";
 import { publicCommunitySyncEnabled, syncModePatch } from "../shared/syncPolicy";
@@ -243,6 +249,15 @@ import {
   PrivateHubLifecycleDialog,
   type PrivateHubLifecycleIntent
 } from "./PrivateHubLifecycleDialog";
+import {
+  PrivateHubClaimDialog,
+  type PrivateHubClaimIntent
+} from "./PrivateHubClaimDialog";
+import { ReplayAnnotationTextDialog } from "./ReplayAnnotationTextDialog";
+import {
+  createReplayTextAnnotation,
+  type PendingReplayTextAnnotation
+} from "./replayAnnotationText";
 import {
   GAME_WEBVIEW_PARTITIONS,
   gameWebviewIsReady,
@@ -354,6 +369,7 @@ import {
 } from "../shared/navigationModel";
 import { GuidedTour } from "./GuidedTour";
 import { HomeDeckThemeIntro } from "./HomeDeckThemeIntro";
+import { InsightsComingSoon } from "./InsightsComingSoon";
 import {
   HomeLiveTakeoverPlayer,
   type HomeLiveTakeoverPlayerHandle,
@@ -569,6 +585,9 @@ const MULLIGAN_LAB_URL = new URL("/api/app/mulligan-lab", HOME_CONFIG_URL).toStr
 const MULLIGAN_LAB_TARGET_URL = new URL("/api/app/mulligan-lab/v2", HOME_CONFIG_URL).toString();
 const SIDEBOARD_LAB_URL = new URL("/api/app/sideboard-lab", HOME_CONFIG_URL).toString();
 const MULLIGAN_LAB_REGISTRY = buildMulliganLabRegistry(cardRegistryData);
+const REPLAY_INTELLIGENCE_CARD_BY_NAME = new Map(
+  [...MULLIGAN_LAB_REGISTRY.byCode.values()].map((card) => [card.name.trim().toLowerCase(), card])
+);
 const LAB_TRAINING_LEGEND_NAME_BY_CANONICAL = new Map(
   mulliganLabLegendOptions(MULLIGAN_LAB_REGISTRY).map((card) => [normalizeLegendName(card.name), card.name])
 );
@@ -576,14 +595,14 @@ const LAB_TRAINING_LEGEND_NAMES = new Set(LAB_TRAINING_LEGEND_NAME_BY_CANONICAL.
 const RELEASE_NOTES = {
   version: APP_VERSION_META,
   title: `RiftLite v${APP_VERSION_META}`,
-  intro: "This release improves RiftAtlas startup recovery and makes captured-match saving and deletion more dependable.",
+  intro: "This release strengthens capture, export, training, and private-hub reliability while the next Insights experience is prepared.",
   items: [
-    "RiftAtlas startup recovery now handles empty or stalled pages more reliably and will no longer leave the game hidden indefinitely.",
-    "If the automatic Atlas repair cannot restore the lobby, RiftLite now offers a clearer embedded sign-in reset while preserving Atlas-local decks and RiftLite data.",
-    "Atlas connection diagnostics now detect when a security gateway or network filter returns a placeholder page instead of the real application.",
-    "Rare local database runtime faults now recover automatically, preventing a whole session of failed Match Review saves and deletions.",
-    "Delete capture now remains reliable when the original review write or linked replay metadata was damaged, and completed deletions are no longer misreported as failures.",
-    "Completed Web Replay warnings can be cleared from Upload activity without deleting the local capture or online replay."
+    "Insights now shows a Coming Soon preview while its clearer, more visual coaching experience is refined. Match and replay capture continue as normal.",
+    "RiftAtlas capture now uses authoritative match identity, format, and score data while guarding against updated board controls being mistaken for new opponents.",
+    "Match detection is more resilient around RiftAtlas overlays, BO1 lobby returns, and Ivern's Brush battlefield replacement, while deleting a capture now restores game keyboard input correctly.",
+    "Replay video export now validates and safely finalises recordings, reducing tiny or malformed MP4 files and giving clearer failures when source media is incomplete.",
+    "Mulligan Lab and Sideboard Lab now provide more game-like feedback, stronger explanations, and improved training handoff between practice and real match review.",
+    "Legacy private hubs can be claimed through a secure in-app dialog, and replay text annotations now use an accessible editor that preserves their exact replay and voice-note timing."
   ]
 };
 const RIOT_LEGAL_NOTICE = `RiftLite was created under Riot Games' "Legal Jibber Jabber" policy using assets owned by Riot Games. Riot Games does not endorse or sponsor this project.`;
@@ -2847,106 +2866,84 @@ const TRONISBAD_SPOTLIGHT: CommunitySpotlight = {
   ]
 };
 
-const BLOODY_SPOTLIGHT: CommunitySpotlight = {
-  id: "bloody",
-  name: "Bloody",
+const ZELONIUS_SPOTLIGHT: CommunitySpotlight = {
+  id: "zelonius",
+  name: "Zelonius",
   kicker: "Creator spotlight",
-  location: "Competitive Riftbound player",
-  description: "Long-time streamer, YouTuber, and competitor Bloody is now grinding Riftbound. Fresh from a Top 16 finish and Best Sivir performance in Hartford, she is training with her sights set on becoming the best in the world.",
+  location: "Former professional FIFA player and coach",
+  description: "Zelonius, a former professional FIFA player and coach, now makes daily Riftbound content on his YouTube channel, Zelonius Riftbound. His content focuses on helping players improve, with educational videos covering fundamentals, competitive strategy, deck guides and in-depth breakdowns. He also discusses the latest Riftbound news, new releases and the evolving competitive scene. Alongside his videos, Zelonius regularly livestreams deck testing, gameplay and preparation for upcoming events, aiming to help players take their game to the next level.",
   primaryCta: {
-    id: "twitch",
-    label: "Watch Twitch",
-    url: "https://www.twitch.tv/bloody",
-    description: "Watch Bloody live for Riftbound practice, competitive play, and the climb to the top.",
-    icon: Radio,
+    id: "x",
+    label: "Follow on X",
+    url: "https://x.com/Zelonius",
+    description: "Follow Zelonius's main social for Riftbound news, video releases, livestreams, and competitive updates.",
+    icon: X,
     featured: true
   },
   links: [
     {
-      id: "twitch",
-      label: "Twitch",
-      url: "https://www.twitch.tv/bloody",
-      description: "Watch Bloody live for Riftbound practice, competitive play, and community streams.",
-      icon: Radio,
+      id: "x",
+      label: "X",
+      url: "https://x.com/Zelonius",
+      description: "Zelonius's main social for Riftbound news, new videos, livestreams, and competitive updates.",
+      icon: X,
       featured: true
     },
     {
       id: "youtube",
       label: "YouTube",
-      url: "https://www.youtube.com/@Blooby",
-      description: "Watch Bloody's videos, competitive highlights, and creator content.",
+      url: "https://www.youtube.com/@Zelonius-Riftbound",
+      description: "Daily educational Riftbound videos, deck guides, strategy breakdowns, news, gameplay, and livestreams.",
       icon: Video,
       featured: true
-    },
-    {
-      id: "tiktok",
-      label: "TikTok",
-      url: "https://www.tiktok.com/@bloobyclips",
-      description: "Follow Bloody's short-form clips, competitive moments, and stream highlights.",
-      icon: Video,
-      featured: true
-    },
-    {
-      id: "instagram",
-      label: "Instagram",
-      url: "https://www.instagram.com/bloodysnaps/",
-      description: "Photos, creator updates, tournament moments, and community posts.",
-      icon: Camera
-    },
-    {
-      id: "x",
-      label: "X",
-      url: "https://x.com/bloody",
-      description: "Follow Bloody for competitive updates, stream announcements, and Riftbound posts.",
-      icon: X
     }
   ],
-  tags: ["Streamer", "Competitive play", "Sivir", "Hartford Top 16"],
+  tags: ["Daily videos", "Competitive strategy", "Deck guides", "Livestreams"],
   highlights: [
     {
-      title: "Long-time creator",
-      text: "Bloody brings years of streaming and YouTube experience to her competitive journey in Riftbound."
+      title: "Daily improvement",
+      text: "Educational videos turn fundamentals, competitive strategy, deck guides, and in-depth breakdowns into practical ways to improve."
     },
     {
-      title: "Hartford Top 16",
-      text: "A Top 16 finish in Hartford put Bloody among the event's strongest competitors."
+      title: "Professional coaching background",
+      text: "Experience as a professional FIFA player and coach brings a structured, improvement-led perspective to Riftbound."
     },
     {
-      title: "Best of Sivir",
-      text: "Bloody earned the event's Best Sivir result while sharpening one of her signature competitive picks."
+      title: "Meta and news",
+      text: "Regular coverage follows new releases, the latest Riftbound news, and changes across the competitive scene."
     },
     {
-      title: "Aiming for the top",
-      text: "Her focus is firmly on training, improving, and competing to become one of the best Riftbound players in the world."
+      title: "Live preparation",
+      text: "Livestreams cover deck testing, gameplay, and preparation for upcoming events so viewers can learn through the full process."
     }
   ],
   assets: {
-    logo: "community/bloody-profile.webp",
-    banner: "community/bloody-banner.webp",
-    tiktok: "community/bloody-banner.webp",
-    youtube: "community/bloody-banner.webp",
-    twitch: "community/bloody-banner.webp"
+    logo: "community/zelonius-avatar.jpg",
+    banner: "community/zelonius-banner.jpg",
+    tiktok: "community/zelonius-x.jpg",
+    youtube: "community/zelonius-youtube.jpg",
+    twitch: "community/zelonius-profile.png"
   },
-  overviewBanner: "community/bloody-banner.webp",
-  overviewLogo: "community/bloody-profile.webp",
+  overviewBanner: "community/zelonius-banner.jpg",
+  overviewLogo: "community/zelonius-avatar.jpg",
   routes: [
     {
-      key: "twitch",
-      title: "Twitch stream",
-      subtitle: "Watch live Riftbound practice, competitive play, and community streams.",
-      linkId: "twitch"
+      key: "youtube",
+      title: "Daily Riftbound videos",
+      subtitle: "Learn through fundamentals, deck guides, competitive strategy, news, and in-depth breakdowns.",
+      linkId: "youtube"
     },
     {
-      key: "youtube",
-      title: "YouTube channel",
-      subtitle: "Watch videos, competitive highlights, and Bloody's wider creator content.",
+      key: "twitch",
+      title: "Livestreams and deck testing",
+      subtitle: "Watch gameplay and follow the preparation process for upcoming competitive events.",
       linkId: "youtube"
     },
     {
       key: "tiktok",
-      title: "TikTok clips",
-      subtitle: "Follow short-form clips, competitive moments, and stream highlights.",
-      linkId: "tiktok"
+      title: "News and updates on X",
+      subtitle: "Follow the main Zelonius social for new content, livestream notices, and competitive discussion.",
+      linkId: "x"
     }
   ]
 };
@@ -2966,7 +2963,7 @@ const COMMUNITY_SPOTLIGHTS: CommunitySpotlight[] = [
   MASKEDSWAN_SPOTLIGHT,
   ARG0NTCG_SPOTLIGHT,
   TRONISBAD_SPOTLIGHT,
-  BLOODY_SPOTLIGHT
+  ZELONIUS_SPOTLIGHT
 ];
 
 interface CaptureNotice {
@@ -3016,6 +3013,7 @@ function App() {
   const [webReplayDiagnosticsRefreshing, setWebReplayDiagnosticsRefreshing] = useState(false);
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus>(DEFAULT_UPDATE_STATUS);
   const [screenshotStatus, setScreenshotStatus] = useState("");
+  const [mp4ExportProgress, setMp4ExportProgress] = useState<ReplayMp4ExportUiState | null>(null);
   const [actionFeedback, setActionFeedback] = useState("");
   const [captureNotice, setCaptureNotice] = useState<CaptureNotice | null>(null);
   const [atlasRecoverySuggested, setAtlasRecoverySuggested] = useState(false);
@@ -3037,6 +3035,8 @@ function App() {
   const [deckSelectionTarget, setDeckSelectionTarget] = useState("");
   const [matchFocusTarget, setMatchFocusTarget] = useState<MatchFocusTarget | null>(null);
   const [focusedReplayId, setFocusedReplayId] = useState("");
+  const [focusedReplayTimeMs, setFocusedReplayTimeMs] = useState<number | null>(null);
+  const [focusedReplayEvidenceId, setFocusedReplayEvidenceId] = useState("");
   const guidedTourInitializedRef = useRef(false);
   const homeThemeIntroInitializedRef = useRef(false);
   const trainingLabsIntroInitializedRef = useRef(false);
@@ -3064,6 +3064,10 @@ function App() {
   } | null>(null);
   const autoConfirmingRef = useRef<string>("");
   const actionFeedbackTimerRef = useRef<number | undefined>(undefined);
+  const activeMp4ExportRef = useRef<RendererReplayMp4ExportRequest | null>(null);
+  const mp4ExportRequestSequenceRef = useRef(0);
+  const retiredMp4ExportIdsRef = useRef(new Set<string>());
+  const settledUnboundMp4RequestsRef = useRef<RendererReplayMp4ExportRequest[]>([]);
   const captureNoticeTimerRef = useRef<number | undefined>(undefined);
   const capturePromptSignatureRef = useRef("");
   const atlasReloadStormRef = useRef(initialAtlasReloadStormState());
@@ -3139,6 +3143,125 @@ function App() {
     return request;
   }, []);
 
+  const runReplayMp4ExportWithProgress = useCallback(async (
+    replayId: string,
+    kind: ReplayMp4ExportProgress["kind"],
+    label: string,
+    invokeExport: (requestId: number) => Promise<string>
+  ): Promise<string> => {
+    if (activeMp4ExportRef.current) {
+      throw new Error("Another MP4 export is already running. Wait for it to finish before starting another.");
+    }
+    const nextRequestId = mp4ExportRequestSequenceRef.current >= Number.MAX_SAFE_INTEGER
+      ? 1
+      : mp4ExportRequestSequenceRef.current + 1;
+    mp4ExportRequestSequenceRef.current = nextRequestId;
+    const request: RendererReplayMp4ExportRequest = {
+      requestId: nextRequestId,
+      exportId: "",
+      replayId,
+      kind
+    };
+    activeMp4ExportRef.current = request;
+    setMp4ExportProgress({
+      requestId: request.requestId,
+      exportId: "",
+      replayId,
+      kind,
+      label,
+      stage: "preparing",
+      percent: 0,
+      message: "Choose where to save the finished MP4."
+    });
+    try {
+      const exportedPath = await invokeExport(request.requestId);
+      if (!exportedPath) {
+        if (activeMp4ExportRef.current?.requestId === request.requestId) {
+          activeMp4ExportRef.current = null;
+          setMp4ExportProgress((current) => current?.requestId === request.requestId ? null : current);
+        }
+        return "";
+      }
+      if (activeMp4ExportRef.current?.requestId === request.requestId) {
+        if (request.exportId) {
+          retiredMp4ExportIdsRef.current.add(request.exportId);
+          while (retiredMp4ExportIdsRef.current.size > 64) {
+            const oldest = retiredMp4ExportIdsRef.current.values().next().value as string | undefined;
+            if (!oldest) break;
+            retiredMp4ExportIdsRef.current.delete(oldest);
+          }
+        } else {
+          settledUnboundMp4RequestsRef.current.push({ ...request });
+          settledUnboundMp4RequestsRef.current = settledUnboundMp4RequestsRef.current.slice(-64);
+        }
+        activeMp4ExportRef.current = null;
+        setMp4ExportProgress((current) => current?.requestId === request.requestId
+          ? {
+            ...current,
+            stage: "completed",
+            percent: 100,
+            message: "The MP4 finished exporting and passed its integrity check.",
+            outputPath: exportedPath,
+            error: undefined
+          }
+          : current
+        );
+      }
+      return exportedPath;
+    } catch (error) {
+      const message = rendererErrorMessage(error, "MP4 export failed.");
+      if (activeMp4ExportRef.current?.requestId === request.requestId) {
+        if (request.exportId) {
+          retiredMp4ExportIdsRef.current.add(request.exportId);
+          while (retiredMp4ExportIdsRef.current.size > 64) {
+            const oldest = retiredMp4ExportIdsRef.current.values().next().value as string | undefined;
+            if (!oldest) break;
+            retiredMp4ExportIdsRef.current.delete(oldest);
+          }
+        } else {
+          settledUnboundMp4RequestsRef.current.push({ ...request });
+          settledUnboundMp4RequestsRef.current = settledUnboundMp4RequestsRef.current.slice(-64);
+        }
+        activeMp4ExportRef.current = null;
+        setMp4ExportProgress((current) => current?.requestId === request.requestId
+          ? {
+            ...current,
+            stage: "failed",
+            percent: undefined,
+            message: "The MP4 was not created.",
+            error: message
+          }
+          : current
+        );
+      }
+      throw error;
+    }
+  }, []);
+
+  const exportReplayMp4WithProgress = useCallback((
+    replayId: string,
+    options: ReplayMp4ExportOptions
+  ): Promise<string> => {
+    const clipSeconds = Math.round((options.clipDurationMs ?? 0) / 1000);
+    const isClip = options.mode === "clip";
+    return runReplayMp4ExportWithProgress(
+      replayId,
+      "replay",
+      isClip ? `${clipSeconds || "Short"}s MP4 clip` : "MP4 video",
+      (requestId) => window.riftlite.exportReplayMp4(replayId, options, requestId)
+    );
+  }, [runReplayMp4ExportWithProgress]);
+
+  const exportReplayPresentationMp4WithProgress = useCallback((
+    replayId: string,
+    payload: ReplayPresentationRecordingPayload
+  ): Promise<string> => runReplayMp4ExportWithProgress(
+    replayId,
+    "presentation",
+    "presentation MP4",
+    (requestId) => window.riftlite.exportReplayPresentationMp4(replayId, payload, requestId)
+  ), [runReplayMp4ExportWithProgress]);
+
   function openView(nextView: ActiveView, options?: NavigationOptions) {
     if (nextView === "play" && healthRef.current.state === "review-needed") {
       setActiveView("matches");
@@ -3197,7 +3320,7 @@ function App() {
 
   async function dismissAtlasKnownOpponentHandCard(instanceId: string): Promise<void> {
     try {
-      setAtlasKnownOpponentHand(await window.riftlite.dismissAtlasKnownOpponentHandCard(instanceId));
+      setAtlasKnownOpponentHand(await window.riftlite.dismissAtlasKnownOpponentHandCard(instanceId) ?? EMPTY_ATLAS_KNOWN_OPPONENT_HAND);
     } catch (error) {
       showActionFeedback(error instanceof Error ? error.message : "RiftLite could not dismiss that known card.");
     }
@@ -3205,7 +3328,7 @@ function App() {
 
   async function clearAtlasKnownOpponentHand(): Promise<void> {
     try {
-      setAtlasKnownOpponentHand(await window.riftlite.clearAtlasKnownOpponentHand());
+      setAtlasKnownOpponentHand(await window.riftlite.clearAtlasKnownOpponentHand() ?? EMPTY_ATLAS_KNOWN_OPPONENT_HAND);
     } catch (error) {
       showActionFeedback(error instanceof Error ? error.message : "RiftLite could not clear the known hand.");
     }
@@ -3354,6 +3477,75 @@ function App() {
       return;
     }
     setActiveView("account");
+  }), []);
+
+  useEffect(() => window.riftlite.onReplayMp4ExportProgress((progress) => {
+    if (retiredMp4ExportIdsRef.current.has(progress.exportId)) {
+      return;
+    }
+    const terminal = progress.stage === "completed" || progress.stage === "failed";
+    const staleUnboundIndex = settledUnboundMp4RequestsRef.current.findIndex((request) =>
+      request.requestId === progress.requestId
+      && request.replayId === progress.replayId
+      && request.kind === progress.kind
+    );
+    const retireStaleUnboundProgress = (): void => {
+      if (staleUnboundIndex >= 0) {
+        settledUnboundMp4RequestsRef.current.splice(staleUnboundIndex, 1);
+      }
+      retiredMp4ExportIdsRef.current.add(progress.exportId);
+      while (retiredMp4ExportIdsRef.current.size > 64) {
+        const oldest = retiredMp4ExportIdsRef.current.values().next().value as string | undefined;
+        if (!oldest) break;
+        retiredMp4ExportIdsRef.current.delete(oldest);
+      }
+    };
+    const active = activeMp4ExportRef.current;
+    if (!active) {
+      if (staleUnboundIndex >= 0) {
+        retireStaleUnboundProgress();
+      }
+      return;
+    }
+    if (active.requestId !== progress.requestId || active.replayId !== progress.replayId || active.kind !== progress.kind) {
+      if (staleUnboundIndex >= 0) {
+        retireStaleUnboundProgress();
+      }
+      return;
+    }
+    if (active.exportId && active.exportId !== progress.exportId) {
+      if (staleUnboundIndex >= 0) {
+        retireStaleUnboundProgress();
+      }
+      return;
+    }
+    if (!active.exportId && terminal && staleUnboundIndex >= 0) {
+      retireStaleUnboundProgress();
+      return;
+    }
+    if (!active.exportId && !terminal && staleUnboundIndex >= 0) {
+      settledUnboundMp4RequestsRef.current.splice(staleUnboundIndex, 1);
+    }
+    active.exportId = progress.exportId;
+    const activeRequestId = active.requestId;
+    setMp4ExportProgress((current) => {
+      if (!current || current.requestId !== activeRequestId || (current.exportId && current.exportId !== progress.exportId)) {
+        return current;
+      }
+      return replayMp4ExportUiProgress({ ...current, exportId: progress.exportId }, progress);
+    });
+    if (terminal) {
+      retiredMp4ExportIdsRef.current.add(progress.exportId);
+      while (retiredMp4ExportIdsRef.current.size > 64) {
+        const oldest = retiredMp4ExportIdsRef.current.values().next().value as string | undefined;
+        if (!oldest) break;
+        retiredMp4ExportIdsRef.current.delete(oldest);
+      }
+      const latest = activeMp4ExportRef.current;
+      if (latest?.requestId === activeRequestId && latest.exportId === progress.exportId) {
+        activeMp4ExportRef.current = null;
+      }
+    }
   }), []);
 
   useEffect(() => {
@@ -3553,7 +3745,7 @@ function App() {
   useEffect(() => {
     void bootstrap().catch((error) => handleBootstrapFailure(error));
     void window.riftlite.getAtlasKnownOpponentHand()
-      .then(setAtlasKnownOpponentHand)
+      .then((state) => setAtlasKnownOpponentHand(state ?? EMPTY_ATLAS_KNOWN_OPPONENT_HAND))
       .catch(() => setAtlasKnownOpponentHand(EMPTY_ATLAS_KNOWN_OPPONENT_HAND));
     const offEvent = window.riftlite.onCaptureEvent((event) => {
       void maybeStartReplayVideo(event);
@@ -3620,7 +3812,7 @@ function App() {
       addReplayReviewFlagFromHotkey();
     });
     const offAtlasKnownHand = window.riftlite.onAtlasKnownOpponentHandUpdated((state) => {
-      setAtlasKnownOpponentHand(state);
+      setAtlasKnownOpponentHand(state ?? EMPTY_ATLAS_KNOWN_OPPONENT_HAND);
     });
     const offAtlasKnownHandShortcut = window.riftlite.onAtlasKnownOpponentHandShortcut(() => {
       if (activeViewRef.current === "play" && activePlatformRef.current === "atlas") {
@@ -4737,6 +4929,7 @@ function App() {
 
   async function deleteReplay(id: string) {
     await window.riftlite.deleteReplay(id);
+    deleteReplayPresentationState(id);
     await refreshReplays();
     await refreshDeletedItems();
   }
@@ -4747,7 +4940,13 @@ function App() {
       showActionFeedback("No replay is linked to this match yet.");
       return;
     }
-    setFocusedReplayId(replay.id);
+    openReplayAt(replay.id);
+  }
+
+  function openReplayAt(replayId: string, timeMs?: number, correctionEventId?: string) {
+    setFocusedReplayId(replayId);
+    setFocusedReplayTimeMs(typeof timeMs === "number" && Number.isFinite(timeMs) ? Math.max(0, timeMs) : null);
+    setFocusedReplayEvidenceId(correctionEventId?.trim() ?? "");
     setActiveView("replays");
   }
 
@@ -5246,7 +5445,7 @@ function App() {
       );
     } else if (autoRepairEmptyShell) {
       setAtlasShellVisibility((current) => updateAtlasShellVisibility(current, "empty-shell-recovery-started"));
-      showActionFeedback("Atlas loaded without its lobby. Repairing its embedded runtime and retrying once...", 8_000);
+      showActionFeedback("Atlas did not finish loading its lobby controls. Repairing its embedded runtime and retrying once...", 8_000);
     }
   }
 
@@ -5717,7 +5916,7 @@ function App() {
       matchId: id,
       platform: runtime.platform,
       capturedAt: video.endedAt,
-      schemaVersion: 4,
+      schemaVersion: 5,
       title: replayShadowClipTitle(runtime, clipSeconds),
       players: {
         me: myName,
@@ -6296,7 +6495,7 @@ function App() {
     if (hotkeyFlags.length) {
       saved = await window.riftlite.saveReplay({
         ...saved,
-        schemaVersion: 4,
+        schemaVersion: 5,
         flags: mergeReplayFlags(saved.flags, hotkeyFlags)
       });
     }
@@ -6650,6 +6849,7 @@ function App() {
   const viewTitle = {
     home: "Home",
     play: "Play",
+    insights: "Insights",
     scorepad: "Scorepad",
     matches: "Matches",
     stats: "Stats",
@@ -6671,6 +6871,7 @@ function App() {
   const viewDescription = {
     home: "Your RiftLite launchpad for playing, reviewing, decks, community data, and social tools.",
     play: "Embedded capture is active automatically for TCGA and Atlas.",
+    insights: "A new visual coaching experience is in development.",
     scorepad: "Score table games or quick-log event matches without sending them to public community stats.",
     matches: "Review, correct, and track locally captured matches.",
     stats: "Personal performance from local RiftLite history.",
@@ -7004,8 +7205,8 @@ function App() {
                   <RefreshCw size={22} aria-hidden="true" />
                   <strong>Starting RiftAtlas</strong>
                   <span>{atlasShellVisibility === "recovering"
-                    ? "Atlas returned an empty shell. RiftLite is safely refreshing its site runtime and retrying once."
-                    : "Waiting for the lobby. Repair now refreshes embedded Atlas caches without signing you out or changing local decks."}</span>
+                    ? "Atlas returned an incomplete lobby. RiftLite is safely refreshing its site runtime and retrying once."
+                    : "Waiting for the lobby controls. Repair now refreshes embedded Atlas caches without signing you out or changing local decks."}</span>
                   <div className="atlas-shell-loading-actions">
                     <button
                       type="button"
@@ -7153,10 +7354,16 @@ function App() {
             }}
             onReview={(draft) => setReviewDraft(prepareDraftForReview(draft))}
             replayFocusId={focusedReplayId}
-            onReplayFocusConsumed={() => setFocusedReplayId("")}
+            replayFocusTimeMs={focusedReplayTimeMs}
+            replayFocusEvidenceId={focusedReplayEvidenceId}
+            onReplayFocusConsumed={() => { setFocusedReplayId(""); setFocusedReplayTimeMs(null); setFocusedReplayEvidenceId(""); }}
+            onOpenReplay={openReplayAt}
             onOpenReplayForMatch={openReplayForMatch}
             onReplaysChanged={refreshReplays}
             onDeleteReplay={deleteReplay}
+            mp4ExportActive={Boolean(mp4ExportProgress && mp4ExportProgress.stage !== "completed" && mp4ExportProgress.stage !== "failed")}
+            onExportReplayMp4={exportReplayMp4WithProgress}
+            onExportReplayPresentationMp4={exportReplayPresentationMp4WithProgress}
             onDelete={async (id) => {
               await window.riftlite.deleteMatch(id);
               const [nextMatches, nextReplays, nextDeletedMatches, nextDeletedReplays] = await Promise.all([
@@ -7196,6 +7403,15 @@ function App() {
         />
       ) : null}
       {releaseNotesOpen ? <ReleaseNotesModal onClose={() => void dismissReleaseNotes()} /> : null}
+      {mp4ExportProgress ? (
+        <ReplayMp4ExportProgressDialog
+          progress={mp4ExportProgress}
+          onOpenFolder={() => void window.riftlite.revealLastReplayMp4Export().catch((error) => {
+            showActionFeedback(rendererErrorMessage(error, "The exported MP4 could not be shown in its folder."));
+          })}
+          onDismiss={() => setMp4ExportProgress(null)}
+        />
+      ) : null}
       {guidedTourState?.status === "active" ? (
         <GuidedTour
           state={guidedTourState}
@@ -7307,9 +7523,18 @@ function AtlasKnownOpponentHandPanel({
 }) {
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
   const onCloseRef = useRef(onClose);
+  const [hoveredCardInstanceId, setHoveredCardInstanceId] = useState<string | null>(null);
+  const [focusedCardInstanceId, setFocusedCardInstanceId] = useState<string | null>(null);
   onCloseRef.current = onClose;
   const knownCount = state.cards.length;
   const handCount = state.opponentHandCount;
+  const previewedCardInstanceId = hoveredCardInstanceId ?? focusedCardInstanceId;
+  const previewedCard = state.cards.find((card) => card.instanceId === previewedCardInstanceId) ?? null;
+  const previewedCardImageUrl = previewedCard
+    ? resolveBundledReplayCardImage(previewedCard.code || previewedCard.cardId)
+      || deckTrackerImageUrlFromId(previewedCard.code || previewedCard.cardId)
+    : "";
+  const previewedCardName = previewedCard?.name || previewedCard?.code || "Known card";
   const hasAnonymousDeparture = !state.activeReveal
     && handCount !== null
     && knownCount > handCount;
@@ -7344,6 +7569,24 @@ function AtlasKnownOpponentHandPanel({
         onClose();
       }
     }}>
+      {previewedCard ? (
+        <figure
+          className="atlas-known-hand-preview"
+          aria-hidden="true"
+          data-atlas-known-hand-preview
+          data-card-instance-id={previewedCard.instanceId}
+        >
+          <span className="atlas-known-hand-preview-art">
+            {previewedCardImageUrl
+              ? <img src={previewedCardImageUrl} alt="" draggable={false} />
+              : <strong>{previewedCardName.slice(0, 2).toUpperCase()}</strong>}
+          </span>
+          <figcaption>
+            <strong>{previewedCardName}</strong>
+            {previewedCard.code ? <span>{previewedCard.code}</span> : null}
+          </figcaption>
+        </figure>
+      ) : null}
       <aside
         id="atlas-known-opponent-hand"
         className="atlas-known-hand-panel"
@@ -7383,7 +7626,15 @@ function AtlasKnownOpponentHandPanel({
                   type="button"
                   className="atlas-known-hand-card"
                   key={card.instanceId}
-                  onClick={() => onDismiss(card.instanceId)}
+                  onClick={() => {
+                    setHoveredCardInstanceId(null);
+                    setFocusedCardInstanceId(null);
+                    onDismiss(card.instanceId);
+                  }}
+                  onBlur={() => setFocusedCardInstanceId((current) => current === card.instanceId ? null : current)}
+                  onFocus={() => setFocusedCardInstanceId(card.instanceId)}
+                  onMouseEnter={() => setHoveredCardInstanceId(card.instanceId)}
+                  onMouseLeave={() => setHoveredCardInstanceId((current) => current === card.instanceId ? null : current)}
                   aria-label={`Mark ${cardName} as no longer in the opponent hand`}
                   title={`Mark ${cardName} as gone`}
                 >
@@ -7405,8 +7656,19 @@ function AtlasKnownOpponentHandPanel({
           </div>
         )}
         <footer className="atlas-known-hand-footer">
-          <span>Click a card when you know it has left their hand.</span>
-          <button type="button" className="secondary" disabled={!state.cards.length} onClick={onClear}>Clear all</button>
+          <span>Hover or focus for a larger view. Click a card when you know it has left their hand.</span>
+          <button
+            type="button"
+            className="secondary"
+            disabled={!state.cards.length}
+            onClick={() => {
+              setHoveredCardInstanceId(null);
+              setFocusedCardInstanceId(null);
+              onClear();
+            }}
+          >
+            Clear all
+          </button>
         </footer>
       </aside>
     </div>
@@ -7480,6 +7742,7 @@ function navigationIcon(id: string): React.ReactNode {
   switch (id) {
     case "home": return <Home size={19} />;
     case "play": return <Play size={19} />;
+    case "insights": return <Lightbulb size={19} />;
     case "review":
     case "match-history": return <ClipboardList size={19} />;
     case "local-replays": return <Film size={19} />;
@@ -9274,6 +9537,24 @@ function HomeView({
     onNavigate("spotlight", { spotlightId: creator.id });
   }
 
+  function trackHomeCreatorVideo(linkId: "youtube-play" | "youtube-channel" | "youtube-video") {
+    if (!featuredVideo.creatorId) return;
+    void window.riftlite.trackSpotlightClick({
+      spotlightId: featuredVideo.creatorId,
+      linkId,
+      appVersion: APP_VERSION_META,
+      source: "home-creator-video-carousel"
+    });
+  }
+
+  function openHomeCreatorVideoLink(
+    url: string,
+    linkId: "youtube-channel" | "youtube-video"
+  ) {
+    trackHomeCreatorVideo(linkId);
+    void window.riftlite.openExternalResource(url);
+  }
+
   function openDiscord() {
     void window.riftlite.openExternalResource(discordResource.url);
   }
@@ -9620,7 +9901,10 @@ function HomeView({
                 <button
                   type="button"
                   className="home-video-frame home-video-preview"
-                  onClick={() => setPlayingHomeVideoId(featuredVideo.videoId)}
+                  onClick={() => {
+                    trackHomeCreatorVideo("youtube-play");
+                    setPlayingHomeVideoId(featuredVideo.videoId);
+                  }}
                   aria-label={`Play ${featuredVideo.title}`}
                 >
                   {featuredVideo.thumbnailUrl ? (
@@ -9656,9 +9940,9 @@ function HomeView({
                   <p><strong>{featuredVideo.creatorName || "RiftLite"}</strong><span>{homeCreatorVideoDateLabel(featuredVideo.publishedAt)}</span></p>
                   <div className="modern-creator-video-actions">
                     {featuredVideo.channelUrl ? (
-                      <button className="modern-text-action" onClick={() => void window.riftlite.openExternalResource(featuredVideo.channelUrl!)}><Compass size={14} /> Creator</button>
+                      <button className="modern-text-action" onClick={() => openHomeCreatorVideoLink(featuredVideo.channelUrl!, "youtube-channel")}><Compass size={14} /> Creator</button>
                     ) : null}
-                    <button className="modern-text-action" onClick={() => void window.riftlite.openExternalResource(featuredVideo.url)}><ExternalLink size={14} /> YouTube</button>
+                    <button className="modern-text-action" onClick={() => openHomeCreatorVideoLink(featuredVideo.url, "youtube-video")}><ExternalLink size={14} /> YouTube</button>
                   </div>
                   <div className="modern-video-controls" aria-label="Creator video carousel controls">
                     <button type="button" onClick={() => setFeaturedVideoCarouselOffset(-1)} disabled={homeVideoFeed.videos.length <= 1} aria-label="Previous creator video"><ChevronLeft size={16} /></button>
@@ -11692,10 +11976,16 @@ function DashboardView({
   onPurgeDeletedReplay,
   onMatchesChanged,
   replayFocusId,
+  replayFocusTimeMs,
+  replayFocusEvidenceId,
   onReplayFocusConsumed,
+  onOpenReplay,
   onOpenReplayForMatch,
   onReplaysChanged,
   onDeleteReplay,
+  mp4ExportActive,
+  onExportReplayMp4,
+  onExportReplayPresentationMp4,
   onReview,
   onDelete
 }: {
@@ -11776,10 +12066,16 @@ function DashboardView({
   onPurgeDeletedReplay: (id: string) => Promise<void>;
   onMatchesChanged: () => Promise<void>;
   replayFocusId: string;
+  replayFocusTimeMs: number | null;
+  replayFocusEvidenceId: string;
   onReplayFocusConsumed: () => void;
+  onOpenReplay: (replayId: string, timeMs?: number, correctionEventId?: string) => void;
   onOpenReplayForMatch: (matchId: string) => void;
   onReplaysChanged: (focusReplayId?: string) => Promise<void>;
   onDeleteReplay: (id: string) => Promise<void>;
+  mp4ExportActive: boolean;
+  onExportReplayMp4: (replayId: string, options: ReplayMp4ExportOptions) => Promise<string>;
+  onExportReplayPresentationMp4: (replayId: string, payload: ReplayPresentationRecordingPayload) => Promise<string>;
   onReview: (draft: MatchDraft) => void;
   onDelete: (id: string) => Promise<void>;
 }) {
@@ -11832,6 +12128,9 @@ function DashboardView({
   if (view === "stats") {
     return <StatsView matches={visibleMatches} />;
   }
+  if (view === "insights") {
+    return <InsightsComingSoon />;
+  }
   if (view === "mulligan-lab") {
     return <MulliganLabView decks={decks} settings={settings} onNavigate={onNavigate} />;
   }
@@ -11857,10 +12156,15 @@ function DashboardView({
         matches={visibleMatches}
         settings={settings}
         focusReplayId={replayFocusId}
+        focusReplayTimeMs={replayFocusTimeMs}
+        focusReplayEvidenceId={replayFocusEvidenceId}
         onFocusConsumed={onReplayFocusConsumed}
         onReplaysChanged={onReplaysChanged}
         onDeleteReplay={onDeleteReplay}
         onSaveSettings={onSaveSettings}
+        mp4ExportActive={mp4ExportActive}
+        onExportReplayMp4={onExportReplayMp4}
+        onExportReplayPresentationMp4={onExportReplayPresentationMp4}
       />
     );
   }
@@ -11881,10 +12185,15 @@ function DashboardView({
         matches={visibleMatches}
         settings={settings}
         focusReplayId={replayFocusId}
+        focusReplayTimeMs={replayFocusTimeMs}
+        focusReplayEvidenceId={replayFocusEvidenceId}
         onFocusConsumed={onReplayFocusConsumed}
         onReplaysChanged={onReplaysChanged}
         onDeleteReplay={onDeleteReplay}
         onSaveSettings={onSaveSettings}
+        mp4ExportActive={mp4ExportActive}
+        onExportReplayMp4={onExportReplayMp4}
+        onExportReplayPresentationMp4={onExportReplayPresentationMp4}
       />
     );
   }
@@ -15814,7 +16123,16 @@ function SpotlightView({ initialSpotlightId = "" }: { initialSpotlightId?: strin
               key={tile.key}
               onClick={() => tile.link ? openLink(tile.link, `media-${tile.key}`) : undefined}
             >
-              {assets[tile.key] ? <img src={assets[tile.key]} alt="" loading="lazy" /> : <span />}
+              {assets[tile.key] ? (
+                <img
+                  src={assets[tile.key]}
+                  alt=""
+                  loading="lazy"
+                  style={spotlight.id === "zelonius" && tile.key === "twitch"
+                    ? { objectPosition: "center 30%" }
+                    : undefined}
+                />
+              ) : <span />}
               <div>
                 <strong>{tile.title}</strong>
                 <p>{tile.subtitle}</p>
@@ -20258,19 +20576,29 @@ function ReplayView({
   matches,
   settings,
   focusReplayId,
+  focusReplayTimeMs,
+  focusReplayEvidenceId,
   onFocusConsumed,
   onReplaysChanged,
   onDeleteReplay,
-  onSaveSettings
+  onSaveSettings,
+  mp4ExportActive,
+  onExportReplayMp4,
+  onExportReplayPresentationMp4
 }: {
   replays: ReplayRecord[];
   matches: MatchDraft[];
   settings: UserSettings;
   focusReplayId: string;
+  focusReplayTimeMs: number | null;
+  focusReplayEvidenceId: string;
   onFocusConsumed: () => void;
   onReplaysChanged: (focusReplayId?: string) => Promise<void>;
   onDeleteReplay: (id: string) => Promise<void>;
   onSaveSettings: (patch: Partial<UserSettings>) => Promise<void>;
+  mp4ExportActive: boolean;
+  onExportReplayMp4: (replayId: string, options: ReplayMp4ExportOptions) => Promise<string>;
+  onExportReplayPresentationMp4: (replayId: string, payload: ReplayPresentationRecordingPayload) => Promise<string>;
 }) {
   const [platformFilter, setPlatformFilter] = useState<"all" | GamePlatform>("all");
   const [mediaFilter, setMediaFilter] = useState("all");
@@ -20284,6 +20612,7 @@ function ReplayView({
   const [search, setSearch] = useState("");
   const deferredSearch = useDeferredValue(search);
   const [selectedReplayId, setSelectedReplayId] = useState("");
+  const [focusedSeekRequest, setFocusedSeekRequest] = useState<{ replayId: string; timeMs?: number; correctionEventId?: string; token: number } | null>(null);
   const [bulkSelectMode, setBulkSelectMode] = useState(false);
   const [selectedReplayIds, setSelectedReplayIds] = useState<Set<string>>(() => new Set());
   const [status, setStatus] = useState("");
@@ -20363,8 +20692,16 @@ function ReplayView({
     setFlagFilter("all");
     setFolderFilter("all");
     setSelectedReplayId(focusReplayId);
+    if (typeof focusReplayTimeMs === "number" || focusReplayEvidenceId) {
+      setFocusedSeekRequest({
+        replayId: focusReplayId,
+        timeMs: typeof focusReplayTimeMs === "number" ? focusReplayTimeMs : undefined,
+        correctionEventId: focusReplayEvidenceId || undefined,
+        token: Date.now()
+      });
+    }
     onFocusConsumed();
-  }, [focusReplayId, onFocusConsumed]);
+  }, [focusReplayEvidenceId, focusReplayId, focusReplayTimeMs, onFocusConsumed]);
 
   useEffect(() => {
     if (!filteredItems.length) {
@@ -20432,15 +20769,23 @@ function ReplayView({
   }
 
   async function exportReplayMp4File(replayId: string, options: ReplayMp4ExportOptions) {
+    if (mp4ExportActive) {
+      return;
+    }
     setExportingReplay(null);
     const clipSeconds = Math.round((options.clipDurationMs ?? 0) / 1000);
     const isClip = options.mode === "clip";
     setStatus(isClip ? `Exporting ${clipSeconds || ""}s MP4 clip...` : "Exporting MP4 video...");
     try {
-      const exportedPath = await window.riftlite.exportReplayMp4(replayId, options);
-      setStatus(exportedPath ? `Exported ${isClip ? "MP4 clip" : "MP4"} ${exportedPath}` : "");
+      const exportedPath = await onExportReplayMp4(replayId, options);
+      if (!exportedPath) {
+        setStatus("");
+        return;
+      }
+      setStatus(`Exported ${isClip ? "MP4 clip" : "MP4"} ${exportedPath}`);
     } catch (error) {
-      setStatus(rendererErrorMessage(error, "MP4 export failed."));
+      const message = rendererErrorMessage(error, "MP4 export failed.");
+      setStatus(message);
     }
   }
 
@@ -20501,6 +20846,7 @@ function ReplayView({
     setStatus(`Moving ${replayLabel} to the recycle bin...`);
     try {
       await window.riftlite.deleteReplays(replayIds);
+      replayIds.forEach(deleteReplayPresentationState);
       exitBulkSelectMode();
       await onReplaysChanged();
       setStatus(`Moved ${replayLabel} to the recycle bin.`);
@@ -20873,7 +21219,10 @@ function ReplayView({
           model={selectedModel}
           settings={settings}
           replayFolders={replayFolders}
+          focusSeekRequest={focusedSeekRequest?.replayId === selectedModel.replay.id ? focusedSeekRequest : null}
+          onFocusSeekConsumed={() => setFocusedSeekRequest(null)}
           onExport={(clipStartMs) => setExportingReplay({ id: selectedModel.replay.id, clipStartMs })}
+          onExportPresentationMp4={onExportReplayPresentationMp4}
           onSaveReplay={saveReplay}
           onDeleteReplay={() => void onDeleteReplay(selectedModel.replay.id)}
         />
@@ -20886,9 +21235,193 @@ function ReplayView({
           onExportBundle={() => void exportReplayBundleFile(exportingReplay.id)}
           onExportMp4={(options) => void exportReplayMp4File(exportingReplay.id, options)}
           onExportFlagsText={() => void exportReplayFlagsTextFile(exportingReplay.id)}
+          mp4ExportActive={mp4ExportActive}
         />
       ) : null}
     </section>
+  );
+}
+
+type RendererReplayMp4ExportRequest = {
+  requestId: number;
+  exportId: string;
+  replayId: string;
+  kind: ReplayMp4ExportProgress["kind"];
+};
+
+type ReplayMp4ExportUiState = {
+  requestId: number;
+  exportId: string;
+  replayId: string;
+  kind: ReplayMp4ExportProgress["kind"];
+  label: string;
+  stage: ReplayMp4ExportProgress["stage"];
+  percent?: number;
+  message: string;
+  outputPath?: string;
+  error?: string;
+};
+
+const REPLAY_MP4_EXPORT_STAGES: Array<{
+  stage: Extract<ReplayMp4ExportProgress["stage"], "preparing" | "encoding" | "validating">;
+  label: string;
+}> = [
+  { stage: "preparing", label: "Prepare" },
+  { stage: "encoding", label: "Create video" },
+  { stage: "validating", label: "Check file" }
+];
+
+const pendingReplayPresentationExports = new Map<string, ReplayPresentationRecordingPayload>();
+const deletedReplayPresentationIds = new Set<string>();
+const replayPresentationDisposers = new Map<string, () => void>();
+let replayPresentationRecordingGeneration = 0;
+
+function nextReplayPresentationGeneration(): number {
+  replayPresentationRecordingGeneration = replayPresentationRecordingGeneration >= Number.MAX_SAFE_INTEGER
+    ? 1
+    : replayPresentationRecordingGeneration + 1;
+  return replayPresentationRecordingGeneration;
+}
+
+function deleteReplayPresentationState(replayId: string): void {
+  deletedReplayPresentationIds.add(replayId);
+  pendingReplayPresentationExports.delete(replayId);
+  try {
+    replayPresentationDisposers.get(replayId)?.();
+  } catch {
+    // Deletion has already succeeded; stale renderer resources must not block refresh.
+  }
+  replayPresentationDisposers.delete(replayId);
+}
+
+function replayMp4ExportUiProgress(
+  current: ReplayMp4ExportUiState,
+  progress: ReplayMp4ExportProgress
+): ReplayMp4ExportUiState {
+  const percent = typeof progress.percent === "number" && Number.isFinite(progress.percent)
+    ? Math.min(100, Math.max(0, Math.round(progress.percent)))
+    : undefined;
+  return {
+    ...current,
+    stage: progress.stage,
+    percent,
+    message: progress.message || current.message,
+    outputPath: progress.outputPath || current.outputPath,
+    error: progress.error
+  };
+}
+
+function ReplayMp4ExportProgressDialog({
+  progress,
+  onOpenFolder,
+  onDismiss
+}: {
+  progress: ReplayMp4ExportUiState;
+  onOpenFolder: () => void;
+  onDismiss: () => void;
+}) {
+  const working = progress.stage === "preparing" || progress.stage === "encoding" || progress.stage === "validating";
+  const completed = progress.stage === "completed";
+  const dialogRef = useRef<HTMLElement | null>(null);
+  const currentStageIndex = REPLAY_MP4_EXPORT_STAGES.findIndex((item) => item.stage === progress.stage);
+  const hasPercent = working && typeof progress.percent === "number";
+  const title = completed ? "Your MP4 is ready" : progress.stage === "failed" ? "MP4 export did not finish" : `Creating ${progress.label}`;
+  const boundedError = progress.error?.trim().slice(0, 420) ?? "";
+
+  useEffect(() => {
+    dialogRef.current?.focus({ preventScroll: true });
+  }, [working]);
+
+  return (
+    <div className="modal-backdrop replay-mp4-progress-backdrop">
+      <section
+        ref={dialogRef}
+        className="replay-mp4-progress-modal"
+        data-stage={progress.stage}
+        role="dialog"
+        aria-modal="true"
+        aria-busy={working}
+        aria-labelledby="replay-mp4-progress-title"
+        aria-describedby="replay-mp4-progress-description"
+        tabIndex={-1}
+        onKeyDown={(event) => {
+          if (working && (event.key === "Escape" || event.key === "Tab")) {
+            event.preventDefault();
+          }
+        }}
+      >
+        <header>
+          <span className="replay-mp4-progress-icon" aria-hidden="true">
+            {completed ? <Check size={24} /> : progress.stage === "failed" ? <AlertTriangle size={24} /> : <RefreshCw size={24} />}
+          </span>
+          <div>
+            <span>{completed ? "Export complete" : progress.stage === "failed" ? "Export stopped safely" : "Replay export in progress"}</span>
+            <h2 id="replay-mp4-progress-title">{title}</h2>
+          </div>
+        </header>
+
+        <div className="replay-mp4-progress-body">
+          {working ? (
+            <>
+              <ol className="replay-mp4-progress-stages" aria-label="MP4 export stages">
+                {REPLAY_MP4_EXPORT_STAGES.map((item, index) => {
+                  const stageState = index < currentStageIndex ? "complete" : index === currentStageIndex ? "active" : "pending";
+                  return (
+                    <li key={item.stage} data-state={stageState}>
+                      <span>{stageState === "complete" ? <Check size={13} /> : index + 1}</span>
+                      <strong>{item.label}</strong>
+                    </li>
+                  );
+                })}
+              </ol>
+              <div
+                className="replay-mp4-progress-track"
+                data-indeterminate={!hasPercent || undefined}
+                role="progressbar"
+                aria-label="MP4 export progress"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={hasPercent ? progress.percent : undefined}
+                aria-valuetext={hasPercent ? `${progress.percent}%` : progress.message}
+              >
+                <span style={hasPercent ? { width: `${progress.percent}%` } : undefined} />
+              </div>
+              <div className="replay-mp4-progress-copy" role="status" aria-live="polite">
+                <strong>{progress.message}</strong>
+                {hasPercent ? <span>{progress.percent}%</span> : <span>Working...</span>}
+              </div>
+              <p id="replay-mp4-progress-description" className="replay-mp4-progress-warning">
+                The final file is not ready yet. Keep RiftLite open and wait for the completion message before opening it.
+              </p>
+            </>
+          ) : completed ? (
+            <>
+              <p id="replay-mp4-progress-description">The video finished exporting and passed its integrity check. It is now safe to open or share.</p>
+              {progress.outputPath ? <code className="replay-mp4-export-path" title={progress.outputPath}>{progress.outputPath}</code> : null}
+            </>
+          ) : (
+            <>
+              <p id="replay-mp4-progress-description">
+                {progress.kind === "presentation"
+                  ? "RiftLite did not publish an unfinished MP4. Your presentation recording is retained; dismiss this message, then choose Retry presentation export."
+                  : "RiftLite did not publish an unfinished MP4. Your original replay is safe, and you can try the export again."
+                }
+              </p>
+              {boundedError ? <p className="replay-mp4-progress-error" role="alert">{boundedError}</p> : null}
+            </>
+          )}
+        </div>
+
+        {!working ? (
+          <footer>
+            {completed && progress.outputPath ? (
+              <button type="button" className="secondary" onClick={onOpenFolder}><FolderOpen size={15} /> Show in folder</button>
+            ) : null}
+            <button type="button" className="primary" onClick={onDismiss}>Done</button>
+          </footer>
+        ) : null}
+      </section>
+    </div>
   );
 }
 
@@ -20946,7 +21479,8 @@ function ReplayExportDialog({
   onCancel,
   onExportBundle,
   onExportMp4,
-  onExportFlagsText
+  onExportFlagsText,
+  mp4ExportActive
 }: {
   replay: ReplayRecord | null;
   currentTimeMs: number;
@@ -20954,6 +21488,7 @@ function ReplayExportDialog({
   onExportBundle: () => void;
   onExportMp4: (options: ReplayMp4ExportOptions) => void;
   onExportFlagsText: () => void;
+  mp4ExportActive: boolean;
 }) {
   const cropPreviewRef = useRef<HTMLDivElement | null>(null);
   const cropPreviewVideoRef = useRef<HTMLVideoElement | null>(null);
@@ -21289,8 +21824,8 @@ function ReplayExportDialog({
                 </div>
               ) : null}
             </div>
-            <button type="button" className="primary" disabled={!hasVideo} onClick={() => onExportMp4(options)}>
-              <Video size={16} /> Export MP4
+            <button type="button" className="primary" disabled={!hasVideo || mp4ExportActive} onClick={() => onExportMp4(options)}>
+              <Video size={16} /> {mp4ExportActive ? "Export already running" : "Export MP4"}
             </button>
             {!hasVideo ? <small>MP4 export needs a full video replay. Use coaching pack for screenshot-only replays.</small> : null}
             <div className="replay-export-clip">
@@ -21310,7 +21845,7 @@ function ReplayExportDialog({
                       type="button"
                       className="secondary"
                       key={durationMs}
-                      disabled={!hasVideo || clipRemainingMs <= 0}
+                      disabled={!hasVideo || clipRemainingMs <= 0 || mp4ExportActive}
                       onClick={() => {
                         setCustomClipDurationMs(durationMs);
                         exportClip(durationMs);
@@ -21351,7 +21886,7 @@ function ReplayExportDialog({
                 <button
                   type="button"
                   className="primary"
-                  disabled={!hasVideo || clipRemainingMs <= 0}
+                  disabled={!hasVideo || clipRemainingMs <= 0 || mp4ExportActive}
                   onClick={() => exportClip(safeCustomClipDurationMs)}
                 >
                   <Scissors size={15} /> Export custom clip
@@ -21454,6 +21989,7 @@ function replayListItem(replay: ReplayRecord, match?: MatchDraft): ReplayListIte
   const title = replay.title || [myLegend || "Replay", opponentLegend].filter(Boolean).join(" vs ");
   const chips = [
     match?.format || metadata?.format || "Replay",
+    replay.intelligence ? "Replay Intelligence" : "",
     replay.video ? "Video" : "",
     [myLegend, opponentLegend].filter(Boolean).join(" vs "),
     battlefields.slice(0, 2).join(", ")
@@ -21474,7 +22010,10 @@ function replayListItem(replay: ReplayRecord, match?: MatchDraft): ReplayListIte
     metadata?.deckName,
     replay.flags?.map((flag) => [flag.label, flag.customType, flag.note, flag.targetLabel].join(" ")).join(" "),
     replay.annotations?.map((annotation) => [annotation.tool, annotation.text, annotation.note, annotation.targetLabel].join(" ")).join(" "),
-    replay.voiceNotes?.length ? "voice notes coaching audio" : ""
+    replay.voiceNotes?.length ? "voice notes coaching audio" : "",
+    replay.intelligence?.story.join(" "),
+    replay.intelligence?.moments.map((moment) => `${moment.title} ${moment.body}`).join(" "),
+    replay.intelligence?.cardJourneys.map((journey) => `${journey.cardName} ${journey.cardId || ""} ${journey.outcomes.join(" ")}`).join(" ")
   ];
   return {
     replay,
@@ -21647,23 +22186,32 @@ function ReplayDetail({
   model,
   settings,
   replayFolders,
+  focusSeekRequest,
+  onFocusSeekConsumed,
   onExport,
+  onExportPresentationMp4,
   onSaveReplay,
   onDeleteReplay
 }: {
   model: AtlasReplayViewModel;
   settings: UserSettings;
   replayFolders: ReplayFolder[];
+  focusSeekRequest: { replayId: string; timeMs?: number; correctionEventId?: string; token: number } | null;
+  onFocusSeekConsumed: () => void;
   onExport: (clipStartMs: number) => void;
+  onExportPresentationMp4: (replayId: string, payload: ReplayPresentationRecordingPayload) => Promise<string>;
   onSaveReplay: (replay: ReplayRecord) => Promise<boolean>;
   onDeleteReplay: () => void;
 }) {
   const analyticsMatch = model.match ? localToAnalytics(model.match) : null;
+  const replayIntelligence = useMemo(() => buildReplayIntelligence(model.replay, model), [model]);
   const allScreenshots = useMemo(() => replayScreenshots(model), [model]);
   const screenshots = useMemo(() => trimmedReplayScreenshots(allScreenshots, model.replay.trim), [allScreenshots, model.replay.trim]);
   const [slideshowOpen, setSlideshowOpen] = useState(false);
   const [slideshowIndex, setSlideshowIndex] = useState(0);
   const [videoSeekMs, setVideoSeekMs] = useState<number | null>(null);
+  const [evidenceOpen, setEvidenceOpen] = useState(false);
+  const [focusedCorrectionEventId, setFocusedCorrectionEventId] = useState("");
   const [replayVideoCurrentMs, setReplayVideoCurrentMs] = useState(0);
   const [flagType, setFlagType] = useState<ReplayFlagType>("key-turn");
   const [flagCustomType, setFlagCustomType] = useState("");
@@ -21703,6 +22251,16 @@ function ReplayDetail({
     .sort((a, b) => replayFlagSortMs(a) - replayFlagSortMs(b)), [visibleFlags]);
 
   useEffect(() => {
+    if (!focusSeekRequest || focusSeekRequest.replayId !== model.replay.id) return;
+    if (typeof focusSeekRequest.timeMs === "number") setVideoSeekMs(focusSeekRequest.timeMs);
+    if (focusSeekRequest.correctionEventId) {
+      setEvidenceOpen(true);
+      setFocusedCorrectionEventId(focusSeekRequest.correctionEventId);
+    }
+    onFocusSeekConsumed();
+  }, [focusSeekRequest?.token, model.replay.id]);
+
+  useEffect(() => {
     replayFlagsRef.current = replayFlags;
   }, [replayFlags]);
 
@@ -21718,6 +22276,8 @@ function ReplayDetail({
     setSlideshowOpen(false);
     setSlideshowIndex(0);
     setReplayVideoCurrentMs(0);
+    setEvidenceOpen(false);
+    setFocusedCorrectionEventId("");
     pendingLayerIdRef.current = null;
     setAddingLayer(false);
     setLayerStatus("");
@@ -21810,7 +22370,7 @@ function ReplayDetail({
     replayFlagsRef.current = flags;
     void onSaveReplay({
       ...model.replay,
-      schemaVersion: 4,
+      schemaVersion: 5,
       flags
     });
   }
@@ -21819,7 +22379,7 @@ function ReplayDetail({
     replayAnnotationsRef.current = annotations;
     void onSaveReplay({
       ...model.replay,
-      schemaVersion: 4,
+      schemaVersion: 5,
       annotations
     });
   }
@@ -21828,7 +22388,7 @@ function ReplayDetail({
     replayVoiceNotesRef.current = voiceNotes;
     void onSaveReplay({
       ...model.replay,
-      schemaVersion: 4,
+      schemaVersion: 5,
       voiceNotes
     });
   }
@@ -21931,7 +22491,7 @@ function ReplayDetail({
     replayAnnotationsRef.current = nextAnnotations;
     void onSaveReplay({
       ...model.replay,
-      schemaVersion: 4,
+      schemaVersion: 5,
       flags: nextFlags,
       annotations: nextAnnotations,
       voiceNotes: nextVoiceNotes
@@ -21956,7 +22516,7 @@ function ReplayDetail({
     replayVoiceNotesRef.current = voiceNotes;
     void onSaveReplay({
       ...model.replay,
-      schemaVersion: 4,
+      schemaVersion: 5,
       flags,
       annotations: replayAnnotationsRef.current,
       voiceNotes
@@ -21978,7 +22538,7 @@ function ReplayDetail({
     replayAnnotationsRef.current = annotations;
     void onSaveReplay({
       ...model.replay,
-      schemaVersion: 4,
+      schemaVersion: 5,
       annotations,
       voiceNotes
     });
@@ -22106,7 +22666,7 @@ function ReplayDetail({
   function saveCoachingPackMetadata() {
     void onSaveReplay({
       ...model.replay,
-      schemaVersion: 4,
+      schemaVersion: 5,
       coachingPack: {
         ...packDraft,
         updatedAt: new Date().toISOString()
@@ -22134,7 +22694,7 @@ function ReplayDetail({
     try {
       await onSaveReplay({
         ...model.replay,
-        schemaVersion: 4,
+        schemaVersion: 5,
         layers: [...layers, nextLayer]
       });
       setActiveLayerId(nextLayer.id);
@@ -22342,11 +22902,13 @@ function ReplayDetail({
 
       {model.replay.video ? (
         <ReplayVideoPlayer
+          key={model.replay.id}
           replayId={model.replay.id}
           video={model.replay.video}
           flags={visibleFlags.filter((flag) => flag.targetType === "video-time")}
           annotations={visibleAnnotations.filter((annotation) => annotation.targetType === "video-time")}
           voiceNotes={visibleVoiceNotes}
+          intelligenceEvents={replayIntelligence.events}
           seekToMs={videoSeekMs}
           onSeekHandled={() => setVideoSeekMs(null)}
           onTimeChange={setReplayVideoCurrentMs}
@@ -22374,6 +22936,7 @@ function ReplayDetail({
           onRemoveAnnotation={removeAnnotation}
           onRemoveAnnotations={removeAnnotations}
           onClip={(timeMs) => onExport(timeMs)}
+          onExportPresentationMp4={onExportPresentationMp4}
         />
       ) : null}
 
@@ -22385,6 +22948,18 @@ function ReplayDetail({
         <Metric label="Replay frames" value={trimSavings} />
         <Metric label="Video" value={model.replay.video ? formatBytes(model.replay.video.sizeBytes) : "Off"} />
       </div>
+
+      <details className="replay-evidence-drawer" open={evidenceOpen} onToggle={(event) => setEvidenceOpen(event.currentTarget.open)}>
+        <summary><Activity size={16} /><span><strong>Evidence and corrections</strong><small>Inspect the event trail behind Insights or correct reconstructed data.</small></span><ChevronDown size={16} /></summary>
+        <ReplayIntelligencePanel
+          model={model}
+          result={replayIntelligence}
+          focusCorrectionEventId={focusedCorrectionEventId}
+          onFocusCorrectionHandled={() => setFocusedCorrectionEventId("")}
+          onSeek={(timeMs) => setVideoSeekMs(timeMs)}
+          onSaveReplay={onSaveReplay}
+        />
+      </details>
 
       <ReplayHealthPanel
         model={model}
@@ -22581,6 +23156,432 @@ function ReplayDetail({
   );
 }
 
+type ReplayIntelligenceTab = "overview" | "timeline" | "cards";
+
+function ReplayIntelligencePanel({
+  model,
+  result,
+  focusCorrectionEventId,
+  onFocusCorrectionHandled,
+  onSeek,
+  onSaveReplay
+}: {
+  model: AtlasReplayViewModel;
+  result: ReplayIntelligenceResult;
+  focusCorrectionEventId: string;
+  onFocusCorrectionHandled: () => void;
+  onSeek: (timeMs: number) => void;
+  onSaveReplay: (replay: ReplayRecord) => Promise<boolean>;
+}) {
+  const [tab, setTab] = useState<ReplayIntelligenceTab>("overview");
+  const [search, setSearch] = useState("");
+  const [eventType, setEventType] = useState("all");
+  const [side, setSide] = useState("all");
+  const [confidence, setConfidence] = useState("all");
+  const [selectedCard, setSelectedCard] = useState("");
+  const [editingEvent, setEditingEvent] = useState<ReplayIntelligenceEvent | null>(null);
+  const [status, setStatus] = useState("");
+  const [saving, setSaving] = useState(false);
+  const summary = result.summary;
+  const eventTypes = useMemo(() => [...new Set(result.events.map((event) => event.type))].sort(), [result.events]);
+  const filteredEvents = useMemo(() => {
+    const needle = search.trim().toLowerCase();
+    return result.events.filter((event) => {
+      if (eventType !== "all" && event.type !== eventType) return false;
+      if (side !== "all" && event.side !== side) return false;
+      if (confidence !== "all" && event.confidence !== confidence) return false;
+      if (selectedCard && replayIntelligenceCardKey(event.cardId || event.cardName) !== selectedCard) return false;
+      if (!needle) return true;
+      return [event.id, event.text, event.cardName, event.cardId, event.battlefield, event.destination, event.fromZone, event.toZone, event.turnLabel, event.correctionNote]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase()
+        .includes(needle);
+    });
+  }, [confidence, eventType, result.events, search, selectedCard, side]);
+
+  useEffect(() => {
+    setTab("overview");
+    setSearch("");
+    setEventType("all");
+    setSide("all");
+    setConfidence("all");
+    setSelectedCard("");
+    setEditingEvent(null);
+    setStatus("");
+  }, [model.replay.id]);
+
+  useEffect(() => {
+    if (!focusCorrectionEventId) return;
+    setTab("timeline");
+    setEventType("all");
+    setSide("all");
+    setConfidence("all");
+    setSelectedCard("");
+    setSearch(focusCorrectionEventId);
+    const focusedEvent = result.events.find((event) => event.id === focusCorrectionEventId);
+    if (focusedEvent) {
+      setEditingEvent(focusedEvent);
+      setStatus("Opened the evidence supporting this insight.");
+    } else {
+      setStatus("This insight came from retained raw capture evidence. The source is preserved, but it has no editable timeline row.");
+    }
+    onFocusCorrectionHandled();
+  }, [focusCorrectionEventId, result.events]);
+
+  async function saveIntelligence(corrections: ReplayIntelligenceCorrection[], message: string) {
+    setSaving(true);
+    setStatus("Saving Replay Intelligence locally...");
+    try {
+      const nextReplay = replayWithIntelligence({
+        ...model.replay,
+        schemaVersion: 5,
+        intelligence: { ...summary, corrections }
+      }, model.match, corrections);
+      const saved = await onSaveReplay(nextReplay);
+      setStatus(saved ? message : "Replay Intelligence could not be saved.");
+      if (saved) setEditingEvent(null);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function openCardJourney(cardKey: string) {
+    setSelectedCard(cardKey);
+    setEventType("all");
+    setSearch("");
+    setTab("timeline");
+  }
+
+  const coverageTotal = Math.max(1, summary.coverage.totalEvents);
+  return (
+    <section className="rail-card replay-intelligence-panel" data-grade={summary.coverage.grade}>
+      <header className="replay-intelligence-header">
+        <div>
+          <span className="replay-intelligence-kicker"><Activity size={14} /> Insight evidence</span>
+          <h2>Replay evidence</h2>
+          <p>The event trail behind your Insights. Audit what RiftLite reconstructed, follow card journeys, or correct the retained evidence layer.</p>
+        </div>
+        <div className="replay-intelligence-grade">
+          <strong>{summary.coverage.grade}</strong>
+          <span>evidence coverage</span>
+        </div>
+      </header>
+
+      <div className="replay-intelligence-tabs" role="tablist" aria-label="Replay evidence views">
+        {([
+          ["overview", "Game story"],
+          ["timeline", `Timeline ${result.events.length}`],
+          ["cards", `Card journeys ${summary.cardJourneys.length}`]
+        ] as Array<[ReplayIntelligenceTab, string]>).map(([value, label]) => (
+          <button type="button" role="tab" aria-selected={tab === value} data-active={tab === value} key={value} onClick={() => setTab(value)}>{label}</button>
+        ))}
+        <button type="button" className="replay-intelligence-save" disabled={saving} onClick={() => void saveIntelligence(summary.corrections, "Replay evidence saved locally.")}>
+          <Save size={13} /> {saving ? "Saving..." : "Save evidence"}
+        </button>
+      </div>
+
+      {tab === "overview" ? (
+        <div className="replay-intelligence-overview">
+          <div className="replay-intelligence-stat-grid">
+            <ReplayIntelligenceStat label="Games" value={summary.stats.games} />
+            <ReplayIntelligenceStat label="Turns" value={summary.stats.turns} />
+            <ReplayIntelligenceStat label="Card actions" value={summary.stats.cardActions} />
+            <ReplayIntelligenceStat label="Scoring" value={summary.stats.scoringEvents} />
+            <ReplayIntelligenceStat label="Combat" value={summary.stats.combats} />
+            <ReplayIntelligenceStat label="Corrections" value={summary.corrections.length} />
+          </div>
+
+          <div className="replay-intelligence-overview-grid">
+            <article className="replay-intelligence-story">
+              <h3><History size={16} /> Game story</h3>
+              <ol>
+                {summary.story.map((line, index) => <li key={`${index}:${line}`}>{line}</li>)}
+              </ol>
+            </article>
+            <article className="replay-intelligence-coverage">
+              <h3><Activity size={16} /> Evidence mix</h3>
+              {(["confirmed", "reconstructed", "inferred", "manual"] as ReplayIntelligenceConfidence[]).map((value) => {
+                const count = summary.coverage[value];
+                return (
+                  <div key={value}>
+                    <span>{replayIntelligenceConfidenceLabel(value)} <strong>{count}</strong></span>
+                    <i><b data-confidence={value} style={{ width: `${(count / coverageTotal) * 100}%` }} /></i>
+                  </div>
+                );
+              })}
+              <small>{summary.coverage.cardEvents} card events · {summary.coverage.scoreEvents} score events · {summary.coverage.hasVideo ? "video linked" : "no video"}</small>
+            </article>
+          </div>
+
+          <div className="replay-intelligence-moments">
+            <h3><Lightbulb size={16} /> Review moments</h3>
+            {summary.moments.length ? (
+              <div>
+                {summary.moments.map((moment) => (
+                  <button
+                    type="button"
+                    key={moment.id}
+                    data-kind={moment.kind}
+                    onClick={() => {
+                      if (typeof moment.videoTimeMs === "number") onSeek(moment.videoTimeMs);
+                      setSearch(moment.eventId ?? "");
+                      setTab("timeline");
+                    }}
+                  >
+                    <span>{moment.kind.replace("-", " ")} · {replayIntelligenceConfidenceLabel(moment.confidence)}</span>
+                    <strong>{moment.title}</strong>
+                    <p>{moment.body}</p>
+                    {typeof moment.videoTimeMs === "number" ? <small><Play size={11} /> {formatDuration(moment.videoTimeMs)}</small> : null}
+                  </button>
+                ))}
+              </div>
+            ) : <p className="muted">More structured events are needed before RiftLite can identify useful review moments.</p>}
+          </div>
+
+          {summary.limitations.length ? (
+            <details className="replay-intelligence-limitations">
+              <summary>What this replay cannot prove</summary>
+              <ul>{summary.limitations.map((line) => <li key={line}>{line}</li>)}</ul>
+            </details>
+          ) : null}
+        </div>
+      ) : null}
+
+      {tab === "timeline" ? (
+        <div className="replay-intelligence-timeline">
+          <div className="replay-intelligence-filters">
+            <label className="replay-intelligence-search">Search<input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Card, battlefield, action, turn..." /></label>
+            <label>Event<select value={eventType} onChange={(event) => setEventType(event.target.value)}><option value="all">All events</option>{eventTypes.map((value) => <option value={value} key={value}>{value.replace("-", " ")}</option>)}</select></label>
+            <label>Side<select value={side} onChange={(event) => setSide(event.target.value)}><option value="all">Both players</option><option value="me">Player</option><option value="opponent">Opponent</option><option value="system">System</option><option value="unknown">Unknown</option></select></label>
+            <label>Evidence<select value={confidence} onChange={(event) => setConfidence(event.target.value)}><option value="all">All confidence</option><option value="confirmed">Confirmed</option><option value="reconstructed">Reconstructed</option><option value="inferred">Inferred</option><option value="manual">Manual</option></select></label>
+            {selectedCard ? <button type="button" className="secondary" onClick={() => setSelectedCard("")}><X size={13} /> Clear card</button> : null}
+          </div>
+          <div className="replay-intelligence-timeline-summary">
+            <span>{filteredEvents.length} of {result.events.length} events</span>
+            <span>{model.replay.video ? "Select a row to jump to video" : "Timeline reconstructed without local video"}</span>
+          </div>
+          <div className="replay-intelligence-event-list">
+            {filteredEvents.map((event) => (
+              <ReplayIntelligenceEventRow
+                event={event}
+                replay={model.replay}
+                key={event.id}
+                onSeek={onSeek}
+                onEdit={() => setEditingEvent(event)}
+              />
+            ))}
+            {!filteredEvents.length ? <div className="replay-intelligence-empty"><Eye size={22} /><strong>No matching evidence</strong><span>Clear a filter or search for another card or action.</span></div> : null}
+          </div>
+        </div>
+      ) : null}
+
+      {tab === "cards" ? (
+        <div className="replay-intelligence-card-journeys">
+          <p>These journeys join only events with the same visible card identity, player and game. Hover the artwork to inspect it; open a journey to isolate its evidence.</p>
+          <div className="replay-intelligence-card-grid">
+            {summary.cardJourneys.map((journey) => {
+              const imageUrl = replayIntelligenceCardImage(journey.cardId, journey.cardName);
+              return (
+                <button type="button" key={journey.id} onClick={() => openCardJourney(replayIntelligenceCardKey(journey.cardId || journey.cardName))}>
+                  <ReplayIntelligenceCardArt imageUrl={imageUrl} cardName={journey.cardName} />
+                  <span className="replay-intelligence-card-copy">
+                    <small>Game {journey.gameNumber} · {journey.side === "me" ? "Player" : journey.side === "opponent" ? "Opponent" : "Observed"}</small>
+                    <strong>{journey.cardName}</strong>
+                    <em>{journey.events.length} action{journey.events.length === 1 ? "" : "s"} · {replayIntelligenceConfidenceLabel(journey.confidence)}</em>
+                    <span>{journey.outcomes.length ? journey.outcomes.join(" → ") : "visible card reference"}</span>
+                    {journey.knownHandTimeMs ? <b>Known in hand about {formatDuration(journey.knownHandTimeMs)}</b> : null}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+          {!summary.cardJourneys.length ? <div className="replay-intelligence-empty"><Eye size={22} /><strong>No named card journeys</strong><span>The source did not expose enough card identities for this replay.</span></div> : null}
+        </div>
+      ) : null}
+
+      {status ? <p className="replay-intelligence-status" role="status">{status}</p> : null}
+      {editingEvent ? (
+        <ReplayIntelligenceCorrectionEditor
+          event={editingEvent}
+          replay={model.replay}
+          correction={summary.corrections.find((item) => item.eventId === editingEvent.id)}
+          saving={saving}
+          onCancel={() => setEditingEvent(null)}
+          onSave={(correction) => void saveIntelligence([
+            ...summary.corrections.filter((item) => item.eventId !== correction.eventId),
+            correction
+          ], "Correction saved. The original capture evidence remains unchanged.")}
+          onReset={() => void saveIntelligence(summary.corrections.filter((item) => item.eventId !== editingEvent.id), "Manual correction removed.")}
+          onDismiss={() => void saveIntelligence([
+            ...summary.corrections.filter((item) => item.eventId !== editingEvent.id),
+            {
+              id: summary.corrections.find((item) => item.eventId === editingEvent.id)?.id ?? createLocalId("replay-correction"),
+              eventId: editingEvent.id,
+              updatedAt: new Date().toISOString(),
+              dismissed: true,
+              note: "Dismissed during replay review."
+            }
+          ], "Event dismissed from Replay Intelligence. The source evidence was retained.")}
+        />
+      ) : null}
+    </section>
+  );
+}
+
+function ReplayIntelligenceStat({ label, value }: { label: string; value: number }) {
+  return <div><span>{label}</span><strong>{value}</strong></div>;
+}
+
+function ReplayIntelligenceEventRow({
+  event,
+  replay,
+  onSeek,
+  onEdit
+}: {
+  event: ReplayIntelligenceEvent;
+  replay: ReplayRecord;
+  onSeek: (timeMs: number) => void;
+  onEdit: () => void;
+}) {
+  const imageUrl = replayIntelligenceCardImage(event.cardId, event.cardName);
+  return (
+    <article className="replay-intelligence-event" data-type={event.type} data-side={event.side} data-confidence={event.confidence}>
+      <button type="button" className="replay-intelligence-event-main" onClick={() => typeof event.videoTimeMs === "number" && onSeek(event.videoTimeMs)} disabled={typeof event.videoTimeMs !== "number"}>
+        <span className="replay-intelligence-event-time">
+          <strong>{typeof event.videoTimeMs === "number" ? formatDuration(event.videoTimeMs) : event.labelTime}</strong>
+          <small>{event.turnLabel || `Game ${event.gameNumber ?? 1}`}</small>
+        </span>
+        {event.cardName || event.cardId ? <ReplayIntelligenceCardArt imageUrl={imageUrl} cardName={event.cardName || event.cardId || "Card"} compact /> : <span className="replay-intelligence-event-node" />}
+        <span className="replay-intelligence-event-copy">
+          <span><b>{event.type.replace("-", " ")}</b><i data-confidence={event.confidence}>{replayIntelligenceConfidenceLabel(event.confidence)}</i>{event.corrected ? <i>corrected</i> : null}</span>
+          <strong>{event.text || event.cardName || "Captured event"}</strong>
+          {replayEventMetadata(event) ? <small>{replayEventMetadata(event)}</small> : null}
+          <em>{event.confidenceReason}{event.correctionNote ? ` ${event.correctionNote}` : ""}</em>
+        </span>
+        {event.score ? <span className="replay-intelligence-score">{event.score.me ?? "-"}<small>score</small>{event.score.opponent ?? "-"}</span> : null}
+        {typeof event.videoTimeMs === "number" ? <Play className="replay-intelligence-play" size={15} /> : null}
+      </button>
+      <button type="button" className="replay-intelligence-correct" onClick={onEdit}>{event.corrected ? "Edit correction" : "Correct"}</button>
+    </article>
+  );
+}
+
+function ReplayIntelligenceCardArt({ imageUrl, cardName, compact = false }: { imageUrl: string; cardName: string; compact?: boolean }) {
+  return (
+    <span className={`replay-intelligence-card-art${compact ? " compact" : ""}`}>
+      {imageUrl ? <img src={imageUrl} alt={cardName} loading="lazy" draggable={false} /> : <strong>{cardName.slice(0, 2).toUpperCase()}</strong>}
+      {imageUrl ? <span className="replay-intelligence-card-preview"><img src={imageUrl} alt={`${cardName} enlarged`} /></span> : null}
+    </span>
+  );
+}
+
+function ReplayIntelligenceCorrectionEditor({
+  event,
+  replay,
+  correction,
+  saving,
+  onSave,
+  onReset,
+  onDismiss,
+  onCancel
+}: {
+  event: ReplayIntelligenceEvent;
+  replay: ReplayRecord;
+  correction?: ReplayIntelligenceCorrection;
+  saving: boolean;
+  onSave: (correction: ReplayIntelligenceCorrection) => void;
+  onReset: () => void;
+  onDismiss: () => void;
+  onCancel: () => void;
+}) {
+  const initialSeconds = typeof event.videoTimeMs === "number" ? Math.round(event.videoTimeMs / 1000) : 0;
+  const [draft, setDraft] = useState(() => ({
+    type: correction?.type ?? event.type,
+    side: correction?.side ?? event.side,
+    text: correction?.text ?? event.text,
+    cardName: correction?.cardName ?? event.cardName,
+    cardId: correction?.cardId ?? event.cardId ?? "",
+    fromZone: correction?.fromZone ?? event.fromZone ?? "",
+    toZone: correction?.toZone ?? event.toZone ?? "",
+    destination: correction?.destination ?? event.destination,
+    battlefield: correction?.battlefield ?? event.battlefield,
+    pointsScored: String(correction?.pointsScored ?? event.pointsScored ?? ""),
+    videoSeconds: String(initialSeconds),
+    note: correction?.note ?? event.correctionNote
+  }));
+  const knownTypes: ReplayIntelligenceEvent["type"][] = ["setup", "mulligan", "turn-start", "turn-end", "draw", "play", "move", "score", "combat", "battlefield", "scoreboard", "result", "action"];
+  function submit() {
+    const seconds = Number(draft.videoSeconds);
+    const videoBase = Date.parse(replay.video?.startedAt || replay.capturedAt);
+    const capturedAt = replay.video && Number.isFinite(seconds) && Number.isFinite(videoBase)
+      ? new Date(videoBase + Math.max(0, seconds) * 1000).toISOString()
+      : correction?.capturedAt;
+    const points = Number(draft.pointsScored);
+    onSave({
+      id: correction?.id ?? createLocalId("replay-correction"),
+      eventId: event.id,
+      updatedAt: new Date().toISOString(),
+      capturedAt,
+      type: draft.type,
+      side: draft.side,
+      text: draft.text.trim(),
+      cardName: draft.cardName.trim(),
+      cardId: draft.cardId.trim(),
+      fromZone: draft.fromZone.trim(),
+      toZone: draft.toZone.trim(),
+      destination: draft.destination.trim(),
+      battlefield: draft.battlefield.trim(),
+      pointsScored: Number.isFinite(points) && draft.pointsScored.trim() ? points : undefined,
+      note: draft.note.trim()
+    });
+  }
+  return (
+    <div className="replay-intelligence-editor-backdrop" role="presentation" onMouseDown={(mouseEvent) => mouseEvent.target === mouseEvent.currentTarget && onCancel()}>
+      <section className="replay-intelligence-editor" role="dialog" aria-modal="true" aria-label="Correct replay event">
+        <header><div><span>Manual evidence layer</span><h3>Correct replay event</h3></div><button type="button" className="secondary" onClick={onCancel}><X size={15} /></button></header>
+        <p>The captured source is preserved. This correction changes only the reconstructed Replay Intelligence view.</p>
+        <div className="replay-intelligence-editor-grid">
+          <label>Event type<select value={draft.type} onChange={(changeEvent) => setDraft({ ...draft, type: changeEvent.target.value as ReplayIntelligenceEvent["type"] })}>{knownTypes.map((type) => <option value={type} key={type}>{type.replace("-", " ")}</option>)}</select></label>
+          <label>Side<select value={draft.side} onChange={(changeEvent) => setDraft({ ...draft, side: changeEvent.target.value as ReplayIntelligenceEvent["side"] })}><option value="me">Player</option><option value="opponent">Opponent</option><option value="system">System</option><option value="unknown">Unknown</option></select></label>
+          {replay.video ? <label>Video time (seconds)<input type="number" min="0" max={Math.ceil(replay.video.durationMs / 1000)} value={draft.videoSeconds} onChange={(changeEvent) => setDraft({ ...draft, videoSeconds: changeEvent.target.value })} /></label> : null}
+          <label>Points scored<input type="number" min="-20" max="20" value={draft.pointsScored} onChange={(changeEvent) => setDraft({ ...draft, pointsScored: changeEvent.target.value })} /></label>
+          <label className="wide">Description<input value={draft.text} onChange={(changeEvent) => setDraft({ ...draft, text: changeEvent.target.value })} /></label>
+          <label>Card name<input value={draft.cardName} onChange={(changeEvent) => setDraft({ ...draft, cardName: changeEvent.target.value })} /></label>
+          <label>Card code<input value={draft.cardId} onChange={(changeEvent) => setDraft({ ...draft, cardId: changeEvent.target.value })} /></label>
+          <label>From zone<input value={draft.fromZone} onChange={(changeEvent) => setDraft({ ...draft, fromZone: changeEvent.target.value })} /></label>
+          <label>To zone<input value={draft.toZone} onChange={(changeEvent) => setDraft({ ...draft, toZone: changeEvent.target.value })} /></label>
+          <label>Destination<input value={draft.destination} onChange={(changeEvent) => setDraft({ ...draft, destination: changeEvent.target.value })} /></label>
+          <label>Battlefield<input value={draft.battlefield} onChange={(changeEvent) => setDraft({ ...draft, battlefield: changeEvent.target.value })} /></label>
+          <label className="wide">Reviewer note<textarea value={draft.note} onChange={(changeEvent) => setDraft({ ...draft, note: changeEvent.target.value })} placeholder="Why was this changed?" /></label>
+        </div>
+        <footer>
+          <div><button type="button" className="secondary danger" disabled={saving} onClick={onDismiss}>Dismiss event</button>{correction ? <button type="button" className="secondary" disabled={saving} onClick={onReset}>Reset correction</button> : null}</div>
+          <div><button type="button" className="secondary" onClick={onCancel}>Cancel</button><button type="button" className="primary" disabled={saving || !draft.text.trim()} onClick={submit}><Save size={14} /> Save correction</button></div>
+        </footer>
+      </section>
+    </div>
+  );
+}
+
+function replayIntelligenceConfidenceLabel(value: ReplayIntelligenceConfidence): string {
+  if (value === "confirmed") return "Confirmed";
+  if (value === "reconstructed") return "Reconstructed";
+  if (value === "manual") return "Manual";
+  return "Inferred";
+}
+
+function replayIntelligenceCardKey(value: string): string {
+  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+}
+
+function replayIntelligenceCardImage(cardId = "", cardName = ""): string {
+  const registryCard = REPLAY_INTELLIGENCE_CARD_BY_NAME.get(cardName.trim().toLowerCase());
+  return resolveBundledReplayCardImage(cardId || registryCard?.code || "")
+    || registryCard?.imageUrl
+    || deckTrackerImageUrlFromId(cardId || registryCard?.code || "");
+}
+
 function ReplayHealthPanel({
   model,
   screenshots,
@@ -22698,6 +23699,7 @@ function ReplayRawCapturePanel({
         <StatRow label="Uploaded" value={rawCapture?.uploadedAt ? new Date(rawCapture.uploadedAt).toLocaleString() : deliverySummary.uploadLabel} />
         <StatRow label="Discord reports" value={deliverySummary.discordLabel} />
       </div>
+
       <div className="replay-delivery-stages" aria-label="Replay delivery progress">
         {deliveryStages.map((stage) => (
           <div className="replay-delivery-stage" data-state={stage.state} key={stage.id}>
@@ -22871,22 +23873,6 @@ function rendererErrorMessage(error: unknown, fallback: string): string {
   }
   const text = String(error ?? "").trim();
   return text || fallback;
-}
-
-function matchReviewErrorMessage(error: unknown, fallback: string): string {
-  const raw = rendererErrorMessage(error, fallback)
-    .replace(/^Error invoking remote method '[^']+':\s*/i, "")
-    .replace(/^Error:\s*/i, "")
-    .replace(/\s+/g, " ")
-    .trim();
-  if (/memory access out of bounds|null function or function signature mismatch|table index is out of bounds|bad parameter or other api misuse/i.test(raw)) {
-    const retryAction = /^Delete\b/i.test(fallback)
-      ? "restart RiftLite, then try Delete capture again"
-      : "restart RiftLite, then retry Save match or Review later";
-    return `${fallback} RiftLite's local database runtime stopped responding. This review is still open; ${retryAction}.`;
-  }
-  const safeDetail = raw && raw !== fallback ? raw.slice(0, 280) : "";
-  return safeDetail ? `${fallback} ${safeDetail}` : `${fallback} Please try again.`;
 }
 
 function replayFlagSortMs(flag: ReplayFlag): number {
@@ -23254,6 +24240,8 @@ function ReplayAnnotationCanvas({
   const [draftPoints, setDraftPoints] = useState<Array<{ x: number; y: number }>>([]);
   const [drawing, setDrawing] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(false);
+  const [pendingTextAnnotation, setPendingTextAnnotation] = useState<PendingReplayTextAnnotation | null>(null);
+  const [textDraft, setTextDraft] = useState("");
   const normalisePoint = (event: React.PointerEvent<SVGSVGElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
     return {
@@ -23271,25 +24259,19 @@ function ReplayAnnotationCanvas({
     event.preventDefault();
     const point = normalisePoint(event);
     if (tool === "text") {
-      const text = window.prompt("Annotation text");
-      if (!text?.trim()) {
-        return;
-      }
-      onAddAnnotation({
-        id: crypto.randomUUID(),
+      setTextDraft("");
+      setPendingTextAnnotation({
         targetType: timeMs == null ? "frame" : "video-time",
         targetId,
         targetLabel,
         capturedAt,
         timeMs,
-        tool,
+        tool: "text",
         layerId,
         ...clipFields(),
         color,
         width: 2,
-        points: [point],
-        text: text.trim(),
-        createdAt: new Date().toISOString()
+        points: [point]
       });
       return;
     }
@@ -23329,6 +24311,27 @@ function ReplayAnnotationCanvas({
       createdAt: new Date().toISOString()
     });
     setDraftPoints([]);
+  };
+  const cancelTextAnnotation = () => {
+    setPendingTextAnnotation(null);
+    setTextDraft("");
+  };
+  const confirmTextAnnotation = () => {
+    if (!pendingTextAnnotation) {
+      return;
+    }
+    const annotation = createReplayTextAnnotation(
+      pendingTextAnnotation,
+      textDraft,
+      crypto.randomUUID(),
+      new Date().toISOString()
+    );
+    if (!annotation) {
+      return;
+    }
+    onAddAnnotation(annotation);
+    setPendingTextAnnotation(null);
+    setTextDraft("");
   };
   const syncedAnnotations = annotations.filter((annotation) => {
     if (!annotation.clipId) {
@@ -23441,6 +24444,15 @@ function ReplayAnnotationCanvas({
           <ReplayAnnotationShape annotation={annotation} key={annotation.id} />
         ))}
       </svg>
+      {pendingTextAnnotation ? (
+        <ReplayAnnotationTextDialog
+          targetLabel={pendingTextAnnotation.targetLabel}
+          value={textDraft}
+          onChange={setTextDraft}
+          onCancel={cancelTextAnnotation}
+          onConfirm={confirmTextAnnotation}
+        />
+      ) : null}
     </div>
   );
 }
@@ -23489,6 +24501,7 @@ function ReplayVideoPlayer({
   flags,
   annotations,
   voiceNotes,
+  intelligenceEvents,
   seekToMs,
   onSeekHandled,
   onTimeChange,
@@ -23509,13 +24522,15 @@ function ReplayVideoPlayer({
   onAddAnnotation,
   onRemoveAnnotation,
   onRemoveAnnotations,
-  onClip
+  onClip,
+  onExportPresentationMp4
 }: {
   replayId: string;
   video: ReplayVideoAsset;
   flags: ReplayFlag[];
   annotations: ReplayAnnotation[];
   voiceNotes: ReplayVoiceNote[];
+  intelligenceEvents: ReplayIntelligenceEvent[];
   seekToMs: number | null;
   onSeekHandled: () => void;
   onTimeChange: (timeMs: number) => void;
@@ -23537,6 +24552,7 @@ function ReplayVideoPlayer({
   onRemoveAnnotation: (id: string) => void;
   onRemoveAnnotations: (ids: string[]) => void;
   onClip: (timeMs: number) => void;
+  onExportPresentationMp4: (replayId: string, payload: ReplayPresentationRecordingPayload) => Promise<string>;
 }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const videoStageRef = useRef<HTMLDivElement | null>(null);
@@ -23556,11 +24572,27 @@ function ReplayVideoPlayer({
   const presentationCleanupRef = useRef<(() => void) | null>(null);
   const presentationAnimationRef = useRef<number | null>(null);
   const presentationStartedAtRef = useRef(0);
+  const presentationGenerationRef = useRef(0);
+  const presentationMountedRef = useRef(false);
+  const presentationDisposedRef = useRef(true);
+  const presentationStartRequestRef = useRef(0);
+  const presentationStartPendingRef = useRef(false);
+  const presentationExportRequestRef = useRef(0);
+  const presentationExportBusyRef = useRef(false);
   const [playbackUrl, setPlaybackUrl] = useState(video.url);
   const [currentMs, setCurrentMs] = useState(0);
   const [status, setStatus] = useState("");
   const [presentationRecording, setPresentationRecording] = useState(false);
-  const [presentationStatus, setPresentationStatus] = useState("");
+  const [presentationStartPending, setPresentationStartPending] = useState(false);
+  const [pendingPresentationExport, setPendingPresentationExport] = useState<ReplayPresentationRecordingPayload | null>(
+    () => pendingReplayPresentationExports.get(replayId) ?? null
+  );
+  const [presentationPayloadPreparing, setPresentationPayloadPreparing] = useState(false);
+  const [presentationExportBusy, setPresentationExportBusy] = useState(false);
+  const [presentationStatus, setPresentationStatus] = useState(() => pendingReplayPresentationExports.has(replayId)
+    ? "A presentation recording is ready to export."
+    : ""
+  );
   const [recordingVoice, setRecordingVoice] = useState(false);
   const [activeClipId, setActiveClipId] = useState<string | undefined>();
   const [activeClipStartedAt, setActiveClipStartedAt] = useState<number | undefined>();
@@ -23585,6 +24617,14 @@ function ReplayVideoPlayer({
   useEffect(() => {
     visibleAnnotationsRef.current = visibleAnnotations;
   }, [visibleAnnotations]);
+
+  useEffect(() => {
+    const retained = pendingReplayPresentationExports.get(replayId) ?? null;
+    setPendingPresentationExport(retained);
+    setPresentationPayloadPreparing(false);
+    setPresentationExportBusy(false);
+    setPresentationStatus(retained ? "A presentation recording is ready to export." : "");
+  }, [replayId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -23621,18 +24661,26 @@ function ReplayVideoPlayer({
     };
   }, [video.path, video.url, video.mimeType, video.sizeBytes]);
 
-  useEffect(() => () => {
-    voiceRecorderRef.current?.state === "recording" && voiceRecorderRef.current.stop();
-    voiceRecorderCleanupRef.current?.();
-    if (presentationRecorderRef.current?.state === "recording") {
-      presentationRecorderRef.current.stop();
-    }
-    cleanupPresentationRecording();
-    audioRef.current?.pause();
-    if (voicePlaybackTimerRef.current) {
-      window.clearInterval(voicePlaybackTimerRef.current);
-    }
-    void window.riftlite.setWindowFullscreen(false).catch(() => undefined);
+  useEffect(() => {
+    presentationMountedRef.current = true;
+    presentationDisposedRef.current = false;
+    deletedReplayPresentationIds.delete(replayId);
+    presentationGenerationRef.current = nextReplayPresentationGeneration();
+    replayPresentationDisposers.set(replayId, disposePresentationRuntime);
+    return () => {
+      presentationMountedRef.current = false;
+      disposePresentationRuntime();
+      if (replayPresentationDisposers.get(replayId) === disposePresentationRuntime) {
+        replayPresentationDisposers.delete(replayId);
+      }
+      voiceRecorderRef.current?.state === "recording" && voiceRecorderRef.current.stop();
+      voiceRecorderCleanupRef.current?.();
+      audioRef.current?.pause();
+      if (voicePlaybackTimerRef.current) {
+        window.clearInterval(voicePlaybackTimerRef.current);
+      }
+      void window.riftlite.setWindowFullscreen(false).catch(() => undefined);
+    };
   }, []);
 
   useEffect(() => {
@@ -23679,14 +24727,72 @@ function ReplayVideoPlayer({
     }
   }, [playbackClipId, voiceNotes]);
 
+  function nextPresentationStartRequest(): number {
+    const requestId = presentationStartRequestRef.current >= Number.MAX_SAFE_INTEGER
+      ? 1
+      : presentationStartRequestRef.current + 1;
+    presentationStartRequestRef.current = requestId;
+    return requestId;
+  }
+
+  function nextPresentationExportRequest(): number {
+    const requestId = presentationExportRequestRef.current >= Number.MAX_SAFE_INTEGER
+      ? 1
+      : presentationExportRequestRef.current + 1;
+    presentationExportRequestRef.current = requestId;
+    return requestId;
+  }
+
+  function isPresentationLifecycleCurrent(generation: number): boolean {
+    return presentationMountedRef.current
+      && !presentationDisposedRef.current
+      && !deletedReplayPresentationIds.has(replayId)
+      && presentationGenerationRef.current === generation
+      && replayPresentationRecordingGeneration === generation;
+  }
+
+  function isPresentationStartCurrent(requestId: number, generation: number): boolean {
+    return presentationStartRequestRef.current === requestId
+      && isPresentationLifecycleCurrent(generation);
+  }
+
   function cleanupPresentationRecording() {
-    if (presentationAnimationRef.current) {
+    if (presentationAnimationRef.current !== null) {
       window.cancelAnimationFrame(presentationAnimationRef.current);
       presentationAnimationRef.current = null;
     }
-    presentationCleanupRef.current?.();
+    const cleanup = presentationCleanupRef.current;
     presentationCleanupRef.current = null;
     presentationRecorderRef.current = null;
+    try {
+      cleanup?.();
+    } catch {
+      // Refs are already cleared, so a platform cleanup error cannot orphan UI state.
+    }
+  }
+
+  function disposePresentationRuntime(): void {
+    presentationDisposedRef.current = true;
+    presentationStartPendingRef.current = false;
+    presentationExportBusyRef.current = false;
+    nextPresentationStartRequest();
+    nextPresentationExportRequest();
+    presentationGenerationRef.current = nextReplayPresentationGeneration();
+    const recorder = presentationRecorderRef.current;
+    if (recorder) {
+      recorder.ondataavailable = null;
+      recorder.onstop = null;
+      if (recorder.state !== "inactive") {
+        try {
+          recorder.requestData?.();
+          recorder.stop();
+        } catch {
+          // The tracks are still stopped by cleanupPresentationRecording below.
+        }
+      }
+    }
+    presentationChunksRef.current = [];
+    cleanupPresentationRecording();
   }
 
   function drawPresentationAnnotation(
@@ -23755,8 +24861,12 @@ function ReplayVideoPlayer({
   function drawPresentationFrame(
     canvas: HTMLCanvasElement,
     context: CanvasRenderingContext2D,
-    track?: MediaStreamTrack & { requestFrame?: () => void }
+    track: (MediaStreamTrack & { requestFrame?: () => void }) | undefined,
+    shouldContinue: () => boolean
   ) {
+    if (!shouldContinue()) {
+      return;
+    }
     const element = videoRef.current;
     context.fillStyle = "#020814";
     context.fillRect(0, 0, canvas.width, canvas.height);
@@ -23767,10 +24877,111 @@ function ReplayVideoPlayer({
       drawPresentationAnnotation(context, annotation, canvas.width, canvas.height);
     }
     track?.requestFrame?.();
-    presentationAnimationRef.current = window.requestAnimationFrame(() => drawPresentationFrame(canvas, context, track));
+    if (shouldContinue()) {
+      presentationAnimationRef.current = window.requestAnimationFrame(() => {
+        drawPresentationFrame(canvas, context, track, shouldContinue);
+      });
+    }
+  }
+
+  function retainPresentationExport(payload: ReplayPresentationRecordingPayload, generation: number): boolean {
+    if (!isPresentationLifecycleCurrent(generation)) {
+      return false;
+    }
+    pendingReplayPresentationExports.clear();
+    pendingReplayPresentationExports.set(replayId, payload);
+    setPendingPresentationExport(payload);
+    return true;
+  }
+
+  function discardPendingPresentationExport(): void {
+    if (
+      presentationExportBusyRef.current
+      || presentationPayloadPreparing
+      || presentationStartPendingRef.current
+      || presentationRecording
+    ) {
+      return;
+    }
+    nextPresentationStartRequest();
+    nextPresentationExportRequest();
+    presentationGenerationRef.current = nextReplayPresentationGeneration();
+    pendingReplayPresentationExports.clear();
+    setPendingPresentationExport(null);
+    setPresentationStatus("Discarded the retained presentation recording.");
+  }
+
+  async function exportPendingPresentationRecording(
+    payload: ReplayPresentationRecordingPayload | null = pendingPresentationExport
+  ): Promise<void> {
+    const generation = presentationGenerationRef.current;
+    if (
+      !payload
+      || presentationExportBusyRef.current
+      || presentationPayloadPreparing
+      || !isPresentationLifecycleCurrent(generation)
+    ) {
+      return;
+    }
+    const exportRequestId = nextPresentationExportRequest();
+    presentationExportBusyRef.current = true;
+    setPresentationExportBusy(true);
+    setPresentationStatus("Choose where to save the retained presentation MP4...");
+    try {
+      const outputPath = await onExportPresentationMp4(replayId, payload);
+      const clearedRetainedPayload = Boolean(
+        outputPath && pendingReplayPresentationExports.get(replayId) === payload
+      );
+      if (clearedRetainedPayload) {
+        // The main process only resolves with a path after validation and promotion.
+        // Clear the retained bytes even if this player unmounted while export ran.
+        pendingReplayPresentationExports.delete(replayId);
+      }
+      if (
+        presentationExportRequestRef.current !== exportRequestId
+        || !isPresentationLifecycleCurrent(generation)
+      ) {
+        return;
+      }
+      if (!outputPath) {
+        setPresentationStatus("Presentation export cancelled. The recording is kept here so you can retry.");
+        return;
+      }
+      if (clearedRetainedPayload) {
+        setPendingPresentationExport(null);
+      }
+      setPresentationStatus(`Presentation MP4 exported to ${outputPath}`);
+    } catch (error) {
+      if (
+        presentationExportRequestRef.current === exportRequestId
+        && isPresentationLifecycleCurrent(generation)
+      ) {
+        const message = rendererErrorMessage(error, "Presentation export failed.");
+        setPresentationStatus(`${message} The recording is kept here so you can retry.`);
+      }
+    } finally {
+      if (presentationExportRequestRef.current === exportRequestId) {
+        presentationExportBusyRef.current = false;
+        if (isPresentationLifecycleCurrent(generation)) {
+          setPresentationExportBusy(false);
+        }
+      }
+    }
   }
 
   async function startPresentationRecording() {
+    if (
+      presentationExportBusyRef.current
+      || presentationPayloadPreparing
+      || presentationStartPendingRef.current
+      || presentationRecorderRef.current
+      || presentationRecording
+      || !presentationMountedRef.current
+      || presentationDisposedRef.current
+      || deletedReplayPresentationIds.has(replayId)
+    ) {
+      return;
+    }
     const element = videoRef.current;
     if (!element || !element.videoWidth || !element.videoHeight) {
       setPresentationStatus("Replay video is not ready yet.");
@@ -23784,20 +24995,48 @@ function ReplayVideoPlayer({
       setPresentationStatus("Microphone access is not available on this system.");
       return;
     }
-    stopVoicePlayback();
-    if (recordingVoice) {
-      stopTimelineVoiceNote();
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(2, element.videoWidth - (element.videoWidth % 2));
+    canvas.height = Math.max(2, element.videoHeight - (element.videoHeight % 2));
+    const context = canvas.getContext("2d", { alpha: false });
+    if (!context) {
+      setPresentationStatus("Could not create presentation canvas.");
+      return;
     }
+
+    // This token is captured before the microphone permission await. It serializes
+    // rapid clicks and makes every continuation conditional on this mounted replay.
+    const startRequestId = nextPresentationStartRequest();
+    const generation = nextReplayPresentationGeneration();
+    presentationGenerationRef.current = generation;
+    presentationStartPendingRef.current = true;
+    setPresentationStartPending(true);
+    nextPresentationExportRequest();
+    // Keep any retained recording until microphone access succeeds and the new
+    // MediaRecorder has actually started, so a denied prompt cannot destroy it.
+    setPresentationStatus("Waiting for microphone access before recording...");
+    let acquiredResourceCleanup: (() => void) | null = null;
     try {
-      const canvas = document.createElement("canvas");
-      canvas.width = Math.max(2, element.videoWidth - (element.videoWidth % 2));
-      canvas.height = Math.max(2, element.videoHeight - (element.videoHeight % 2));
-      const context = canvas.getContext("2d", { alpha: false });
-      if (!context) {
-        setPresentationStatus("Could not create presentation canvas.");
-        return;
+      stopVoicePlayback();
+      if (recordingVoice) {
+        stopTimelineVoiceNote();
       }
       const voiceCapture = await createVoiceStreamCapture(microphoneDeviceId);
+      let voiceCaptureCleaned = false;
+      const cleanupVoiceCapture = () => {
+        if (voiceCaptureCleaned) {
+          return;
+        }
+        voiceCaptureCleaned = true;
+        voiceCapture.stream.getTracks().forEach((track) => track.stop());
+        voiceCapture.cleanup();
+      };
+      acquiredResourceCleanup = cleanupVoiceCapture;
+      if (!isPresentationStartCurrent(startRequestId, generation)) {
+        acquiredResourceCleanup();
+        acquiredResourceCleanup = null;
+        return;
+      }
       const fps = Math.min(30, Math.max(15, video.fps || 24));
       const canvasStream = canvas.captureStream(fps);
       const canvasTrack = canvasStream.getVideoTracks()[0] as MediaStreamTrack & { requestFrame?: () => void };
@@ -23805,6 +25044,17 @@ function ReplayVideoPlayer({
         ...canvasStream.getVideoTracks(),
         ...voiceCapture.stream.getAudioTracks()
       ]);
+      let recordingResourcesCleaned = false;
+      const cleanupRecordingResources = () => {
+        if (recordingResourcesCleaned) {
+          return;
+        }
+        recordingResourcesCleaned = true;
+        combinedStream.getTracks().forEach((track) => track.stop());
+        canvasStream.getTracks().forEach((track) => track.stop());
+        cleanupVoiceCapture();
+      };
+      acquiredResourceCleanup = cleanupRecordingResources;
       const mimeCandidates = [
         "video/webm;codecs=vp9,opus",
         "video/webm;codecs=vp8,opus",
@@ -23819,47 +25069,80 @@ function ReplayVideoPlayer({
       presentationChunksRef.current = [];
       presentationStartedAtRef.current = Date.now();
       presentationRecorderRef.current = recorder;
-      presentationCleanupRef.current = () => {
-        combinedStream.getTracks().forEach((track) => track.stop());
-        canvasStream.getTracks().forEach((track) => track.stop());
-        voiceCapture.cleanup();
-      };
+      presentationCleanupRef.current = cleanupRecordingResources;
+      acquiredResourceCleanup = null;
+      const recordingIsCurrent = () => isPresentationStartCurrent(startRequestId, generation);
       recorder.ondataavailable = (event) => {
-        if (event.data.size) {
+        if (recordingIsCurrent() && event.data.size) {
           presentationChunksRef.current.push(event.data);
         }
       };
       recorder.onstop = () => {
+        const recordingIsStillCurrent = recordingIsCurrent();
         const durationMs = Math.max(0, Date.now() - presentationStartedAtRef.current);
-        const blob = new Blob(presentationChunksRef.current, { type: recorder.mimeType || "video/webm" });
+        const chunks = recordingIsStillCurrent ? presentationChunksRef.current : [];
+        const blob = new Blob(chunks, { type: recorder.mimeType || "video/webm" });
+        presentationChunksRef.current = [];
         cleanupPresentationRecording();
+        if (!recordingIsStillCurrent) {
+          return;
+        }
         setPresentationRecording(false);
         if (!blob.size) {
           setPresentationStatus("No presentation video was captured.");
           return;
         }
-        setPresentationStatus("Preparing presentation MP4...");
+        setPresentationStatus("Securing presentation recording for export...");
+        setPresentationPayloadPreparing(true);
         void blob.arrayBuffer()
-          .then((data) => window.riftlite.exportReplayPresentationMp4(replayId, {
-            data,
-            mimeType: blob.type || "video/webm",
-            durationMs
-          }))
-          .then((outputPath) => {
-            setPresentationStatus(outputPath ? `Presentation MP4 exported to ${outputPath}` : "Presentation export cancelled.");
+          .then((data) => {
+            if (!recordingIsCurrent()) {
+              return;
+            }
+            const payload: ReplayPresentationRecordingPayload = {
+              data,
+              mimeType: blob.type || "video/webm",
+              durationMs
+            };
+            if (!retainPresentationExport(payload, generation)) {
+              return;
+            }
+            setPresentationPayloadPreparing(false);
+            setPresentationStatus("Presentation recording retained. Choose a save location for the MP4.");
+            void exportPendingPresentationRecording(payload);
           })
           .catch((error) => {
-            setPresentationStatus(rendererErrorMessage(error, "Presentation export failed."));
+            if (recordingIsCurrent()) {
+              setPresentationPayloadPreparing(false);
+              setPresentationStatus(rendererErrorMessage(error, "The presentation recording could not be prepared for export."));
+            }
           });
       };
-      drawPresentationFrame(canvas, context, canvasTrack);
+      drawPresentationFrame(canvas, context, canvasTrack, recordingIsCurrent);
       recorder.start(1000);
-      setPresentationRecording(true);
-      setPresentationStatus("Presentation recording. Play, pause, draw, and talk; stop to export one MP4.");
+      // Choosing Record new explicitly replaces the one retained app-wide recording
+      // only after the replacement is known to be recording successfully.
+      pendingReplayPresentationExports.clear();
+      setPendingPresentationExport(null);
+      if (recordingIsCurrent()) {
+        setPresentationRecording(true);
+        setPresentationStatus("Presentation recording. Play, pause, draw, and talk; stop to export one MP4.");
+      }
     } catch (error) {
+      acquiredResourceCleanup?.();
       cleanupPresentationRecording();
-      setPresentationRecording(false);
-      setPresentationStatus(rendererErrorMessage(error, "Presentation recording could not start."));
+      presentationChunksRef.current = [];
+      if (isPresentationStartCurrent(startRequestId, generation)) {
+        setPresentationRecording(false);
+        setPresentationStatus(rendererErrorMessage(error, "Presentation recording could not start."));
+      }
+    } finally {
+      if (presentationStartRequestRef.current === startRequestId) {
+        presentationStartPendingRef.current = false;
+        if (presentationMountedRef.current && !presentationDisposedRef.current) {
+          setPresentationStartPending(false);
+        }
+      }
     }
   }
 
@@ -24120,13 +25403,55 @@ function ReplayVideoPlayer({
         <div className="row-actions">
           <button
             type="button"
-            className={presentationRecording ? "danger" : "secondary"}
-            onClick={() => presentationRecording ? stopPresentationRecording() : void startPresentationRecording()}
-            disabled={Boolean(playbackClipId)}
-            title="Record replay playback, pauses, drawings, and microphone narration into one MP4"
+            className={presentationRecording ? "danger" : pendingPresentationExport ? "primary" : "secondary"}
+            onClick={() => presentationRecording
+              ? stopPresentationRecording()
+              : pendingPresentationExport
+                ? void exportPendingPresentationRecording()
+                : void startPresentationRecording()
+            }
+            disabled={Boolean(playbackClipId) || presentationExportBusy || presentationPayloadPreparing || presentationStartPending}
+            title={pendingPresentationExport
+              ? "Retry saving the retained presentation recording as a validated MP4"
+              : "Record replay playback, pauses, drawings, and microphone narration into one MP4"
+            }
           >
-            <Video size={14} /> {presentationRecording ? "Stop presentation" : "Presentation MP4"}
+            {pendingPresentationExport ? <RefreshCw size={14} /> : <Video size={14} />}
+            {presentationRecording
+              ? "Stop presentation"
+              : presentationPayloadPreparing
+                ? "Securing recording..."
+                : presentationStartPending
+                  ? "Waiting for microphone..."
+                : presentationExportBusy
+                  ? "Exporting presentation..."
+                  : pendingPresentationExport
+                    ? "Retry presentation export"
+                    : "Presentation MP4"
+            }
           </button>
+          {pendingPresentationExport && !presentationRecording ? (
+            <>
+              <button
+                type="button"
+                className="secondary"
+                disabled={presentationExportBusy || presentationPayloadPreparing || presentationStartPending || Boolean(playbackClipId)}
+                onClick={() => void startPresentationRecording()}
+                title="Explicitly replace the retained recording with a new presentation"
+              >
+                <Video size={14} /> Record new
+              </button>
+              <button
+                type="button"
+                className="secondary danger"
+                disabled={presentationExportBusy || presentationPayloadPreparing || presentationStartPending}
+                onClick={discardPendingPresentationExport}
+                title="Discard the retained presentation recording"
+              >
+                <Trash2 size={14} /> Discard recording
+              </button>
+            </>
+          ) : null}
           <button
             type="button"
             className="secondary"
@@ -24228,6 +25553,12 @@ function ReplayVideoPlayer({
           <Video size={15} />
           <strong>Recording presentation MP4</strong>
           <span>Play, pause, draw, and talk. Stop recording to export one continuous video.</span>
+        </div>
+      ) : pendingPresentationExport ? (
+        <div className="replay-coaching-status" data-state="ready" role="status">
+          <Check size={15} />
+          <strong>Presentation recording retained</strong>
+          <span>{formatDuration(pendingPresentationExport.durationMs)} · {formatBytes(pendingPresentationExport.data.byteLength)}. Retry export, record a replacement, or discard it explicitly.</span>
         </div>
       ) : playbackClipId ? (
         <div className="replay-coaching-status" data-state="playing">
@@ -24335,6 +25666,7 @@ function ReplayVideoPlayer({
         video={video}
         flags={sortedFlags}
         voiceNotes={voiceNotes}
+        intelligenceEvents={intelligenceEvents}
         currentMs={currentMs}
         playbackClipId={playbackClipId}
         voicePlaybackPaused={voicePlaybackPaused}
@@ -24376,7 +25708,7 @@ function ReplayVideoPlayer({
           ))}
         </div>
       ) : null}
-      {presentationStatus ? <p className="muted replay-presentation-status">{presentationStatus}</p> : null}
+      {presentationStatus ? <p className="muted replay-presentation-status" role="status" aria-live="polite">{presentationStatus}</p> : null}
       {status ? <p className="muted">{status}</p> : null}
     </section>
   );
@@ -24386,6 +25718,7 @@ function ReplayVideoMarkerTimeline({
   video,
   flags,
   voiceNotes,
+  intelligenceEvents,
   currentMs,
   playbackClipId,
   voicePlaybackPaused,
@@ -24398,6 +25731,7 @@ function ReplayVideoMarkerTimeline({
   video: ReplayVideoAsset;
   flags: ReplayFlag[];
   voiceNotes: ReplayVoiceNote[];
+  intelligenceEvents: ReplayIntelligenceEvent[];
   currentMs: number;
   playbackClipId?: string;
   voicePlaybackPaused: boolean;
@@ -24409,6 +25743,10 @@ function ReplayVideoMarkerTimeline({
 }) {
   const durationMs = Math.max(1, video.durationMs || 1);
   const sortedFlags = [...flags].filter((flag) => typeof flag.timeMs === "number").sort((a, b) => (a.timeMs ?? 0) - (b.timeMs ?? 0));
+  const intelligencePins = intelligenceEvents
+    .filter((event) => typeof event.videoTimeMs === "number" && ["mulligan", "play", "combat", "score", "battlefield", "result"].includes(event.type))
+    .filter((event, index, all) => all.findIndex((item) => Math.abs((item.videoTimeMs ?? 0) - (event.videoTimeMs ?? 0)) < 1_500 && item.type === event.type) === index)
+    .slice(0, 80);
   const seekFromPointer = (event: React.PointerEvent<HTMLDivElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
     if (!rect.width) {
@@ -24468,6 +25806,22 @@ function ReplayVideoMarkerTimeline({
         }}
       >
         <span className="replay-marker-progress" style={{ width: `${Math.min(100, Math.max(0, (currentMs / durationMs) * 100))}%` }} />
+        {intelligencePins.map((event) => {
+          const left = Math.min(100, Math.max(0, ((event.videoTimeMs ?? 0) / durationMs) * 100));
+          return (
+            <button
+              type="button"
+              className="replay-intelligence-marker-pin"
+              data-event-type={event.type}
+              data-confidence={event.confidence}
+              style={{ left: `${left}%` }}
+              key={`intelligence:${event.id}`}
+              title={`${event.type.replace("-", " ")} · ${event.text} · ${event.confidence}`}
+              onClick={() => onSeek(event.videoTimeMs ?? 0)}
+              onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}
+            />
+          );
+        })}
         {sortedFlags.map((flag) => {
           const note = replayVoiceNoteForFlag(voiceNotes, flag.id, flag.layerId);
           const isPlayingNote = Boolean(note && playbackClipId === note.id);
@@ -26098,6 +27452,10 @@ function HubsView({ settings, matches, replays, hubMatches, onSave, onHubResult,
   const [hubLifecycleCountdown, setHubLifecycleCountdown] = useState(0);
   const [hubLifecycleBusy, setHubLifecycleBusy] = useState(false);
   const [hubLifecycleError, setHubLifecycleError] = useState("");
+  const [hubClaimIntent, setHubClaimIntent] = useState<PrivateHubClaimIntent | null>(null);
+  const [hubClaimPassword, setHubClaimPassword] = useState("");
+  const [hubClaimBusy, setHubClaimBusy] = useState(false);
+  const [hubClaimError, setHubClaimError] = useState("");
   const [currentHubReplays, setCurrentHubReplays] = useState(replays);
   const activeHubsRef = useRef(settings.activeHubs);
   const localWebReplayIds = useMemo(() => webReplayIdsByLocalMatch(currentHubReplays), [currentHubReplays]);
@@ -26308,32 +27666,53 @@ function HubsView({ settings, matches, replays, hubMatches, onSave, onHubResult,
     }
   }
 
-  async function claimSelectedHub() {
-    const hubId = selectedHubId || targetHubId || settings.activeHubs[0]?.id || "";
-    if (!hubId) {
-      setSyncStatus("Choose a hub to claim.");
+  function requestHubClaim(hub: PrivateHub) {
+    if (!settings.accountUid || hub.claimed) return;
+    setHubClaimPassword("");
+    setHubClaimError("");
+    setHubClaimIntent({ hub: { id: hub.id, name: hub.name } });
+  }
+
+  function cancelHubClaim() {
+    if (hubClaimBusy) return;
+    setHubClaimIntent(null);
+    setHubClaimPassword("");
+    setHubClaimError("");
+  }
+
+  async function confirmHubClaim() {
+    const intent = hubClaimIntent;
+    if (!intent || hubClaimBusy) return;
+    if (!hubClaimPassword.trim()) {
+      setHubClaimError("Enter the existing hub password.");
       return;
     }
-    const claimPassword = window.prompt("Enter this hub's password to claim ownership for your RiftLite account.");
-    if (!claimPassword?.trim()) {
-      setSyncStatus("Hub claim cancelled.");
-      return;
-    }
-    setSyncStatus("Claiming hub for your RiftLite account...");
+    const hubId = intent.hub.id;
+    setHubClaimBusy(true);
+    setHubClaimError("");
     try {
-      await window.riftlite.claimHub(hubId, claimPassword);
+      await window.riftlite.claimHub(hubId, hubClaimPassword);
       await onSave({
         activeHubs: settings.activeHubs.map((hub) => hub.id === hubId
           ? { ...hub, role: "owner", claimed: true }
           : hub)
       });
+      setHubClaimIntent(null);
+      setHubClaimPassword("");
       setSyncStatus("Hub claimed. Account roles are now available.");
-      await refreshPrivateHubData();
-      await refreshHubSocial(hubId);
-      await refreshHubHealth(hubId);
     } catch (error) {
-      setSyncStatus(error instanceof Error ? error.message : "Hub claim failed.");
+      setHubClaimError(error instanceof Error ? error.message : "Hub claim failed.");
+      return;
+    } finally {
+      setHubClaimBusy(false);
     }
+    await refreshPrivateHubData().catch(() => {
+      setSyncStatus("Hub claimed. Refresh the hub if its account tools do not appear immediately.");
+    });
+    await Promise.all([
+      refreshHubSocial(hubId),
+      refreshHubHealth(hubId)
+    ]);
   }
 
   async function refreshHubSocial(hubId: string) {
@@ -26821,7 +28200,7 @@ function HubsView({ settings, matches, replays, hubMatches, onSave, onHubResult,
           <p className="muted">Create or sign in to a recoverable RiftLite account before claiming this hub.</p>
         ) : !selectedHub.claimed ? (
           <div className="row-actions">
-            <button className="primary" onClick={() => void claimSelectedHub()}><Shield size={16} /> Claim with hub password</button>
+            <button className="primary" onClick={() => requestHubClaim(selectedHub)}><Shield size={16} /> Claim with hub password</button>
           </div>
         ) : !hubAccountReady ? (
           <p className="muted">Finish your RiftLite profile on the Account page to unlock invites and hub messages.</p>
@@ -26967,6 +28346,17 @@ function HubsView({ settings, matches, replays, hubMatches, onSave, onHubResult,
           error={hubLifecycleError}
           onCancel={cancelHubLifecycle}
           onConfirm={() => void confirmHubLifecycle()}
+        />
+      ) : null}
+      {hubClaimIntent ? (
+        <PrivateHubClaimDialog
+          intent={hubClaimIntent}
+          password={hubClaimPassword}
+          busy={hubClaimBusy}
+          error={hubClaimError}
+          onPasswordChange={setHubClaimPassword}
+          onCancel={cancelHubClaim}
+          onConfirm={() => void confirmHubClaim()}
         />
       ) : null}
     </section>
@@ -30111,9 +31501,11 @@ function MatchReviewModal({ draft, decks, battlefields, previousFlags, onReviewL
   const [isSaving, setIsSaving] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isDeferring, setIsDeferring] = useState(false);
+  const [deleteConfirmationOpen, setDeleteConfirmationOpen] = useState(false);
   const [saveError, setSaveError] = useState("");
   const [seatErrorGames, setSeatErrorGames] = useState<number[]>([]);
   const [previousFlagChoice, setPreviousFlagChoice] = useState("");
+  const deleteCancelButtonRef = useRef<HTMLButtonElement | null>(null);
   const bo3GamesCacheRef = useRef<MatchGame[]>(draft.games.length > 1 ? ensureReviewGames(draft, "Bo3") : []);
 
   useEffect(() => {
@@ -30121,6 +31513,13 @@ function MatchReviewModal({ draft, decks, battlefields, previousFlags, onReviewL
       bo3GamesCacheRef.current = ensureReviewGames(draft, "Bo3");
     }
   }, [draft.id, draft.format, draft.games]);
+
+  useEffect(() => {
+    if (!deleteConfirmationOpen) {
+      return;
+    }
+    deleteCancelButtonRef.current?.focus({ preventScroll: true });
+  }, [deleteConfirmationOpen]);
 
   function patch(next: Partial<MatchDraft>) {
     if (saveError) {
@@ -30163,8 +31562,8 @@ function MatchReviewModal({ draft, decks, battlefields, previousFlags, onReviewL
       setSaveError(matchReviewErrorMessage(
         error,
         draft.status === "saved"
-          ? "The match editor could not close safely. It is still open."
-          : "Review later could not store this match. The review is still open."
+          ? "The match editor could not close safely."
+          : "Review later could not store this match."
       ));
       setIsDeferring(false);
     }
@@ -30174,10 +31573,12 @@ function MatchReviewModal({ draft, decks, battlefields, previousFlags, onReviewL
     if (isSaving || isDeleting || isDeferring) {
       return;
     }
-    const confirmed = window.confirm("Delete this captured match? Use this for non-games where the opponent left during setup. The match will move to the recycle bin and will not count in stats.");
-    if (!confirmed) {
+    if (!deleteConfirmationOpen) {
+      setSaveError("");
+      setDeleteConfirmationOpen(true);
       return;
     }
+    setDeleteConfirmationOpen(false);
     setSaveError("");
     setIsDeleting(true);
     try {
@@ -30506,11 +31907,30 @@ function MatchReviewModal({ draft, decks, battlefields, previousFlags, onReviewL
           ) : null}
           <label className="wide">Notes<textarea value={draft.notes} onChange={(event) => patch({ notes: event.target.value })} /></label>
         </div>
-        <footer>
-          <span className={saveError ? "save-error" : ""}><Flag size={16} /> {saveError || reviewFooterHint(draft, isScorepadDraft)}</span>
-          <button className="danger" disabled={isSaving || isDeleting || isDeferring} onClick={() => void deleteCapture()}><Trash2 size={16} /> {isDeleting ? "Deleting..." : "Delete capture"}</button>
-          <button className="secondary" disabled={isSaving || isDeleting || isDeferring} onClick={() => void reviewLater()}>{isDeferring ? isSavedDraft ? "Closing..." : "Keeping..." : isSavedDraft ? "Cancel" : "Review later"}</button>
-          <button className="primary" disabled={isSaving || isDeleting || isDeferring} onClick={() => void saveMatch()}><Check size={16} /> {isSaving ? "Saving..." : "Save match"}</button>
+        <footer data-delete-confirmation={deleteConfirmationOpen ? "true" : undefined}>
+          {deleteConfirmationOpen ? <>
+            <span className="review-delete-confirmation" role="alert">
+              <Trash2 size={16} />
+              <span>
+                <strong>Delete this captured match?</strong>
+                <small>It will move to the recycle bin and will not count in stats.</small>
+              </span>
+            </span>
+            <button
+              ref={deleteCancelButtonRef}
+              className="secondary"
+              disabled={isDeleting}
+              onClick={() => setDeleteConfirmationOpen(false)}
+            >Keep reviewing</button>
+            <button className="danger" disabled={isDeleting} onClick={() => void deleteCapture()}>
+              <Trash2 size={16} /> {isDeleting ? "Deleting..." : "Delete capture now"}
+            </button>
+          </> : <>
+            <span className={saveError ? "save-error" : ""}><Flag size={16} /> {saveError ? "The review is still open. Resolve the issue above, then try again." : reviewFooterHint(draft, isScorepadDraft)}</span>
+            <button className="danger" disabled={isSaving || isDeleting || isDeferring} onClick={() => void deleteCapture()}><Trash2 size={16} /> {isDeleting ? "Deleting..." : "Delete capture"}</button>
+            <button className="secondary" disabled={isSaving || isDeleting || isDeferring} onClick={() => void reviewLater()}>{isDeferring ? isSavedDraft ? "Closing..." : "Keeping..." : isSavedDraft ? "Cancel" : "Review later"}</button>
+            <button className="primary" disabled={isSaving || isDeleting || isDeferring} onClick={() => void saveMatch()}><Check size={16} /> {isSaving ? "Saving..." : "Save match"}</button>
+          </>}
         </footer>
       </section>
     </div>

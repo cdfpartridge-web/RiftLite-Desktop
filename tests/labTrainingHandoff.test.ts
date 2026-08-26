@@ -44,6 +44,23 @@ describe("lab training navigation handoff", () => {
     expect(storage.values.has(LAB_TRAINING_HANDOFF_STORAGE_KEY)).toBe(false);
   });
 
+  it("accepts short-lived coaching context from Insights", () => {
+    const handoff = createLabTrainingHandoff({
+      destination: "mulligan",
+      source: "insights",
+      playerLegend: "Jinx",
+      opponentLegend: "Jayce",
+      deckId: "deck-coach",
+      wentFirst: "1st"
+    }, now);
+    expect(parseLabTrainingHandoff(handoff, "mulligan", now.getTime())).toMatchObject({
+      source: "insights",
+      playerLegend: "Jinx",
+      opponentLegend: "Jayce",
+      deckId: "deck-coach"
+    });
+  });
+
   it("rejects expired, future, malformed, and incomplete context", () => {
     const valid = createLabTrainingHandoff({
       destination: "sideboard",

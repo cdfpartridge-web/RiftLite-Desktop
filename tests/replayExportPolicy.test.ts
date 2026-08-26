@@ -45,7 +45,7 @@ describe("replay large-file export policy", () => {
     const sourceResolver = mainSource.slice(sourceStart, sourceEnd);
     expect(sourceResolver).not.toContain("MAX_STREAMED_REPLAY_VIDEO_BYTES");
     expect(mainSource).toContain("writeFileAsBase64Lines(stream, video.sourcePath, MAX_STREAMED_REPLAY_VIDEO_BYTES)");
-    expect(mainSource).toContain("timeout: replayMp4ExportTimeoutMs(videoDurationSec * 1000)");
+    expect(mainSource).toContain("replayMp4ExportTimeoutMs(expectedDurationMs)");
   });
 
   it("bounds streamed manifests and data lines independently of the total bundle", () => {

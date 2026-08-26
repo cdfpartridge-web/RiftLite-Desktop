@@ -66,6 +66,9 @@ export function isAtlasPlayerIdentityUiControlCandidate(candidate: AtlasPlayerId
   if (isAtlasPlayerIdentityUiControlValue(candidate.name)) {
     return true;
   }
+  if (isAtlasBoardStatusIdentityCandidate(candidate)) {
+    return true;
+  }
   if (isReliableAtlasPlayerIdentityCandidate(candidate)) {
     return false;
   }
@@ -101,7 +104,25 @@ export function normalizeAtlasPlayerIdentityName(value: string): string {
 function isStructurallyImpossibleAtlasPlayerIdentity(value: string): boolean {
   const compact = normalizeAtlasPlayerIdentityName(value).replace(/[^a-z0-9]+/g, "");
   return compact.startsWith("hidepopoverdeckpeek") ||
-    compact.startsWith("hidepopovertrashcard");
+    compact.startsWith("hidepopovertrashcard") ||
+    /^\d+floatingenergy\d*power/.test(compact) ||
+    /^drawdlookctrlburn\d*$/.test(compact) ||
+    /^\d+send$/.test(compact) ||
+    /^recycle\d*(?:body|calm|chaos|fury|mind|order)?runes?$/.test(compact) ||
+    compact.endsWith("menu") ||
+    compact === "main" ||
+    compact === "gamesettings";
+}
+
+function isAtlasBoardStatusIdentityCandidate(candidate: AtlasPlayerIdentityCandidate): boolean {
+  const compact = normalizeAtlasPlayerIdentityName(candidate.name).replace(/[^a-z0-9]+/g, "");
+  const source = (candidate.source ?? "").trim().toLowerCase();
+  const top = finitePosition(candidate.top);
+  const left = finitePosition(candidate.left);
+  return compact === "gold" &&
+    /^(?:identity|presence|player)-dom$/.test(source) &&
+    top <= 8 &&
+    left <= 40;
 }
 
 function finiteScore(value: number | undefined): number {

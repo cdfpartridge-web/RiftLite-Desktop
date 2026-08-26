@@ -795,7 +795,7 @@ describe("MatchSessionTracker", () => {
     expect(draft.games[1].result).toBe("Win");
   });
 
-  it("starts a new TCGA game when battlefield evidence changes even if format text is absent", () => {
+  it("starts a new TCGA game when the score falls and battlefield evidence changes even if format text is absent", () => {
     const tracker = new MatchSessionTracker();
     tracker.ingest(event("match-start", {
       active: true,
@@ -853,6 +853,69 @@ describe("MatchSessionTracker", () => {
     expect(draft.games[0].oppBattlefield).toBe("Sunken Temple");
     expect(draft.games[0].myBattlefieldImage).toContain("papertree");
     expect(draft.games[0].myBattlefieldImage).not.toContain("baron");
+  });
+
+  it("keeps an Ivern Brush battlefield replacement inside the current TCGA game", () => {
+    const tracker = new MatchSessionTracker();
+    const forbiddingWaste = "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/83dbc88d462da85be9398c790e88ff13da8637d4-1039x744.png";
+    const brush = "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/fad09d6bd9bf38e376f430ecb0b400762420d061-1039x744.png";
+    const trappingGrounds = "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/234bb01e24892aefa024ae402f6ee7703ccdbbd4-1039x744.png";
+
+    tracker.ingest(event("match-start", {
+      active: true,
+      opponentName: "Kididok",
+      score: { me: "0", opp: "0", source: "tcga-counter-player" },
+      myBattlefieldImage: forbiddingWaste,
+      opponentBattlefieldImage: trappingGrounds
+    }, "2026-08-19T08:07:15.911Z"));
+    tracker.ingest(event("match-snapshot", {
+      active: true,
+      score: { me: "1", opp: "1", source: "tcga-counter-player" },
+      myBattlefieldImage: forbiddingWaste,
+      opponentBattlefieldImage: trappingGrounds
+    }, "2026-08-19T08:08:16.167Z"));
+    tracker.ingest(event("match-snapshot", {
+      active: true,
+      score: { me: "1", opp: "1", source: "tcga-counter-player" },
+      myBattlefieldImage: brush,
+      opponentBattlefieldImage: trappingGrounds
+    }, "2026-08-19T08:08:21.604Z"));
+    tracker.ingest(event("match-snapshot", {
+      active: true,
+      score: { me: "3", opp: "4", source: "tcga-counter-player" },
+      myBattlefieldImage: brush,
+      opponentBattlefieldImage: trappingGrounds
+    }, "2026-08-19T08:18:03.000Z"));
+    tracker.ingest(event("match-snapshot", {
+      active: true,
+      score: { me: "3", opp: "4", source: "tcga-counter-player" },
+      myBattlefieldImage: forbiddingWaste,
+      opponentBattlefieldImage: trappingGrounds
+    }, "2026-08-19T08:18:04.000Z"));
+    tracker.ingest(event("match-snapshot", {
+      active: true,
+      score: { me: "4", opp: "6", source: "tcga-counter-player" },
+      myBattlefieldImage: forbiddingWaste,
+      opponentBattlefieldImage: trappingGrounds
+    }, "2026-08-19T08:21:07.000Z"));
+
+    const draft = tracker.buildDraft("tcga", event("match-end", {
+      active: false,
+      reason: "inactive-debounce"
+    }, "2026-08-19T08:21:25.027Z"), settings);
+
+    expect(draft.format).toBe("Bo1");
+    expect(draft.score).toBe("0-1");
+    expect(draft.result).toBe("Loss");
+    expect(draft.games).toHaveLength(1);
+    expect(draft.games[0]).toMatchObject({
+      gameNumber: 1,
+      result: "Loss",
+      myPoints: 4,
+      oppPoints: 6
+    });
+    expect(draft.games[0].myBattlefieldImage).toContain("83dbc88d462da85be9398c790e88ff13da8637d4");
+    expect(draft.games[0].myBattlefieldImage).not.toContain("fad09d6bd9bf38e376f430ecb0b400762420d061");
   });
 
   it("preserves per-game battlefield candidate images across BO3 score resets", () => {
@@ -1960,6 +2023,66 @@ describe("MatchSessionTracker", () => {
     });
   });
 
+  it("keeps one Atlas session when live board text repeatedly replaces the opponent label", () => {
+    const tracker = new MatchSessionTracker();
+    const roomCode = "H8YTM";
+    const startedAt = "2026-08-26T11:17:05.374Z";
+    const stableOpponent = {
+      name: "Omurice",
+      side: "opponent",
+      source: "aria-label",
+      score: 8,
+      top: 13,
+      left: 1469
+    };
+    const base = {
+      active: true,
+      format: "Auto",
+      roomCode,
+      myName: "BMU",
+      configuredUsername: "BMU",
+      myChampionCode: "SFD-195",
+      opponentChampionCode: "UNL-228",
+      myBattlefieldCode: "UNL-205",
+      opponentBattlefieldCode: "OGN-296",
+      score: { me: "", opp: "", source: "none" },
+      rows: [{ text: "12:19Played Pyke, Dockside Butcher from hand." }]
+    };
+
+    tracker.ingest(event("match-start", {
+      ...base,
+      opponentName: "Omurice",
+      atlasPlayerCandidates: [stableOpponent]
+    }, startedAt, "atlas"));
+
+    const noisySnapshots = [
+      ["2/2010FloatingEnergy0Power0340", "player-dom", "2026-08-26T11:17:57.845Z"],
+      ["Recycle 2 Fury runes.", "identity-dom", "2026-08-26T11:18:29.087Z"],
+      ["Gold.", "identity-dom", "2026-08-26T11:18:59.760Z"],
+      ["20Send", "identity-dom", "2026-08-26T11:19:30.550Z"]
+    ] as const;
+
+    for (const [opponentName, source, capturedAt] of noisySnapshots) {
+      const snapshot = event("match-snapshot", {
+        ...base,
+        opponentName,
+        atlasPlayerCandidates: [
+          { name: opponentName, side: "opponent", source, score: 8, top: 5, left: 5 },
+          stableOpponent
+        ]
+      }, capturedAt, "atlas");
+      expect(tracker.shouldFinalizeBeforeNewSession(snapshot)).toBe(false);
+      tracker.ingest(snapshot);
+      expect(tracker.get("atlas")?.sticky.opponentName).toBe("Omurice");
+    }
+
+    expect(tracker.get("atlas")).toMatchObject({
+      startedAt,
+      sticky: { roomCode, opponentName: "Omurice" }
+    });
+    expect(tracker.get("atlas")?.evidence).toHaveLength(6);
+  });
+
   it("keeps the same Atlas session when Stacked Deck hides the opponent identity entirely", () => {
     const tracker = new MatchSessionTracker();
     const roomCode = "ZYBSB";
@@ -3006,6 +3129,28 @@ describe("MatchSessionTracker", () => {
       "Played Watchful Sentry to base.",
       "Ended their turn."
     ]);
+  });
+
+  it("stores complete Atlas played-card names without the source-zone suffix", () => {
+    const tracker = new MatchSessionTracker();
+    tracker.ingest(event("match-start", {
+      active: true,
+      configuredUsername: "BMU",
+      opponentName: "Nova",
+      rows: [
+        { text: "20:35BMU's turn\u21ba" },
+        { text: "20:35Played Turn to Dust from hand.\u21ba" },
+        { text: "20:36Played Mournful Witness from hand to base.\u21ba" }
+      ]
+    }, "2026-04-24T19:36:30.000Z", "atlas"));
+
+    expect(tracker.getReplayEvents("atlas")
+      .filter((item) => item.type === "play")
+      .map((item) => ({ cardName: item.cardName, destination: item.destination })))
+      .toEqual([
+        { cardName: "Turn to Dust", destination: "" },
+        { cardName: "Mournful Witness", destination: "base" }
+      ]);
   });
 
   it("filters low-value Atlas replay noise and treats setup draw text as setup", () => {

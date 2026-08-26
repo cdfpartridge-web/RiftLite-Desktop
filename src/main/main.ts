@@ -1,9 +1,9 @@
 import { app, BrowserWindow, clipboard, desktopCapturer, dialog, globalShortcut, ipcMain, Menu, nativeImage, safeStorage, screen, session as electronSession, shell, webContents as electronWebContents } from "electron";
 import type { NativeImage, OpenDialogOptions, SaveDialogOptions, WebContents } from "electron";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { once } from "node:events";
 import { createReadStream, createWriteStream, mkdirSync } from "node:fs";
-import { access, appendFile, copyFile, mkdir, open, readFile, readdir, realpath, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { access, appendFile, copyFile, mkdir, open, readFile, readdir, realpath, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
@@ -18,6 +18,8 @@ import type {
   AtlasWebviewRecoveryResult,
   AppNavigationRequest,
   BattlefieldOption,
+  CoachShareCardCaptureRequest,
+  CoachShareCardCaptureResult,
   CaptureEvent,
   CommunityMatch,
   DeckEntry,
@@ -41,6 +43,7 @@ import type {
   ReplayFileRevealResult,
   ReplayFlag,
   ReplayLocalAssetKind,
+  ReplayMp4ExportProgress,
   ReplayMp4ExportOptions,
   ReplayPresentationRecordingPayload,
   RawCaptureAppendFramePayload,
@@ -72,8 +75,14 @@ import {
   ATLAS_BATTLEFIELD_SEAT_IPC_CHANNEL,
   AtlasBattlefieldSeatSocketTracker,
   atlasBattlefieldSeatSignalFromFrame,
+  atlasPlayerIdFromUrl,
   atlasSeatCaptureEvent
 } from "../shared/atlasSeatTracker.js";
+import {
+  ATLAS_AUTHORITATIVE_MATCH_IPC_CHANNEL,
+  AtlasAuthoritativeMatchTracker,
+  atlasAuthoritativeMatchSignalFromState
+} from "../shared/atlasAuthoritativeMatch.js";
 import { atlasCardRenderingCssForUrl } from "../shared/atlasCardRendering.js";
 import { AtlasKnownOpponentHandTracker } from "../shared/atlasKnownOpponentHand.js";
 import {
@@ -151,6 +160,17 @@ import { runAccountCloudRestore } from "./services/accountCloudRestoreCoordinato
 import { CaptureCoordinator } from "./services/captureCoordinator.js";
 import { CaptureDiagnostics } from "./services/captureDiagnostics.js";
 import { startEventLoopWatchdog, type EventLoopWatchdog } from "./services/eventLoopWatchdog.js";
+import {
+  replayMp4CanonicalPathKey,
+  replayMp4DurationIsNearExpected,
+  replayMp4DurationTolerance,
+  replayMp4EncodingPercent,
+  replayMp4FileIdentityMatches,
+  replayMp4ProbeHasVideo,
+  replayMp4ProgressTimeMs,
+  replayMp4StagingPaths,
+  replayMp4ValidationPercent
+} from "./services/replayMp4ExportSafety.js";
 import {
   confirmedMatchSupportsBackgroundDelivery,
   confirmMatchLocalFirst,
@@ -347,6 +367,21 @@ type ConfirmedMatchDeliveryJob = {
   pending: Promise<void> | null;
 };
 const confirmedMatchDeliveryByMatchId = new Map<string, ConfirmedMatchDeliveryJob>();
+type ActiveReplayMp4Export = {
+  exportId: string;
+  requestId: number;
+  replayId: string;
+  kind: ReplayMp4ExportProgress["kind"];
+  sender: WebContents;
+  stage: ReplayMp4ExportProgress["stage"];
+  percent?: number;
+  lastDiagnosticStage?: ReplayMp4ExportProgress["stage"];
+};
+let activeReplayMp4Export: ActiveReplayMp4Export | null = null;
+let lastCompletedReplayMp4ExportPath = "";
+let replayMp4QuitPending = false;
+let replayMp4WindowClosePending: BrowserWindow | null = null;
+let replayMp4QuitNoticeShown = false;
 
 function installSmokeNetworkIsolation(): void {
   if (!IS_PACKAGED_SMOKE_TEST) return;
@@ -2114,6 +2149,7 @@ function installRawCaptureWebSocketTap(webContents: WebContents): void {
   rawCaptureDebuggerContents.add(webContents);
   const socketUrls = new Map<string, string>();
   const battlefieldSeatSockets = new AtlasBattlefieldSeatSocketTracker();
+  const authoritativeMatchTracker = new AtlasAuthoritativeMatchTracker();
   try {
     if (!webContents.debugger.isAttached()) {
       webContents.debugger.attach("1.3");
@@ -2146,6 +2182,9 @@ function installRawCaptureWebSocketTap(webContents: WebContents): void {
       const url = readDebugString(payload.url);
       if (requestId && isRiftAtlasRealtimeSocket(url)) {
         socketUrls.set(requestId, url);
+        if (/\/parties\/match\//i.test(url) && atlasPlayerIdFromUrl(url)) {
+          authoritativeMatchTracker.reset();
+        }
         battlefieldSeatSockets.observeOpened(requestId, url);
       }
       return;
@@ -2187,7 +2226,8 @@ function installRawCaptureWebSocketTap(webContents: WebContents): void {
       webContents,
       frame,
       "atlas-ws-frame",
-      battlefieldSeatSockets.isCurrent(requestId)
+      battlefieldSeatSockets.isCurrent(requestId),
+      authoritativeMatchTracker
     );
   });
 
@@ -2242,8 +2282,22 @@ function ingestAtlasRawFrame(
   webContents: WebContents,
   frame: RawCaptureAppendFramePayload,
   reason: string,
-  bridgeBattlefieldSeat = false
+  bridgeBattlefieldSeat = false,
+  authoritativeMatchTracker?: AtlasAuthoritativeMatchTracker
 ): void {
+  const authoritativeMatchState = bridgeBattlefieldSeat
+    ? authoritativeMatchTracker?.observeFrame(frame) ?? null
+    : null;
+  if (authoritativeMatchState && !webContents.isDestroyed()) {
+    try {
+      webContents.send(
+        ATLAS_AUTHORITATIVE_MATCH_IPC_CHANNEL,
+        atlasAuthoritativeMatchSignalFromState(authoritativeMatchState)
+      );
+    } catch (error) {
+      void logStartupIssue("atlas authoritative match bridge failed", error);
+    }
+  }
   const battlefieldSeatSignal = bridgeBattlefieldSeat
     ? atlasBattlefieldSeatSignalFromFrame(frame)
     : null;
@@ -2986,6 +3040,71 @@ async function takeScreenshot(source: ScreenshotResult["source"] = "manual", opt
     }
     return result;
   }
+}
+
+function coachShareCaptureBounds(value: CoachShareCardCaptureRequest["bounds"] | null | undefined): { x: number; y: number; width: number; height: number } {
+  if (!value || ![value.x, value.y, value.width, value.height].every((item) => Number.isFinite(item))) {
+    throw new Error("Share card bounds were invalid.");
+  }
+  const x = Math.max(0, Math.floor(value.x));
+  const y = Math.max(0, Math.floor(value.y));
+  const bounds = {
+    x,
+    y,
+    width: Math.ceil(value.x + value.width) - x,
+    height: Math.ceil(value.y + value.height) - y
+  };
+  if (bounds.width < 320 || bounds.height < 180 || bounds.width > 2400 || bounds.height > 1600) {
+    throw new Error("Share card bounds were outside the supported size.");
+  }
+  const aspectRatio = bounds.width / bounds.height;
+  if (Math.abs(aspectRatio - 16 / 9) > 0.03) {
+    throw new Error("Share card was not rendered at a 16:9 aspect ratio.");
+  }
+  return bounds;
+}
+
+async function captureCoachShareCard(
+  sender: WebContents,
+  request: CoachShareCardCaptureRequest
+): Promise<CoachShareCardCaptureResult> {
+  if (request?.action !== "copy" && request?.action !== "save") {
+    throw new Error("Share card action was invalid.");
+  }
+  const action = request.action;
+  const bounds = coachShareCaptureBounds(request?.bounds);
+  const owner = BrowserWindow.fromWebContents(sender);
+  const [contentWidth, contentHeight] = owner?.getContentSize() ?? [0, 0];
+  if (contentWidth > 0 && contentHeight > 0 && (bounds.x + bounds.width > contentWidth + 1 || bounds.y + bounds.height > contentHeight + 1)) {
+    throw new Error("Share card was outside the RiftLite window.");
+  }
+  const captured = await sender.capturePage(bounds);
+  if (captured.isEmpty()) {
+    throw new Error("The coaching card capture was empty.");
+  }
+  const image = captured.resize({ width: 1200, height: 675, quality: "best" });
+  if (action === "copy") {
+    clipboard.writeImage(image);
+    return { ok: true, action, message: "Coaching card copied as an image." };
+  }
+
+  const settings = await store.getSettings();
+  const directory = screenshotDirectory(settings);
+  await mkdir(directory, { recursive: true });
+  const options: SaveDialogOptions = {
+    title: "Save RiftLite coaching card",
+    defaultPath: join(directory, screenshotFilename(request.label || "Coaching-Quest", "png")),
+    filters: [{ name: "PNG image", extensions: ["png"] }]
+  };
+  const result = owner
+    ? await dialog.showSaveDialog(owner, options)
+    : await dialog.showSaveDialog(options);
+  if (result.canceled || !result.filePath) {
+    return { ok: false, action, cancelled: true, message: "Save cancelled." };
+  }
+  const filePath = result.filePath.toLowerCase().endsWith(".png") ? result.filePath : `${result.filePath}.png`;
+  await writeFile(filePath, image.toPNG({ scaleFactor: 1 }));
+  return { ok: true, action, path: filePath, message: `Saved ${basename(filePath)}` };
 }
 
 async function captureTimedReplayFrame(
@@ -4000,11 +4119,11 @@ async function exportReplayBundle(replayId: string): Promise<string> {
   }
   const bundle: Omit<RiftReplayBundle, "video"> = {
     format: "riftlite.replay",
-    version: 4,
+    version: 5,
     exportedAt: new Date().toISOString(),
     replay: {
       ...replay,
-      schemaVersion: 4,
+      schemaVersion: 5,
       coachingPack,
       matchSnapshot: match,
       search
@@ -4184,31 +4303,65 @@ function replayMp4RenderGeometry(video: ReplayVideoAsset, options: ReplayMp4Expo
   };
 }
 
-async function replayMp4ProbeVideoGeometry(
+type ReplayMp4MediaProbe = Pick<ReplayVideoAsset, "durationMs" | "width" | "height" | "hasAudio">;
+
+async function replayMp4ProbeMedia(
   ffmpegPath: string,
   filePath: string,
-  fallback: ReplayVideoAsset
-): Promise<Pick<ReplayVideoAsset, "width" | "height">> {
+  fallback: Pick<ReplayVideoAsset, "durationMs" | "width" | "height">
+): Promise<ReplayMp4MediaProbe> {
+  let output = "";
   try {
-    await execFileAsync(ffmpegPath, ["-hide_banner", "-i", filePath], {
+    await execFileAsync(ffmpegPath, ["-nostdin", "-hide_banner", "-i", filePath], {
       windowsHide: true,
       timeout: 30_000,
-      maxBuffer: 1024 * 1024
+      maxBuffer: 2 * 1024 * 1024
     });
   } catch (error) {
-    const output = error && typeof error === "object"
-      ? `${String((error as { stdout?: unknown }).stdout ?? "")}\n${String((error as { stderr?: unknown }).stderr ?? "")}`
-      : String(error ?? "");
-    const match = output.match(/Video:\s.*?([1-9]\d{2,5})x([1-9]\d{2,5})/i);
-    if (match) {
-      const width = Number.parseInt(match[1] ?? "", 10);
-      const height = Number.parseInt(match[2] ?? "", 10);
-      if (Number.isFinite(width) && Number.isFinite(height) && width >= 320 && height >= 180) {
-        return { width, height };
-      }
-    }
+    output = replayMp4ProbeOutput(error);
   }
-  return { width: fallback.width, height: fallback.height };
+  if (!replayMp4ProbeHasVideo(output)) {
+    throw new Error("MP4 export could not read a video stream from the source recording.");
+  }
+  const match = output.match(/Video:\s.*?([1-9]\d{2,5})x([1-9]\d{2,5})/i);
+  const width = Number.parseInt(match?.[1] ?? "", 10);
+  const height = Number.parseInt(match?.[2] ?? "", 10);
+  const headerDurationMs = replayMediaDurationMsFromFfmpegOutput(output);
+  let scannedDurationMs = 0;
+  try {
+    scannedDurationMs = await runReplayMp4Ffmpeg(ffmpegPath, [
+      "-nostdin",
+      "-hide_banner",
+      "-loglevel",
+      "error",
+      "-progress",
+      "pipe:1",
+      "-nostats",
+      "-fflags",
+      "+genpts",
+      "-i",
+      filePath,
+      "-map",
+      "0:v:0",
+      "-c",
+      "copy",
+      "-f",
+      "null",
+      "-"
+    ], replayMp4ExportTimeoutMs(headerDurationMs || fallback.durationMs));
+  } catch (error) {
+    throw new Error(`MP4 export could not scan the source recording: ${replayMp4ExportErrorMessage(error)}`);
+  }
+  const durationMs = scannedDurationMs || headerDurationMs;
+  if (!Number.isFinite(durationMs) || durationMs <= 0) {
+    throw new Error("MP4 export could not determine the source video's duration.");
+  }
+  return {
+    durationMs,
+    width: Number.isFinite(width) && width >= 320 ? width : fallback.width,
+    height: Number.isFinite(height) && height >= 180 ? height : fallback.height,
+    hasAudio: /Stream\s+#\d+:\d+[^\r\n]*Audio:/i.test(output)
+  };
 }
 
 function replayMp4GeometryFilterBody(geometry: ReplayMp4RenderGeometry): string {
@@ -4644,6 +4797,415 @@ async function replayMp4VoiceInputs(
   return result;
 }
 
+function replayMp4ExportErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return message.replace(/\s+/g, " ").trim().slice(0, 1_000) || "MP4 export failed.";
+}
+
+function recordReplayMp4ExportLifecycle(progress: ReplayMp4ExportProgress): void {
+  if (typeof diagnostics === "undefined") {
+    return;
+  }
+  void diagnostics.record({
+    id: `replay-mp4-export-${progress.stage}-${Date.now()}-${randomUUID()}`,
+    platform: "sim",
+    kind: "debug",
+    capturedAt: new Date().toISOString(),
+    url: "",
+    payload: {
+      diagnosticType: "replay-mp4-export",
+      exportId: progress.exportId,
+      requestId: progress.requestId,
+      replayId: progress.replayId,
+      exportKind: progress.kind,
+      stage: progress.stage,
+      percent: progress.percent,
+      outputFilename: progress.outputPath ? basename(progress.outputPath) : undefined,
+      error: progress.error
+    }
+  }).catch(() => undefined);
+}
+
+function emitReplayMp4ExportProgress(
+  context: ActiveReplayMp4Export,
+  patch: Omit<ReplayMp4ExportProgress, "exportId" | "requestId" | "replayId" | "kind">
+): void {
+  context.stage = patch.stage;
+  context.percent = patch.percent;
+  const progress: ReplayMp4ExportProgress = {
+    exportId: context.exportId,
+    requestId: context.requestId,
+    replayId: context.replayId,
+    kind: context.kind,
+    ...patch
+  };
+  if (!context.sender.isDestroyed()) {
+    try {
+      context.sender.send("replay:mp4-export-progress", progress);
+    } catch {
+      // Export remains main-process owned if the renderer disappears.
+    }
+  }
+  if (context.lastDiagnosticStage !== progress.stage) {
+    context.lastDiagnosticStage = progress.stage;
+    recordReplayMp4ExportLifecycle(progress);
+  }
+}
+
+function assertReplayMp4ExportRequestId(requestId: number): void {
+  if (!Number.isSafeInteger(requestId) || requestId <= 0) {
+    throw new Error("MP4 export request identity is invalid.");
+  }
+}
+
+function beginReplayMp4Export(
+  replayId: string,
+  kind: ReplayMp4ExportProgress["kind"],
+  requestId: number,
+  sender: WebContents
+): ActiveReplayMp4Export {
+  assertReplayMp4ExportRequestId(requestId);
+  if (activeReplayMp4Export) {
+    throw new Error("Another MP4 export is already running. Wait for it to finish before starting another export.");
+  }
+  const context: ActiveReplayMp4Export = {
+    exportId: randomUUID(),
+    requestId,
+    replayId,
+    kind,
+    sender,
+    stage: "preparing"
+  };
+  activeReplayMp4Export = context;
+  return context;
+}
+
+function endReplayMp4Export(context: ActiveReplayMp4Export): void {
+  if (activeReplayMp4Export?.exportId === context.exportId) {
+    activeReplayMp4Export = null;
+  }
+  replayMp4QuitNoticeShown = false;
+  if (replayMp4QuitPending) {
+    replayMp4QuitPending = false;
+    replayMp4WindowClosePending = null;
+    setImmediate(() => app.quit());
+    return;
+  }
+  const window = replayMp4WindowClosePending;
+  replayMp4WindowClosePending = null;
+  if (window && !window.isDestroyed()) {
+    setImmediate(() => window.close());
+  }
+}
+
+function deferQuitForReplayMp4Export(
+  intent: "quit" | "close-window" = "quit",
+  windowToClose?: BrowserWindow
+): boolean {
+  const context = activeReplayMp4Export;
+  if (!context) {
+    return false;
+  }
+  if (intent === "quit") {
+    replayMp4QuitPending = true;
+  } else if (windowToClose) {
+    replayMp4WindowClosePending = windowToClose;
+  }
+  if (!replayMp4QuitNoticeShown) {
+    replayMp4QuitNoticeShown = true;
+    void logStartupIssue("quit deferred for MP4 export", JSON.stringify({
+      exportId: context.exportId,
+      requestId: context.requestId,
+      replayId: context.replayId,
+      exportKind: context.kind,
+      stage: context.stage,
+      percent: context.percent
+    }));
+    const options: Electron.MessageBoxOptions = {
+      type: "info",
+      title: "MP4 export in progress",
+      message: "RiftLite is still finishing your MP4 export.",
+      detail: intent === "quit"
+        ? "The app will close automatically after the video is validated and saved. Closing it early would leave an unusable file."
+        : "The window will close automatically after the video is validated and saved. Closing it early would leave an unusable file.",
+      buttons: ["Keep exporting"],
+      defaultId: 0,
+      noLink: true
+    };
+    const window = mainWindow;
+    if (window && !window.isDestroyed()) {
+      void dialog.showMessageBox(window, options).catch(() => undefined);
+    } else {
+      void dialog.showMessageBox(options).catch(() => undefined);
+    }
+  }
+  return true;
+}
+
+async function runReplayMp4Ffmpeg(
+  ffmpegPath: string,
+  args: string[],
+  timeoutMs: number,
+  onProgressMs?: (processedMs: number) => void
+): Promise<number> {
+  return new Promise<number>((resolveProcess, rejectProcess) => {
+    const child = spawn(ffmpegPath, args, {
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    let settled = false;
+    let timedOut = false;
+    let stderr = "";
+    let progressBuffer = "";
+    let lastProgressMs = -1;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGKILL");
+    }, timeoutMs);
+    const settle = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      if (error) rejectProcess(error);
+      else resolveProcess(Math.max(0, lastProgressMs));
+    };
+    const consumeProgressLine = (line: string) => {
+      const processedMs = replayMp4ProgressTimeMs(line);
+      if (processedMs == null) return;
+      if (processedMs > lastProgressMs) {
+        lastProgressMs = processedMs;
+        onProgressMs?.(processedMs);
+      }
+    };
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      progressBuffer += chunk;
+      const lines = progressBuffer.split(/\r?\n/);
+      progressBuffer = lines.pop() ?? "";
+      lines.forEach(consumeProgressLine);
+    });
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk: string) => {
+      stderr = `${stderr}${chunk}`.slice(-1024 * 1024);
+    });
+    child.once("error", (error) => settle(error));
+    child.once("close", (code, signal) => {
+      if (progressBuffer) consumeProgressLine(progressBuffer);
+      if (timedOut) {
+        const error = new Error(`ffmpeg timed out after ${Math.round(timeoutMs / 60_000)} minutes.`) as Error & { stderr?: string };
+        error.stderr = stderr;
+        settle(error);
+        return;
+      }
+      if (code !== 0) {
+        const error = new Error(`ffmpeg exited with code ${code ?? "unknown"}${signal ? ` (${signal})` : ""}.`) as Error & { stderr?: string };
+        error.stderr = stderr;
+        settle(error);
+        return;
+      }
+      settle();
+    });
+  });
+}
+
+function replayMp4ProbeOutput(error: unknown): string {
+  if (!error || typeof error !== "object") {
+    return String(error ?? "");
+  }
+  return [
+    (error as { stdout?: unknown }).stdout,
+    (error as { stderr?: unknown }).stderr
+  ].map((value) => String(value ?? "")).join("\n");
+}
+
+async function replayMp4CanonicalCandidatePath(filePath: string): Promise<string> {
+  try {
+    return await realpath(filePath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
+      throw error;
+    }
+    const parent = await realpath(dirname(filePath));
+    return join(parent, basename(filePath));
+  }
+}
+
+async function replayMp4OptionalFileIdentity(filePath: string): Promise<{ dev: number; ino: number } | null> {
+  try {
+    const fileStats = await stat(filePath);
+    return { dev: fileStats.dev, ino: fileStats.ino };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
+}
+
+async function assertReplayMp4DestinationDiffersFromSource(sourcePath: string, outputPath: string): Promise<void> {
+  const [canonicalSource, canonicalOutput, sourceIdentity, outputIdentity] = await Promise.all([
+    replayMp4CanonicalCandidatePath(sourcePath),
+    replayMp4CanonicalCandidatePath(outputPath),
+    replayMp4OptionalFileIdentity(sourcePath),
+    replayMp4OptionalFileIdentity(outputPath)
+  ]);
+  const sameCanonicalPath = replayMp4CanonicalPathKey(canonicalSource, process.platform) ===
+    replayMp4CanonicalPathKey(canonicalOutput, process.platform);
+  const sameFileIdentity = Boolean(
+    sourceIdentity && outputIdentity && replayMp4FileIdentityMatches(sourceIdentity, outputIdentity)
+  );
+  if (sameCanonicalPath || sameFileIdentity) {
+    throw new Error("Choose a different file name for the MP4 export so the original replay video is kept safe.");
+  }
+}
+
+async function setReplayMp4WindowsHidden(filePath: string, hidden: boolean): Promise<void> {
+  if (process.platform !== "win32") {
+    return;
+  }
+  await execFileAsync("attrib", [hidden ? "+H" : "-H", filePath], {
+    windowsHide: true,
+    timeout: 10_000,
+    maxBuffer: 256 * 1024
+  });
+}
+
+async function createReplayMp4StagingDirectory(directory: string): Promise<void> {
+  await mkdir(directory);
+  try {
+    await setReplayMp4WindowsHidden(directory, true);
+  } catch (error) {
+    await rm(directory, { recursive: true, force: true }).catch(() => undefined);
+    throw new Error(`MP4 export could not prepare its hidden staging area: ${replayMp4ExportErrorMessage(error)}`);
+  }
+}
+
+async function validateReplayMp4Output(
+  ffmpegPath: string,
+  partialPath: string,
+  expectedDurationMs: number,
+  onProgressMs?: (processedMs: number) => void
+): Promise<void> {
+  const exportedStats = await stat(partialPath);
+  if (!exportedStats.isFile() || exportedStats.size <= 0) {
+    throw new Error("MP4 export did not create a video.");
+  }
+
+  const probe = await replayMp4ProbeMedia(ffmpegPath, partialPath, {
+    durationMs: expectedDurationMs,
+    width: 1920,
+    height: 1080
+  });
+  const actualDurationMs = probe.durationMs;
+  if (!replayMp4DurationIsNearExpected(actualDurationMs, expectedDurationMs)) {
+    const tolerance = replayMp4DurationTolerance(expectedDurationMs);
+    const minimumDurationMs = Math.max(0, expectedDurationMs - tolerance.earlyMs);
+    const maximumDurationMs = expectedDurationMs + tolerance.lateMs;
+    throw new Error(
+      `MP4 validation found a duration outside the accepted range (${(actualDurationMs / 1000).toFixed(2)}s; expected ${(expectedDurationMs / 1000).toFixed(2)}s, accepted ${(minimumDurationMs / 1000).toFixed(2)}s–${(maximumDurationMs / 1000).toFixed(2)}s).`
+    );
+  }
+
+  try {
+    await runReplayMp4Ffmpeg(ffmpegPath, [
+      "-nostdin",
+      "-hide_banner",
+      "-loglevel",
+      "error",
+      "-progress",
+      "pipe:1",
+      "-nostats",
+      "-xerror",
+      "-err_detect",
+      "explode",
+      "-i",
+      partialPath,
+      "-map",
+      "0:v:0",
+      "-map",
+      "0:a?",
+      "-f",
+      "null",
+      "-"
+    ], replayMp4ExportTimeoutMs(expectedDurationMs), onProgressMs);
+  } catch (error) {
+    const details = replayMp4ProbeOutput(error).trim().slice(-4_000);
+    throw new Error(details
+      ? `MP4 validation failed while checking the complete video:\n${details}`
+      : "MP4 validation failed while checking the complete video.");
+  }
+}
+
+type ReplayMp4DestinationSnapshot = {
+  exists: boolean;
+  size?: number;
+  mtimeMs?: number;
+};
+
+async function replayMp4DestinationSnapshot(filePath: string): Promise<ReplayMp4DestinationSnapshot> {
+  try {
+    const fileStats = await stat(filePath);
+    return { exists: true, size: fileStats.size, mtimeMs: fileStats.mtimeMs };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
+      return { exists: false };
+    }
+    throw error;
+  }
+}
+
+function replayMp4DestinationMatches(
+  expected: ReplayMp4DestinationSnapshot,
+  actual: ReplayMp4DestinationSnapshot
+): boolean {
+  return expected.exists === actual.exists && (
+    !expected.exists || (expected.size === actual.size && expected.mtimeMs === actual.mtimeMs)
+  );
+}
+
+async function promoteReplayMp4Output(
+  partialPath: string,
+  outputPath: string,
+  initialDestination: ReplayMp4DestinationSnapshot
+): Promise<void> {
+  const retryDelaysMs = [0, 100, 250, 500, 1_000];
+  for (let attempt = 0; attempt < retryDelaysMs.length; attempt += 1) {
+    const delayMs = retryDelaysMs[attempt] ?? 0;
+    if (delayMs) {
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, delayMs));
+    }
+    const currentDestination = await replayMp4DestinationSnapshot(outputPath);
+    if (!replayMp4DestinationMatches(initialDestination, currentDestination)) {
+      throw new Error("The selected destination changed while RiftLite was exporting. The completed video was not allowed to overwrite it.");
+    }
+    try {
+      await rename(partialPath, outputPath);
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException)?.code;
+      const retryable = code === "EPERM" || code === "EACCES" || code === "EBUSY";
+      if (!retryable || attempt === retryDelaysMs.length - 1) {
+        throw error;
+      }
+    }
+  }
+}
+
+async function revealLastReplayMp4Export(): Promise<void> {
+  const filePath = lastCompletedReplayMp4ExportPath;
+  if (!filePath) {
+    throw new Error("No completed MP4 export is available yet.");
+  }
+  try {
+    const fileStats = await stat(filePath);
+    if (!fileStats.isFile()) throw new Error("not a file");
+  } catch {
+    lastCompletedReplayMp4ExportPath = "";
+    throw new Error("The last exported MP4 has been moved or deleted.");
+  }
+  shell.showItemInFolder(filePath);
+}
+
 function ffmpegSeconds(value: number): string {
   return Math.max(0, value).toFixed(3);
 }
@@ -4705,7 +5267,49 @@ function appendReplayMp4AudioFilters(
   return "[aout]";
 }
 
-async function exportReplayMp4(replayId: string, options: ReplayMp4ExportOptions): Promise<string> {
+async function exportReplayMp4(
+  replayId: string,
+  options: ReplayMp4ExportOptions,
+  requestId: number,
+  sender: WebContents
+): Promise<string> {
+  const context = beginReplayMp4Export(replayId, "replay", requestId, sender);
+  try {
+    const outputPath = await exportReplayMp4Unlocked(replayId, options, context);
+    endReplayMp4Export(context);
+    if (outputPath) {
+      lastCompletedReplayMp4ExportPath = outputPath;
+      emitReplayMp4ExportProgress(context, {
+        stage: "completed",
+        percent: 100,
+        message: "MP4 export complete.",
+        outputPath
+      });
+    }
+    return outputPath;
+  } catch (error) {
+    const message = replayMp4ExportErrorMessage(error);
+    endReplayMp4Export(context);
+    emitReplayMp4ExportProgress(context, {
+      stage: "failed",
+      percent: context.percent,
+      message,
+      error: message
+    });
+    await logStartupIssue("Replay MP4 export failed", JSON.stringify({
+      exportId: context.exportId,
+      replayId,
+      error: message
+    }));
+    throw error;
+  }
+}
+
+async function exportReplayMp4Unlocked(
+  replayId: string,
+  options: ReplayMp4ExportOptions,
+  context: ActiveReplayMp4Export
+): Promise<string> {
   const [replays, matches, settings] = await Promise.all([store.getReplays(), store.getMatches(), store.getSettings()]);
   const storedReplay = replays.find((item) => item.id === replayId);
   if (!storedReplay) {
@@ -4718,12 +5322,14 @@ async function exportReplayMp4(replayId: string, options: ReplayMp4ExportOptions
   if (!source) {
     throw new Error("MP4 export needs a video replay. Use the RiftLite coaching pack export for screenshot-only replays.");
   }
-  const clipRange = replayMp4ClipRange(source.asset, options);
-  const exportOptions: ReplayMp4ExportOptions = clipRange ? { ...options, mode: "clip", watermark: true } : { ...options, mode: "full" };
   const ffmpegPath = replayVideoFfmpegPath();
   if (!ffmpegPath || !(await pathExists(ffmpegPath))) {
     throw new Error("MP4 export needs ffmpeg.");
   }
+  const sourceProbe = await replayMp4ProbeMedia(ffmpegPath, source.sourcePath, source.asset);
+  const sourceAsset: ReplayVideoAsset = { ...source.asset, ...sourceProbe };
+  const clipRange = replayMp4ClipRange(sourceAsset, options);
+  const exportOptions: ReplayMp4ExportOptions = clipRange ? { ...options, mode: "clip", watermark: true } : { ...options, mode: "full" };
 
   const directory = replayBundleDirectory(settings);
   await mkdir(directory, { recursive: true });
@@ -4745,27 +5351,46 @@ async function exportReplayMp4(replayId: string, options: ReplayMp4ExportOptions
     return "";
   }
   const outputPath = result.filePath.toLowerCase().endsWith(".mp4") ? result.filePath : `${result.filePath}.mp4`;
-  if (resolve(outputPath) === resolve(source.sourcePath)) {
-    throw new Error("Choose a different file name for the MP4 export so the original replay video is kept safe.");
-  }
-  await unlink(outputPath).catch(() => undefined);
-
+  await assertReplayMp4DestinationDiffersFromSource(source.sourcePath, outputPath);
+  const initialDestination = await replayMp4DestinationSnapshot(outputPath);
+  const staging = replayMp4StagingPaths(outputPath, context.exportId);
+  const partialPath = staging.partialPath;
   const tempDirectory = join(app.getPath("temp"), `riftlite-mp4-export-${randomUUID()}`);
-  await mkdir(tempDirectory, { recursive: true });
-  const tempFiles: string[] = [];
+  let stagingCreated = false;
+  let tempDirectoryCreated = false;
   try {
-    const probedVideoSize = await replayMp4ProbeVideoGeometry(ffmpegPath, source.sourcePath, source.asset);
-    const renderVideo: ReplayVideoAsset = { ...source.asset, ...probedVideoSize };
+    await createReplayMp4StagingDirectory(staging.directory);
+    stagingCreated = true;
+    await mkdir(tempDirectory);
+    tempDirectoryCreated = true;
+    emitReplayMp4ExportProgress(context, {
+      stage: "preparing",
+      percent: 2,
+      message: "Preparing replay video and overlays..."
+    });
+    const renderVideo = sourceAsset;
     const geometry = replayMp4RenderGeometry(renderVideo, exportOptions);
     const overlayInputs = await replayMp4OverlayInputs(replay, renderVideo, exportOptions, tempDirectory, clipRange, geometry);
     const voiceInputs = await replayMp4VoiceInputs(replay, renderVideo, exportOptions, tempDirectory, clipRange);
-    tempFiles.push(...overlayInputs.map((input) => input.path), ...voiceInputs.map((input) => input.path));
-
     const hasOverlay = overlayInputs.length > 0;
     const hasVoice = voiceInputs.length > 0;
-    const fps = Math.max(1, source.asset.fps || 24);
-    const videoDurationSec = Math.max(1, (clipRange?.durationMs ?? source.asset.durationMs ?? 1000) / 1000);
-    const args = ["-y", "-hide_banner", "-loglevel", "error", "-fflags", "+genpts", "-i", source.sourcePath];
+    const fps = Math.max(1, sourceAsset.fps || 24);
+    const expectedDurationMs = Math.max(1_000, clipRange?.durationMs ?? sourceProbe.durationMs);
+    const videoDurationSec = expectedDurationMs / 1000;
+    const args = [
+      "-y",
+      "-nostdin",
+      "-hide_banner",
+      "-loglevel",
+      "error",
+      "-progress",
+      "pipe:1",
+      "-nostats",
+      "-fflags",
+      "+genpts",
+      "-i",
+      source.sourcePath
+    ];
     overlayInputs.forEach((overlay) => {
       args.push("-loop", "1", "-t", ffmpegSeconds(videoDurationSec + 1), "-i", overlay.path);
     });
@@ -4773,7 +5398,7 @@ async function exportReplayMp4(replayId: string, options: ReplayMp4ExportOptions
       args.push("-i", voice.path);
     });
 
-    const canCopyVideoToMp4 = replayMp4CanCopyVideoToMp4(source.asset, source.sourcePath);
+    const canCopyVideoToMp4 = replayMp4CanCopyVideoToMp4(sourceAsset, source.sourcePath);
     const needsVideoFilter = Boolean(clipRange) || geometry.layout !== "landscape" || hasOverlay || hasVoice || !canCopyVideoToMp4;
     if (!needsVideoFilter) {
       args.push("-map", "0:v:0");
@@ -4782,7 +5407,7 @@ async function exportReplayMp4(replayId: string, options: ReplayMp4ExportOptions
       } else {
         args.push("-an");
       }
-      args.push("-c:v", "copy", "-movflags", "+faststart", outputPath);
+      args.push("-c:v", "copy", "-movflags", "+faststart", "-f", "mp4", partialPath);
     } else {
       const sourceVideoFilter = clipRange
         ? `[0:v]trim=start=${ffmpegSeconds(clipRange.startMs / 1000)}:end=${ffmpegSeconds(clipRange.endMs / 1000)},setpts=PTS-STARTPTS,${replayMp4GeometryFilterBody(geometry)},fps=${fps},setsar=1[v0]`
@@ -4802,11 +5427,11 @@ async function exportReplayMp4(replayId: string, options: ReplayMp4ExportOptions
         filterParts.push(`${currentVideoLabel}${overlayLabel}overlay=${Math.round(overlay.x ?? 0)}:${Math.round(overlay.y ?? 0)}:shortest=1:enable='gte(t\\,${ffmpegSeconds(overlay.startSec)})*lte(t\\,${ffmpegSeconds(overlay.endSec)})'${nextLabel}`);
         currentVideoLabel = nextLabel;
       });
-      const audioLabel = appendReplayMp4AudioFilters(filterParts, source.asset, voiceInputs, 1 + overlayInputs.length, exportOptions, clipRange);
+      const audioLabel = appendReplayMp4AudioFilters(filterParts, sourceAsset, voiceInputs, 1 + overlayInputs.length, exportOptions, clipRange);
       args.push("-filter_complex", filterParts.join(";"), "-map", currentVideoLabel);
       if (audioLabel) {
         args.push("-map", audioLabel, "-c:a", "aac", "-b:a", "128k");
-      } else if (exportOptions.includeOriginalAudio && source.asset.hasAudio) {
+      } else if (exportOptions.includeOriginalAudio && sourceAsset.hasAudio) {
         args.push("-map", "0:a?", "-c:a", "aac", "-b:a", "128k");
       } else {
         args.push("-an");
@@ -4824,35 +5449,116 @@ async function exportReplayMp4(replayId: string, options: ReplayMp4ExportOptions
         "+faststart",
         "-t",
         ffmpegSeconds(videoDurationSec),
-        outputPath
+        "-f",
+        "mp4",
+        partialPath
       );
     }
 
+    emitReplayMp4ExportProgress(context, {
+      stage: "encoding",
+      percent: 5,
+      message: "Encoding MP4 video..."
+    });
     try {
-      await execFileAsync(ffmpegPath, args, {
-        windowsHide: true,
-        timeout: replayMp4ExportTimeoutMs(videoDurationSec * 1000),
-        maxBuffer: 1024 * 1024
-      });
+      await runReplayMp4Ffmpeg(
+        ffmpegPath,
+        args,
+        replayMp4ExportTimeoutMs(expectedDurationMs),
+        (processedMs) => {
+          const percent = replayMp4EncodingPercent(processedMs, expectedDurationMs);
+          if (percent != null) {
+            emitReplayMp4ExportProgress(context, {
+              stage: "encoding",
+              percent,
+              message: `Encoding MP4 video... ${percent}%`
+            });
+          }
+        }
+      );
     } catch (error) {
       throw replayMp4FfmpegError(error);
     }
-    const exportedStats = await stat(outputPath);
-    if (exportedStats.size <= 0) {
-      throw new Error("MP4 export did not create a video.");
-    }
+    emitReplayMp4ExportProgress(context, {
+      stage: "validating",
+      percent: 92,
+      message: "Validating the complete MP4..."
+    });
+    await validateReplayMp4Output(ffmpegPath, partialPath, expectedDurationMs, (processedMs) => {
+      const percent = replayMp4ValidationPercent(processedMs, expectedDurationMs);
+      if (percent != null) {
+        emitReplayMp4ExportProgress(context, {
+          stage: "validating",
+          percent,
+          message: `Checking every video and audio frame... ${percent}%`
+        });
+      }
+    });
+    emitReplayMp4ExportProgress(context, {
+      stage: "validating",
+      percent: 99,
+      message: "Finalizing the validated MP4..."
+    });
+    await setReplayMp4WindowsHidden(partialPath, false);
+    await promoteReplayMp4Output(partialPath, outputPath, initialDestination);
     return outputPath;
   } finally {
-    for (const file of tempFiles) {
-      await unlink(file).catch(() => undefined);
+    if (tempDirectoryCreated) {
+      await rm(tempDirectory, { recursive: true, force: true }).catch(() => undefined);
+    }
+    if (stagingCreated) {
+      await rm(staging.directory, { recursive: true, force: true }).catch(() => undefined);
     }
   }
 }
 
-async function exportReplayPresentationMp4(replayId: string, payload: ReplayPresentationRecordingPayload): Promise<string> {
+async function exportReplayPresentationMp4(
+  replayId: string,
+  payload: ReplayPresentationRecordingPayload,
+  requestId: number,
+  sender: WebContents
+): Promise<string> {
+  assertReplayMp4ExportRequestId(requestId);
   if (!payload?.data || payload.data.byteLength <= 0) {
     throw new Error("No presentation recording was received.");
   }
+  const context = beginReplayMp4Export(replayId, "presentation", requestId, sender);
+  try {
+    const outputPath = await exportReplayPresentationMp4Unlocked(replayId, payload, context);
+    endReplayMp4Export(context);
+    if (outputPath) {
+      lastCompletedReplayMp4ExportPath = outputPath;
+      emitReplayMp4ExportProgress(context, {
+        stage: "completed",
+        percent: 100,
+        message: "Presentation MP4 export complete.",
+        outputPath
+      });
+    }
+    return outputPath;
+  } catch (error) {
+    const message = replayMp4ExportErrorMessage(error);
+    endReplayMp4Export(context);
+    emitReplayMp4ExportProgress(context, {
+      stage: "failed",
+      percent: context.percent,
+      message,
+      error: message
+    });
+    await logStartupIssue("Replay presentation MP4 export failed", JSON.stringify({
+      exportId: context.exportId,
+      replayId,
+      error: message
+    }));
+    throw error;
+  }
+}
+
+async function exportReplayPresentationMp4Unlocked(
+  replayId: string,
+  payload: ReplayPresentationRecordingPayload,
+  context: ActiveReplayMp4Export
+): Promise<string> {
   const ffmpegPath = replayVideoFfmpegPath();
   if (!ffmpegPath || !(await pathExists(ffmpegPath))) {
     throw new Error("Presentation export needs ffmpeg.");
@@ -4882,20 +5588,50 @@ async function exportReplayPresentationMp4(replayId: string, payload: ReplayPres
     return "";
   }
   const outputPath = result.filePath.toLowerCase().endsWith(".mp4") ? result.filePath : `${result.filePath}.mp4`;
-  await unlink(outputPath).catch(() => undefined);
-
+  const replaySourcePath = replay.video?.path?.trim();
+  if (replaySourcePath) {
+    await assertReplayMp4DestinationDiffersFromSource(replaySourcePath, outputPath);
+  }
+  const initialDestination = await replayMp4DestinationSnapshot(outputPath);
+  const staging = replayMp4StagingPaths(outputPath, context.exportId);
+  const partialPath = staging.partialPath;
   const tempDirectory = join(app.getPath("temp"), `riftlite-presentation-export-${randomUUID()}`);
-  await mkdir(tempDirectory, { recursive: true });
   const inputExtension = payload.mimeType.toLowerCase().includes("mp4") ? "mp4" : "webm";
   const inputPath = join(tempDirectory, `presentation.${inputExtension}`);
-  await writeFile(inputPath, Buffer.from(new Uint8Array(payload.data)));
+  let stagingCreated = false;
+  let tempDirectoryCreated = false;
   try {
-    const durationSec = Math.max(1, payload.durationMs / 1000 + 0.5);
+    await createReplayMp4StagingDirectory(staging.directory);
+    stagingCreated = true;
+    await mkdir(tempDirectory);
+    tempDirectoryCreated = true;
+    emitReplayMp4ExportProgress(context, {
+      stage: "preparing",
+      percent: 2,
+      message: "Preparing presentation recording..."
+    });
+    await writeFile(inputPath, Buffer.from(new Uint8Array(payload.data)));
+    const inputProbe = await replayMp4ProbeMedia(ffmpegPath, inputPath, {
+      durationMs: payload.durationMs,
+      width: 1920,
+      height: 1080
+    });
+    const expectedDurationMs = inputProbe.durationMs;
+    const durationSec = expectedDurationMs / 1000;
+    emitReplayMp4ExportProgress(context, {
+      stage: "encoding",
+      percent: 5,
+      message: "Encoding presentation MP4..."
+    });
     const args = [
       "-y",
+      "-nostdin",
       "-hide_banner",
       "-loglevel",
       "error",
+      "-progress",
+      "pipe:1",
+      "-nostats",
       "-fflags",
       "+genpts",
       "-i",
@@ -4920,25 +5656,59 @@ async function exportReplayPresentationMp4(replayId: string, payload: ReplayPres
       "160k",
       "-t",
       ffmpegSeconds(durationSec),
-      "-shortest",
-      outputPath
+      "-f",
+      "mp4",
+      partialPath
     ];
     try {
-      await execFileAsync(ffmpegPath, args, {
-        windowsHide: true,
-        timeout: 900_000,
-        maxBuffer: 1024 * 1024
-      });
+      await runReplayMp4Ffmpeg(
+        ffmpegPath,
+        args,
+        replayMp4ExportTimeoutMs(expectedDurationMs),
+        (processedMs) => {
+          const percent = replayMp4EncodingPercent(processedMs, expectedDurationMs);
+          if (percent != null) {
+            emitReplayMp4ExportProgress(context, {
+              stage: "encoding",
+              percent,
+              message: `Encoding presentation MP4... ${percent}%`
+            });
+          }
+        }
+      );
     } catch (error) {
       throw replayMp4FfmpegError(error);
     }
-    const exportedStats = await stat(outputPath);
-    if (exportedStats.size <= 0) {
-      throw new Error("Presentation export did not create a video.");
-    }
+    emitReplayMp4ExportProgress(context, {
+      stage: "validating",
+      percent: 92,
+      message: "Validating the complete presentation MP4..."
+    });
+    await validateReplayMp4Output(ffmpegPath, partialPath, expectedDurationMs, (processedMs) => {
+      const percent = replayMp4ValidationPercent(processedMs, expectedDurationMs);
+      if (percent != null) {
+        emitReplayMp4ExportProgress(context, {
+          stage: "validating",
+          percent,
+          message: `Checking every video and audio frame... ${percent}%`
+        });
+      }
+    });
+    emitReplayMp4ExportProgress(context, {
+      stage: "validating",
+      percent: 99,
+      message: "Finalizing the validated presentation MP4..."
+    });
+    await setReplayMp4WindowsHidden(partialPath, false);
+    await promoteReplayMp4Output(partialPath, outputPath, initialDestination);
     return outputPath;
   } finally {
-    await unlink(inputPath).catch(() => undefined);
+    if (tempDirectoryCreated) {
+      await rm(tempDirectory, { recursive: true, force: true }).catch(() => undefined);
+    }
+    if (stagingCreated) {
+      await rm(staging.directory, { recursive: true, force: true }).catch(() => undefined);
+    }
   }
 }
 
@@ -4954,7 +5724,7 @@ function defaultReplayCoachingPack(replay: ReplayRecord, match: MatchDraft | und
 }
 
 function validateReplayBundle(parsed: RiftReplayBundle): void {
-  if (parsed.format !== "riftlite.replay" || ![1, 2, 3, 4].includes(parsed.version) || !parsed.replay?.id) {
+  if (parsed.format !== "riftlite.replay" || ![1, 2, 3, 4, 5].includes(parsed.version) || !parsed.replay?.id) {
     throw new Error("This is not a RiftLite replay bundle.");
   }
 }
@@ -5308,7 +6078,7 @@ async function saveImportedReplayBundleData(
     matchSnapshot,
     search: parsed.search,
     video: importedVideo,
-    schemaVersion: Math.max(4, parsed.replay.schemaVersion ?? 1) as ReplayRecord["schemaVersion"],
+    schemaVersion: Math.max(5, parsed.replay.schemaVersion ?? 1) as ReplayRecord["schemaVersion"],
     coachingPack: parsed.coachingPack ?? parsed.replay.coachingPack,
     flags: parsed.replay.flags?.map((flag) => ({ ...flag, targetId: remapTargetId(flag.targetType, flag.targetId) })),
     annotations: parsed.replay.annotations?.map((annotation) => ({ ...annotation, targetId: remapTargetId(annotation.targetType, annotation.targetId) })),
@@ -6760,7 +7530,7 @@ async function importReplayMediaFromPath(sourcePath: string): Promise<ReplayReco
     matchId: replayId,
     platform,
     capturedAt: startedAt,
-    schemaVersion: 4,
+    schemaVersion: 5,
     title,
     players: { me: "", opponent: "" },
     events: [],
@@ -7169,6 +7939,13 @@ async function createWindow(): Promise<void> {
     }
   });
   const createdMainWindow = mainWindow;
+  createdMainWindow.on("close", (event) => {
+    if (!activeReplayMp4Export) {
+      return;
+    }
+    event.preventDefault();
+    deferQuitForReplayMp4Export("close-window", createdMainWindow);
+  });
   createdMainWindow.once("closed", () => {
     if (mainWindow === createdMainWindow) {
       mainWindow = null;
@@ -7946,8 +8723,9 @@ function registerIpc(): void {
   handleTrustedAppIpc("replays:purge", (_event, id: string) => store.purgeReplay(id));
   handleTrustedAppIpc("replays:export", (_event, replayId: string) => exportReplayBundle(replayId));
   handleTrustedAppIpc("replays:reveal-file", (_event, replayId: string, preferredKind?: ReplayLocalAssetKind) => revealReplayFile(replayId, preferredKind));
-  handleTrustedAppIpc("replays:export-mp4", (_event, replayId: string, options: ReplayMp4ExportOptions) => exportReplayMp4(replayId, options));
-  handleTrustedAppIpc("replays:export-presentation-mp4", (_event, replayId: string, payload: ReplayPresentationRecordingPayload) => exportReplayPresentationMp4(replayId, payload));
+  handleTrustedAppIpc("replays:export-mp4", (event, replayId: string, options: ReplayMp4ExportOptions, requestId: number) => exportReplayMp4(replayId, options, requestId, event.sender));
+  handleTrustedAppIpc("replays:export-presentation-mp4", (event, replayId: string, payload: ReplayPresentationRecordingPayload, requestId: number) => exportReplayPresentationMp4(replayId, payload, requestId, event.sender));
+  handleTrustedAppIpc("replays:reveal-last-mp4-export", () => revealLastReplayMp4Export());
   handleTrustedAppIpc("replays:export-flags-text", (_event, replayId: string) => exportReplayFlagsText(replayId));
   handleTrustedAppIpc("raw-capture:upload", (event, replayId: string) => {
     assertTrustedAppIpcSender(event);
@@ -8332,6 +9110,9 @@ function registerIpc(): void {
     return tcgaReplayResearchCapture.deleteAll();
   });
   handleTrustedAppIpc("screenshot:take", () => takeScreenshot("manual"));
+  handleTrustedAppIpc("coach:share-card:capture", (event, request: CoachShareCardCaptureRequest) => (
+    captureCoachShareCard(event.sender, request)
+  ));
   handleTrustedAppIpc("screenshot:choose-directory", async () => {
     const settings = await store.getSettings();
     const options: OpenDialogOptions = {
@@ -8678,6 +9459,9 @@ app.whenReady().then(async () => {
         // electron-updater must own the quit that launches the downloaded
         // installer. Finalize the research capture first and then allow that
         // quit through the global before-quit guard.
+        if (activeReplayMp4Export) {
+          throw new Error("An MP4 export is still running. Wait for it to finish, then choose Install again.");
+        }
         try {
           if (tcgaReplayResearchCapture.getStatus().active) {
             await tcgaReplayResearchCapture.stop("update-install");
@@ -8896,6 +9680,10 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", (event) => {
+  if (deferQuitForReplayMp4Export()) {
+    event.preventDefault();
+    return;
+  }
   if (
     tcgaResearchQuitAllowed ||
     typeof tcgaReplayResearchCapture === "undefined" ||

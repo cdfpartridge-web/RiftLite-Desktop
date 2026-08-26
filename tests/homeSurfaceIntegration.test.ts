@@ -119,4 +119,12 @@ describe("Home launchpad", () => {
     expect(stylesSource).toContain("min-width: 420px");
     expect(stylesSource).toContain("min-height: 315px");
   });
+
+  it("tracks creator-video plays and outbound carousel links by creator", () => {
+    expect(homeSource).toContain('source: "home-creator-video-carousel"');
+    expect(homeSource).toContain('trackHomeCreatorVideo("youtube-play")');
+    expect(homeSource).toContain('openHomeCreatorVideoLink(featuredVideo.channelUrl!, "youtube-channel")');
+    expect(homeSource).toContain('openHomeCreatorVideoLink(featuredVideo.url, "youtube-video")');
+    expect(homeSource).toContain("spotlightId: featuredVideo.creatorId");
+  });
 });

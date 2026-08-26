@@ -9,6 +9,7 @@ import {
 } from "../../shared/atlasPlayerIdentity.js";
 import { privateHubSyncEnabled, publicCommunitySyncEnabled, teamSyncEnabled } from "../../shared/syncPolicy.js";
 import { readTcgaLocalPlayerName, readTcgaProfileName } from "../../shared/tcgaIdentity.js";
+import { parseReplayCardActionText } from "../../shared/replayCardText.js";
 
 export interface ResolvedSnapshot {
   myChampion?: string;
@@ -79,6 +80,11 @@ interface SessionState {
   atlasCompletedGameIdentities: AtlasGameIdentity[];
   atlasHeldResult?: AtlasResultEventIdentity;
 }
+
+// Active Atlas games emit frequent snapshots. Treat those snapshots as state
+// evidence, not match boundaries, unless the previous session has gone quiet
+// long enough that the normal match-start signal may genuinely have been lost.
+const ATLAS_SNAPSHOT_NEW_SESSION_MIN_GAP_MS = 120_000;
 
 export class MatchSessionTracker {
   private readonly sessions = new Map<GamePlatform, SessionState>();
@@ -381,6 +387,9 @@ function shouldStartFreshSession(session: SessionState, event: CaptureEvent): bo
   if (shouldPreserveAtlasSnapshotOpponentIdentity(session, event)) {
     return false;
   }
+  if (isRecentAtlasSnapshot(session, event)) {
+    return false;
+  }
   const existingOpponent = normalizePlayerNameKey(readString(session.sticky.opponentName));
   const nextOpponent = normalizePlayerNameKey(readString(event.payload.opponentName));
   const existingOpponentIsNoise = isLikelyAtlasActionText(existingOpponent) ||
@@ -436,6 +445,10 @@ function shouldPreserveAtlasSnapshotOpponentIdentity(session: SessionState, even
     return false;
   }
 
+  if (isRecentAtlasSnapshot(session, event)) {
+    return true;
+  }
+
   const candidates = Array.isArray(event.payload.atlasPlayerCandidates)
     ? event.payload.atlasPlayerCandidates
     : [];
@@ -466,6 +479,18 @@ function shouldPreserveAtlasSnapshotOpponentIdentity(session: SessionState, even
   ));
   return nextIdentityCandidates.length > 0 &&
     nextIdentityCandidates.every((candidate) => !isReliableAtlasPlayerIdentityCandidate(candidate));
+}
+
+function isRecentAtlasSnapshot(session: SessionState, event: CaptureEvent): boolean {
+  if (session.platform !== "atlas" || event.platform !== "atlas" || event.kind !== "match-snapshot") {
+    return false;
+  }
+  const sessionAt = new Date(session.updatedAt).getTime();
+  const eventAt = new Date(event.capturedAt).getTime();
+  if (!Number.isFinite(sessionAt) || !Number.isFinite(eventAt)) {
+    return true;
+  }
+  return eventAt - sessionAt <= ATLAS_SNAPSHOT_NEW_SESSION_MIN_GAP_MS;
 }
 
 function isAtlasSameOpponentBo3ContinuationCandidate(session: SessionState, event: CaptureEvent): boolean {
@@ -994,6 +1019,8 @@ function addReplayRows(session: SessionState, event: CaptureEvent, score: { me?:
       text: parsed.text,
       cardName: card.name,
       destination: card.destination,
+      fromZone: card.fromZone,
+      toZone: card.toZone,
       battlefield,
       pointsScored: replayPointsScored(parsed.text),
       score: type === "score" ? replayScore(score) : undefined
@@ -1330,20 +1357,16 @@ function classifyReplayText(value: string): ReplayStructuredEvent["type"] {
   return "action";
 }
 
-function replayCardFromText(value: string): { name: string; destination: string } {
-  const played = value.match(/\bPlayed\s+(.+?)(?:\s+to\s+(.+?))?\.?$/i);
-  if (played) {
-    return { name: cleanReplayDestination(played[1]), destination: cleanReplayDestination(played[2] ?? "") };
-  }
-  const moved = value.match(/\bMoved\s+(.+?)\s+to\s+(.+?)(?:\.|$)/i);
-  if (moved) {
-    return { name: cleanReplayDestination(moved[1]), destination: cleanReplayDestination(moved[2]) };
-  }
-  const revealed = value.match(/\bRevealed\s+(.+?)(?:\.|$)/i);
-  if (revealed) {
-    return { name: cleanReplayDestination(revealed[1]), destination: "" };
-  }
-  return { name: "", destination: "" };
+function replayCardFromText(value: string): { name: string; destination: string; fromZone?: string; toZone?: string } {
+  const parsed = parseReplayCardActionText(value);
+  return parsed
+    ? {
+        name: cleanReplayDestination(parsed.name),
+        destination: cleanReplayDestination(parsed.destination),
+        fromZone: parsed.fromZone,
+        toZone: parsed.toZone
+      }
+    : { name: "", destination: "" };
 }
 
 function replayBattlefieldFromText(value: string): string {
@@ -1674,7 +1697,11 @@ function shouldStartNextGame(session: SessionState, score: { me?: number; opp?: 
   if (scoreDropped && currentTotal >= 6 && nextTotal <= currentTotal - 2) {
     return hasNumericReset || nextTotal > 0 || looksMultiGame;
   }
-  return currentHasNonZeroScore && (nextHasNonZeroScore || looksMultiGame) && (
+  // A battlefield can change during a live game (for example, Ivern can turn a
+  // conquered battlefield into Brush). Treat a battlefield change only as
+  // supporting evidence after the scoreboard has also moved backwards; it is
+  // never sufficient to create another game on its own.
+  return scoreDropped && currentHasNonZeroScore && (nextHasNonZeroScore || looksMultiGame) && (
     battlefieldChanged(current.myBattlefield, payload.myBattlefield) ||
     battlefieldChanged(current.opponentBattlefield, payload.opponentBattlefield) ||
     battlefieldCodeChanged(current.myBattlefieldCode, readBattlefieldCode(payload, "me")) ||
@@ -2746,7 +2773,7 @@ function isLikelyAtlasActionText(value: string): boolean {
   if (!withoutClockPrefix) {
     return false;
   }
-  return /^(locked|chose|auto[-\s]?selected|selected|must choose|both players|finalized|rolled|(?:wins?|won) initiative|played|moved|drew|ended|conquered|scored|set your score)\b/.test(withoutClockPrefix) ||
+  return /^(locked|chose|auto[-\s]?selected|selected|must choose|both players|finalized|rolled|recycl(?:e|ed)|(?:wins?|won) initiative|played|moved|drew|ended|conquered|scored|set your score)\b/.test(withoutClockPrefix) ||
     (/^\d/.test(normalized) && /^must\b/.test(withoutClockPrefix)) ||
     /\b(take the first|decides who plays first|locked in|locked a battlefield|mulligan|sideboarding|sideboard|their turn|your turn)\b/.test(withoutClockPrefix);
 }
@@ -2892,15 +2919,16 @@ function isGeneratedBattlefieldCandidate(candidate: Record<string, unknown>): bo
 }
 
 function isGeneratedBattlefieldName(value: string): boolean {
-  return /\bbaron\s+pit\b/i.test(value);
+  return /\b(?:baron\s+pit|brush)\b/i.test(value);
 }
 
 function isGeneratedBattlefieldCode(value: string): boolean {
-  return riftboundCardCodeFromValue(value) === "UNL-T01";
+  const code = riftboundCardCodeFromValue(value);
+  return code === "UNL-T01" || code === "UNL-T03";
 }
 
 function isGeneratedBattlefieldImage(value: string): boolean {
-  return /baron[-_\s]?pit|e44f173629322a4e0c32d3f8902c294d4482ef42/i.test(value);
+  return /baron[-_\s]?pit|brush|e44f173629322a4e0c32d3f8902c294d4482ef42|fad09d6bd9bf38e376f430ecb0b400762420d061/i.test(value);
 }
 
 function isCardBackImage(value: string): boolean {

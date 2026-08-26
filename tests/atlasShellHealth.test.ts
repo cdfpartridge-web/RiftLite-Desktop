@@ -16,6 +16,7 @@ const BASE_EVIDENCE: AtlasShellEvidence = {
   interactiveText: "",
   interactiveCount: 0,
   gameSurfaceCount: 0,
+  lobbyPlaySurfaceCount: 0,
   lobbyHeadingCount: 0,
   authHeadingCount: 0,
   authFormCount: 0
@@ -39,19 +40,61 @@ describe("RiftAtlas shell health", () => {
     expect(shouldReportAtlasEmptyShell(result, true, true)).toBe(false);
   });
 
-  it("requires a real lobby heading and action or multiple lobby actions", () => {
-    expect(assess({
+  it("requires a real play control instead of accepting a deck-only partial lobby", () => {
+    const healthy = assess({
       visibleText: "Lobby Import Deck New Deck Choose Deck Host Room Solo Room Find Random Match Join / Spectate",
       interactiveText: "Import Deck New Deck Choose Deck Host Room Solo Room Find Random Match Join / Spectate",
       interactiveCount: 8,
       lobbyHeadingCount: 1
-    })).toMatchObject({ ready: true, routeKind: "lobby", readyReason: "lobby-content" });
+    });
+    expect(healthy).toMatchObject({
+      ready: true,
+      routeKind: "lobby",
+      readyReason: "lobby-content",
+      lobbyPlayActionCount: 4
+    });
+
+    const partialLobby = assess({
+      visibleText: "Play Riftbound online with private room codes. Player Shown to opponents Sideboard 0/10 Room Code Import Deck New Deck Choose Deck Edit Deck",
+      interactiveText: "Import Deck New Deck Choose Deck Edit Deck Player",
+      interactiveCount: 19
+    });
+    expect(partialLobby).toMatchObject({
+      ready: false,
+      routeKind: "lobby",
+      readyReason: "none",
+      lobbyActionCount: 3,
+      lobbyPlayActionCount: 0,
+      gameMarkerCount: 2
+    });
 
     expect(assess({
-      visibleText: "Import Deck Choose Deck",
-      interactiveText: "Import Deck Choose Deck",
-      interactiveCount: 2
-    }).ready).toBe(true);
+      visibleText: "Player Shown to opponents Import Deck New Deck Choose Deck Edit Deck",
+      interactiveText: "Import Deck New Deck Choose Deck Edit Deck Player",
+      interactiveCount: 46,
+      gameSurfaceCount: 40
+    })).toMatchObject({
+      ready: false,
+      routeKind: "lobby",
+      lobbyPlayActionCount: 0,
+      lobbyPlaySurfaceCount: 0
+    });
+  });
+
+  it("accepts localized lobby controls through Atlas's visible play surfaces", () => {
+    expect(assess({
+      pathname: "/zh-CN",
+      visibleText: "大厅 玩家 对手可见",
+      interactiveText: "导入套牌 新建套牌 选择套牌 匹配",
+      interactiveCount: 8,
+      lobbyPlaySurfaceCount: 4
+    })).toMatchObject({
+      ready: true,
+      routeKind: "lobby",
+      readyReason: "lobby-content",
+      lobbyPlayActionCount: 0,
+      lobbyPlaySurfaceCount: 4
+    });
   });
 
   it("does not accept navigation labels alone as lobby evidence", () => {
@@ -87,6 +130,14 @@ describe("RiftAtlas shell health", () => {
       interactiveText: "Sign in Sign up Discord Privacy Terms",
       interactiveCount: 8
     }).ready).toBe(false);
+
+    expect(assess({
+      pathname: "/zh-CN/sign-in",
+      visibleText: "登录 电子邮件",
+      interactiveText: "继续",
+      authHeadingCount: 1,
+      authFormCount: 1
+    })).toMatchObject({ ready: true, routeKind: "auth", readyReason: "auth-content" });
   });
 
   it("does not treat a newsletter email form as an authentication surface", () => {

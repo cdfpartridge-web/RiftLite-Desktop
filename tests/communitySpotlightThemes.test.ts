@@ -43,9 +43,9 @@ describe("community spotlight themes", () => {
       primary: "#F28A24",
       secondary: "#7A2531"
     });
-    expect(communitySpotlightTheme("  BLOODY ")).toEqual({
-      primary: "#C24F86",
-      secondary: "#D6B752"
+    expect(communitySpotlightTheme("  ZELONIUS ")).toEqual({
+      primary: "#F5B51B",
+      secondary: "#08784A"
     });
   });
 

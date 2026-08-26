@@ -776,7 +776,7 @@ export interface ReplayRecord {
   deletedAt?: string;
   folderId?: string;
   favourite?: boolean;
-  schemaVersion?: 1 | 2 | 3 | 4;
+  schemaVersion?: 1 | 2 | 3 | 4 | 5;
   title: string;
   players: {
     me: string;
@@ -796,8 +796,114 @@ export interface ReplayRecord {
   coachingPack?: ReplayCoachingPackMetadata;
   matchSnapshot?: MatchDraft;
   search?: ReplaySearchMetadata;
+  intelligence?: ReplayIntelligenceSummary;
   importedAt?: string;
   importedFrom?: string;
+}
+
+export type ReplayIntelligenceConfidence = "confirmed" | "reconstructed" | "inferred" | "manual";
+
+export type ReplayIntelligenceSource =
+  | "game-data"
+  | "game-log"
+  | "state-diff"
+  | "capture-snapshot"
+  | "manual";
+
+export interface ReplayIntelligenceCorrection {
+  id: string;
+  eventId: string;
+  updatedAt: string;
+  note?: string;
+  dismissed?: boolean;
+  capturedAt?: string;
+  type?: ReplayStructuredEventType;
+  side?: ReplayStructuredEvent["side"];
+  text?: string;
+  cardName?: string;
+  cardId?: string;
+  destination?: string;
+  fromZone?: string;
+  toZone?: string;
+  battlefield?: string;
+  pointsScored?: number;
+}
+
+export interface ReplayIntelligenceCoverage {
+  grade: "high" | "medium" | "limited";
+  totalEvents: number;
+  confirmed: number;
+  reconstructed: number;
+  inferred: number;
+  manual: number;
+  cardEvents: number;
+  scoreEvents: number;
+  turnEvents: number;
+  hasVideo: boolean;
+}
+
+export interface ReplayIntelligenceStats {
+  games: number;
+  turns: number;
+  cardActions: number;
+  draws: number;
+  plays: number;
+  moves: number;
+  scoringEvents: number;
+  combats: number;
+  battlefieldChanges: number;
+  mulligans: number;
+}
+
+export interface ReplayIntelligenceCardJourneyEvent {
+  eventId: string;
+  capturedAt: string;
+  videoTimeMs?: number;
+  type: ReplayStructuredEventType;
+  fromZone?: string;
+  toZone?: string;
+  destination?: string;
+  confidence: ReplayIntelligenceConfidence;
+}
+
+export interface ReplayIntelligenceCardJourney {
+  id: string;
+  gameNumber: number;
+  side: ReplayStructuredEvent["side"];
+  cardName: string;
+  cardId?: string;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  firstVideoTimeMs?: number;
+  knownHandTimeMs?: number;
+  outcomes: string[];
+  confidence: ReplayIntelligenceConfidence;
+  events: ReplayIntelligenceCardJourneyEvent[];
+}
+
+export interface ReplayIntelligenceMoment {
+  id: string;
+  kind: "decision" | "pattern" | "swing" | "data-gap";
+  title: string;
+  body: string;
+  eventId?: string;
+  capturedAt?: string;
+  videoTimeMs?: number;
+  side?: ReplayStructuredEvent["side"];
+  confidence: ReplayIntelligenceConfidence;
+}
+
+export interface ReplayIntelligenceSummary {
+  version: 1;
+  generatedAt: string;
+  sourceEventCount: number;
+  corrections: ReplayIntelligenceCorrection[];
+  coverage: ReplayIntelligenceCoverage;
+  stats: ReplayIntelligenceStats;
+  story: string[];
+  moments: ReplayIntelligenceMoment[];
+  cardJourneys: ReplayIntelligenceCardJourney[];
+  limitations: string[];
 }
 
 export type ReplayLocalAssetKind = "video" | "raw-capture" | "replay-bundle" | "frame";
@@ -1010,6 +1116,20 @@ export interface ReplayPresentationRecordingPayload {
   durationMs: number;
 }
 
+export type ReplayMp4ExportStage = "preparing" | "encoding" | "validating" | "completed" | "failed";
+
+export interface ReplayMp4ExportProgress {
+  exportId: string;
+  requestId: number;
+  replayId: string;
+  kind: "replay" | "presentation";
+  stage: ReplayMp4ExportStage;
+  percent?: number;
+  message: string;
+  outputPath?: string;
+  error?: string;
+}
+
 export interface ReplayWindowCaptureSource {
   id: string;
   name: string;
@@ -1049,7 +1169,7 @@ export interface ReplayBundleVideo {
 
 export interface RiftReplayBundle {
   format: "riftlite.replay";
-  version: 1 | 2 | 3 | 4;
+  version: 1 | 2 | 3 | 4 | 5;
   exportedAt: string;
   replay: ReplayRecord;
   match?: MatchDraft;
@@ -2100,6 +2220,25 @@ export interface ScreenshotResult {
   source: "manual" | "hotkey" | "replay-keyframe";
 }
 
+export interface CoachShareCardCaptureRequest {
+  action: "copy" | "save";
+  bounds: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
+  label?: string;
+}
+
+export interface CoachShareCardCaptureResult {
+  ok: boolean;
+  action: CoachShareCardCaptureRequest["action"];
+  cancelled?: boolean;
+  path?: string;
+  message: string;
+}
+
 export type AtlasWebviewRecoveryMode = "runtime" | "sign-in" | "site-data";
 
 export interface AtlasWebviewRecoveryResult {
@@ -2207,8 +2346,9 @@ export interface RiftLiteApi {
   purgeReplay(id: string): Promise<void>;
   exportReplayBundle(replayId: string): Promise<string>;
   revealReplayFile(replayId: string, preferredKind?: ReplayLocalAssetKind): Promise<ReplayFileRevealResult>;
-  exportReplayMp4(replayId: string, options: ReplayMp4ExportOptions): Promise<string>;
-  exportReplayPresentationMp4(replayId: string, payload: ReplayPresentationRecordingPayload): Promise<string>;
+  exportReplayMp4(replayId: string, options: ReplayMp4ExportOptions, requestId: number): Promise<string>;
+  exportReplayPresentationMp4(replayId: string, payload: ReplayPresentationRecordingPayload, requestId: number): Promise<string>;
+  revealLastReplayMp4Export(): Promise<void>;
   exportReplayFlagsText(replayId: string): Promise<string>;
   uploadRawCapture(replayId: string): Promise<ReplayRecord | null>;
   getRawCaptureStatus(): Promise<RawCaptureStatus>;
@@ -2330,6 +2470,7 @@ export interface RiftLiteApi {
   openTcgaReplayResearchFolder(): Promise<void>;
   deleteTcgaReplayResearchCaptures(): Promise<TcgaReplayResearchStatus>;
   takeScreenshot(): Promise<ScreenshotResult>;
+  captureCoachShareCard(request: CoachShareCardCaptureRequest): Promise<CoachShareCardCaptureResult>;
   chooseScreenshotDirectory(): Promise<UserSettings>;
   openScreenshotDirectory(): Promise<void>;
   chooseReplayDirectory(): Promise<UserSettings>;
@@ -2346,6 +2487,7 @@ export interface RiftLiteApi {
   onScreenshotSaved(callback: (result: ScreenshotResult) => void): () => void;
   onReplayShadowClipHotkey(callback: () => void): () => void;
   onReplayQuickFlagHotkey(callback: () => void): () => void;
+  onReplayMp4ExportProgress(callback: (progress: ReplayMp4ExportProgress) => void): () => void;
   onAtlasKnownOpponentHandUpdated(callback: (state: AtlasKnownOpponentHandState) => void): () => void;
   onAtlasKnownOpponentHandShortcut(callback: () => void): () => void;
   onUpdateStatus(callback: (status: UpdateStatus) => void): () => void;

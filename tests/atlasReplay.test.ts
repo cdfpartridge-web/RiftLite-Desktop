@@ -97,6 +97,27 @@ describe("atlas replay builder", () => {
     expect(model.scoreLabel).toBe("1-0");
   });
 
+  it("preserves card names containing 'to' and removes the source zone from played-card names", () => {
+    const model = buildAtlasReplay(replay([
+      event("match-snapshot", "2026-04-26T12:03:00.000Z", {
+        active: true,
+        rows: [
+          { text: "12:01BMU's turn" },
+          { text: "12:01Played Turn to Dust from hand." },
+          { text: "12:02Played Mournful Witness from hand to base." }
+        ]
+      })
+    ]), match());
+
+    expect(model.events
+      .filter((item) => item.type === "play")
+      .map((item) => ({ cardName: item.cardName, destination: item.destination })))
+      .toEqual([
+        { cardName: "Turn to Dust", destination: "" },
+        { cardName: "Mournful Witness", destination: "base" }
+      ]);
+  });
+
   it("keeps scoreboard events when Atlas exposes score changes but no clean action row", () => {
     const model = buildAtlasReplay(replay([
       event("match-snapshot", "2026-04-26T12:00:00.000Z", { active: true, score: { me: "0", opp: "0" }, rows: [] }),

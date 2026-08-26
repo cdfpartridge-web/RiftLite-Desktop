@@ -34,6 +34,13 @@ describe("Atlas known opponent hand integration", () => {
     expect(appSource).toContain("resolveBundledReplayCardImage(card.code || card.cardId)");
     expect(appSource).toContain("key={card.instanceId}");
     expect(appSource).toContain("onDismiss(card.instanceId)");
+    expect(appSource).toContain("data-atlas-known-hand-preview");
+    expect(appSource).toContain('aria-hidden="true"');
+    expect(appSource).toContain("onMouseEnter={() => setHoveredCardInstanceId(card.instanceId)}");
+    expect(appSource).toContain("onMouseLeave={() => setHoveredCardInstanceId");
+    expect(appSource).toContain("onFocus={() => setFocusedCardInstanceId(card.instanceId)}");
+    expect(appSource).toContain("onBlur={() => setFocusedCardInstanceId");
+    expect(appSource).toContain("Hover or focus for a larger view.");
     expect(appSource).toContain("Unknown draws are not added.");
     const panelStart = appSource.indexOf("function AtlasKnownOpponentHandPanel");
     const panelEnd = appSource.indexOf("function ReleaseNotesModal", panelStart);

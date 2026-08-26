@@ -38,6 +38,13 @@ import {
 import { readTcgaLocalPlayerName, readTcgaProfileName } from "../shared/tcgaIdentity.js";
 import { shouldCaptureTcgaResearchCheckpoint } from "../shared/tcgaResearchCheckpoint.js";
 import type { BattlefieldCandidate, CaptureEvent, CaptureKind, GamePlatform } from "../shared/types.js";
+import {
+  ATLAS_AUTHORITATIVE_MATCH_IPC_CHANNEL,
+  AtlasAuthoritativeMatchTracker,
+  atlasAuthoritativeMatchSignalFromState,
+  validatedAtlasAuthoritativeMatchSignal,
+  type AtlasAuthoritativeMatchSignal
+} from "../shared/atlasAuthoritativeMatch.js";
 
 function trustedGameWebviewPlatform(): GamePlatform {
   const resolved = resolveGameWebviewPlatformIdentity(
@@ -215,6 +222,8 @@ let atlasShellFinalEmptyTimer: number | undefined;
 let atlasLocalPlayerSeat: AtlasPlayerSeat | null = null;
 let atlasBattlefieldSeatRoomCode = "";
 let atlasBattlefieldSeatSocketId = "";
+const atlasAuthoritativeMatchTracker = new AtlasAuthoritativeMatchTracker();
+let atlasAuthoritativeMatchState: AtlasAuthoritativeMatchSignal | null = null;
 
 type CounterPlayer = {
   name: string;
@@ -1200,6 +1209,11 @@ function readTcgaTurnText(bodyText: string): string {
 
 function readAtlasSnapshot(): Record<string, unknown> {
   const bodyText = documentText();
+  const roomCode = readRoomCode(bodyText) || atlasBattlefieldSeatRoomCode;
+  const authoritativeMatch = atlasAuthoritativeMatchState &&
+    (!roomCode || atlasAuthoritativeMatchState.roomCode === roomCode)
+    ? atlasAuthoritativeMatchState
+    : null;
   const nonGamePage = isAtlasNonGamePage();
   const logRows = Array.from(document.querySelectorAll("ul li, [role='log'] li, [class*='log' i] li, [class*='matchLog' i] li"))
     .slice(-28)
@@ -1226,7 +1240,19 @@ function readAtlasSnapshot(): Record<string, unknown> {
   );
   const inGameText = !nonGamePage && !sideboarding && /concede|report winner|request rematch|opponent.*left|left the game|disconnected|\bturn\b|mulligan|played|wins!|winner|\bround\b|combat|attack|block/i.test(bodyText);
   const atlasScoreCandidates = sideboarding ? [] : readAtlasScoreTrackCandidates();
-  const score = sideboarding ? { me: "", opp: "", raw: [], source: "none" } : readAtlasScore(bodyText, logRows, atlasScoreCandidates);
+  const domScore = sideboarding ? { me: "", opp: "", raw: [], source: "none" } : readAtlasScore(bodyText, logRows, atlasScoreCandidates);
+  const hasAuthoritativeScore = Boolean(
+    authoritativeMatch &&
+    (authoritativeMatch.score.me !== "" || authoritativeMatch.score.opp !== "")
+  );
+  const score = hasAuthoritativeScore && authoritativeMatch
+    ? {
+        me: authoritativeMatch.score.me || domScore.me,
+        opp: authoritativeMatch.score.opp || domScore.opp,
+        raw: domScore.raw,
+        source: "atlas-authoritative-packet"
+      }
+    : domScore;
   const hasScoreEvidence = Number.parseInt(score.me, 10) > 0 || Number.parseInt(score.opp, 10) > 0;
   const boardSelector = document.querySelector(
     "[data-drop-zone-root], [data-zone-owner], [data-owner], [class*='game-board' i], [class*='play-area' i], canvas"
@@ -1280,7 +1306,6 @@ function readAtlasSnapshot(): Record<string, unknown> {
         inGameText ||
         terminalText))
   );
-  const roomCode = readRoomCode(bodyText) || atlasBattlefieldSeatRoomCode;
   const atlasPlayers = nonGamePage
     ? { me: "", opponent: "", candidates: [] }
     : readAtlasPlayers(bodyText, logRows, active || boardEvidence || hasScoreEvidence || gameplayRows, roomCode);
@@ -1305,7 +1330,10 @@ function readAtlasSnapshot(): Record<string, unknown> {
     })).slice(0, 10),
     rows: logRows,
     roomCode,
-    format: readAtlasFormat(bodyText),
+    format: authoritativeMatch?.format || readAtlasFormat(bodyText),
+    atlasGameInstanceId: authoritativeMatch?.gameInstanceId ?? "",
+    atlasIdentitySource: authoritativeMatch?.opponentName ? "atlas-authoritative-packet" : "",
+    atlasFormatSource: authoritativeMatch?.format ? "atlas-authoritative-packet" : "",
     atlasSideboarding: sideboarding,
     atlasBo3Queue,
     atlasBo3GameNumber: atlasBo3GameNumberValue,
@@ -1313,8 +1341,8 @@ function readAtlasSnapshot(): Record<string, unknown> {
     atlasCardZoneOverlay: cardZoneOverlay,
     atlasTransientOverlay: transientOverlay,
     atlasResultKind: classifyAtlasResult(terminalText),
-    myName: atlasPlayers.me,
-    opponentName: atlasPlayers.opponent,
+    myName: authoritativeMatch?.myName || atlasPlayers.me,
+    opponentName: authoritativeMatch?.opponentName || atlasPlayers.opponent,
     atlasPlayerCandidates: atlasPlayers.candidates,
     myChampion: atlasLegendCardText(myLegendCard),
     opponentChampion: atlasLegendCardText(opponentLegendCard),
@@ -2136,7 +2164,7 @@ function isLikelyAtlasPlayerName(value: string): boolean {
   if (/^(unl|ogn|sfd|pro)-\d{3}[a-z]?$/i.test(name)) {
     return false;
   }
-  if (/\b(score|points?|battlefield|mulligan|sideboard|deck|hand|base|rune|energy|power|turn|room|match|lobby|play|pass|concede|report|winner|victory|defeat|support|tcg|atlas)\b/i.test(name)) {
+  if (/\b(score|points?|battlefield|mulligan|sideboard|deck|hand|base|runes?|energy|power|turn|room|match|lobby|play|pass|concede|report|winner|victory|defeat|support|tcg|atlas)\b/i.test(name)) {
     return false;
   }
   return true;
@@ -2148,7 +2176,7 @@ function isLikelyAtlasPlayerActionText(value: string): boolean {
   if (!withoutClockPrefix) {
     return false;
   }
-  return /^(locked|chose|auto[-\s]?selected|selected|both players|finalized|rolled|(?:wins?|won) initiative|played|moved|drew|ended|conquered|scored|set your score)\b/.test(withoutClockPrefix) ||
+  return /^(locked|chose|auto[-\s]?selected|selected|both players|finalized|rolled|recycl(?:e|ed)|(?:wins?|won) initiative|played|moved|drew|ended|conquered|scored|set your score)\b/.test(withoutClockPrefix) ||
     /^must choose\b/.test(withoutClockPrefix) ||
     (/^\d/.test(normalized) && /^must\b/.test(withoutClockPrefix)) ||
     /\b(take the first|decides who plays first|locked in|locked a battlefield|mulligan|sideboarding|sideboard|their turn|your turn)\b/.test(withoutClockPrefix);
@@ -2310,6 +2338,9 @@ function reportAtlasShellStatusIfNeeded(reportMode: "observe" | "stalled" | "emp
     .filter(isVisibleShellElement);
   const gameSurfaceElements = Array.from(document.querySelectorAll("canvas, [data-card-id], [data-drop-zone], [data-zone-owner]"))
     .filter(isVisibleShellElement);
+  const lobbyPlaySurfaceElements = Array.from(document.querySelectorAll(
+    ".lobby-quick-match-actions button, .lobby-private-play-actions button, .lobby-room-code-actions button"
+  )).filter(isVisibleShellElement);
   const visibleTextElements = Array.from(document.querySelectorAll("h1, h2, h3, p, li, label, button, a, [role='button'], [role='dialog']"))
     .filter(isVisibleShellElement);
   const visibleText = visibleTextElements
@@ -2330,6 +2361,7 @@ function reportAtlasShellStatusIfNeeded(reportMode: "observe" | "stalled" | "emp
     interactiveText,
     interactiveCount: interactiveElements.length,
     gameSurfaceCount: gameSurfaceElements.length,
+    lobbyPlaySurfaceCount: lobbyPlaySurfaceElements.length,
     lobbyHeadingCount: headingElements.filter((element) => /^lobby$/i.test(shellElementText(element))).length,
     authHeadingCount: headingElements.filter((element) => /^(?:sign in|log in|sign up|create account)$/i.test(shellElementText(element))).length,
     authFormCount: Array.from(document.querySelectorAll("form, [data-clerk-component], [class*='cl-rootBox'], [class*='cl-card']"))
@@ -2344,6 +2376,8 @@ function reportAtlasShellStatusIfNeeded(reportMode: "observe" | "stalled" | "emp
     routeKind: assessment.routeKind,
     readyReason: assessment.readyReason,
     lobbyActionCount: assessment.lobbyActionCount,
+    lobbyPlayActionCount: assessment.lobbyPlayActionCount,
+    lobbyPlaySurfaceCount: assessment.lobbyPlaySurfaceCount,
     authMarkerCount: assessment.authMarkerCount,
     gameMarkerCount: assessment.gameMarkerCount
   };
@@ -2804,6 +2838,7 @@ function installNetworkHooks(): void {
 }
 
 function handleWebSocketMessageText(requestUrl: string, raw: string, dir: "in" | "out", socketId = ""): void {
+  updateAtlasAuthoritativeMatchFromFrame(requestUrl, raw, dir, socketId);
   updateAtlasBattlefieldSeatFromFrame(requestUrl, raw, dir, socketId);
   captureRawAtlasFrame(requestUrl, raw, dir, socketId);
   const shouldCapture = raw && (
@@ -2833,9 +2868,15 @@ function prepareAtlasBattlefieldSeatSocket(requestUrl: string, socketId: string)
     return;
   }
   const previousRoomCode = atlasBattlefieldSeatRoomCode;
+  const previousSocketId = atlasBattlefieldSeatSocketId;
   const roomChanged = Boolean(previousRoomCode && previousRoomCode !== roomCode);
   atlasBattlefieldSeatRoomCode = roomCode;
   atlasBattlefieldSeatSocketId = socketId;
+  if (previousSocketId && previousSocketId !== socketId) {
+    atlasAuthoritativeMatchTracker.reset();
+    atlasAuthoritativeMatchState = null;
+    lastSnapshotSignature = "";
+  }
   if (!roomChanged) {
     return;
   }
@@ -2847,6 +2888,76 @@ function prepareAtlasBattlefieldSeatSocket(requestUrl: string, socketId: string)
     atlasLocalPlayerSeat: "",
     atlasLocalBattlefieldZone: "",
     atlasOpponentBattlefieldZone: ""
+  });
+}
+
+function updateAtlasAuthoritativeMatchFromFrame(
+  requestUrl: string,
+  raw: string,
+  dir: "in" | "out",
+  socketId: string
+): void {
+  if (
+    platform !== "atlas" ||
+    dir !== "in" ||
+    !socketId ||
+    (atlasBattlefieldSeatSocketId && socketId !== atlasBattlefieldSeatSocketId)
+  ) {
+    return;
+  }
+  const state = atlasAuthoritativeMatchTracker.observeFrame({
+    platform: "atlas",
+    requestUrl,
+    frame: {
+      seq: rawCaptureSeq,
+      ts: Date.now(),
+      dir,
+      socketId,
+      raw
+    }
+  });
+  if (!state) {
+    return;
+  }
+  applyAtlasAuthoritativeMatchState(
+    atlasAuthoritativeMatchSignalFromState(state),
+    "preload-websocket"
+  );
+}
+
+function applyAtlasAuthoritativeMatchState(
+  state: AtlasAuthoritativeMatchSignal,
+  source: "preload-websocket" | "main-debugger-bridge"
+): void {
+  const previousSignature = atlasAuthoritativeMatchState
+    ? JSON.stringify(atlasAuthoritativeMatchState)
+    : "";
+  const nextSignature = JSON.stringify(state);
+  if (nextSignature === previousSignature) {
+    return;
+  }
+  atlasAuthoritativeMatchState = state;
+  lastSnapshotSignature = "";
+  sendDebug("atlas-authoritative-match-resolved", {
+    source,
+    roomCode: state.roomCode,
+    atlasGameInstanceId: state.gameInstanceId,
+    atlasAuthoritativeFormat: state.format,
+    atlasAuthoritativeScore: state.score
+  });
+  scheduleSnapshot("atlas-authoritative-match-resolved");
+}
+
+function installAtlasAuthoritativeMatchBridge(): void {
+  if (platform !== "atlas") {
+    return;
+  }
+  ipcRenderer.on(ATLAS_AUTHORITATIVE_MATCH_IPC_CHANNEL, (_event, value: unknown) => {
+    const state = validatedAtlasAuthoritativeMatchSignal(value);
+    if (!state) {
+      return;
+    }
+    applyAtlasAuthoritativeMatchState(state, "main-debugger-bridge");
   });
 }
 
@@ -3070,6 +3181,7 @@ declare global {
   }
 }
 
+installAtlasAuthoritativeMatchBridge();
 installAtlasBattlefieldSeatBridge();
 installAtlasEditableFocusBridge();
 installNetworkHooks();

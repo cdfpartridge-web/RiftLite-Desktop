@@ -23,6 +23,7 @@ import type {
   ReplayVideoSession,
   ReplayVideoStartOptions,
   ReplayRecord,
+  ReplayMp4ExportProgress,
   ReplayScreenshotFrame,
   ReplayVideoCaptureMode,
   RiftLiteApi,
@@ -97,8 +98,9 @@ const api: RiftLiteApi = {
   purgeReplay: (id) => ipcRenderer.invoke("replays:purge", id) as Promise<void>,
   exportReplayBundle: (replayId) => ipcRenderer.invoke("replays:export", replayId) as Promise<string>,
   revealReplayFile: (replayId, preferredKind) => ipcRenderer.invoke("replays:reveal-file", replayId, preferredKind) as ReturnType<RiftLiteApi["revealReplayFile"]>,
-  exportReplayMp4: (replayId, options) => ipcRenderer.invoke("replays:export-mp4", replayId, options) as ReturnType<RiftLiteApi["exportReplayMp4"]>,
-  exportReplayPresentationMp4: (replayId, payload) => ipcRenderer.invoke("replays:export-presentation-mp4", replayId, payload) as ReturnType<RiftLiteApi["exportReplayPresentationMp4"]>,
+  exportReplayMp4: (replayId, options, requestId) => ipcRenderer.invoke("replays:export-mp4", replayId, options, requestId) as ReturnType<RiftLiteApi["exportReplayMp4"]>,
+  exportReplayPresentationMp4: (replayId, payload, requestId) => ipcRenderer.invoke("replays:export-presentation-mp4", replayId, payload, requestId) as ReturnType<RiftLiteApi["exportReplayPresentationMp4"]>,
+  revealLastReplayMp4Export: () => ipcRenderer.invoke("replays:reveal-last-mp4-export") as Promise<void>,
   exportReplayFlagsText: (replayId) => ipcRenderer.invoke("replays:export-flags-text", replayId) as ReturnType<RiftLiteApi["exportReplayFlagsText"]>,
   uploadRawCapture: (replayId) => ipcRenderer.invoke("raw-capture:upload", replayId) as ReturnType<RiftLiteApi["uploadRawCapture"]>,
   getRawCaptureStatus: () => ipcRenderer.invoke("raw-capture:status") as ReturnType<RiftLiteApi["getRawCaptureStatus"]>,
@@ -225,6 +227,7 @@ const api: RiftLiteApi = {
   openTcgaReplayResearchFolder: () => ipcRenderer.invoke("tcga-research:open") as Promise<void>,
   deleteTcgaReplayResearchCaptures: () => ipcRenderer.invoke("tcga-research:delete") as ReturnType<RiftLiteApi["deleteTcgaReplayResearchCaptures"]>,
   takeScreenshot: () => ipcRenderer.invoke("screenshot:take") as Promise<ScreenshotResult>,
+  captureCoachShareCard: (request) => ipcRenderer.invoke("coach:share-card:capture", request) as ReturnType<RiftLiteApi["captureCoachShareCard"]>,
   chooseScreenshotDirectory: () => ipcRenderer.invoke("screenshot:choose-directory") as Promise<UserSettings>,
   openScreenshotDirectory: () => ipcRenderer.invoke("screenshot:open-directory") as Promise<void>,
   chooseReplayDirectory: () => ipcRenderer.invoke("replays:choose-directory") as Promise<UserSettings>,
@@ -273,6 +276,11 @@ const api: RiftLiteApi = {
     const listener = () => callback();
     ipcRenderer.on("replay:quick-flag-hotkey", listener);
     return () => ipcRenderer.removeListener("replay:quick-flag-hotkey", listener);
+  },
+  onReplayMp4ExportProgress: (callback) => {
+    const listener = (_event: Electron.IpcRendererEvent, progress: ReplayMp4ExportProgress) => callback(progress);
+    ipcRenderer.on("replay:mp4-export-progress", listener);
+    return () => ipcRenderer.removeListener("replay:mp4-export-progress", listener);
   },
   onAtlasKnownOpponentHandUpdated: (callback) => {
     const listener = (_event: Electron.IpcRendererEvent, state: AtlasKnownOpponentHandState) => callback(state);
