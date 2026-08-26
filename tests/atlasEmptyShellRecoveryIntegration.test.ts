@@ -52,6 +52,9 @@ describe("Atlas empty-shell recovery integration", () => {
 
     expect(repairIndex).toBeGreaterThan(-1);
     expect(reloadIndex).toBeGreaterThan(repairIndex);
+    expect(handler).toContain("atlasEmptyShellMainRecovery.canFinishCommittedReload(");
+    expect(handler.indexOf("atlasEmptyShellMainRecovery.canFinishCommittedReload("))
+      .toBeGreaterThan(repairIndex);
   });
 
   it("routes bounded repair modes through progressively stronger cleanup before remounting", () => {
@@ -110,7 +113,7 @@ describe("Atlas empty-shell recovery integration", () => {
     expect(platformEffect).not.toContain("atlasEmptyShellAutoRepairRef.current = false");
   });
 
-  it("warns at eight seconds and waits eighteen seconds before automatic repair", () => {
+  it("warns at eight seconds, repairs at eighteen, and retries after match grace", () => {
     const deadlineChecks = sourceBetween(
       gamePreloadSource,
       "function scheduleAtlasShellDeadlineChecks",
@@ -120,6 +123,9 @@ describe("Atlas empty-shell recovery integration", () => {
     expect(deadlineChecks).toContain("ATLAS_STALLED_SHELL_MIN_AGE_MS");
     expect(deadlineChecks).toContain('reportAtlasShellStatusIfNeeded("empty")');
     expect(deadlineChecks).toContain("ATLAS_EMPTY_SHELL_MIN_AGE_MS");
+    expect(deadlineChecks).toContain('reportAtlasShellStatusIfNeeded("persistent-empty")');
+    expect(deadlineChecks).toContain("ATLAS_PERSISTENT_EMPTY_SHELL_MIN_AGE_MS");
+    expect(deadlineChecks).toContain("ATLAS_PERSISTENT_EMPTY_SHELL_RETRY_AGE_MS");
     const mutationCheck = sourceBetween(
       gamePreloadSource,
       "function scheduleAtlasShellMutationCheck",
@@ -135,5 +141,42 @@ describe("Atlas empty-shell recovery integration", () => {
     expect(visibleCheck).toContain("clearAtlasShellDeadlineTimers()");
     expect(visibleCheck).toContain("scheduleAtlasShellDeadlineChecks()");
     expect(visibleCheck).not.toContain("Date.now() - atlasShellChecksStartedAt");
+  });
+
+  it("keeps monitoring a previously healthy SPA shell and requires stable readiness", () => {
+    const shellStatus = sourceBetween(
+      gamePreloadSource,
+      "function reportAtlasShellStatusIfNeeded",
+      "function isAtlasAuthSurface"
+    );
+    const mutationCheck = sourceBetween(
+      gamePreloadSource,
+      "function scheduleAtlasShellMutationCheck",
+      "function clearAtlasShellDeadlineTimers"
+    );
+    const routeMonitor = sourceBetween(
+      gamePreloadSource,
+      "function updateAtlasShellRecoveryRouteMonitoring",
+      "function clearAtlasShellReadyCandidate"
+    );
+    const observerSetup = sourceBetween(
+      gamePreloadSource,
+      "function installDomObserver",
+      "function installNetworkHooks"
+    );
+
+    expect(shellStatus).toContain('document.readyState === "loading"');
+    expect(shellStatus).not.toContain('document.readyState !== "complete"');
+    expect(shellStatus).toContain("ATLAS_SHELL_READY_STABILITY_MS");
+    expect(shellStatus).toContain('reason: "atlas-app-shell-regressed"');
+    expect(shellStatus).toContain("scheduleAtlasShellDeadlineChecks()");
+    expect(mutationCheck).toContain("updateAtlasShellRecoveryRouteMonitoring()");
+    expect(routeMonitor).toContain("atlasShellNeedsOngoingMonitoring()");
+    expect(routeMonitor).toContain("atlasShellRecoveryRouteTransition(");
+    expect(routeMonitor).toContain("atlasShellRecoveryRouteActive = transition.active");
+    expect(routeMonitor).toContain("if (transition.shouldArmDeadlines)");
+    expect(routeMonitor).toContain("scheduleAtlasShellDeadlineChecks()");
+    expect(observerSetup).toContain("ATLAS_SHELL_MONITOR_INTERVAL_MS");
+    expect(observerSetup).toContain("window.setInterval(scheduleAtlasShellMutationCheck");
   });
 });

@@ -17,9 +17,15 @@ import {
 } from "../shared/atlasPlayerIdentity.js";
 import {
   ATLAS_EMPTY_SHELL_MIN_AGE_MS,
+  ATLAS_PERSISTENT_EMPTY_SHELL_MIN_AGE_MS,
+  ATLAS_PERSISTENT_EMPTY_SHELL_RETRY_AGE_MS,
+  ATLAS_SHELL_MONITOR_INTERVAL_MS,
+  ATLAS_SHELL_READY_STABILITY_MS,
   ATLAS_STALLED_SHELL_MIN_AGE_MS,
   assessAtlasShell,
+  atlasShellRecoveryRouteTransition,
   isAtlasAuthSurfaceEvidence,
+  isAtlasShellRecoveryRoute,
   shouldReportAtlasEmptyShell
 } from "../shared/atlasShellHealth.js";
 import { riftboundCardCodeFromValue } from "../shared/cardIdentity.js";
@@ -215,10 +221,14 @@ let atlasDeferredMutationSnapshot = false;
 let atlasEmptyShellReported = false;
 let atlasStalledShellReported = false;
 let atlasShellReadyReported = false;
+let atlasShellRecoveryRouteActive = false;
+let atlasShellReadyCandidateAt = 0;
+let atlasShellReadyCandidateTimer: number | undefined;
 let atlasShellMutationCheckTimer: number | undefined;
 let atlasShellStallTimer: number | undefined;
 let atlasShellEmptyTimer: number | undefined;
-let atlasShellFinalEmptyTimer: number | undefined;
+let atlasShellPersistentEmptyTimer: number | undefined;
+let atlasShellPersistentEmptyRetryTimer: number | undefined;
 let atlasLocalPlayerSeat: AtlasPlayerSeat | null = null;
 let atlasBattlefieldSeatRoomCode = "";
 let atlasBattlefieldSeatSocketId = "";
@@ -2318,21 +2328,101 @@ function safeStorageKeys(): string[] {
   }
 }
 
-function reportAtlasShellStatusIfNeeded(reportMode: "observe" | "stalled" | "empty" = "observe"): void {
+type AtlasShellReportMode = "observe" | "stalled" | "empty" | "persistent-empty";
+
+function atlasShellNeedsOngoingMonitoring(): boolean {
+  return isAtlasShellRecoveryRoute(location.hostname, location.pathname);
+}
+
+function updateAtlasShellRecoveryRouteMonitoring(): boolean {
+  const routeActive = atlasShellNeedsOngoingMonitoring();
+  const transition = atlasShellRecoveryRouteTransition(
+    atlasShellRecoveryRouteActive,
+    routeActive,
+    atlasShellReadyReported
+  );
+  atlasShellRecoveryRouteActive = transition.active;
+  if (!transition.active) {
+    clearAtlasShellReadyCandidate();
+    clearAtlasShellDeadlineTimers();
+    return false;
+  }
+  if (transition.shouldArmDeadlines) {
+    scheduleAtlasShellDeadlineChecks();
+  }
+  return true;
+}
+
+function clearAtlasShellReadyCandidate(): void {
+  atlasShellReadyCandidateAt = 0;
+  if (atlasShellReadyCandidateTimer !== undefined) {
+    window.clearTimeout(atlasShellReadyCandidateTimer);
+    atlasShellReadyCandidateTimer = undefined;
+  }
+}
+
+function scheduleAtlasShellReadyCandidateCheck(delayMs: number): void {
+  if (atlasShellReadyCandidateTimer !== undefined) {
+    return;
+  }
+  atlasShellReadyCandidateTimer = window.setTimeout(() => {
+    atlasShellReadyCandidateTimer = undefined;
+    reportAtlasShellStatusIfNeeded("observe");
+  }, Math.max(50, delayMs));
+}
+
+function reportAtlasShellStatusIfNeeded(reportMode: AtlasShellReportMode = "observe"): void {
   if (
     platform !== "atlas" ||
-    atlasShellReadyReported ||
-    document.readyState !== "complete" ||
+    document.readyState === "loading" ||
     document.visibilityState === "hidden"
   ) {
     return;
   }
-  const hiddenShellSelector = "[hidden], [aria-hidden='true'], .sr-only, [class*='sr-only'], script, style, template, noscript";
+  if (!updateAtlasShellRecoveryRouteMonitoring()) {
+    return;
+  }
+  const hiddenShellSelector = "[hidden], [inert], [aria-hidden='true'], .sr-only, [class*='sr-only'], script, style, template, noscript";
   const isVisibleShellElement = (element: Element) => {
     if (element.closest(hiddenShellSelector)) return false;
+    const checkVisibility = (element as Element & {
+      checkVisibility?: (options?: { checkOpacity?: boolean; checkVisibilityCSS?: boolean }) => boolean;
+    }).checkVisibility;
+    let visibilityChecked = false;
+    if (typeof checkVisibility === "function") {
+      try {
+        if (!checkVisibility.call(element, { checkOpacity: true, checkVisibilityCSS: true })) {
+          return false;
+        }
+        visibilityChecked = true;
+      } catch {
+        // Older Chromium builds can expose checkVisibility without all options.
+      }
+    }
+    if (!visibilityChecked) {
+      for (let current: Element | null = element; current; current = current.parentElement) {
+        const ancestorStyle = window.getComputedStyle(current);
+        const opacity = Number.parseFloat(ancestorStyle.opacity);
+        if (
+          ancestorStyle.display === "none" ||
+          ancestorStyle.visibility === "hidden" ||
+          ancestorStyle.visibility === "collapse" ||
+          ancestorStyle.getPropertyValue("content-visibility") === "hidden" ||
+          (Number.isFinite(opacity) && opacity <= 0.01)
+        ) {
+          return false;
+        }
+      }
+    }
     const bounds = element.getBoundingClientRect();
     const style = window.getComputedStyle(element);
-    return bounds.width > 1 && bounds.height > 1 && style.display !== "none" && style.visibility !== "hidden" && style.opacity !== "0";
+    const opacity = Number.parseFloat(style.opacity);
+    return bounds.width > 1 && bounds.height > 1 &&
+      style.display !== "none" &&
+      style.visibility !== "hidden" &&
+      style.visibility !== "collapse" &&
+      style.getPropertyValue("content-visibility") !== "hidden" &&
+      (!Number.isFinite(opacity) || opacity > 0.01);
   };
   const interactiveElements = Array.from(document.querySelectorAll("button, input, select, textarea, canvas, [role='button'], [role='dialog']"))
     .filter(isVisibleShellElement);
@@ -2382,12 +2472,43 @@ function reportAtlasShellStatusIfNeeded(reportMode: "observe" | "stalled" | "emp
     gameMarkerCount: assessment.gameMarkerCount
   };
   if (assessment.ready) {
+    if (atlasShellReadyReported) {
+      return;
+    }
+    const now = Date.now();
+    if (!atlasShellReadyCandidateAt) {
+      atlasShellReadyCandidateAt = now;
+      scheduleAtlasShellReadyCandidateCheck(ATLAS_SHELL_READY_STABILITY_MS);
+      return;
+    }
+    const stableForMs = now - atlasShellReadyCandidateAt;
+    if (stableForMs < ATLAS_SHELL_READY_STABILITY_MS) {
+      scheduleAtlasShellReadyCandidateCheck(ATLAS_SHELL_READY_STABILITY_MS - stableForMs);
+      return;
+    }
+    clearAtlasShellReadyCandidate();
     atlasShellReadyReported = true;
+    atlasStalledShellReported = false;
+    atlasEmptyShellReported = false;
     clearAtlasShellDeadlineTimers();
     send("debug", {
       reason: "atlas-app-shell-ready",
+      stableForMs,
       ...shellEvidence
     });
+    return;
+  }
+  clearAtlasShellReadyCandidate();
+  if (atlasShellReadyReported) {
+    atlasShellReadyReported = false;
+    atlasStalledShellReported = false;
+    atlasEmptyShellReported = false;
+    send("debug", {
+      reason: "atlas-app-shell-regressed",
+      ...debugSnapshot(),
+      ...shellEvidence
+    });
+    scheduleAtlasShellDeadlineChecks();
     return;
   }
   if (reportMode === "stalled" && !atlasStalledShellReported) {
@@ -2406,6 +2527,16 @@ function reportAtlasShellStatusIfNeeded(reportMode: "observe" | "stalled" | "emp
       ...debugSnapshot(),
       ...shellEvidence,
       visibleText: visibleText.slice(0, 800)
+    });
+    return;
+  }
+  if (reportMode === "persistent-empty") {
+    send("debug", {
+      reason: "atlas-app-shell-empty",
+      persistent: true,
+      ...shellEvidence,
+      readyState: document.readyState,
+      path: location.pathname
     });
   }
 }
@@ -2432,11 +2563,13 @@ function shellElementText(element: Element): string {
 }
 
 function scheduleAtlasShellMutationCheck(): void {
-  if (
-    platform !== "atlas" ||
-    atlasShellReadyReported ||
-    atlasShellMutationCheckTimer !== undefined
-  ) {
+  if (platform !== "atlas") {
+    return;
+  }
+  if (!updateAtlasShellRecoveryRouteMonitoring()) {
+    return;
+  }
+  if (atlasShellMutationCheckTimer !== undefined) {
     return;
   }
   atlasShellMutationCheckTimer = window.setTimeout(() => {
@@ -2446,14 +2579,20 @@ function scheduleAtlasShellMutationCheck(): void {
 }
 
 function clearAtlasShellDeadlineTimers(): void {
-  for (const timer of [atlasShellStallTimer, atlasShellEmptyTimer, atlasShellFinalEmptyTimer]) {
+  for (const timer of [
+    atlasShellStallTimer,
+    atlasShellEmptyTimer,
+    atlasShellPersistentEmptyTimer,
+    atlasShellPersistentEmptyRetryTimer
+  ]) {
     if (timer !== undefined) {
       window.clearTimeout(timer);
     }
   }
   atlasShellStallTimer = undefined;
   atlasShellEmptyTimer = undefined;
-  atlasShellFinalEmptyTimer = undefined;
+  atlasShellPersistentEmptyTimer = undefined;
+  atlasShellPersistentEmptyRetryTimer = undefined;
 }
 
 function scheduleAtlasShellDeadlineChecks(): void {
@@ -2466,21 +2605,32 @@ function scheduleAtlasShellDeadlineChecks(): void {
     () => reportAtlasShellStatusIfNeeded("empty"),
     ATLAS_EMPTY_SHELL_MIN_AGE_MS
   );
-  atlasShellFinalEmptyTimer = window.setTimeout(
-    () => reportAtlasShellStatusIfNeeded("empty"),
-    30_000
+  atlasShellPersistentEmptyTimer = window.setTimeout(
+    () => reportAtlasShellStatusIfNeeded("persistent-empty"),
+    ATLAS_PERSISTENT_EMPTY_SHELL_MIN_AGE_MS
+  );
+  atlasShellPersistentEmptyRetryTimer = window.setTimeout(
+    () => reportAtlasShellStatusIfNeeded("persistent-empty"),
+    ATLAS_PERSISTENT_EMPTY_SHELL_RETRY_AGE_MS
   );
 }
 
 function checkAtlasShellAfterBecomingVisible(): void {
-  if (platform !== "atlas" || atlasShellReadyReported) {
+  if (platform !== "atlas") {
     return;
   }
   if (document.visibilityState === "hidden") {
+    clearAtlasShellReadyCandidate();
     clearAtlasShellDeadlineTimers();
     return;
   }
+  if (!updateAtlasShellRecoveryRouteMonitoring()) {
+    return;
+  }
   reportAtlasShellStatusIfNeeded("observe");
+  if (atlasShellReadyReported) {
+    return;
+  }
   // Hidden/background time must not consume Atlas's hydration grace period.
   // Give the client a fresh visible interval before declaring it stalled.
   scheduleAtlasShellDeadlineChecks();
@@ -2748,7 +2898,10 @@ function installDomObserver(): void {
       for (const delay of [250, 750, 1_500, 3_000, 5_000]) {
         window.setTimeout(() => reportAtlasShellStatusIfNeeded("observe"), delay);
       }
-      scheduleAtlasShellDeadlineChecks();
+      updateAtlasShellRecoveryRouteMonitoring();
+      // RiftAtlas is an SPA. A route can lose its app subtree without replacing
+      // this preload document, so keep a cheap route-aware health monitor alive.
+      window.setInterval(scheduleAtlasShellMutationCheck, ATLAS_SHELL_MONITOR_INTERVAL_MS);
     }
     const heartbeat = () => {
       publishSnapshot("safety-heartbeat");

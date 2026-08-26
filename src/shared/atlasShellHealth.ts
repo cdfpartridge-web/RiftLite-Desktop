@@ -13,6 +13,10 @@ export interface AtlasShellEvidence {
 
 export const ATLAS_STALLED_SHELL_MIN_AGE_MS = 8_000;
 export const ATLAS_EMPTY_SHELL_MIN_AGE_MS = 18_000;
+export const ATLAS_SHELL_READY_STABILITY_MS = 3_000;
+export const ATLAS_PERSISTENT_EMPTY_SHELL_MIN_AGE_MS = 60_000;
+export const ATLAS_PERSISTENT_EMPTY_SHELL_RETRY_AGE_MS = 120_000;
+export const ATLAS_SHELL_MONITOR_INTERVAL_MS = 5_000;
 
 export type AtlasShellRouteKind = "lobby" | "auth" | "game" | "other";
 
@@ -158,6 +162,37 @@ export function shouldReportAtlasEmptyShell(
   alreadyReported: boolean
 ): boolean {
   return allowEmpty && !alreadyReported && !assessment.ready;
+}
+
+/**
+ * Automatic shell recovery is intentionally limited to Atlas's lobby and
+ * authentication surfaces. Deck tools and active game routes must never be
+ * redirected just because their controls differ from the lobby classifier.
+ */
+export function isAtlasShellRecoveryRoute(hostname: string, pathname: string): boolean {
+  const normalizedHostname = hostname.trim().toLowerCase();
+  const normalizedPathname = stripAtlasLocalePrefix(normalizePathname(pathname));
+  const routeKind = atlasShellRouteKind(normalizedHostname, normalizedPathname);
+  return routeKind === "lobby" || routeKind === "auth";
+}
+
+export interface AtlasShellRecoveryRouteTransition {
+  active: boolean;
+  entered: boolean;
+  shouldArmDeadlines: boolean;
+}
+
+export function atlasShellRecoveryRouteTransition(
+  previouslyActive: boolean,
+  routeActive: boolean,
+  shellReadyReported: boolean
+): AtlasShellRecoveryRouteTransition {
+  const entered = routeActive && !previouslyActive;
+  return {
+    active: routeActive,
+    entered,
+    shouldArmDeadlines: entered && !shellReadyReported
+  };
 }
 
 function assessment(

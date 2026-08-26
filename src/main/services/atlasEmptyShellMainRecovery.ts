@@ -100,39 +100,51 @@ export class AtlasEmptyShellMainRecoveryGuard {
   }
 
   /**
-   * Consumes a scheduled recovery and confirms that its original guest and
-   * navigation are still current. A mismatch still consumes the app-session
-   * budget so a replacement guest cannot turn the fallback into a reload loop.
+   * Confirms that the scheduled guest and navigation are still current, then
+   * consumes the app-session recovery budget. A cancelled delay never started
+   * a repair, so it must not prevent a later genuine blank shell from healing.
    */
   commitScheduledReload(recoveryKey: string, guestId: number, navigationKey: string): boolean {
     if (this.attempt.status !== "scheduled" || this.attempt.recoveryKey !== recoveryKey) {
       return false;
     }
     const scheduled = this.attempt;
+    const current = this.guestNavigations.get(guestId);
+    const canCommit = scheduled.guestId === guestId &&
+      scheduled.navigationKey === navigationKey &&
+      current?.navigationKey === navigationKey;
+    if (!canCommit) {
+      this.attempt = { status: "idle" };
+      return false;
+    }
     this.attempt = {
       status: "consumed",
       recoveryKey,
+      targetGuestId: guestId,
+      targetNavigationKey: navigationKey,
       bindNextAtlasNavigation: false
     };
-    const current = this.guestNavigations.get(guestId);
-    return scheduled.guestId === guestId &&
-      scheduled.navigationKey === navigationKey &&
-      current?.navigationKey === navigationKey;
+    return true;
   }
 
   abandonScheduledReload(recoveryKey: string): void {
     if (this.attempt.status === "scheduled" && this.attempt.recoveryKey === recoveryKey) {
-      this.attempt = {
-        status: "consumed",
-        recoveryKey,
-        bindNextAtlasNavigation: true
-      };
+      this.attempt = { status: "idle" };
     }
   }
 
   isCurrentNavigation(guestId: number, url: string): boolean {
     const current = this.guestNavigations.get(guestId);
     return Boolean(current && isAtlasUrl(url) && current.url === normalizeNavigationUrl(url));
+  }
+
+  canFinishCommittedReload(recoveryKey: string, guestId: number, navigationKey: string): boolean {
+    const current = this.guestNavigations.get(guestId);
+    return this.attempt.status === "consumed" &&
+      this.attempt.recoveryKey === recoveryKey &&
+      this.attempt.targetGuestId === guestId &&
+      this.attempt.targetNavigationKey === navigationKey &&
+      current?.navigationKey === navigationKey;
   }
 
   markAtlasShellReady(guestId: number, url: string): boolean {
@@ -166,6 +178,10 @@ export class AtlasEmptyShellMainRecoveryGuard {
 
   forgetGuest(guestId: number): void {
     this.guestNavigations.delete(guestId);
+    if (this.attempt.status === "scheduled" && this.attempt.guestId === guestId) {
+      this.attempt = { status: "idle" };
+      return;
+    }
     if (this.attempt.status === "consumed" && this.attempt.targetGuestId === guestId) {
       this.attempt = {
         ...this.attempt,

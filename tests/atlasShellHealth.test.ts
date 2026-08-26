@@ -2,9 +2,15 @@ import { describe, expect, it } from "vitest";
 
 import {
   ATLAS_EMPTY_SHELL_MIN_AGE_MS,
+  ATLAS_PERSISTENT_EMPTY_SHELL_MIN_AGE_MS,
+  ATLAS_PERSISTENT_EMPTY_SHELL_RETRY_AGE_MS,
+  ATLAS_SHELL_MONITOR_INTERVAL_MS,
+  ATLAS_SHELL_READY_STABILITY_MS,
   ATLAS_STALLED_SHELL_MIN_AGE_MS,
   assessAtlasShell,
+  atlasShellRecoveryRouteTransition,
   isAtlasAuthSurfaceEvidence,
+  isAtlasShellRecoveryRoute,
   shouldReportAtlasEmptyShell,
   type AtlasShellEvidence
 } from "../src/shared/atlasShellHealth.js";
@@ -38,6 +44,23 @@ describe("RiftAtlas shell health", () => {
     expect(shouldReportAtlasEmptyShell(result, true, false)).toBe(true);
     expect(shouldReportAtlasEmptyShell(result, false, false)).toBe(false);
     expect(shouldReportAtlasEmptyShell(result, true, true)).toBe(false);
+  });
+
+  it("rejects the advert-and-footer-only shell reported by v0.9.60 users", () => {
+    const result = assess({
+      visibleText: "Shop TCGplayer Internationally Get all your cards in one package Shop Now RiftAtlas Convergence #3 Sep 19 Patch Notes Legal Notice Privacy Policy Terms of Service Contact",
+      interactiveText: "Shop Now RiftAtlas Convergence #3 Patch Notes Legal Notice Privacy Policy Terms of Service Contact",
+      interactiveCount: 24,
+      gameSurfaceCount: 1
+    });
+
+    expect(result).toMatchObject({
+      ready: false,
+      routeKind: "lobby",
+      readyReason: "none",
+      lobbyPlayActionCount: 0,
+      lobbyPlaySurfaceCount: 0
+    });
   });
 
   it("requires a real play control instead of accepting a deck-only partial lobby", () => {
@@ -170,6 +193,32 @@ describe("RiftAtlas shell health", () => {
     });
   });
 
+  it("limits automatic recovery to locale-aware lobby and authentication routes", () => {
+    for (const pathname of ["/", "/lobby", "/en", "/en/lobby", "/sign-in", "/zh-CN/sign-up"]) {
+      expect(isAtlasShellRecoveryRoute("play.riftatlas.com", pathname), pathname).toBe(true);
+    }
+    expect(isAtlasShellRecoveryRoute("clerk.riftatlas.com", "/v1/oauth_callback")).toBe(true);
+
+    for (const pathname of ["/decks", "/game/ROOM", "/play/ROOM", "/room/ROOM", "/en/game/ROOM"]) {
+      expect(isAtlasShellRecoveryRoute("play.riftatlas.com", pathname), pathname).toBe(false);
+    }
+  });
+
+  it("re-arms deadlines when an unready SPA returns from a game to the lobby", () => {
+    const leftForGame = atlasShellRecoveryRouteTransition(true, false, false);
+    expect(leftForGame).toEqual({ active: false, entered: false, shouldArmDeadlines: false });
+
+    const returnedBlank = atlasShellRecoveryRouteTransition(leftForGame.active, true, false);
+    expect(returnedBlank).toEqual({ active: true, entered: true, shouldArmDeadlines: true });
+
+    expect(atlasShellRecoveryRouteTransition(false, true, true)).toEqual({
+      active: true,
+      entered: true,
+      shouldArmDeadlines: false
+    });
+    expect(atlasShellRecoveryRouteTransition(true, true, false).shouldArmDeadlines).toBe(false);
+  });
+
   it("accepts a match surface or route-specific waiting room text", () => {
     expect(assess({ pathname: "/game/ROOM-1", gameSurfaceCount: 1 })).toMatchObject({
       ready: true,
@@ -199,8 +248,12 @@ describe("RiftAtlas shell health", () => {
     })).toMatchObject({ ready: false, routeKind: "game", readyReason: "none" });
   });
 
-  it("stages a warning at eight seconds before declaring the shell empty at eighteen", () => {
+  it("stages shell health checks without trusting a transient first render", () => {
     expect(ATLAS_STALLED_SHELL_MIN_AGE_MS).toBe(8_000);
     expect(ATLAS_EMPTY_SHELL_MIN_AGE_MS).toBe(18_000);
+    expect(ATLAS_SHELL_READY_STABILITY_MS).toBe(3_000);
+    expect(ATLAS_SHELL_MONITOR_INTERVAL_MS).toBe(5_000);
+    expect(ATLAS_PERSISTENT_EMPTY_SHELL_MIN_AGE_MS).toBe(60_000);
+    expect(ATLAS_PERSISTENT_EMPTY_SHELL_RETRY_AGE_MS).toBe(120_000);
   });
 });

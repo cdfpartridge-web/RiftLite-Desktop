@@ -595,14 +595,13 @@ const LAB_TRAINING_LEGEND_NAMES = new Set(LAB_TRAINING_LEGEND_NAME_BY_CANONICAL.
 const RELEASE_NOTES = {
   version: APP_VERSION_META,
   title: `RiftLite v${APP_VERSION_META}`,
-  intro: "This release strengthens capture, export, training, and private-hub reliability while the next Insights experience is prepared.",
+  intro: "This focused hotfix makes RiftAtlas recover safely when only its adverts and page frame load but the lobby itself does not.",
   items: [
-    "Insights now shows a Coming Soon preview while its clearer, more visual coaching experience is refined. Match and replay capture continue as normal.",
-    "RiftAtlas capture now uses authoritative match identity, format, and score data while guarding against updated board controls being mistaken for new opponents.",
-    "Match detection is more resilient around RiftAtlas overlays, BO1 lobby returns, and Ivern's Brush battlefield replacement, while deleting a capture now restores game keyboard input correctly.",
-    "Replay video export now validates and safely finalises recordings, reducing tiny or malformed MP4 files and giving clearer failures when source media is incomplete.",
-    "Mulligan Lab and Sideboard Lab now provide more game-like feedback, stronger explanations, and improved training handoff between practice and real match review.",
-    "Legacy private hubs can be claimed through a secure in-app dialog, and replay text annotations now use an accessible editor that preserves their exact replay and voice-note timing."
+    "RiftLite now detects the partial Atlas page where adverts, event rails, and footer links appear but the real lobby and play controls are missing.",
+    "Lobby monitoring continues across Atlas page transitions, including when returning from a match after the page initially loaded correctly.",
+    "Recovery waits through active recording and the post-match continuation window, then retries without interrupting a game or redirecting deck and match pages.",
+    "The automatic repair remains bounded and preserves Atlas sign-in, decks, cookies, and local data.",
+    "Insights remains a Coming Soon preview while normal match and replay evidence capture continues in the background."
   ]
 };
 const RIOT_LEGAL_NOTICE = `RiftLite was created under Riot Games' "Legal Jibber Jabber" policy using assets owned by Riot Games. Riot Games does not endorse or sponsor this project.`;

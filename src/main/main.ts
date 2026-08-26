@@ -7896,7 +7896,12 @@ function handleAtlasShellStatusEvent(sender: WebContents, event: CaptureEvent): 
       const senderStillCurrentAfterRepair = !sender.isDestroyed() &&
         latestAtlasGuest?.id === sender.id &&
         platformFromUrl(sender.getURL()) === "atlas" &&
-        !capture.hasActiveCaptureSession("atlas");
+        !capture.hasActiveCaptureSession("atlas") &&
+        atlasEmptyShellMainRecovery.canFinishCommittedReload(
+          recoveryKey,
+          sender.id,
+          navigationKey
+        );
       if (!senderStillCurrentAfterRepair) {
         return;
       }
