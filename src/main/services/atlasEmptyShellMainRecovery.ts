@@ -147,7 +147,14 @@ export class AtlasEmptyShellMainRecoveryGuard {
       current?.navigationKey === navigationKey;
   }
 
-  markAtlasShellReady(guestId: number, url: string): boolean {
+  /**
+   * Cancels a pending reload once the current Atlas document is usable. A
+   * repair that already ran is only refunded when the lobby itself proves its
+   * launch controls are present. Authentication pages are healthy documents,
+   * but accepting them as a repaired lobby would let an OAuth redirect reopen
+   * the recovery budget before the original failure was actually fixed.
+   */
+  markAtlasShellReady(guestId: number, url: string, provesLobbyReady = false): boolean {
     const current = this.guestNavigations.get(guestId);
     if (!current || !this.isCurrentNavigation(guestId, url)) {
       return false;
@@ -158,6 +165,7 @@ export class AtlasEmptyShellMainRecoveryGuard {
     }
     if (
       this.attempt.status === "consumed" &&
+      provesLobbyReady &&
       this.attempt.targetGuestId === guestId &&
       this.attempt.targetNavigationKey === current.navigationKey
     ) {

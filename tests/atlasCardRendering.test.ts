@@ -11,6 +11,19 @@ describe("Atlas card rendering", () => {
     expect(css).not.toMatch(/(?:transform|zoom)\s*:/);
   });
 
+  it("moves Atlas's named lobby query container above the flex column", () => {
+    const css = atlasCardRenderingCssForUrl("https://play.riftatlas.com/");
+
+    expect(css).toContain(".hub-theme > .contents:has(.lobby-content-column)");
+    expect(css).toContain("display: block !important");
+    expect(css).toContain("min-height: 100dvh !important");
+    expect(css).toContain(".hub-theme .lobby-content-column");
+    expect(css).toContain("container-type: normal !important");
+    expect(css).toContain("container-name: none !important");
+    expect(css).toContain(".hub-theme :has(> .lobby-content-column)");
+    expect(css).toContain("container: lobby-content / inline-size !important");
+  });
+
   it("does not inject the rule into other embedded sites", () => {
     expect(atlasCardRenderingCssForUrl("https://tcg-arena.fr/")).toBe("");
     expect(atlasCardRenderingCssForUrl("https://play.riftatlas.com.evil.example/")).toBe("");

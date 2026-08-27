@@ -5409,10 +5409,15 @@ function App() {
     const atlasShellReadyEvent = captureEvent.platform === "atlas" &&
       captureEvent.kind === "debug" &&
       captureEvent.payload.reason === "atlas-app-shell-ready";
+    const atlasLobbyReadyEvent = atlasShellReadyEvent &&
+      captureEvent.payload.routeKind === "lobby" &&
+      captureEvent.payload.readyReason === "lobby-content";
     if (atlasShellReadyEvent) {
+      setAtlasShellVisibility((current) => updateAtlasShellVisibility(current, "atlas-shell-ready"));
+    }
+    if (atlasLobbyReadyEvent) {
       atlasReloadStormRef.current = initialAtlasReloadStormState();
       atlasEmptyShellAutoRepairRef.current = false;
-      setAtlasShellVisibility((current) => updateAtlasShellVisibility(current, "atlas-shell-ready"));
       setAtlasRecoverySuggested(false);
     }
     const atlasMatchActive = healthRef.current.platform === "atlas" && healthRef.current.state === "match-detected";

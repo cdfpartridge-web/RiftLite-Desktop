@@ -7836,7 +7836,9 @@ function handleAtlasShellStatusEvent(sender: WebContents, event: CaptureEvent): 
     return;
   }
   if (reason === "atlas-app-shell-ready") {
-    atlasEmptyShellMainRecovery.markAtlasShellReady(sender.id, reportedUrl);
+    const provesLobbyReady = event.payload.routeKind === "lobby" &&
+      event.payload.readyReason === "lobby-content";
+    atlasEmptyShellMainRecovery.markAtlasShellReady(sender.id, reportedUrl, provesLobbyReady);
     return;
   }
   if (reason !== "atlas-app-shell-empty") {
@@ -8201,7 +8203,10 @@ async function createWindow(): Promise<void> {
       }
       refreshGuestContext();
     });
-    webContents.on("dom-ready", refreshGuestContext);
+    webContents.on("dom-ready", () => {
+      refreshGuestContext();
+      installAtlasCardRendering();
+    });
     webContents.once("destroyed", () => {
       const wasCurrentAtlasGuest = policy.platform === "atlas"
         && gameWebContentsByPlatform.get("atlas")?.id === webContents.id;
