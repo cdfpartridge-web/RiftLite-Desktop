@@ -51,6 +51,10 @@ import {
   validatedAtlasAuthoritativeMatchSignal,
   type AtlasAuthoritativeMatchSignal
 } from "../shared/atlasAuthoritativeMatch.js";
+import {
+  ATLAS_INVALID_AUTH_SESSION_ERROR_CODE,
+  isAtlasInvalidAuthSessionMessage
+} from "../shared/atlasAuthSession.js";
 
 function trustedGameWebviewPlatform(): GamePlatform {
   const resolved = resolveGameWebviewPlatformIdentity(
@@ -225,6 +229,8 @@ let atlasShellRecoveryRouteActive = false;
 let atlasShellReadyCandidateAt = 0;
 let atlasShellReadyCandidateTimer: number | undefined;
 let atlasShellMutationCheckTimer: number | undefined;
+let atlasInvalidAuthSessionReported = false;
+let atlasInvalidAuthSessionCheckTimer: number | undefined;
 let atlasShellStallTimer: number | undefined;
 let atlasShellEmptyTimer: number | undefined;
 let atlasShellPersistentEmptyTimer: number | undefined;
@@ -2562,6 +2568,50 @@ function shellElementText(element: Element): string {
   ].filter(Boolean).join(" ");
 }
 
+const ATLAS_AUTH_NOTIFICATION_SELECTOR = [
+  "[data-sonner-toast]",
+  "[role='alert']",
+  "[role='status']",
+  "[aria-live='assertive']",
+  "[aria-live='polite']",
+  "[class*='toast' i]"
+].join(", ");
+
+function reportAtlasInvalidAuthSessionIfNeeded(): void {
+  if (platform !== "atlas" || atlasInvalidAuthSessionReported || !document.body) {
+    return;
+  }
+  const notification = Array.from(document.querySelectorAll(ATLAS_AUTH_NOTIFICATION_SELECTOR))
+    .slice(0, 100)
+    .find((element) => {
+      const style = getComputedStyle(element);
+      const bounds = element.getBoundingClientRect();
+      const visible = bounds.width > 0 && bounds.height > 0 &&
+        style.display !== "none" &&
+        style.visibility !== "hidden" &&
+        style.visibility !== "collapse";
+      return visible && isAtlasInvalidAuthSessionMessage(textOf(element));
+    });
+  if (!notification) {
+    return;
+  }
+  atlasInvalidAuthSessionReported = true;
+  send("debug", {
+    reason: "atlas-auth-session-invalid",
+    authErrorCode: ATLAS_INVALID_AUTH_SESSION_ERROR_CODE
+  });
+}
+
+function scheduleAtlasInvalidAuthSessionCheck(): void {
+  if (platform !== "atlas" || atlasInvalidAuthSessionReported || atlasInvalidAuthSessionCheckTimer !== undefined) {
+    return;
+  }
+  atlasInvalidAuthSessionCheckTimer = window.setTimeout(() => {
+    atlasInvalidAuthSessionCheckTimer = undefined;
+    reportAtlasInvalidAuthSessionIfNeeded();
+  }, 50);
+}
+
 function scheduleAtlasShellMutationCheck(): void {
   if (platform !== "atlas") {
     return;
@@ -2858,6 +2908,7 @@ function installDomObserver(): void {
     }
     installAtlasInteractionThrottle();
     const observer = new MutationObserver((mutations) => {
+      scheduleAtlasInvalidAuthSessionCheck();
       scheduleAtlasShellMutationCheck();
       if (platform === "atlas" && atlasInteractionIsQuiet()) {
         const critical = mutations.some((mutation) =>
@@ -2894,6 +2945,7 @@ function installDomObserver(): void {
     sendDebug("capture-ready-debug");
     publishSnapshot("initial");
     if (platform === "atlas") {
+      scheduleAtlasInvalidAuthSessionCheck();
       document.addEventListener("visibilitychange", checkAtlasShellAfterBecomingVisible);
       for (const delay of [250, 750, 1_500, 3_000, 5_000]) {
         window.setTimeout(() => reportAtlasShellStatusIfNeeded("observe"), delay);

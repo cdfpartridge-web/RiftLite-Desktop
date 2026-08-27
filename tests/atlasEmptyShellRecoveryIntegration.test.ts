@@ -179,4 +179,15 @@ describe("Atlas empty-shell recovery integration", () => {
     expect(observerSetup).toContain("ATLAS_SHELL_MONITOR_INTERVAL_MS");
     expect(observerSetup).toContain("window.setInterval(scheduleAtlasShellMutationCheck");
   });
+
+  it("ignores a queued shell-ready event from a replaced webview", () => {
+    const binding = sourceBetween(
+      rendererSource,
+      "return bindGameWebviewEvents(webview, {",
+      "}, [activePlatform, mountedGamePlatform, preloadUrl, gameWebviewEpoch, gameZoom]);"
+    );
+
+    expect(binding).toContain("if (gameRef.current === webview)");
+    expect(binding).toContain("handleWebviewIpc(event)");
+  });
 });

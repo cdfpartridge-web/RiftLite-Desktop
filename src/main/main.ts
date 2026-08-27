@@ -337,6 +337,7 @@ let registeredScreenshotHotkey = "";
 let registeredShadowClipHotkey = "";
 let registeredReplayFlagHotkey = "";
 const gameWebContentsByPlatform = new Map<GamePlatform, WebContents>();
+const atlasClerkSignInRepairByGuest = new Map<number, () => Promise<void>>();
 const embeddedWebviewPolicyBySession = new WeakMap<object, EmbeddedWebviewPolicy>();
 const rawCaptureDebuggerContents = new WeakSet<WebContents>();
 type TcgaReplayResearchRequest = {
@@ -1905,6 +1906,15 @@ function secureGameWebContents(webContents: WebContents, policy: Extract<Embedde
     }
     await repairAtlasClerkSignIn(popup);
   };
+  if (policy.platform === "atlas") {
+    const registeredRepair = () => repairAtlasClerkSignIn();
+    atlasClerkSignInRepairByGuest.set(webContents.id, registeredRepair);
+    webContents.once("destroyed", () => {
+      if (atlasClerkSignInRepairByGuest.get(webContents.id) === registeredRepair) {
+        atlasClerkSignInRepairByGuest.delete(webContents.id);
+      }
+    });
+  }
   installRestrictedEmbeddedPermissions(
     webContents,
     policy,
@@ -7835,6 +7845,22 @@ function handleAtlasShellStatusEvent(sender: WebContents, event: CaptureEvent): 
   ) {
     return;
   }
+  if (reason === "atlas-auth-session-invalid") {
+    if (
+      event.payload.authErrorCode !== "invalid_claims" ||
+      capture.hasActiveCaptureSession("atlas")
+    ) {
+      return;
+    }
+    const repairAtlasSignIn = atlasClerkSignInRepairByGuest.get(sender.id);
+    if (!repairAtlasSignIn) {
+      return;
+    }
+    void repairAtlasSignIn().catch((error) => {
+      void logStartupIssue("Atlas invalid-claims sign-in repair failed", error);
+    });
+    return;
+  }
   if (reason === "atlas-app-shell-ready") {
     const provesLobbyReady = event.payload.routeKind === "lobby" &&
       event.payload.readyReason === "lobby-content";
@@ -8069,11 +8095,18 @@ async function createWindow(): Promise<void> {
     let atlasCardRenderingGeneration = 0;
     let atlasCardRenderingCssKey = "";
     let atlasCardRenderingPendingGeneration: number | null = null;
+    let atlasCardRenderingAttemptCount = 0;
+    let atlasCardRenderingRetryTimer: ReturnType<typeof setTimeout> | undefined;
     let mainNavigationStartedAt = 0;
     const invalidateAtlasCardRendering = () => {
       atlasCardRenderingGeneration += 1;
       atlasCardRenderingCssKey = "";
       atlasCardRenderingPendingGeneration = null;
+      atlasCardRenderingAttemptCount = 0;
+      if (atlasCardRenderingRetryTimer) {
+        clearTimeout(atlasCardRenderingRetryTimer);
+        atlasCardRenderingRetryTimer = undefined;
+      }
     };
     const installAtlasCardRendering = () => {
       if (webContents.isDestroyed()) {
@@ -8085,6 +8118,7 @@ async function createWindow(): Promise<void> {
         return;
       }
       atlasCardRenderingPendingGeneration = generation;
+      atlasCardRenderingAttemptCount += 1;
       void webContents.insertCSS(cardRenderingCss).then((cssKey) => {
         if (
           webContents.isDestroyed() ||
@@ -8099,6 +8133,17 @@ async function createWindow(): Promise<void> {
         atlasCardRenderingCssKey = cssKey;
       }).catch((error) => {
         void logStartupIssue("Atlas card rendering CSS failed", error);
+        if (
+          !webContents.isDestroyed() &&
+          generation === atlasCardRenderingGeneration &&
+          atlasCardRenderingAttemptCount < 3 &&
+          atlasCardRenderingCssForUrl(webContents.getURL())
+        ) {
+          atlasCardRenderingRetryTimer = setTimeout(() => {
+            atlasCardRenderingRetryTimer = undefined;
+            installAtlasCardRendering();
+          }, 150);
+        }
       }).finally(() => {
         if (atlasCardRenderingPendingGeneration === generation) {
           atlasCardRenderingPendingGeneration = null;
@@ -8207,6 +8252,7 @@ async function createWindow(): Promise<void> {
       refreshGuestContext();
       installAtlasCardRendering();
     });
+    installAtlasCardRendering();
     webContents.once("destroyed", () => {
       const wasCurrentAtlasGuest = policy.platform === "atlas"
         && gameWebContentsByPlatform.get("atlas")?.id === webContents.id;

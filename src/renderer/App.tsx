@@ -3961,7 +3961,11 @@ function App() {
       void primeReplayVideoTarget(platform);
     };
     return bindGameWebviewEvents(webview, {
-      onIpcMessage: handleWebviewIpc,
+      onIpcMessage: (event) => {
+        if (gameRef.current === webview) {
+          handleWebviewIpc(event);
+        }
+      },
       onDomReady: presentGame,
       onDidFinishLoad: presentGame,
       onDidNavigate: () => applyGameZoom(),

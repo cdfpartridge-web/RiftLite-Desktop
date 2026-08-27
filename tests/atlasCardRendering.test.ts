@@ -1,5 +1,18 @@
+import { readFileSync } from "node:fs";
+
 import { describe, expect, it } from "vitest";
 import { atlasCardRenderingCssForUrl } from "../src/shared/atlasCardRendering.js";
+
+const mainSource = readFileSync(new URL("../src/main/main.ts", import.meta.url), "utf8");
+
+function sourceBetween(source: string, startMarker: string, endMarker: string): string {
+  const start = source.indexOf(startMarker);
+  const end = source.indexOf(endMarker, start + startMarker.length);
+  if (start < 0 || end < 0) {
+    throw new Error(`Could not find source block between ${startMarker} and ${endMarker}.`);
+  }
+  return source.slice(start, end);
+}
 
 describe("Atlas card rendering", () => {
   it("sharpens only card artwork on low-DPI Atlas boards", () => {
@@ -28,5 +41,19 @@ describe("Atlas card rendering", () => {
     expect(atlasCardRenderingCssForUrl("https://tcg-arena.fr/")).toBe("");
     expect(atlasCardRenderingCssForUrl("https://play.riftatlas.com.evil.example/")).toBe("");
     expect(atlasCardRenderingCssForUrl("not a url")).toBe("");
+  });
+
+  it("retries a rejected compatibility-style insertion without crossing navigations", () => {
+    const lifecycle = sourceBetween(
+      mainSource,
+      "let atlasCardRenderingGeneration = 0",
+      "const reportGuestLifecycle"
+    );
+
+    expect(lifecycle).toContain("atlasCardRenderingAttemptCount < 3");
+    expect(lifecycle).toContain("generation === atlasCardRenderingGeneration");
+    expect(lifecycle).toContain("atlasCardRenderingRetryTimer = setTimeout");
+    expect(lifecycle).toContain("installAtlasCardRendering();");
+    expect(lifecycle).toContain("clearTimeout(atlasCardRenderingRetryTimer)");
   });
 });
