@@ -3829,6 +3829,7 @@ function App() {
         return;
       }
       void (async () => {
+        const forcedAtlasAuthRemount = failure.platform === "atlas" && failure.reason === "authentication-reset";
         const switchStatus = await window.riftlite.getGamePlatformSwitchStatus().catch(() => ({
           allowed: false,
           message: "RiftLite could not verify whether a match is still active."
@@ -3836,7 +3837,7 @@ function App() {
         if (
           !failure.canAutoRemount ||
           !switchStatus.allowed ||
-          gameGuestAutoRecoveryRef.current.has(failure.platform)
+          (!forcedAtlasAuthRemount && gameGuestAutoRecoveryRef.current.has(failure.platform))
         ) {
           showCaptureNotice({
             title: "Game page needs attention",

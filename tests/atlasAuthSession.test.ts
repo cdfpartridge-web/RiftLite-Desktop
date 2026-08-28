@@ -50,11 +50,16 @@ describe("Atlas invalid authentication session recovery", () => {
     expect(detection).not.toContain("document.body.innerText");
   });
 
-  it("routes a current guest signal through the existing bounded Clerk-cookie repair", () => {
+  it("uses a bounded cross-guest recovery: refresh first, targeted sign-in reset second, then stop", () => {
     const security = sourceBetween(
       mainSource,
       "function secureGameWebContents",
       "function secureHomeMediaWebContents"
+    );
+    const roomRecovery = sourceBetween(
+      security,
+      "const recoverAtlasInvalidClaims",
+      "const clearAtlasRootTokenCacheIfNeeded"
     );
     const handler = sourceBetween(
       mainSource,
@@ -62,12 +67,22 @@ describe("Atlas invalid authentication session recovery", () => {
       "async function createWindow"
     );
 
-    expect(security).toContain("atlasClerkSignInRepairByGuest.set(webContents.id, registeredRepair)");
-    expect(security).toContain("atlasClerkSignInRepairByGuest.delete(webContents.id)");
-    expect(security).toContain("clearAtlasClerkAuthCookies(webContents.session)");
+    expect(security).toContain("atlasInvalidClaimsRecoveryByGuest.set(webContents.id, registeredRecovery)");
+    expect(security).toContain("atlasInvalidClaimsRecoveryByGuest.delete(webContents.id)");
+    expect(roomRecovery).toContain("clearAtlasClerkSessionTokenCache(webContents)");
+    expect(roomRecovery).toContain('atlasExplicitRepairUrl(Date.now(), "runtime")');
+    expect(roomRecovery).toContain('recoveryStep === "refresh-token"');
+    expect(roomRecovery).toContain('recoveryStep === "stop"');
+    expect(roomRecovery).toContain('refreshAtlasWebviewRuntime("sign-in")');
+    expect(roomRecovery).not.toContain('refreshAtlasWebviewRuntime("site-data")');
+    expect(roomRecovery).not.toContain("clearAtlasClerkAuthCookies");
+    expect(roomRecovery).not.toContain('atlasExplicitRepairUrl(Date.now(), "sign-in")');
+    expect(security).toContain("atlasInvalidClaimsRecoveryBudget.next()");
+    expect(security).toContain('reason: "authentication-blocked"');
     expect(handler).toContain('reason === "atlas-auth-session-invalid"');
     expect(handler).toContain('event.payload.authErrorCode !== "invalid_claims"');
     expect(handler).toContain('capture.hasActiveCaptureSession("atlas")');
-    expect(handler).toContain("atlasClerkSignInRepairByGuest.get(sender.id)");
+    expect(handler).toContain("atlasInvalidClaimsRecoveryByGuest.get(sender.id)");
+    expect(handler).not.toContain("clearAtlasClerkAuthCookies");
   });
 });

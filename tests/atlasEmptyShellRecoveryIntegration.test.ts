@@ -58,6 +58,11 @@ describe("Atlas empty-shell recovery integration", () => {
   });
 
   it("routes bounded repair modes through progressively stronger cleanup before remounting", () => {
+    const quiesce = sourceBetween(
+      mainSource,
+      "async function quiesceAtlasWebviewGuestForRecovery",
+      "function refreshAtlasWebviewRuntime"
+    );
     const recovery = sourceBetween(
       mainSource,
       "function refreshAtlasWebviewRuntime",
@@ -69,12 +74,21 @@ describe("Atlas empty-shell recovery integration", () => {
       "function refreshGamePresentation"
     );
 
+    expect(quiesce).toContain("guest.stop()");
+    expect(quiesce).toContain("guest.close()");
+    expect(quiesce).toContain('once(guest, "destroyed")');
     expect(recovery).toContain('trigger === "automatic-empty-shell" ? "runtime" : trigger');
+    expect(recovery).toContain('trigger === "automatic-empty-shell"');
+    expect(recovery).toContain("await quiesceAtlasWebviewGuestForRecovery()");
+    expect(recovery.indexOf("await quiesceAtlasWebviewGuestForRecovery()"))
+      .toBeLessThan(recovery.indexOf("electronSession.fromPartition(ATLAS_GAME_PARTITION)"));
     expect(recovery).toContain('mode === "sign-in" || mode === "site-data"');
     expect(recovery).toContain("() => clearAtlasClerkAuthCookies(atlasSession)");
     expect(recovery).toContain('mode === "site-data"');
     expect(recovery).toContain("clearAtlasWebviewSiteData(atlasSession)");
     expect(recovery).toContain("clearAtlasWebviewRuntime(atlasSession)");
+    expect(recovery).toContain("Cookie operations are not cancellable");
+    expect(recovery).not.toContain("return await Promise.race");
     expect(recovery).toContain('"atlas-local-decks"');
     expect(recovery).toContain('"riftlite-replays"');
     expect(rendererRepair).toContain('mode: AtlasWebviewRecoveryMode = "runtime"');
@@ -189,5 +203,17 @@ describe("Atlas empty-shell recovery integration", () => {
 
     expect(binding).toContain("if (gameRef.current === webview)");
     expect(binding).toContain("handleWebviewIpc(event)");
+  });
+
+  it("forces one renderer remount after a targeted Atlas sign-in reset", () => {
+    const failureHandler = sourceBetween(
+      rendererSource,
+      "const offGameWebviewFailure",
+      "return () => {"
+    );
+
+    expect(failureHandler).toContain('failure.reason === "authentication-reset"');
+    expect(failureHandler).toContain("!forcedAtlasAuthRemount && gameGuestAutoRecoveryRef.current.has");
+    expect(failureHandler).toContain("setGameWebviewEpoch((current) => current + 1)");
   });
 });

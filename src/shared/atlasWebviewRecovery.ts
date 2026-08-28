@@ -9,8 +9,8 @@ export function atlasExplicitRepairUrl(
 ): string {
   const safeToken = Number.isFinite(repairToken) ? Math.max(0, Math.trunc(repairToken)) : 0;
   return mode === "runtime"
-    ? `https://play.riftatlas.com/?riftlite_repair=${safeToken}`
-    : `https://play.riftatlas.com/sign-in?redirect_url=%2F&riftlite_repair=${safeToken}`;
+    ? `https://play.riftatlas.com/?recover=lobby&riftlite_repair=${safeToken}`
+    : `https://play.riftatlas.com/sign-in?redirect_url=%2F%3Frecover%3Dlobby&riftlite_repair=${safeToken}`;
 }
 
 export interface AtlasReloadStormState {
@@ -173,12 +173,15 @@ async function cleanupStage(
 ): Promise<void> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    await Promise.race([
-      operation(),
-      new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => reject(new Error(`Timed out after ${timeoutMs} ms.`)), timeoutMs);
-      })
-    ]);
+    // Electron's cache/storage operations cannot be cancelled. Abandoning one
+    // after a Promise.race timeout would let it finish against the newly
+    // mounted guest and recreate the race this recovery is meant to prevent.
+    // Keep the old guest quiesced until the operation really settles, while a
+    // warning records that the stage exceeded its normal budget.
+    timer = setTimeout(() => {
+      result.warnings.push(`${stage}: Still running after ${timeoutMs} ms; waited for safe completion.`);
+    }, timeoutMs);
+    await operation();
     result.completed.push(stage);
   } catch (error) {
     result.warnings.push(cleanupWarning(stage, error));

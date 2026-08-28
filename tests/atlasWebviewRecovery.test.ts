@@ -14,14 +14,14 @@ import {
 describe("Atlas embedded-browser recovery", () => {
   it("uses a unique root-page URL for an explicit repair remount", () => {
     expect(atlasExplicitRepairUrl(1_785_600_000_123)).toBe(
-      "https://play.riftatlas.com/?riftlite_repair=1785600000123"
+      "https://play.riftatlas.com/?recover=lobby&riftlite_repair=1785600000123"
     );
-    expect(atlasExplicitRepairUrl(Number.NaN)).toBe("https://play.riftatlas.com/?riftlite_repair=0");
+    expect(atlasExplicitRepairUrl(Number.NaN)).toBe("https://play.riftatlas.com/?recover=lobby&riftlite_repair=0");
     expect(atlasExplicitRepairUrl(1_785_600_000_123, "sign-in")).toBe(
-      "https://play.riftatlas.com/sign-in?redirect_url=%2F&riftlite_repair=1785600000123"
+      "https://play.riftatlas.com/sign-in?redirect_url=%2F%3Frecover%3Dlobby&riftlite_repair=1785600000123"
     );
     expect(atlasExplicitRepairUrl(1_785_600_000_123, "site-data")).toBe(
-      "https://play.riftatlas.com/sign-in?redirect_url=%2F&riftlite_repair=1785600000123"
+      "https://play.riftatlas.com/sign-in?redirect_url=%2F%3Frecover%3Dlobby&riftlite_repair=1785600000123"
     );
   });
 
@@ -124,11 +124,14 @@ describe("Atlas embedded-browser recovery", () => {
     ]);
   });
 
-  it("times out a stuck runtime stage and still runs the remaining cleanup", async () => {
+  it("waits for a slow runtime stage so it cannot race the replacement guest", async () => {
     vi.useFakeTimers();
     try {
+      let releaseCache!: () => void;
       const session = {
-        clearCache: vi.fn(() => new Promise<void>(() => undefined)),
+        clearCache: vi.fn(() => new Promise<void>((resolve) => {
+          releaseCache = resolve;
+        })),
         closeAllConnections: vi.fn(async () => undefined),
         clearStorageData: vi.fn(async () => undefined),
         flushStorageData: vi.fn()
@@ -136,14 +139,20 @@ describe("Atlas embedded-browser recovery", () => {
 
       const cleanup = clearAtlasWebviewRuntime(session, 25);
       await vi.advanceTimersByTimeAsync(25);
+      expect(session.clearStorageData).not.toHaveBeenCalled();
+      expect(session.closeAllConnections).not.toHaveBeenCalled();
+      releaseCache();
       const result = await cleanup;
 
       expect(result.completed).toEqual([
+        "http-cache",
         "serviceworkers-and-cache-storage",
         "network-connections",
         "storage-flush"
       ]);
-      expect(result.warnings).toEqual(["http-cache: Timed out after 25 ms."]);
+      expect(result.warnings).toEqual([
+        "http-cache: Still running after 25 ms; waited for safe completion."
+      ]);
     } finally {
       vi.useRealTimers();
     }

@@ -55,6 +55,7 @@ import {
   ATLAS_INVALID_AUTH_SESSION_ERROR_CODE,
   isAtlasInvalidAuthSessionMessage
 } from "../shared/atlasAuthSession.js";
+import { atlasLobbyBootstrapRecovery } from "../shared/atlasLobbyBootstrapRecovery.js";
 
 function trustedGameWebviewPlatform(): GamePlatform {
   const resolved = resolveGameWebviewPlatformIdentity(
@@ -68,6 +69,17 @@ function trustedGameWebviewPlatform(): GamePlatform {
 }
 
 const platform = trustedGameWebviewPlatform();
+const atlasLobbyBootstrap = platform === "atlas"
+  ? atlasLobbyBootstrapRecovery(location.href, window.localStorage, window.sessionStorage)
+  : null;
+let atlasLobbyBootstrapNavigationFailed = false;
+if (atlasLobbyBootstrap?.recoveryUrl) {
+  try {
+    history.replaceState(history.state, "", atlasLobbyBootstrap.recoveryUrl);
+  } catch {
+    atlasLobbyBootstrapNavigationFailed = true;
+  }
+}
 const MAX_TEXT = 4000;
 const INTERESTING_URL = /(match|game|live|socket|state|battle|deck|arena|atlas|api)/i;
 const SCORE_KEYS = /(score|scores|point|points|counter|counters|damage|total)/i;
@@ -2942,6 +2954,15 @@ function installDomObserver(): void {
     });
     observer.observe(document.body, { childList: true, subtree: true, characterData: true });
     send("capture-ready", { mode: "dom-observer", host: location.host });
+    if (atlasLobbyBootstrap?.checked) {
+      send("debug", {
+        reason: "atlas-lobby-bootstrap-recovery",
+        recoveryRequested: Boolean(atlasLobbyBootstrap.recoveryUrl),
+        recoverySource: atlasLobbyBootstrap.source,
+        storageReadFailed: atlasLobbyBootstrap.storageReadFailed,
+        navigationFailed: atlasLobbyBootstrapNavigationFailed
+      });
+    }
     sendDebug("capture-ready-debug");
     publishSnapshot("initial");
     if (platform === "atlas") {

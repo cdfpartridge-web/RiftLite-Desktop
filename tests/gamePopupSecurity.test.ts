@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   clearAtlasClerkAuthCookies,
+  clearAtlasClerkSessionTokenCache,
   gamePopupBrowserWindowOptions,
   gamePopupSharesParentSession,
   isAtlasClerkAuthCookie,
@@ -106,7 +107,7 @@ describe("game popup security", () => {
         get: vi.fn().mockResolvedValue([
           { domain: ".clerk.riftatlas.com", name: "__client" },
           { domain: ".riftatlas.com", name: "__client_uat" },
-          { domain: "play.riftatlas.com", name: "__session_Zp57a2iF" },
+          { domain: "play.riftatlas.com", name: "__session_Zp57a2iF", path: "/v1/session" },
           { domain: "play.riftatlas.com", name: "__refresh_Zp57a2iF" },
           { domain: ".clerk.riftatlas.com", name: "__cf_bm" },
           { domain: ".example.com", name: "__client" }
@@ -125,10 +126,16 @@ describe("game popup security", () => {
     expect(remove).toHaveBeenCalledTimes(4);
     expect(remove).toHaveBeenCalledWith("https://clerk.riftatlas.com/", "__client");
     expect(remove).toHaveBeenCalledWith("https://riftatlas.com/", "__client_uat");
-    expect(remove).toHaveBeenCalledWith("https://play.riftatlas.com/", "__session_Zp57a2iF");
+    expect(remove).toHaveBeenCalledWith("https://play.riftatlas.com/v1/session", "__session_Zp57a2iF");
     expect(remove).toHaveBeenCalledWith("https://play.riftatlas.com/", "__refresh_Zp57a2iF");
     expect(flushStorageData).toHaveBeenCalledOnce();
-    expect(closeAllConnections).toHaveBeenCalledOnce();
+    expect(closeAllConnections).toHaveBeenCalledTimes(2);
+    expect(closeAllConnections.mock.invocationCallOrder[0]).toBeLessThan(
+      session.cookies.get.mock.invocationCallOrder[0]!
+    );
+    expect(flushStorageData.mock.invocationCallOrder[0]).toBeLessThan(
+      closeAllConnections.mock.invocationCallOrder[1]!
+    );
   });
 
   it("continues sign-in repair when one targeted cookie cannot be removed", async () => {
@@ -161,6 +168,54 @@ describe("game popup security", () => {
     expect(remove).toHaveBeenCalledWith("https://accounts.riftatlas.com/", "__session_broken");
     expect(remove).toHaveBeenCalledWith("https://play.riftatlas.com/", "__refresh_working");
     expect(flushStorageData).toHaveBeenCalledOnce();
-    expect(closeAllConnections).toHaveBeenCalledOnce();
+    expect(closeAllConnections).toHaveBeenCalledTimes(2);
+  });
+
+  it("still removes Clerk cookies when Electron cannot close or flush the network session", async () => {
+    const remove = vi.fn().mockResolvedValue(undefined);
+    const closeAllConnections = vi.fn().mockRejectedValue(new Error("network service unavailable"));
+    const session = {
+      cookies: {
+        get: vi.fn().mockResolvedValue([
+          { domain: "play.riftatlas.com", name: "__session", path: "/" }
+        ]),
+        remove
+      },
+      flushStorageData: vi.fn(() => { throw new Error("flush unavailable"); }),
+      closeAllConnections
+    };
+
+    await expect(clearAtlasClerkAuthCookies(session as never)).resolves.toEqual({
+      found: 1,
+      removed: 1,
+      failed: 0
+    });
+    expect(remove).toHaveBeenCalledWith("https://play.riftatlas.com/", "__session");
+    expect(closeAllConnections).toHaveBeenCalledTimes(2);
+  });
+
+  it("refreshes only the in-memory Atlas Clerk token without returning it to RiftLite", async () => {
+    const executeJavaScript = vi.fn().mockResolvedValue("cleared");
+    const webContents = {
+      executeJavaScript,
+      isDestroyed: vi.fn().mockReturnValue(false)
+    };
+
+    await expect(clearAtlasClerkSessionTokenCache(webContents as never)).resolves.toBe("cleared");
+    expect(executeJavaScript).toHaveBeenCalledOnce();
+    const script = String(executeJavaScript.mock.calls[0]?.[0] ?? "");
+    expect(script).toContain("clerk.session.clearCache()");
+    expect(script).toContain("clerk.session.getToken({ skipCache: true })");
+    expect(script).not.toContain("__session");
+    expect(script).not.toContain("return refreshed");
+  });
+
+  it("does not execute Atlas token-cache recovery for a destroyed guest", async () => {
+    const executeJavaScript = vi.fn();
+    await expect(clearAtlasClerkSessionTokenCache({
+      executeJavaScript,
+      isDestroyed: () => true
+    } as never)).resolves.toBe("unavailable");
+    expect(executeJavaScript).not.toHaveBeenCalled();
   });
 });

@@ -84,6 +84,8 @@ import {
   atlasAuthoritativeMatchSignalFromState
 } from "../shared/atlasAuthoritativeMatch.js";
 import { atlasCardRenderingCssForUrl } from "../shared/atlasCardRendering.js";
+import { isAtlasRootLandingUrl } from "../shared/atlasCaptureLifecycle.js";
+import { AtlasInvalidClaimsRecoveryBudget } from "../shared/atlasInvalidClaimsRecovery.js";
 import { AtlasKnownOpponentHandTracker } from "../shared/atlasKnownOpponentHand.js";
 import {
   atlasExplicitRepairUrl,
@@ -124,6 +126,7 @@ import {
 } from "../shared/tcgaResearchPageHook.js";
 import {
   clearAtlasClerkAuthCookies,
+  clearAtlasClerkSessionTokenCache,
   gamePopupBrowserWindowOptions,
   gamePopupSharesParentSession,
   isAtlasClerkAuthorizationFailureNavigation,
@@ -337,7 +340,8 @@ let registeredScreenshotHotkey = "";
 let registeredShadowClipHotkey = "";
 let registeredReplayFlagHotkey = "";
 const gameWebContentsByPlatform = new Map<GamePlatform, WebContents>();
-const atlasClerkSignInRepairByGuest = new Map<number, () => Promise<void>>();
+const atlasInvalidClaimsRecoveryByGuest = new Map<number, () => Promise<void>>();
+const atlasInvalidClaimsRecoveryBudget = new AtlasInvalidClaimsRecoveryBudget();
 const embeddedWebviewPolicyBySession = new WeakMap<object, EmbeddedWebviewPolicy>();
 const rawCaptureDebuggerContents = new WeakSet<WebContents>();
 type TcgaReplayResearchRequest = {
@@ -583,6 +587,29 @@ async function runStartupStage<T>(label: string, operation: () => Promise<T> | T
   }
 }
 
+async function quiesceAtlasWebviewGuestForRecovery(timeoutMs = 8_000): Promise<boolean> {
+  const guest = gameWebContentsByPlatform.get("atlas");
+  if (!guest || guest.isDestroyed()) {
+    return false;
+  }
+  const guestId = guest.id;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const destroyed = once(guest, "destroyed");
+  guest.stop();
+  guest.close();
+  try {
+    await Promise.race([
+      destroyed,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(`Atlas guest ${guestId} did not close before recovery.`)), timeoutMs);
+      })
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+  return true;
+}
+
 function refreshAtlasWebviewRuntime(
   trigger: AtlasWebviewRecoveryTrigger
 ): Promise<AtlasWebviewRecoveryResult> {
@@ -598,6 +625,9 @@ function refreshAtlasWebviewRuntime(
     const mode: AtlasWebviewRecoveryMode = trigger === "automatic-empty-shell" ? "runtime" : trigger;
     const warnings: string[] = [];
     try {
+      const guestQuiesced = trigger === "automatic-empty-shell"
+        ? false
+        : await quiesceAtlasWebviewGuestForRecovery();
       const atlasSession = electronSession.fromPartition(ATLAS_GAME_PARTITION);
       const resetAtlasSignIn = mode === "sign-in" || mode === "site-data";
       const authCookies = resetAtlasSignIn
@@ -626,6 +656,7 @@ function refreshAtlasWebviewRuntime(
           trigger,
           mode,
           cleared: [
+            ...(guestQuiesced ? ["atlas-guest-quiesced"] : []),
             ...cleanup.completed,
             ...(authCookies.removed ? ["atlas-clerk-auth-cookies"] : [])
           ],
@@ -695,12 +726,12 @@ async function atlasRecoveryStage<T>(
 ): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    return await Promise.race([
-      operation(),
-      new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs} ms.`)), timeoutMs);
-      })
-    ]);
+    // Cookie operations are not cancellable. Wait for the operation to settle
+    // so it cannot race a replacement Atlas guest after this function returns.
+    timer = setTimeout(() => {
+      warnings.push(`${label}: Still running after ${timeoutMs} ms; waited for safe completion.`.slice(0, 240));
+    }, timeoutMs);
+    return await operation();
   } catch (error) {
     warnings.push(`${label}: ${error instanceof Error ? error.message : String(error)}`.slice(0, 240));
     return fallback;
@@ -1859,31 +1890,120 @@ function reportBlockedGameNavigation(
 
 function secureGameWebContents(webContents: WebContents, policy: Extract<EmbeddedWebviewPolicy, { kind: "game" }>): void {
   let atlasClerkRepairAttempted = false;
+  let atlasInvalidClaimsRecoveryInFlight = false;
+  let atlasRootTokenCacheCleared = false;
+  const requestAtlasAuthRemount = (message: string): void => {
+    const window = mainWindow;
+    if (!window || window.isDestroyed() || window.webContents.isDestroyed()) {
+      return;
+    }
+    window.webContents.send("game-webview:failure", {
+      platform: "atlas",
+      reason: "authentication-reset",
+      message,
+      canAutoRemount: true
+    });
+  };
+  const reportAtlasAuthRecoveryBlocked = (): void => {
+    const window = mainWindow;
+    if (!window || window.isDestroyed() || window.webContents.isDestroyed()) {
+      return;
+    }
+    window.webContents.send("game-webview:failure", {
+      platform: "atlas",
+      reason: "authentication-blocked",
+      message: "Atlas rejected the refreshed session more than once. Automatic recovery stopped to protect your data.",
+      canAutoRemount: false
+    });
+  };
   const repairAtlasClerkSignIn = async (popup?: BrowserWindow): Promise<void> => {
     if (policy.platform !== "atlas" || atlasClerkRepairAttempted) {
       return;
     }
     atlasClerkRepairAttempted = true;
-    const cookieResult = await clearAtlasClerkAuthCookies(webContents.session);
     if (popup && !popup.isDestroyed()) {
       popup.destroy();
     }
-    if (!webContents.isDestroyed()) {
-      await webContents.loadURL("https://play.riftatlas.com/sign-in?redirect_url=%2F");
-    }
+    const recovery = await refreshAtlasWebviewRuntime("sign-in");
     void logStartupIssue(
       "Atlas Clerk sign-in repaired",
-      `Removed ${cookieResult.removed} invalid authentication cookies; ${cookieResult.failed} removals failed.`
+      recovery.ok ? "The rejected Atlas sign-in was isolated and cleared." : recovery.message
+    );
+    requestAtlasAuthRemount(recovery.ok
+      ? "RiftLite refreshed the rejected Atlas sign-in. Sign in again; your Atlas decks and settings were preserved."
+      : "RiftLite restarted Atlas without clearing local data, but its sign-in cleanup did not fully complete. Use Reset Atlas sign-in if the error returns."
     );
     if (mainWindow && !mainWindow.isDestroyed()) {
       await dialog.showMessageBox(mainWindow, {
-        type: "info",
-        title: "RiftAtlas sign-in repaired",
-        message: "RiftAtlas sign-in was reset safely.",
-        detail: "RiftLite removed an invalid RiftAtlas sign-in session. Choose Sign in and try again. Your RiftLite account, matches, decks, and replays were not changed.",
+        type: recovery.ok ? "info" : "warning",
+        title: recovery.ok ? "RiftAtlas sign-in repaired" : "RiftAtlas sign-in needs attention",
+        message: recovery.ok ? "RiftAtlas sign-in was reset safely." : "RiftLite could not finish resetting the RiftAtlas sign-in.",
+        detail: recovery.ok
+          ? "Choose Sign in and try again. Your Atlas local data and all RiftLite account data, matches, decks, and replays were not changed."
+          : "Atlas was restarted without clearing local data. If the error returns, use Reset Atlas sign-in in Settings. Your RiftLite data was not changed.",
         buttons: ["Continue"],
         defaultId: 0
       });
+    }
+  };
+  const recoverAtlasInvalidClaims = async (): Promise<void> => {
+    if (
+      policy.platform !== "atlas" ||
+      atlasInvalidClaimsRecoveryInFlight ||
+      webContents.isDestroyed()
+    ) {
+      return;
+    }
+    atlasInvalidClaimsRecoveryInFlight = true;
+    const recoveryStep = atlasInvalidClaimsRecoveryBudget.next();
+    try {
+      if (recoveryStep === "stop") {
+        reportAtlasAuthRecoveryBlocked();
+        void logStartupIssue("Atlas invalid-claims recovery stopped", "The bounded two-stage recovery budget was exhausted.");
+        return;
+      }
+      if (recoveryStep === "refresh-token") {
+        const tokenCache = await clearAtlasClerkSessionTokenCache(webContents);
+        if (!webContents.isDestroyed()) {
+          await webContents.loadURL(atlasExplicitRepairUrl(Date.now(), "runtime"));
+        }
+        void logStartupIssue(
+          "Atlas room authentication returned to lobby",
+          `Clerk token refresh: ${tokenCache}. Login, decks, preferences, and room recovery were preserved.`
+        );
+        return;
+      }
+
+      // A second rejection means the durable Clerk session itself is no longer
+      // usable. Close the old guest first, clear only Clerk auth cookies and
+      // disposable caches, then let the renderer mount a signed-out Atlas page.
+      // Atlas local storage, decks, identity, and preferences remain intact.
+      const recovery = await refreshAtlasWebviewRuntime("sign-in");
+      void logStartupIssue(
+        "Atlas repeated room authentication reset",
+        recovery.ok ? "Only the rejected Clerk sign-in was reset; Atlas local data was preserved." : recovery.message
+      );
+      requestAtlasAuthRemount(recovery.ok
+        ? "RiftLite refreshed the rejected Atlas sign-in. Sign in again; your Atlas decks and settings were preserved."
+        : "RiftLite restarted Atlas without clearing local data, but its sign-in cleanup did not fully complete. Use Reset Atlas sign-in if the error returns."
+      );
+    } finally {
+      atlasInvalidClaimsRecoveryInFlight = false;
+    }
+  };
+  const clearAtlasRootTokenCacheIfNeeded = async (): Promise<void> => {
+    if (
+      policy.platform !== "atlas" ||
+      atlasRootTokenCacheCleared ||
+      webContents.isDestroyed() ||
+      !isAtlasRootLandingUrl(webContents.getURL())
+    ) {
+      return;
+    }
+    const result = await clearAtlasClerkSessionTokenCache(webContents);
+    atlasRootTokenCacheCleared = result === "cleared";
+    if (result === "failed") {
+      void logStartupIssue("Atlas Clerk token cache refresh failed", diagnosticPageUrl(webContents.getURL()));
     }
   };
   const repairAtlasClerkPageIfNeeded = async (contents: WebContents, popup?: BrowserWindow): Promise<void> => {
@@ -1907,11 +2027,11 @@ function secureGameWebContents(webContents: WebContents, policy: Extract<Embedde
     await repairAtlasClerkSignIn(popup);
   };
   if (policy.platform === "atlas") {
-    const registeredRepair = () => repairAtlasClerkSignIn();
-    atlasClerkSignInRepairByGuest.set(webContents.id, registeredRepair);
+    const registeredRecovery = () => recoverAtlasInvalidClaims();
+    atlasInvalidClaimsRecoveryByGuest.set(webContents.id, registeredRecovery);
     webContents.once("destroyed", () => {
-      if (atlasClerkSignInRepairByGuest.get(webContents.id) === registeredRepair) {
-        atlasClerkSignInRepairByGuest.delete(webContents.id);
+      if (atlasInvalidClaimsRecoveryByGuest.get(webContents.id) === registeredRecovery) {
+        atlasInvalidClaimsRecoveryByGuest.delete(webContents.id);
       }
     });
   }
@@ -1960,6 +2080,7 @@ function secureGameWebContents(webContents: WebContents, policy: Extract<Embedde
   webContents.on("did-finish-load", () => {
     void repairAtlasClerkPageIfNeeded(webContents)
       .catch((error) => logStartupIssue("Atlas Clerk sign-in repair failed", error));
+    void clearAtlasRootTokenCacheIfNeeded();
   });
   const restrictGameNavigation = (event: Electron.Event, url: string) => {
     if (isAllowedGameMainFrameNavigation(policy, url)) {
@@ -7852,12 +7973,12 @@ function handleAtlasShellStatusEvent(sender: WebContents, event: CaptureEvent): 
     ) {
       return;
     }
-    const repairAtlasSignIn = atlasClerkSignInRepairByGuest.get(sender.id);
-    if (!repairAtlasSignIn) {
+    const recoverAtlasRoomAuth = atlasInvalidClaimsRecoveryByGuest.get(sender.id);
+    if (!recoverAtlasRoomAuth) {
       return;
     }
-    void repairAtlasSignIn().catch((error) => {
-      void logStartupIssue("Atlas invalid-claims sign-in repair failed", error);
+    void recoverAtlasRoomAuth().catch((error) => {
+      void logStartupIssue("Atlas invalid-claims lobby recovery failed", error);
     });
     return;
   }
@@ -9276,6 +9397,12 @@ function registerIpc(): void {
     if (!event) {
       throw new Error("Capture event is invalid.");
     }
+    if (event.platform === "atlas" && (
+      event.kind === "match-start" ||
+      (event.kind === "match-snapshot" && event.payload.active === true)
+    )) {
+      atlasInvalidClaimsRecoveryBudget.markHealthy();
+    }
     resetAtlasKnownOpponentHandForCaptureBoundary(event);
     await capture.handleEvent(event);
   });
@@ -9324,6 +9451,12 @@ function registerIpc(): void {
     const event = senderPlatform ? validatedCaptureEvent(value, senderPlatform, isDev) : null;
     if (!event) {
       return;
+    }
+    if (event.platform === "atlas" && (
+      event.kind === "match-start" ||
+      (event.kind === "match-snapshot" && event.payload.active === true)
+    )) {
+      atlasInvalidClaimsRecoveryBudget.markHealthy();
     }
     if (
       event.platform === "tcga" &&
