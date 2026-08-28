@@ -3830,20 +3830,28 @@ function App() {
       }
       void (async () => {
         const forcedAtlasAuthRemount = failure.platform === "atlas" && failure.reason === "authentication-reset";
+        const automaticRemountAllowed = failure.platform !== "atlas" || forcedAtlasAuthRemount;
         const switchStatus = await window.riftlite.getGamePlatformSwitchStatus().catch(() => ({
           allowed: false,
           message: "RiftLite could not verify whether a match is still active."
         }));
         if (
           !failure.canAutoRemount ||
+          !automaticRemountAllowed ||
           !switchStatus.allowed ||
           (!forcedAtlasAuthRemount && gameGuestAutoRecoveryRef.current.has(failure.platform))
         ) {
+          const recoveryGuidance = failure.reason === "authentication-blocked" ||
+            failure.reason === "authentication-refreshed"
+            ? ""
+            : switchStatus.allowed
+              ? "Use Refresh when you are ready."
+              : switchStatus.message;
           showCaptureNotice({
             title: "Game page needs attention",
-            message: `${failure.message} ${switchStatus.allowed ? "Use Refresh when you are ready." : switchStatus.message}`
+            message: `${failure.message}${recoveryGuidance ? ` ${recoveryGuidance}` : ""}`
           }, 8_000);
-          if (failure.platform === "atlas") {
+          if (failure.platform === "atlas" && failure.reason !== "authentication-refreshed") {
             setAtlasRecoverySuggested(true);
           }
           return;
@@ -5425,7 +5433,18 @@ function App() {
       atlasEmptyShellAutoRepairRef.current = false;
       setAtlasRecoverySuggested(false);
     }
-    const atlasMatchActive = healthRef.current.platform === "atlas" && healthRef.current.state === "match-detected";
+    const atlasMatchSignalActive = captureEvent.platform === "atlas" && (
+      captureEvent.kind === "match-start" ||
+      (captureEvent.kind === "match-snapshot" && captureEvent.payload.active === true)
+    );
+    if (atlasMatchSignalActive) {
+      atlasReloadStormRef.current = initialAtlasReloadStormState();
+      atlasEmptyShellAutoRepairRef.current = false;
+      setAtlasRecoverySuggested(false);
+      setAtlasShellVisibility((current) => updateAtlasShellVisibility(current, "atlas-shell-ready"));
+    }
+    const atlasMatchActive = atlasMatchSignalActive ||
+      (healthRef.current.platform === "atlas" && healthRef.current.state === "match-detected");
     const escalateEmptyShell = !atlasMatchActive && shouldEscalateAtlasEmptyShell(
       captureEvent,
       atlasEmptyShellAutoRepairRef.current
@@ -5447,14 +5466,6 @@ function App() {
     void window.riftlite.reportRendererEvent(captureEvent).catch(() => undefined);
     if (escalateEmptyShell) {
       setAtlasShellVisibility((current) => updateAtlasShellVisibility(current, "shell-ready-timeout"));
-      setAtlasRecoverySuggested(true);
-      showActionFeedback(
-        "Atlas still did not start after its runtime refresh. Reset the embedded Atlas sign-in, or open Connection tools for a full reset.",
-        10_000
-      );
-    } else if (autoRepairEmptyShell) {
-      setAtlasShellVisibility((current) => updateAtlasShellVisibility(current, "empty-shell-recovery-started"));
-      showActionFeedback("Atlas did not finish loading its lobby controls. Repairing its embedded runtime and retrying once...", 8_000);
     }
   }
 

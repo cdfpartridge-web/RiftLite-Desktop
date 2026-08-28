@@ -52,22 +52,29 @@ describe("Atlas embedded-browser recovery", () => {
     expect(state).toEqual(initialAtlasReloadStormState());
   });
 
-  it("offers recovery when the Atlas shell loads without its application", () => {
+  it("does not show a repair prompt from an empty-shell observation alone", () => {
     const state = updateAtlasReloadStormState(
       initialAtlasReloadStormState(),
       { kind: "debug", platform: "atlas", payload: { reason: "atlas-app-shell-empty" } },
       5
     );
-    expect(state.suggested).toBe(true);
+    expect(state.suggested).toBe(false);
   });
 
-  it("automatically repairs the first empty Atlas shell only once", () => {
+  it("automatically retries only a persistent empty Atlas shell and only once", () => {
     const emptyShell = { kind: "debug" as const, platform: "atlas" as const, payload: { reason: "atlas-app-shell-empty" } };
-    expect(shouldAutoRepairAtlasEmptyShell(emptyShell, false)).toBe(true);
-    expect(shouldAutoRepairAtlasEmptyShell(emptyShell, true)).toBe(false);
+    const persistentEmptyShell = {
+      kind: "debug" as const,
+      platform: "atlas" as const,
+      payload: { reason: "atlas-app-shell-empty", persistent: true }
+    };
+    expect(shouldAutoRepairAtlasEmptyShell(emptyShell, false)).toBe(false);
+    expect(shouldAutoRepairAtlasEmptyShell(persistentEmptyShell, false)).toBe(true);
+    expect(shouldAutoRepairAtlasEmptyShell(persistentEmptyShell, true)).toBe(false);
     expect(shouldAutoRepairAtlasEmptyShell(atlasEvent("capture-ready"), false)).toBe(false);
     expect(shouldEscalateAtlasEmptyShell(emptyShell, false)).toBe(false);
-    expect(shouldEscalateAtlasEmptyShell(emptyShell, true)).toBe(true);
+    expect(shouldEscalateAtlasEmptyShell(emptyShell, true)).toBe(false);
+    expect(shouldEscalateAtlasEmptyShell(persistentEmptyShell, true)).toBe(true);
     expect(shouldEscalateAtlasEmptyShell(atlasEvent("capture-ready"), true)).toBe(false);
   });
 

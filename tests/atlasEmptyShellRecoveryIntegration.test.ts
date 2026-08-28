@@ -30,31 +30,53 @@ describe("Atlas empty-shell recovery integration", () => {
     expect(shellStatus).toContain("lobbyPlaySurfaceCount: assessment.lobbyPlaySurfaceCount");
   });
 
-  it("keeps the detected guest alive so the main-process repair is not cancelled", () => {
+  it("keeps the Atlas page visible while a persistent retry is evaluated", () => {
     const handler = sourceBetween(
       rendererSource,
       "function handleWebviewIpc",
       "async function primeReplayVideoTarget"
     );
 
-    expect(handler).toContain('updateAtlasShellVisibility(current, "empty-shell-recovery-started")');
+    expect(handler).not.toContain('updateAtlasShellVisibility(current, "empty-shell-recovery-started")');
+    expect(handler).toContain("atlasMatchSignalActive");
     expect(handler).not.toContain("setGameWebviewEpoch");
   });
 
-  it("clears the disposable Atlas runtime before cache-busting the same guest", () => {
+  it("limits automatic recovery to a persistent safe lobby and never clears live Atlas data", () => {
     const handler = sourceBetween(
       mainSource,
       "function handleAtlasShellStatusEvent",
       "async function createWindow"
     );
-    const repairIndex = handler.indexOf('refreshAtlasWebviewRuntime("automatic-empty-shell")');
     const reloadIndex = handler.indexOf("await sender.loadURL(atlasExplicitRepairUrl(Date.now()))");
 
-    expect(repairIndex).toBeGreaterThan(-1);
-    expect(reloadIndex).toBeGreaterThan(repairIndex);
+    expect(handler).toContain("event.payload.persistent !== true");
+    expect(handler).toContain("isAtlasAutomaticRecoveryLobbyUrl");
+    expect(handler).toContain("atlasAutomaticRecoverySafetyFence.isProtected");
+    expect(handler).toContain("capture.getGamePlatformSwitchStatus().allowed");
+    expect(handler).toContain("sender.loadURL(atlasExplicitRepairUrl(Date.now()))");
+    expect(reloadIndex).toBe(-1);
+    expect(handler).not.toContain('refreshAtlasWebviewRuntime("automatic-empty-shell")');
+    expect(handler).not.toContain("clearAtlasWebviewRuntime");
     expect(handler).toContain("atlasEmptyShellMainRecovery.canFinishCommittedReload(");
-    expect(handler.indexOf("atlasEmptyShellMainRecovery.canFinishCommittedReload("))
-      .toBeGreaterThan(repairIndex);
+  });
+
+  it("does not let a DOM-ready lobby report erase realtime matchmaking protection", () => {
+    const handler = sourceBetween(
+      mainSource,
+      "function handleAtlasShellStatusEvent",
+      "async function createWindow"
+    );
+    const readyBranch = sourceBetween(
+      handler,
+      'if (reason === "atlas-app-shell-ready")',
+      'reason !== "atlas-app-shell-empty"'
+    );
+
+    expect(readyBranch).toContain("markAtlasShellReady");
+    expect(readyBranch).not.toContain("atlasAutomaticRecoverySafetyFence.forget");
+    expect(mainSource).toContain('webContents.once("destroyed", () => {');
+    expect(mainSource).toContain("atlasAutomaticRecoverySafetyFence.forget(webContents.id)");
   });
 
   it("routes bounded repair modes through progressively stronger cleanup before remounting", () => {
@@ -77,8 +99,7 @@ describe("Atlas empty-shell recovery integration", () => {
     expect(quiesce).toContain("guest.stop()");
     expect(quiesce).toContain("guest.close()");
     expect(quiesce).toContain('once(guest, "destroyed")');
-    expect(recovery).toContain('trigger === "automatic-empty-shell" ? "runtime" : trigger');
-    expect(recovery).toContain('trigger === "automatic-empty-shell"');
+    expect(recovery).not.toContain('"automatic-empty-shell"');
     expect(recovery).toContain("await quiesceAtlasWebviewGuestForRecovery()");
     expect(recovery.indexOf("await quiesceAtlasWebviewGuestForRecovery()"))
       .toBeLessThan(recovery.indexOf("electronSession.fromPartition(ATLAS_GAME_PARTITION)"));
@@ -107,8 +128,12 @@ describe("Atlas empty-shell recovery integration", () => {
 
     expect(handler).toContain('requestedMode === undefined ? "runtime" : validAtlasWebviewRecoveryMode(requestedMode)');
     expect(handler).toContain('throw new Error("Atlas repair mode is invalid.")');
+    expect(handler).toContain("atlasAutomaticRecoverySafetyFence.isProtected");
+    expect(handler).toContain("Atlas is matchmaking or entering a game");
     expect(handler).toContain("capture.getGamePlatformSwitchStatus()");
     expect(handler).toContain("const result = await refreshAtlasWebviewRuntime(mode)");
+    expect(handler.indexOf("atlasAutomaticRecoverySafetyFence.isProtected"))
+      .toBeLessThan(handler.indexOf("await refreshAtlasWebviewRuntime(mode)"));
     expect(handler).toContain("if (result.ok)");
     expect(handler).toContain("atlasEmptyShellMainRecovery.markExplicitRepairConsumed()");
     expect(handler.indexOf("atlasEmptyShellMainRecovery.markExplicitRepairConsumed()"))
@@ -127,7 +152,7 @@ describe("Atlas empty-shell recovery integration", () => {
     expect(platformEffect).not.toContain("atlasEmptyShellAutoRepairRef.current = false");
   });
 
-  it("warns at eight seconds, repairs at eighteen, and retries after match grace", () => {
+  it("warns at eight seconds, diagnoses at eighteen, and only retries persistent emptiness", () => {
     const deadlineChecks = sourceBetween(
       gamePreloadSource,
       "function scheduleAtlasShellDeadlineChecks",
@@ -215,5 +240,23 @@ describe("Atlas empty-shell recovery integration", () => {
     expect(failureHandler).toContain('failure.reason === "authentication-reset"');
     expect(failureHandler).toContain("!forcedAtlasAuthRemount && gameGuestAutoRecoveryRef.current.has");
     expect(failureHandler).toContain("setGameWebviewEpoch((current) => current + 1)");
+  });
+
+  it("fails closed for generic Atlas load and renderer failures", () => {
+    const lifecycle = sourceBetween(
+      mainSource,
+      'webContents.on("did-fail-load"',
+      'webContents.on("unresponsive"'
+    );
+    const failureHandler = sourceBetween(
+      rendererSource,
+      "const offGameWebviewFailure",
+      "return () => {"
+    );
+
+    expect(lifecycle).toContain('failedPlatform !== "atlas"');
+    expect(lifecycle).toContain('platform !== "atlas"');
+    expect(failureHandler).toContain('failure.platform !== "atlas" || forcedAtlasAuthRemount');
+    expect(failureHandler).toContain("!automaticRemountAllowed");
   });
 });

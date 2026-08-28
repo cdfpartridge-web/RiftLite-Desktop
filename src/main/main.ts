@@ -84,7 +84,6 @@ import {
   atlasAuthoritativeMatchSignalFromState
 } from "../shared/atlasAuthoritativeMatch.js";
 import { atlasCardRenderingCssForUrl } from "../shared/atlasCardRendering.js";
-import { isAtlasRootLandingUrl } from "../shared/atlasCaptureLifecycle.js";
 import { AtlasInvalidClaimsRecoveryBudget } from "../shared/atlasInvalidClaimsRecovery.js";
 import { AtlasKnownOpponentHandTracker } from "../shared/atlasKnownOpponentHand.js";
 import {
@@ -132,6 +131,11 @@ import {
   isAtlasClerkAuthorizationFailureNavigation,
   isAtlasClerkAuthorizationInvalidPage
 } from "./services/gamePopupSecurity.js";
+import {
+  AtlasAutomaticRecoverySafetyFence,
+  canStartAtlasAutomaticRecovery,
+  isAtlasAutomaticRecoveryLobbyUrl
+} from "./services/atlasAutomaticRecoverySafetyFence.js";
 import {
   isReplayMediaFilename,
   matchingMissingReplayIdForMedia,
@@ -342,6 +346,7 @@ let registeredReplayFlagHotkey = "";
 const gameWebContentsByPlatform = new Map<GamePlatform, WebContents>();
 const atlasInvalidClaimsRecoveryByGuest = new Map<number, () => Promise<void>>();
 const atlasInvalidClaimsRecoveryBudget = new AtlasInvalidClaimsRecoveryBudget();
+const atlasAutomaticRecoverySafetyFence = new AtlasAutomaticRecoverySafetyFence();
 const embeddedWebviewPolicyBySession = new WeakMap<object, EmbeddedWebviewPolicy>();
 const rawCaptureDebuggerContents = new WeakSet<WebContents>();
 type TcgaReplayResearchRequest = {
@@ -405,14 +410,15 @@ let replayVideoDisplayTarget: ReplayVideoDisplayTarget | null = null;
 let rawCaptureUploadRetryTimer: ReturnType<typeof setInterval> | null = null;
 let tcgaResearchQuitFinalizationStarted = false;
 let tcgaResearchQuitAllowed = false;
-type AtlasWebviewRecoveryTrigger = "automatic-empty-shell" | AtlasWebviewRecoveryMode;
+type AtlasWebviewRecoveryTrigger = AtlasWebviewRecoveryMode;
 let atlasWebviewRecoveryInFlight: Promise<AtlasWebviewRecoveryResult> | null = null;
 let atlasWebviewRecoveryActiveTrigger: AtlasWebviewRecoveryTrigger | null = null;
 let atlasConnectionDiagnostics = emptyAtlasConnectionDiagnostics();
 const atlasRecentResourceFailures: AtlasResourceFailureDiagnostic[] = [];
 let atlasSessionDiagnosticsInstalled = false;
 const atlasEmptyShellMainRecovery = new AtlasEmptyShellMainRecoveryGuard();
-const ATLAS_EMPTY_SHELL_MAIN_RELOAD_DELAY_MS = 500;
+const ATLAS_EMPTY_SHELL_MAIN_RELOAD_DELAY_MS = 5_000;
+const ATLAS_INVALID_CLAIMS_RECOVERY_DELAY_MS = 5_000;
 
 const accountCloudSyncQueue = new AccountCloudSyncQueue(
   async (reason) => {
@@ -622,12 +628,10 @@ function refreshAtlasWebviewRuntime(
   atlasWebviewRecoveryActiveTrigger = trigger;
   const capturedAt = new Date().toISOString();
   atlasWebviewRecoveryInFlight = (async () => {
-    const mode: AtlasWebviewRecoveryMode = trigger === "automatic-empty-shell" ? "runtime" : trigger;
+    const mode = trigger;
     const warnings: string[] = [];
     try {
-      const guestQuiesced = trigger === "automatic-empty-shell"
-        ? false
-        : await quiesceAtlasWebviewGuestForRecovery();
+      const guestQuiesced = await quiesceAtlasWebviewGuestForRecovery();
       const atlasSession = electronSession.fromPartition(ATLAS_GAME_PARTITION);
       const resetAtlasSignIn = mode === "sign-in" || mode === "site-data";
       const authCookies = resetAtlasSignIn
@@ -1891,7 +1895,36 @@ function reportBlockedGameNavigation(
 function secureGameWebContents(webContents: WebContents, policy: Extract<EmbeddedWebviewPolicy, { kind: "game" }>): void {
   let atlasClerkRepairAttempted = false;
   let atlasInvalidClaimsRecoveryInFlight = false;
-  let atlasRootTokenCacheCleared = false;
+  const atlasGuestRecoverySafe = (
+    requireLobby: boolean,
+    expectedNavigationUrl = "",
+    respectGameEntryFence = true
+  ): boolean => {
+    if (policy.platform !== "atlas" || webContents.isDestroyed()) {
+      return false;
+    }
+    const currentAtlasGuest = gameWebContentsByPlatform.get("atlas");
+    const currentUrl = webContents.getURL();
+    const protectedByGameEntry = respectGameEntryFence &&
+      atlasAutomaticRecoverySafetyFence.isProtected(webContents.id, currentUrl);
+    const platformSwitchAllowed = capture.getGamePlatformSwitchStatus().allowed;
+    if (!requireLobby) {
+      return currentAtlasGuest?.id === webContents.id &&
+        !protectedByGameEntry &&
+        platformSwitchAllowed;
+    }
+    return canStartAtlasAutomaticRecovery({
+      targetGuestId: webContents.id,
+      currentGuestId: currentAtlasGuest?.id ?? null,
+      currentUrl,
+      navigationCurrent: !expectedNavigationUrl || atlasEmptyShellMainRecovery.isCurrentNavigation(
+        webContents.id,
+        expectedNavigationUrl
+      ),
+      platformSwitchAllowed,
+      protectedByGameEntry
+    });
+  };
   const requestAtlasAuthRemount = (message: string): void => {
     const window = mainWindow;
     if (!window || window.isDestroyed() || window.webContents.isDestroyed()) {
@@ -1912,12 +1945,16 @@ function secureGameWebContents(webContents: WebContents, policy: Extract<Embedde
     window.webContents.send("game-webview:failure", {
       platform: "atlas",
       reason: "authentication-blocked",
-      message: "Atlas rejected the refreshed session more than once. Automatic recovery stopped to protect your data.",
+      message: "Atlas rejected the refreshed session again. Use Reset Atlas sign-in in Settings when no match is active; your Atlas decks and RiftLite data will be kept.",
       canAutoRemount: false
     });
   };
   const repairAtlasClerkSignIn = async (popup?: BrowserWindow): Promise<void> => {
-    if (policy.platform !== "atlas" || atlasClerkRepairAttempted) {
+    if (atlasClerkRepairAttempted || !atlasGuestRecoverySafe(false)) {
+      void logStartupIssue(
+        "Atlas Clerk sign-in repair deferred",
+        "Automatic sign-in repair was blocked while Atlas was entering or recording a game."
+      );
       return;
     }
     atlasClerkRepairAttempted = true;
@@ -1947,63 +1984,48 @@ function secureGameWebContents(webContents: WebContents, policy: Extract<Embedde
     }
   };
   const recoverAtlasInvalidClaims = async (): Promise<void> => {
+    const recoveryNavigationUrl = webContents.isDestroyed() ? "" : webContents.getURL();
     if (
-      policy.platform !== "atlas" ||
       atlasInvalidClaimsRecoveryInFlight ||
-      webContents.isDestroyed()
+      !atlasGuestRecoverySafe(true, recoveryNavigationUrl)
     ) {
       return;
     }
     atlasInvalidClaimsRecoveryInFlight = true;
-    const recoveryStep = atlasInvalidClaimsRecoveryBudget.next();
     try {
-      if (recoveryStep === "stop") {
+      const recoveryStep = atlasInvalidClaimsRecoveryBudget.next();
+      if (recoveryStep !== "refresh-token") {
         reportAtlasAuthRecoveryBlocked();
-        void logStartupIssue("Atlas invalid-claims recovery stopped", "The bounded two-stage recovery budget was exhausted.");
-        return;
-      }
-      if (recoveryStep === "refresh-token") {
-        const tokenCache = await clearAtlasClerkSessionTokenCache(webContents);
-        if (!webContents.isDestroyed()) {
-          await webContents.loadURL(atlasExplicitRepairUrl(Date.now(), "runtime"));
-        }
         void logStartupIssue(
-          "Atlas room authentication returned to lobby",
-          `Clerk token refresh: ${tokenCache}. Login, decks, preferences, and room recovery were preserved.`
+          "Atlas invalid-claims recovery stopped",
+          "Automatic sign-in reset was not started. The user can run the targeted Reset Atlas sign-in action when ready."
         );
         return;
       }
 
-      // A second rejection means the durable Clerk session itself is no longer
-      // usable. Close the old guest first, clear only Clerk auth cookies and
-      // disposable caches, then let the renderer mount a signed-out Atlas page.
-      // Atlas local storage, decks, identity, and preferences remain intact.
-      const recovery = await refreshAtlasWebviewRuntime("sign-in");
+      const tokenCache = await clearAtlasClerkSessionTokenCache(webContents);
+      if (!atlasGuestRecoverySafe(true, recoveryNavigationUrl)) {
+        void logStartupIssue(
+          "Atlas invalid-claims token refresh completed without navigation",
+          "Atlas entered a protected route or match state while the token was refreshing."
+        );
+        return;
+      }
       void logStartupIssue(
-        "Atlas repeated room authentication reset",
-        recovery.ok ? "Only the rejected Clerk sign-in was reset; Atlas local data was preserved." : recovery.message
+        "Atlas invalid-claims token refreshed",
+        `Clerk token refresh: ${tokenCache}. No page navigation, guest restart, or site-data reset was performed.`
       );
-      requestAtlasAuthRemount(recovery.ok
-        ? "RiftLite refreshed the rejected Atlas sign-in. Sign in again; your Atlas decks and settings were preserved."
-        : "RiftLite restarted Atlas without clearing local data, but its sign-in cleanup did not fully complete. Use Reset Atlas sign-in if the error returns."
-      );
+      const window = mainWindow;
+      if (window && !window.isDestroyed() && !window.webContents.isDestroyed()) {
+        window.webContents.send("game-webview:failure", {
+          platform: "atlas",
+          reason: "authentication-refreshed",
+          message: "RiftLite refreshed the rejected Atlas session token. Retry the match action; no Atlas data was reset.",
+          canAutoRemount: false
+        });
+      }
     } finally {
       atlasInvalidClaimsRecoveryInFlight = false;
-    }
-  };
-  const clearAtlasRootTokenCacheIfNeeded = async (): Promise<void> => {
-    if (
-      policy.platform !== "atlas" ||
-      atlasRootTokenCacheCleared ||
-      webContents.isDestroyed() ||
-      !isAtlasRootLandingUrl(webContents.getURL())
-    ) {
-      return;
-    }
-    const result = await clearAtlasClerkSessionTokenCache(webContents);
-    atlasRootTokenCacheCleared = result === "cleared";
-    if (result === "failed") {
-      void logStartupIssue("Atlas Clerk token cache refresh failed", diagnosticPageUrl(webContents.getURL()));
     }
   };
   const repairAtlasClerkPageIfNeeded = async (contents: WebContents, popup?: BrowserWindow): Promise<void> => {
@@ -2080,7 +2102,6 @@ function secureGameWebContents(webContents: WebContents, policy: Extract<Embedde
   webContents.on("did-finish-load", () => {
     void repairAtlasClerkPageIfNeeded(webContents)
       .catch((error) => logStartupIssue("Atlas Clerk sign-in repair failed", error));
-    void clearAtlasRootTokenCacheIfNeeded();
   });
   const restrictGameNavigation = (event: Electron.Event, url: string) => {
     if (isAllowedGameMainFrameNavigation(policy, url)) {
@@ -2416,6 +2437,11 @@ function ingestAtlasRawFrame(
   bridgeBattlefieldSeat = false,
   authoritativeMatchTracker?: AtlasAuthoritativeMatchTracker
 ): void {
+  atlasAutomaticRecoverySafetyFence.observeRealtimeFrame(
+    webContents.id,
+    frame.requestUrl,
+    frame.frame.raw
+  );
   const authoritativeMatchState = bridgeBattlefieldSeat
     ? authoritativeMatchTracker?.observeFrame(frame) ?? null
     : null;
@@ -7969,7 +7995,8 @@ function handleAtlasShellStatusEvent(sender: WebContents, event: CaptureEvent): 
   if (reason === "atlas-auth-session-invalid") {
     if (
       event.payload.authErrorCode !== "invalid_claims" ||
-      capture.hasActiveCaptureSession("atlas")
+      capture.hasActiveCaptureSession("atlas") ||
+      !isAtlasAutomaticRecoveryLobbyUrl(senderUrl)
     ) {
       return;
     }
@@ -7977,18 +8004,44 @@ function handleAtlasShellStatusEvent(sender: WebContents, event: CaptureEvent): 
     if (!recoverAtlasRoomAuth) {
       return;
     }
-    void recoverAtlasRoomAuth().catch((error) => {
-      void logStartupIssue("Atlas invalid-claims lobby recovery failed", error);
-    });
+    setTimeout(() => {
+      const currentAtlasGuest = gameWebContentsByPlatform.get("atlas");
+      const currentUrl = sender.isDestroyed() ? "" : sender.getURL();
+      const recoveryStillSafe = !sender.isDestroyed() && canStartAtlasAutomaticRecovery({
+        targetGuestId: sender.id,
+        currentGuestId: currentAtlasGuest?.id ?? null,
+        currentUrl,
+        navigationCurrent: atlasEmptyShellMainRecovery.isCurrentNavigation(sender.id, reportedUrl),
+        protectedByGameEntry: atlasAutomaticRecoverySafetyFence.isProtected(sender.id, currentUrl),
+        platformSwitchAllowed: capture.getGamePlatformSwitchStatus().allowed
+      });
+      if (!recoveryStillSafe) {
+        return;
+      }
+      void recoverAtlasRoomAuth().catch((error) => {
+        void logStartupIssue("Atlas invalid-claims lobby recovery failed", error);
+      });
+    }, ATLAS_INVALID_CLAIMS_RECOVERY_DELAY_MS);
     return;
   }
   if (reason === "atlas-app-shell-ready") {
     const provesLobbyReady = event.payload.routeKind === "lobby" &&
       event.payload.readyReason === "lobby-content";
     atlasEmptyShellMainRecovery.markAtlasShellReady(sender.id, reportedUrl, provesLobbyReady);
+    // DOM readiness is not authoritative evidence that matchmaking ended. Atlas
+    // can briefly render lobby controls after its realtime transport has already
+    // accepted start/searching, so keep that protection until its lease expires
+    // (or until the guest itself is destroyed).
     return;
   }
-  if (reason !== "atlas-app-shell-empty") {
+  if (
+    reason !== "atlas-app-shell-empty" ||
+    event.payload.persistent !== true ||
+    event.payload.routeKind !== "lobby" ||
+    !isAtlasAutomaticRecoveryLobbyUrl(senderUrl) ||
+    atlasAutomaticRecoverySafetyFence.isProtected(sender.id, senderUrl) ||
+    !capture.getGamePlatformSwitchStatus().allowed
+  ) {
     return;
   }
 
@@ -8004,10 +8057,16 @@ function handleAtlasShellStatusEvent(sender: WebContents, event: CaptureEvent): 
   const { navigationKey, recoveryKey } = decision;
   setTimeout(() => {
     const currentAtlasGuest = gameWebContentsByPlatform.get("atlas");
-    const senderStillCurrent = !sender.isDestroyed() &&
-      currentAtlasGuest?.id === sender.id &&
-      platformFromUrl(sender.getURL()) === "atlas";
-    if (capture.hasActiveCaptureSession("atlas") || !senderStillCurrent) {
+    const currentUrl = sender.isDestroyed() ? "" : sender.getURL();
+    const senderStillSafe = !sender.isDestroyed() && canStartAtlasAutomaticRecovery({
+      targetGuestId: sender.id,
+      currentGuestId: currentAtlasGuest?.id ?? null,
+      currentUrl,
+      navigationCurrent: atlasEmptyShellMainRecovery.isCurrentNavigation(sender.id, reportedUrl),
+      protectedByGameEntry: atlasAutomaticRecoverySafetyFence.isProtected(sender.id, currentUrl),
+      platformSwitchAllowed: capture.getGamePlatformSwitchStatus().allowed
+    });
+    if (!senderStillSafe) {
       atlasEmptyShellMainRecovery.abandonScheduledReload(recoveryKey);
       return;
     }
@@ -8016,7 +8075,7 @@ function handleAtlasShellStatusEvent(sender: WebContents, event: CaptureEvent): 
     }
 
     const capturedAt = new Date().toISOString();
-    const url = diagnosticPageUrl(sender.getURL());
+    const url = diagnosticPageUrl(currentUrl);
     void capture.handleEvent({
       id: `atlas-app-shell-main-reload-${Date.now()}-${randomUUID()}`,
       platform: "atlas",
@@ -8028,7 +8087,9 @@ function handleAtlasShellStatusEvent(sender: WebContents, event: CaptureEvent): 
         navigationKey,
         recoveryKey,
         delayMs: ATLAS_EMPTY_SHELL_MAIN_RELOAD_DELAY_MS,
-        cacheBustedNavigation: true
+        cacheBustedNavigation: true,
+        persistentOnly: true,
+        dataCleanup: false
       }
     });
     void logStartupIssue("Atlas empty shell main fail-safe reload", JSON.stringify({
@@ -8036,30 +8097,25 @@ function handleAtlasShellStatusEvent(sender: WebContents, event: CaptureEvent): 
       recoveryKey,
       url
     }));
-    void (async () => {
-      const recovery = await refreshAtlasWebviewRuntime("automatic-empty-shell");
-      if (!recovery.ok) {
-        void logStartupIssue("Atlas empty shell automatic runtime repair failed", recovery.message);
-      }
-      const latestAtlasGuest = gameWebContentsByPlatform.get("atlas");
-      const senderStillCurrentAfterRepair = !sender.isDestroyed() &&
-        latestAtlasGuest?.id === sender.id &&
-        platformFromUrl(sender.getURL()) === "atlas" &&
-        !capture.hasActiveCaptureSession("atlas") &&
-        atlasEmptyShellMainRecovery.canFinishCommittedReload(
-          recoveryKey,
-          sender.id,
-          navigationKey
-        );
-      if (!senderStillCurrentAfterRepair) {
-        return;
-      }
-      try {
-        await sender.loadURL(atlasExplicitRepairUrl(Date.now()));
-      } catch (error) {
-        void logStartupIssue("Atlas empty shell main fail-safe reload failed", error);
-      }
-    })();
+    const finalUrl = sender.isDestroyed() ? "" : sender.getURL();
+    const canNavigateWithoutTouchingAtlasData = !sender.isDestroyed() && canStartAtlasAutomaticRecovery({
+      targetGuestId: sender.id,
+      currentGuestId: gameWebContentsByPlatform.get("atlas")?.id ?? null,
+      currentUrl: finalUrl,
+      navigationCurrent: atlasEmptyShellMainRecovery.canFinishCommittedReload(
+        recoveryKey,
+        sender.id,
+        navigationKey
+      ),
+      protectedByGameEntry: atlasAutomaticRecoverySafetyFence.isProtected(sender.id, finalUrl),
+      platformSwitchAllowed: capture.getGamePlatformSwitchStatus().allowed
+    });
+    if (!canNavigateWithoutTouchingAtlasData) {
+      return;
+    }
+    void sender.loadURL(atlasExplicitRepairUrl(Date.now())).catch((error) => {
+      void logStartupIssue("Atlas empty shell main fail-safe reload failed", error);
+    });
   }, ATLAS_EMPTY_SHELL_MAIN_RELOAD_DELAY_MS);
 }
 
@@ -8359,7 +8415,13 @@ async function createWindow(): Promise<void> {
       reportGuestLifecycle("guest-main-load-failed", payload, validatedURL);
       void logStartupIssue("guest main load failed", JSON.stringify({ ...payload, url: diagnosticPageUrl(validatedURL) }));
       if (errorCode !== -3) {
-        notifyGuestFailure("load-failed", `The embedded game page failed to load (${errorDescription || errorCode}).`, true, validatedURL);
+        const failedPlatform = platformFromUrl(validatedURL || webContents.getURL()) ?? policy.platform;
+        notifyGuestFailure(
+          "load-failed",
+          `The embedded game page failed to load (${errorDescription || errorCode}).`,
+          failedPlatform !== "atlas",
+          validatedURL
+        );
       }
     });
     webContents.on("did-navigate", refreshGuestContext);
@@ -8381,6 +8443,7 @@ async function createWindow(): Promise<void> {
       rawCaptureIngressLimiter.forget(webContents.id);
       forgetGameWebContents(webContents);
       atlasEmptyShellMainRecovery.forgetGuest(webContents.id);
+      atlasAutomaticRecoverySafetyFence.forget(webContents.id);
       if (wasCurrentAtlasGuest && atlasKnownOpponentHandTracker.reset()) {
         publishAtlasKnownOpponentHandState();
       }
@@ -8395,7 +8458,11 @@ async function createWindow(): Promise<void> {
         url: webContents.getURL()
       };
       void logStartupIssue("guest render process gone", JSON.stringify(payload));
-      notifyGuestFailure("render-process-gone", "The embedded game page stopped unexpectedly.", true);
+      notifyGuestFailure(
+        "render-process-gone",
+        "The embedded game page stopped unexpectedly.",
+        platform !== "atlas"
+      );
       if (platform) {
         void capture.handleEvent({
           id: `guest-render-process-gone-${Date.now()}`,
@@ -9367,6 +9434,19 @@ function registerIpc(): void {
     const mode = requestedMode === undefined ? "runtime" : validAtlasWebviewRecoveryMode(requestedMode);
     if (!mode) {
       throw new Error("Atlas repair mode is invalid.");
+    }
+    const atlasGuest = gameWebContentsByPlatform.get("atlas");
+    const atlasGuestUrl = atlasGuest && !atlasGuest.isDestroyed() ? atlasGuest.getURL() : "";
+    if (
+      atlasGuest &&
+      !atlasGuest.isDestroyed() &&
+      atlasAutomaticRecoverySafetyFence.isProtected(atlasGuest.id, atlasGuestUrl)
+    ) {
+      return {
+        ok: false,
+        mode,
+        message: "Atlas is matchmaking or entering a game. Cancel or finish that game before running repair."
+      };
     }
     const switchStatus = capture.getGamePlatformSwitchStatus();
     if (!switchStatus.allowed) {

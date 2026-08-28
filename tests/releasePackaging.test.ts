@@ -24,7 +24,7 @@ describe("release packaging continuity", () => {
       };
     };
 
-    expect(manifest.version).toBe("0.9.64");
+    expect(manifest.version).toBe("0.9.65");
     expect(manifest.devDependencies["electron-builder"]).toBe("26.15.3");
     expect(manifest.build.toolsets.nsis).toBe("1.2.1");
     expect(manifest.build).toMatchObject({

@@ -42,10 +42,9 @@ export function updateAtlasReloadStormState(
   if (event.kind === "capture-ready") {
     captureReadyAt.push(now);
   }
-  const emptyShellDetected = event.kind === "debug" && event.payload.reason === "atlas-app-shell-empty";
   return {
     captureReadyAt,
-    suggested: current.suggested || emptyShellDetected || captureReadyAt.length >= ATLAS_RELOAD_STORM_THRESHOLD
+    suggested: current.suggested || captureReadyAt.length >= ATLAS_RELOAD_STORM_THRESHOLD
   };
 }
 
@@ -56,7 +55,8 @@ export function shouldAutoRepairAtlasEmptyShell(
   return !alreadyRepaired &&
     event.platform === "atlas" &&
     event.kind === "debug" &&
-    event.payload.reason === "atlas-app-shell-empty";
+    event.payload.reason === "atlas-app-shell-empty" &&
+    event.payload.persistent === true;
 }
 
 export function shouldEscalateAtlasEmptyShell(
@@ -66,7 +66,8 @@ export function shouldEscalateAtlasEmptyShell(
   return runtimeRepairAttempted &&
     event.platform === "atlas" &&
     event.kind === "debug" &&
-    event.payload.reason === "atlas-app-shell-empty";
+    event.payload.reason === "atlas-app-shell-empty" &&
+    event.payload.persistent === true;
 }
 
 export interface AtlasWebviewStorageSession {

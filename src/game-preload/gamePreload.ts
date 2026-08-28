@@ -2590,7 +2590,11 @@ const ATLAS_AUTH_NOTIFICATION_SELECTOR = [
 ].join(", ");
 
 function reportAtlasInvalidAuthSessionIfNeeded(): void {
-  if (platform !== "atlas" || atlasInvalidAuthSessionReported || !document.body) {
+  if (platform !== "atlas" || !document.body) {
+    return;
+  }
+  if (!isAtlasShellRecoveryRoute(location.hostname, location.pathname)) {
+    atlasInvalidAuthSessionReported = false;
     return;
   }
   const notification = Array.from(document.querySelectorAll(ATLAS_AUTH_NOTIFICATION_SELECTOR))
@@ -2605,6 +2609,10 @@ function reportAtlasInvalidAuthSessionIfNeeded(): void {
       return visible && isAtlasInvalidAuthSessionMessage(textOf(element));
     });
   if (!notification) {
+    atlasInvalidAuthSessionReported = false;
+    return;
+  }
+  if (atlasInvalidAuthSessionReported) {
     return;
   }
   atlasInvalidAuthSessionReported = true;
@@ -2615,7 +2623,7 @@ function reportAtlasInvalidAuthSessionIfNeeded(): void {
 }
 
 function scheduleAtlasInvalidAuthSessionCheck(): void {
-  if (platform !== "atlas" || atlasInvalidAuthSessionReported || atlasInvalidAuthSessionCheckTimer !== undefined) {
+  if (platform !== "atlas" || atlasInvalidAuthSessionCheckTimer !== undefined) {
     return;
   }
   atlasInvalidAuthSessionCheckTimer = window.setTimeout(() => {
