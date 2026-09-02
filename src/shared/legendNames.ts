@@ -111,6 +111,8 @@ const LEGEND_ALIAS_MAP: Record<string, string> = {
   "newly awakened": "Mel",
   "soul's reflection": "Mel",
   "wuju bladesman": MASTER_YI_WUJU_BLADESMAN,
+  "wuju bladesmen": MASTER_YI_WUJU_BLADESMAN,
+  "master yi, wuju bladesmen": MASTER_YI_WUJU_BLADESMAN,
   "wuju master": MASTER_YI_WUJU_MASTER,
   "wuji master": MASTER_YI_WUJU_MASTER,
   "unstoppable": "Master Yi",
@@ -166,7 +168,7 @@ export function normalizeLegendName(value: unknown): string {
 
   const lower = cleaned.toLowerCase();
   if (lower.startsWith("master yi")) {
-    if (lower.includes("wuju bladesman")) {
+    if (lower.includes("wuju bladesman") || lower.includes("wuju bladesmen")) {
       return MASTER_YI_WUJU_BLADESMAN;
     }
     if (lower.includes("wuji master") || lower.includes("wuju master")) {

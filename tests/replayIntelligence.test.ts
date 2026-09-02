@@ -119,6 +119,33 @@ describe("Replay Intelligence", () => {
     expect(result.summary.limitations.join(" ")).toContain("visible state changes");
   });
 
+  it("preserves inferred evidence carried by a structured Atlas log event", () => {
+    const atlasReplay = replay("atlas");
+    atlasReplay.structuredEvents = [
+      structuredEvent("harnessed-dragon", 169, "play", {
+        side: "system",
+        text: "Played Harnessed Dragon from hand to base.",
+        cardName: "Harnessed Dragon",
+        fromZone: "hand",
+        toZone: "base",
+        actionId: "insight:raw-authoritative",
+        evidence: { source: "game-log", confidence: "inferred", complete: false }
+      })
+    ];
+
+    const result = buildReplayIntelligence(atlasReplay);
+
+    expect(result.events[0]).toMatchObject({
+      id: "harnessed-dragon",
+      source: "game-log",
+      confidence: "inferred",
+      evidence: { source: "game-log", confidence: "inferred", complete: false }
+    });
+    expect(result.events[0]?.confidenceReason).toContain("context was incomplete and inferred");
+    expect(result.summary.coverage.inferred).toBe(1);
+    expect(result.summary.coverage.confirmed).toBe(0);
+  });
+
   it("applies a manual correction without changing captured source evidence", () => {
     const source = replay();
     const correction: ReplayIntelligenceCorrection = {

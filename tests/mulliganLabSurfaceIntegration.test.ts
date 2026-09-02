@@ -6,6 +6,7 @@ const projectRoot = path.resolve(import.meta.dirname, "..");
 const appSource = fs.readFileSync(path.join(projectRoot, "src/renderer/App.tsx"), "utf8");
 const stylesSource = fs.readFileSync(path.join(projectRoot, "src/renderer/styles/app.css"), "utf8");
 const introSource = fs.readFileSync(path.join(projectRoot, "src/renderer/MulliganLabIntro.tsx"), "utf8");
+const catalogSource = fs.readFileSync(path.join(projectRoot, "src/renderer/insightCardCatalog.ts"), "utf8");
 
 const labStart = appSource.indexOf("function MulliganLabView");
 const labEnd = appSource.indexOf("function MatchupLabView", labStart);
@@ -22,7 +23,8 @@ describe("Mulligan Lab desktop surface", () => {
   });
 
   it("keeps every visible card identity and image on the packaged registry path", () => {
-    expect(appSource).toContain("buildMulliganLabRegistry(cardRegistryData)");
+    expect(appSource).toContain("const MULLIGAN_LAB_REGISTRY = INSIGHT_CARD_REGISTRY");
+    expect(catalogSource).toContain("buildMulliganLabRegistry(cardRegistryData)");
     expect(labSource).toContain("card.imageUrl");
     expect(labSource).not.toContain("card.cardCode");
     expect(labSource).not.toContain("legendImageUrl(");

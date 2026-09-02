@@ -645,10 +645,27 @@ describe("RiftLiteStore database recovery", () => {
           myChampionCode: "UNL-226*",
           opponentChampionCode: "VEN-194",
           myBattlefieldCode: "VEN-157",
-          opponentBattlefieldCode: "UNL-218"
+          opponentBattlefieldCode: "UNL-218",
+          rows: [
+            {
+              key: "riftlite-log:g1:semantic:1:played-card",
+              text: "20:35Played Harnessed Dragon from hand to base.",
+              observedAt: "2026-07-18T22:00:53.321Z"
+            },
+            {
+              key: "riftlite-log:g1:semantic:2:invalid-time",
+              text: "20:36Invalid timestamp row.",
+              observedAt: "not-a-timestamp"
+            }
+          ]
         }
       };
-      const expectedCodes = identityEvent.payload;
+      const expectedCodes = {
+        myChampionCode: "UNL-226*",
+        opponentChampionCode: "VEN-194",
+        myBattlefieldCode: "VEN-157",
+        opponentBattlefieldCode: "UNL-218"
+      };
       const pendingMatch: MatchDraft = {
         ...savedMatch("identity-match"),
         status: "pending-review",
@@ -669,6 +686,18 @@ describe("RiftLiteStore database recovery", () => {
 
       expect(storedMatch.rawEvidence[0]?.payload).toMatchObject(expectedCodes);
       expect(storedReplay.events[0]?.payload).toMatchObject(expectedCodes);
+      expect(storedMatch.rawEvidence[0]?.payload.rows).toEqual([
+        {
+          key: "riftlite-log:g1:semantic:1:played-card",
+          text: "20:35Played Harnessed Dragon from hand to base.",
+          observedAt: "2026-07-18T22:00:53.321Z"
+        },
+        {
+          key: "riftlite-log:g1:semantic:2:invalid-time",
+          text: "20:36Invalid timestamp row."
+        }
+      ]);
+      expect(storedReplay.events[0]?.payload.rows).toEqual(storedMatch.rawEvidence[0]?.payload.rows);
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

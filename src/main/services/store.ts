@@ -3,7 +3,7 @@ import { copyFile, mkdir, readFile, readdir, rename, stat, unlink, writeFile } f
 import { existsSync, renameSync } from "node:fs";
 import { createRequire } from "node:module";
 import { randomUUID } from "node:crypto";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import initSqlJs, { type Database, type SqlJsStatic } from "sql.js";
 import { deckNotebookWithCurrentVersion, deckSnapshotHash, emptyDeckNotebook, normalizeDeckNotebook, sanitizeDeckNotebookForDeck } from "../../shared/deckNotebook.js";
@@ -45,6 +45,9 @@ export interface StorePerformanceEvent {
 const require = createRequire(import.meta.url);
 const DATABASE_BACKUP_RETENTION = 10;
 const DATABASE_BACKUP_MIN_INTERVAL_MS = 5 * 60 * 1000;
+const REPLAY_PAYLOAD_FILE_PATTERN = /^[a-f0-9]{20}-[a-f0-9]{64}\.json\.gz$/;
+const ENHANCED_INSIGHTS_CLEAR_CUTOFF_METADATA_KEY = "enhanced-insights-clear-cutoff-v1";
+const UUID_FILE_PART_PATTERN = "[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}";
 const LEGACY_IMPORT_METADATA_KEY = "legacy-import-fingerprint-v1";
 const STORED_PAYLOAD_MIGRATION_METADATA_KEY = "stored-payload-migration-version";
 const STORED_PAYLOAD_MIGRATION_VERSION = "1";
@@ -82,6 +85,9 @@ const DEFAULT_SETTINGS: UserSettings = {
   anonymousInstallCreatedAt: "",
   anonymousUsageLastHeartbeatAt: "",
   anonymousUsageLastHeartbeatVersion: "",
+  enhancedInsightsEnabled: false,
+  enhancedInsightsIntroSeen: false,
+  enhancedInsightsPostGamePromptEnabled: true,
   debugMode: false,
   confirmationEnabled: true,
   replayCaptureEnabled: true,
@@ -364,6 +370,7 @@ export class RiftLiteStore {
   private databaseOperationQueue: Promise<void> = Promise.resolve();
   private databaseMutationVersion = 0;
   private restoreInProgress = false;
+  private readonly activeDatabaseStagingPaths = new Set<string>();
   private settingsMutationQueue: Promise<void> = Promise.resolve();
   private legacyJsonPendingFinalization = false;
   private readonly replayPayloadStore: ReplayPayloadStore;
@@ -605,8 +612,11 @@ export class RiftLiteStore {
 
   async saveMatch(draft: MatchDraft): Promise<MatchDraft> {
     const now = new Date().toISOString();
-    const next = compactMatchForStorage(normalizeStoredMatch({ ...draft, updatedAt: now }));
     return this.enqueueAtomicDatabaseMutation("save-match", (db) => {
+      const next = compactMatchForStorage(applyEnhancedInsightsClearCutoffToMatch(
+        db,
+        normalizeStoredMatch({ ...draft, updatedAt: now })
+      ));
       db.run(
         `INSERT OR REPLACE INTO matches
          (id, platform, status, result, captured_at, updated_at, data_json)
@@ -680,9 +690,12 @@ export class RiftLiteStore {
       }
 
       const now = new Date().toISOString();
-      const next = compactMatchForStorage(normalizeStoredMatch(current
-        ? mergeDeferredReviewFields(current, draft, now)
-        : { ...draft, updatedAt: now }));
+      const next = compactMatchForStorage(applyEnhancedInsightsClearCutoffToMatch(
+        db,
+        normalizeStoredMatch(current
+          ? mergeDeferredReviewFields(current, draft, now)
+          : { ...draft, updatedAt: now })
+      ));
       db.run(
         `INSERT OR REPLACE INTO matches
          (id, platform, status, result, captured_at, updated_at, data_json)
@@ -798,11 +811,14 @@ export class RiftLiteStore {
         return;
       }
       const now = new Date().toISOString();
-      const match = compactMatchForStorage(normalizeStoredMatch({
-        ...(current ?? fallbackDraft!),
-        deletedAt: now,
-        updatedAt: now
-      }));
+      const match = compactMatchForStorage(applyEnhancedInsightsClearCutoffToMatch(
+        db,
+        normalizeStoredMatch({
+          ...(current ?? fallbackDraft!),
+          deletedAt: now,
+          updatedAt: now
+        })
+      ));
       // Capture deliberately opens a review even when its first local write
       // fails. INSERT OR REPLACE lets an explicit Delete capture action create
       // the recycle-bin tombstone from that in-memory review, and safely
@@ -1052,17 +1068,73 @@ export class RiftLiteStore {
   }
 
   async saveReplay(replay: ReplayRecord): Promise<ReplayRecord> {
-    const next = compactReplayForStorage(replayWithIntelligence(replay));
-    const prepared = await this.replayPayloadStore.prepare(next);
-    return this.enqueueAtomicDatabaseMutation("save-replay", (db) => {
+    const committed = await this.enqueueAtomicDatabaseMutation("save-replay", async (db) => {
+      const next = compactReplayForStorage(replayWithIntelligence(
+        applyEnhancedInsightsClearCutoffToReplay(db, replay)
+      ));
+      const prepared = await this.replayPayloadStore.prepare(next);
+      const previousRaw = db.exec("SELECT data_json FROM replays WHERE id=?", [next.id])[0]?.values[0]?.[0];
+      const previousStored = this.parseStoredReplayMetadata(previousRaw);
+      const previousReference = previousStored ? replayPayloadReference(previousStored) : null;
       db.run(
         `INSERT OR REPLACE INTO replays
          (id, match_id, platform, captured_at, data_json)
          VALUES (?, ?, ?, ?, ?)`,
         [next.id, next.matchId, next.platform, next.capturedAt, JSON.stringify(prepared.stored)]
       );
-      return next;
+      return { replay: next, previousReference, reference: prepared.reference };
     }, { invalidateReplays: true });
+    if (committed.previousReference && committed.previousReference.fileName !== committed.reference.fileName) {
+      await this.replayPayloadStore.remove(committed.previousReference);
+    }
+    return committed.replay;
+  }
+
+  async clearEnhancedInsightsData(): Promise<{ matchesUpdated: number; replaysUpdated: number }> {
+    const matches = await this.readAllMatches();
+    const replays = await this.readAllReplays();
+    const enhancedMatchIds = new Set(matches.filter((match) => Boolean(match.insightContext)).map((match) => match.id));
+    let matchesUpdated = 0;
+    let replaysUpdated = 0;
+
+    for (const match of matches) {
+      if (!match.insightContext) {
+        continue;
+      }
+      await this.saveMatch(withoutEnhancedInsightsMatchData(match));
+      matchesUpdated += 1;
+    }
+
+    for (const replay of replays) {
+      if (!replayHasEnhancedInsightsData(replay) && !enhancedMatchIds.has(replay.matchId)) {
+        continue;
+      }
+      const clearedReplay = withoutEnhancedInsightsReplayData(replay);
+      try {
+        await this.saveReplay(clearedReplay);
+      } catch (error) {
+        // saveReplay commits the replacement before unlinking its old immutable
+        // payload. If that unlink alone fails, keep clearing the remaining rows;
+        // the unreferenced-payload sweep below retries it from durable state.
+        const persisted = (await this.readAllReplays()).find((candidate) => candidate.id === replay.id);
+        if (!persisted || !enhancedReplayDataIsCleared(persisted)) {
+          throw error;
+        }
+      }
+      replaysUpdated += 1;
+    }
+
+    const clearedAt = new Date().toISOString();
+    await this.enqueueAtomicDatabaseMutation("record-enhanced-insights-clear-cutoff", (db) => {
+      const previous = enhancedInsightsClearCutoff(db);
+      const next = Math.max(previous, Date.parse(clearedAt));
+      db.run(
+        "INSERT OR REPLACE INTO store_metadata (key, value, updated_at) VALUES (?, ?, ?)",
+        [ENHANCED_INSIGHTS_CLEAR_CUTOFF_METADATA_KEY, new Date(next).toISOString(), Date.now()]
+      );
+    });
+    await this.replaceRecoveryBackupsAfterEnhancedInsightsClear();
+    return { matchesUpdated, replaysUpdated };
   }
 
   /** Saves sync state only while the latest persisted match is still active. */
@@ -1151,9 +1223,10 @@ export class RiftLiteStore {
    * leave an orphaned replay behind.
    */
   async saveReplayIfMatchActive(replay: ReplayRecord): Promise<ReplayRecord | null> {
-    const next = compactReplayForStorage(replayWithIntelligence(replay));
-    const prepared = await this.replayPayloadStore.prepare(next);
-    return this.enqueueAtomicDatabaseMutation("save-replay-if-match-active", (db) => {
+    return this.enqueueAtomicDatabaseMutation("save-replay-if-match-active", async (db) => {
+      const next = compactReplayForStorage(replayWithIntelligence(
+        applyEnhancedInsightsClearCutoffToReplay(db, replay)
+      ));
       const purged = db.exec("SELECT 1 FROM replay_purge_tombstones WHERE replay_id=?", [next.id])[0]?.values[0]?.[0];
       if (purged) {
         return null;
@@ -1168,6 +1241,7 @@ export class RiftLiteStore {
       if (!match || match.deletedAt) {
         return null;
       }
+      const prepared = await this.replayPayloadStore.prepare(next);
       db.run(
         `INSERT OR REPLACE INTO replays
          (id, match_id, platform, captured_at, data_json)
@@ -1249,7 +1323,7 @@ export class RiftLiteStore {
       if (!parent || parent.deletedAt) {
         return null;
       }
-      const candidate = update(current);
+      const candidate = applyEnhancedInsightsClearCutoffToReplay(db, update(current));
       const payloadUnchanged = replayPayloadFieldsShareIdentity(current, candidate);
       const next = compactReplayForStorage(replayWithIntelligence({
         ...candidate,
@@ -1276,7 +1350,7 @@ export class RiftLiteStore {
         return null;
       }
       const current = await this.hydrateStoredReplay(stored);
-      const candidate = update(current);
+      const candidate = applyEnhancedInsightsClearCutoffToReplay(db, update(current));
       const payloadUnchanged = replayPayloadFieldsShareIdentity(current, candidate);
       const next = compactReplayForStorage(replayWithIntelligence({
         ...candidate,
@@ -1510,7 +1584,10 @@ export class RiftLiteStore {
 
       const matches = [...(backup.matches ?? []), ...(backup.deletedMatches ?? [])];
       for (const match of matches) {
-        const next = compactMatchForStorage(normalizeStoredMatch(match));
+        const next = compactMatchForStorage(applyEnhancedInsightsClearCutoffToMatch(
+          candidateDb,
+          normalizeStoredMatch(match)
+        ));
         candidateDb.run(
           `INSERT OR REPLACE INTO matches
            (id, platform, status, result, captured_at, updated_at, data_json)
@@ -1561,7 +1638,9 @@ export class RiftLiteStore {
       if (!options.preserveReplays) {
         const replays = [...(backup.replays ?? []), ...(backup.deletedReplays ?? [])];
         for (const replay of replays) {
-          const next = compactReplayForStorage(replayWithIntelligence(replay));
+          const next = compactReplayForStorage(replayWithIntelligence(
+            applyEnhancedInsightsClearCutoffToReplay(candidateDb, replay)
+          ));
           const prepared = await this.replayPayloadStore.prepare(next);
           candidateDb.run(
             `INSERT OR REPLACE INTO replays
@@ -1582,6 +1661,7 @@ export class RiftLiteStore {
       // saves are free to continue and will advance databaseMutationVersion.
       const stagedDatabase = candidateDb;
       let stagedCandidatePath = await this.stageDatabaseFile(stagedDatabase);
+      const stagedCandidateOriginalPath = stagedCandidatePath;
       try {
         await this.enqueueDatabaseOperation(async () => {
           // Drain every disk write queued while the candidate was built. The
@@ -1616,6 +1696,7 @@ export class RiftLiteStore {
         if (stagedCandidatePath) {
           await unlink(stagedCandidatePath).catch(() => undefined);
         }
+        this.activeDatabaseStagingPaths.delete(stagedCandidateOriginalPath);
       }
     } catch (error) {
       candidateDb?.close();
@@ -2199,6 +2280,8 @@ export class RiftLiteStore {
     } catch (error) {
       await unlink(tempPath).catch(() => undefined);
       throw error;
+    } finally {
+      this.activeDatabaseStagingPaths.delete(tempPath);
     }
   }
 
@@ -2209,8 +2292,14 @@ export class RiftLiteStore {
   private async stageDatabaseBytes(bytes: Uint8Array): Promise<string> {
     await mkdir(dirname(this.dbPath), { recursive: true });
     const tempPath = `${this.dbPath}.tmp-${process.pid}-${Date.now()}-${randomUUID()}`;
-    await writeFile(tempPath, Buffer.from(bytes));
-    return tempPath;
+    this.activeDatabaseStagingPaths.add(tempPath);
+    try {
+      await writeFile(tempPath, Buffer.from(bytes));
+      return tempPath;
+    } catch (error) {
+      this.activeDatabaseStagingPaths.delete(tempPath);
+      throw error;
+    }
   }
 
   private async withDatabaseRepair<T>(context: string, action: () => Promise<T>): Promise<T> {
@@ -2404,6 +2493,59 @@ export class RiftLiteStore {
     const files = await this.listAutoBackupFiles();
     for (const file of files.sort((a, b) => b.mtimeMs - a.mtimeMs).slice(DATABASE_BACKUP_RETENTION)) {
       await unlink(file.path).catch(() => undefined);
+    }
+  }
+
+  private async replaceRecoveryBackupsAfterEnhancedInsightsClear(): Promise<void> {
+    for (const file of await this.listRecoveryBackupCandidates()) {
+      await unlink(file.path);
+    }
+    await this.removeUnreferencedReplayPayloads();
+    await this.replayPayloadStore.removeTemporaryFiles();
+    await this.removeDatabaseStagingTemporaryFiles();
+    this.lastDatabaseBackupAt = 0;
+    await this.createLastKnownGoodBackup("post-insights-clear", true);
+  }
+
+  private async removeDatabaseStagingTemporaryFiles(): Promise<void> {
+    const directory = dirname(this.dbPath);
+    if (!existsSync(directory)) {
+      return;
+    }
+    const filePattern = new RegExp(
+      `^${escapeRegularExpression(basename(this.dbPath))}\\.tmp-\\d+-\\d+-${UUID_FILE_PART_PATTERN}$`
+    );
+    const entries = await readdir(directory, { withFileTypes: true });
+    for (const entry of entries) {
+      const path = join(directory, entry.name);
+      if (entry.isFile() && filePattern.test(entry.name) && !this.activeDatabaseStagingPaths.has(path)) {
+        await unlink(path);
+      }
+    }
+  }
+
+  private async removeUnreferencedReplayPayloads(): Promise<void> {
+    const referencedFiles = await this.enqueueDatabaseRead("list-replay-payload-references", (db) => {
+      const rows = db.exec("SELECT data_json FROM replays")[0]?.values ?? [];
+      return new Set(rows.flatMap((row) => {
+        const stored = this.parseStoredReplayMetadata(row[0]);
+        const reference = stored ? replayPayloadReference(stored) : null;
+        return reference ? [reference.fileName] : [];
+      }));
+    });
+    const directory = join(dirname(this.dbPath), "replay-payloads");
+    if (!existsSync(directory)) {
+      return;
+    }
+    const entries = await readdir(directory, { withFileTypes: true });
+    for (const entry of entries) {
+      if (
+        entry.isFile()
+        && REPLAY_PAYLOAD_FILE_PATTERN.test(entry.name)
+        && !referencedFiles.has(entry.name)
+      ) {
+        await unlink(join(directory, entry.name));
+      }
     }
   }
 
@@ -2613,6 +2755,7 @@ function mergeDeferredReviewFields(current: MatchDraft, draft: MatchDraft, updat
     deckSnapshotJson: draft.deckSnapshotJson,
     flags: draft.flags,
     notes: draft.notes,
+    insightContext: draft.insightContext ?? current.insightContext,
     games: draft.games,
     keepReplay: draft.keepReplay,
     testingSessionId: draft.testingSessionId ?? current.testingSessionId,
@@ -2674,6 +2817,82 @@ function compactReplayForStorage(replay: ReplayRecord): ReplayRecord {
     video: compactReplayVideoAsset(replay.video),
     matchSnapshot: replay.matchSnapshot ? compactMatchForStorage(replay.matchSnapshot) : undefined
   };
+}
+
+function enhancedInsightsClearCutoff(db: Database): number {
+  const raw = db.exec(
+    "SELECT value FROM store_metadata WHERE key=?",
+    [ENHANCED_INSIGHTS_CLEAR_CUTOFF_METADATA_KEY]
+  )[0]?.values[0]?.[0];
+  const parsed = typeof raw === "string" ? Date.parse(raw) : Number.NaN;
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function capturedAfterEnhancedInsightsClear(capturedAt: string, cutoff: number): boolean {
+  const captured = Date.parse(capturedAt);
+  return Number.isFinite(captured) && captured > cutoff;
+}
+
+function withoutEnhancedInsightsMatchData(match: MatchDraft): MatchDraft {
+  const { insightContext: _insightContext, ...withoutInsightContext } = match;
+  return { ...withoutInsightContext, rawEvidence: [] } as MatchDraft;
+}
+
+function applyEnhancedInsightsClearCutoffToMatch(db: Database, match: MatchDraft): MatchDraft {
+  const cutoff = enhancedInsightsClearCutoff(db);
+  if (!cutoff || !match.insightContext || capturedAfterEnhancedInsightsClear(match.capturedAt, cutoff)) {
+    return match;
+  }
+  return withoutEnhancedInsightsMatchData(match);
+}
+
+function replayHasEnhancedInsightsData(replay: ReplayRecord): boolean {
+  return Boolean(
+    replay.enhancedInsights
+    || replay.matchSnapshot?.insightContext
+    || (replay.flags ?? []).some((flag) => flag.id.startsWith("enhanced-insight-"))
+  );
+}
+
+function withoutEnhancedInsightsReplayData(replay: ReplayRecord): ReplayRecord {
+  const {
+    enhancedInsights: _enhancedInsights,
+    intelligence: _enhancedIntelligence,
+    ...withoutEnhancedMarker
+  } = replay;
+  const matchSnapshot = withoutEnhancedMarker.matchSnapshot
+    ? withoutEnhancedInsightsMatchData(withoutEnhancedMarker.matchSnapshot)
+    : undefined;
+  return {
+    ...withoutEnhancedMarker,
+    ...(matchSnapshot ? { matchSnapshot } : {}),
+    events: [],
+    structuredEvents: [],
+    flags: (withoutEnhancedMarker.flags ?? []).filter((flag) => !flag.id.startsWith("enhanced-insight-"))
+  };
+}
+
+function applyEnhancedInsightsClearCutoffToReplay(db: Database, replay: ReplayRecord): ReplayRecord {
+  const cutoff = enhancedInsightsClearCutoff(db);
+  if (!cutoff || !replayHasEnhancedInsightsData(replay) || capturedAfterEnhancedInsightsClear(replay.capturedAt, cutoff)) {
+    return replay;
+  }
+  return withoutEnhancedInsightsReplayData(replay);
+}
+
+function enhancedReplayDataIsCleared(replay: ReplayRecord): boolean {
+  return !replay.enhancedInsights
+    && !replay.matchSnapshot?.insightContext
+    && !(replay.matchSnapshot?.rawEvidence?.length)
+    && !(replay.events?.length)
+    && !(replay.structuredEvents?.length)
+    && !(replay.flags ?? []).some((flag) => flag.id.startsWith("enhanced-insight-"))
+    && !(replay.intelligence?.corrections.length)
+    && !(replay.intelligence?.moments.length);
+}
+
+function escapeRegularExpression(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function compactReplayVideoAsset(video: ReplayRecord["video"]): ReplayRecord["video"] {
@@ -2771,9 +2990,11 @@ function compactCapturePayload(payload: Record<string, unknown> = {}): Record<st
   if (Array.isArray(payload.rows)) {
     compact.rows = payload.rows.slice(-12).map((row) => {
       const record = row && typeof row === "object" && !Array.isArray(row) ? row as Record<string, unknown> : {};
+      const observedAt = compactStoredObservedAt(record.observedAt);
       return {
         key: truncateStoredValue(record.key, 80),
-        text: truncateStoredValue(record.text, 200)
+        text: truncateStoredValue(record.text, 200),
+        ...(observedAt ? { observedAt } : {})
       };
     });
   }
@@ -2822,6 +3043,14 @@ function truncateStoredValue(value: unknown, limit: number): string {
 function isDatabaseMalformedError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return /database disk image is malformed|database corruption|malformed database|file is not a database/i.test(message);
+}
+
+function compactStoredObservedAt(value: unknown): string {
+  if (typeof value !== "string" || value.length > 64) {
+    return "";
+  }
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString().slice(0, 40) : "";
 }
 
 function isSqlJsRuntimeFailure(error: unknown): boolean {

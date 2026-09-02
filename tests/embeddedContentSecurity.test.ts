@@ -5,7 +5,9 @@ import {
   isAllowedEmbeddedNavigation,
   isAllowedGameMainFrameNavigation,
   isAllowedGamePopupNavigation,
+  isAllowedRulesWebviewNavigation,
   isSecurePopupNavigation,
+  RIFTLITE_RULES_WEBVIEW_PARTITION,
   sameWebFrameIdentity
 } from "../src/shared/embeddedContentSecurity.js";
 
@@ -96,6 +98,32 @@ describe("embedded content security", () => {
       "https://www.riftlite.com/replays/embed?embed=1",
       "persist:other"
     )).toBeNull();
+  });
+
+  it("isolates RiftJudge rules search to its exact HTTPS origin and partition", () => {
+    const rules = embeddedWebviewPolicy(
+      "https://app.riftjudge.com/?q=overwhelm",
+      RIFTLITE_RULES_WEBVIEW_PARTITION
+    );
+    expect(rules).toEqual({ kind: "rules" });
+    expect(rules && isAllowedEmbeddedNavigation(
+      rules,
+      "https://app.riftjudge.com/questions/12406"
+    )).toBe(true);
+    expect(isAllowedRulesWebviewNavigation("https://app.riftjudge.com/help")).toBe(true);
+
+    expect(embeddedWebviewPolicy(
+      "https://app.riftjudge.com/",
+      "persist:attacker-controlled"
+    )).toBeNull();
+    expect(isAllowedRulesWebviewNavigation("http://app.riftjudge.com/")).toBe(false);
+    expect(isAllowedRulesWebviewNavigation("https://app.riftjudge.com:8443/")).toBe(false);
+    expect(isAllowedRulesWebviewNavigation("https://app.riftjudge.com.evil.example/")).toBe(false);
+    expect(isAllowedRulesWebviewNavigation("https://riftjudge.com/")).toBe(false);
+    expect(rules && isAllowedEmbeddedNavigation(
+      rules,
+      "https://discord.com/oauth2/authorize"
+    )).toBe(false);
   });
 
   it("permits only default-port HTTPS or blank popup navigation", () => {

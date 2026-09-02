@@ -9,19 +9,25 @@ import {
 
 const mainSource = readFileSync(new URL("../src/main/main.ts", import.meta.url), "utf8");
 
-function fakeWindow(options: { empty?: boolean; destroyed?: boolean } = {}) {
+function fakeWindow(options: { empty?: boolean; emptyCaptures?: number; destroyed?: boolean } = {}) {
   const png = Buffer.from("png-bytes");
-  const capturePage = vi.fn(async () => ({
-    isEmpty: () => options.empty === true,
-    toPNG: () => options.empty ? Buffer.alloc(0) : png
-  }));
+  let captureCount = 0;
+  const capturePage = vi.fn(async () => {
+    captureCount += 1;
+    const empty = options.empty === true || captureCount <= (options.emptyCaptures ?? 0);
+    return {
+      isEmpty: () => empty,
+      toPNG: () => empty ? Buffer.alloc(0) : png
+    };
+  });
   const loadURL = vi.fn(async () => undefined);
+  const invalidate = vi.fn();
   const rasterWindow: ReplayMp4OverlayWindow = {
     isDestroyed: () => options.destroyed === true,
     loadURL,
-    webContents: { capturePage }
+    webContents: { capturePage, invalidate }
   };
-  return { rasterWindow, loadURL, capturePage, png };
+  return { rasterWindow, loadURL, capturePage, invalidate, png };
 }
 
 describe("replay MP4 overlay rasterizer", () => {
@@ -31,7 +37,10 @@ describe("replay MP4 overlay rasterizer", () => {
 
     await expect(rasterizeReplayMp4Svg(fake.rasterWindow, svg, 640, 360)).resolves.toEqual(fake.png);
     expect(fake.loadURL).toHaveBeenCalledWith(replayMp4SvgDataUrl(svg));
-    expect(fake.capturePage).toHaveBeenCalledWith({ x: 0, y: 0, width: 640, height: 360 });
+    expect(fake.capturePage).toHaveBeenCalledWith(
+      { x: 0, y: 0, width: 640, height: 360 },
+      { stayHidden: true }
+    );
     expect(Buffer.from(replayMp4SvgDataUrl(svg).split(",")[1] ?? "", "base64").toString("utf8")).toBe(svg);
   });
 
@@ -40,6 +49,17 @@ describe("replay MP4 overlay rasterizer", () => {
 
     await expect(rasterizeReplayMp4Svg(fake.rasterWindow, "<svg/>", 640, 360))
       .rejects.toThrow("could not be rendered");
+    expect(fake.capturePage).toHaveBeenCalledTimes(2);
+    expect(fake.invalidate).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries once after invalidating a hidden page whose first paint is empty", async () => {
+    const fake = fakeWindow({ emptyCaptures: 1 });
+
+    await expect(rasterizeReplayMp4Svg(fake.rasterWindow, "<svg/>", 640, 360))
+      .resolves.toEqual(fake.png);
+    expect(fake.capturePage).toHaveBeenCalledTimes(2);
+    expect(fake.invalidate).toHaveBeenCalledTimes(1);
   });
 
   it("rejects a destroyed renderer or unsafe dimensions", async () => {

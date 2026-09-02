@@ -3087,6 +3087,358 @@ describe("MatchSessionTracker", () => {
     expect(tracker.getReplayEvents("atlas").find((item) => item.id === scoreEvent?.id)?.screenshot?.label).toBe("Score 1-0");
   });
 
+  it("timestamps an Atlas log row when it was first observed instead of at the displayed minute boundary", () => {
+    const tracker = new MatchSessionTracker();
+    const observedAt = "2026-04-24T19:35:53.321Z";
+    const observedDate = new Date(observedAt);
+    const label = `${String(observedDate.getHours()).padStart(2, "0")}:${String(observedDate.getMinutes()).padStart(2, "0")}`;
+    tracker.ingest(event("match-start", {
+      active: true,
+      configuredUsername: "BMU",
+      opponentName: "Nova",
+      rows: []
+    }, "2026-04-24T19:32:53.321Z", "atlas"), { enhancedInsightsEnabled: true });
+    tracker.ingest(event("match-snapshot", {
+      active: true,
+      configuredUsername: "BMU",
+      opponentName: "Nova",
+      rows: [
+        {
+          key: "hand-reveal",
+          text: `${label}Revealed their hand.\u21ba`,
+          observedAt: "2026-04-24T19:35:52.321Z"
+        },
+        {
+          key: "harnessed-dragon-play",
+          text: `${label}Played Harnessed Dragon from hand to base.\u21ba`,
+          observedAt
+        }
+      ]
+    }, "2026-04-24T19:43:53.321Z", "atlas"));
+
+    const replayEvents = tracker.getReplayEvents("atlas");
+    const reveal = replayEvents.find((item) => item.text === "Revealed their hand.");
+    const play = replayEvents.find((item) => item.cardName === "Harnessed Dragon");
+
+    expect(reveal?.type).toBe("action");
+    expect(replayEvents.filter((item) => item.type === "play")).toHaveLength(1);
+    expect(play).toMatchObject({
+      type: "play",
+      capturedAt: observedAt,
+      fromZone: "hand",
+      toZone: "base",
+      evidence: { source: "game-log", confidence: "inferred", complete: false }
+    });
+  });
+
+  it("attributes a single new Atlas scoring row from the observed score delta without inventing a reason", () => {
+    const tracker = new MatchSessionTracker();
+    tracker.ingest(event("match-start", {
+      active: true,
+      configuredUsername: "BMU",
+      opponentName: "Nova",
+      score: { me: "0", opp: "0" },
+      rows: []
+    }, "2026-04-24T18:00:00.000Z", "atlas"), { enhancedInsightsEnabled: true });
+    tracker.ingest(event("match-snapshot", {
+      active: true,
+      configuredUsername: "BMU",
+      opponentName: "Nova",
+      score: { me: "1", opp: "0" },
+      rows: [
+        { text: "12:04Conquered Grove of the God-Willow and scored 1.\u21ba" }
+      ]
+    }, "2026-04-24T18:04:00.000Z", "atlas"));
+    tracker.ingest(event("match-snapshot", {
+      active: true,
+      configuredUsername: "BMU",
+      opponentName: "Nova",
+      score: { me: "1", opp: "1" },
+      rows: [
+        { text: "12:04Conquered Grove of the God-Willow and scored 1.\u21ba" },
+        { text: "12:05Conquered Targon's Peak and scored 1.\u21ba" }
+      ]
+    }, "2026-04-24T18:05:00.000Z", "atlas"));
+
+    const scores = tracker.getReplayEvents("atlas").filter((item) => item.type === "score");
+    expect(scores.map((item) => ({ side: item.side, reason: item.scoreReason }))).toEqual([
+      { side: "me", reason: undefined },
+      { side: "opponent", reason: undefined }
+    ]);
+  });
+
+  it("carries exact Atlas turn actors onto action and resource rows until that turn ends", () => {
+    const tracker = new MatchSessionTracker();
+    tracker.ingest(event("match-start", {
+      active: true,
+      configuredUsername: "BMU",
+      opponentName: "Nova",
+      rows: [
+        { text: "20:35BMU's turn\u21ba" },
+        { text: "20:36Exhausted 2 runes.\u21ba" },
+        { text: "20:37Played Watchful Sentry to base.\u21ba" },
+        { text: "20:38Ended their turn.\u21ba" },
+        { text: "20:39Nova's turn\u21ba" },
+        { text: "20:40Recycled 1 Order rune.\u21ba" },
+        { text: "20:41Played Hidden Blade to base.\u21ba" },
+        { text: "20:42Played Local Scout to base.\u21ba", side: "me" }
+      ]
+    }, "2026-04-24T20:43:00.000Z", "atlas"), { enhancedInsightsEnabled: true });
+
+    const replayEvents = tracker.getReplayEvents("atlas");
+    expect(replayEvents.find((item) => item.text === "BMU's turn")?.side).toBe("me");
+    expect(replayEvents.find((item) => item.text === "Exhausted 2 runes.")?.side).toBe("me");
+    expect(replayEvents.find((item) => item.text === "Played Watchful Sentry to base.")?.side).toBe("me");
+    expect(replayEvents.find((item) => item.text === "Ended their turn.")?.side).toBe("me");
+    expect(replayEvents.find((item) => item.text === "Nova's turn")?.side).toBe("opponent");
+    expect(replayEvents.find((item) => item.text === "Recycled 1 Order rune.")?.side).toBe("opponent");
+    expect(replayEvents.find((item) => item.text === "Played Hidden Blade to base.")?.side).toBe("opponent");
+    expect(replayEvents.find((item) => item.text === "Played Local Scout to base.")?.side).toBe("me");
+  });
+
+  it("keeps bounded opening evidence when a long replay exceeds the event tail", () => {
+    const tracker = new MatchSessionTracker();
+    tracker.ingest(event("match-start", {
+      active: true,
+      configuredUsername: "BMU",
+      opponentName: "Nova",
+      rows: [
+        { text: "12:00Must choose who starts. Both players draw 4 cards once mulligan begins.\u21ba" },
+        { text: "12:01BMU's turn\u21ba" }
+      ]
+    }, "2026-04-24T12:01:00.000Z", "atlas"), { enhancedInsightsEnabled: true });
+    const baseTime = Date.parse("2026-04-24T12:02:00.000Z");
+    for (let index = 0; index < 460; index += 1) {
+      tracker.ingest(event("match-snapshot", {
+        active: true,
+        configuredUsername: "BMU",
+        opponentName: "Nova",
+        rows: [{ text: `Played Filler ${index} to base.` }]
+      }, new Date(baseTime + index * 1_000).toISOString(), "atlas"));
+    }
+
+    const replayEvents = tracker.getReplayEvents("atlas");
+    expect(replayEvents).toHaveLength(420);
+    expect(replayEvents.some((item) => item.text.startsWith("Must choose who starts"))).toBe(true);
+    expect(replayEvents.some((item) => item.text === "BMU's turn")).toBe(true);
+    expect(replayEvents.some((item) => item.text === "Played Filler 40 to base.")).toBe(false);
+    expect(replayEvents.some((item) => item.text === "Played Filler 459 to base.")).toBe(true);
+  });
+
+  it("creates empty local insight context only for enhanced captures", () => {
+    const enabledTracker = new MatchSessionTracker();
+    enabledTracker.ingest(event("match-start", {
+      active: true,
+      myName: "ConfiguredUser",
+      opponentName: "Rival",
+      score: { me: "0", opp: "0" }
+    }), { enhancedInsightsEnabled: true });
+    const end = event("match-end", {
+      active: false,
+      endText: "You win",
+      score: { me: "8", opp: "4" }
+    }, "2026-04-24T10:05:00.000Z");
+    const enabledDraft = enabledTracker.buildDraft("tcga", end, {
+      ...settings,
+      enhancedInsightsEnabled: false
+    });
+    expect(enabledDraft.insightContext).toEqual({
+      version: 1,
+      capturedWithEnhancedInsights: true,
+      activeGoalIds: [],
+      decisions: [],
+      updatedAt: enabledDraft.updatedAt
+    });
+
+    const disabledTracker = new MatchSessionTracker();
+    disabledTracker.ingest(event("match-start", {
+      active: true,
+      myName: "ConfiguredUser",
+      opponentName: "Rival",
+      score: { me: "0", opp: "0" }
+    }));
+    expect(disabledTracker.buildDraft("tcga", end, {
+      ...settings,
+      enhancedInsightsEnabled: true
+    }).insightContext).toBeUndefined();
+  });
+
+  it("keeps opted-out Atlas evidence at the legacy boundary when the setting is enabled later", () => {
+    const tracker = new MatchSessionTracker();
+    tracker.ingest(event("match-start", {
+      active: true,
+      configuredUsername: "BMU",
+      opponentName: "Nova",
+      rows: [
+        {
+          key: "setup-row",
+          text: "20:35Must choose who starts. Both players draw 4 cards once mulligan begins.\u21ba",
+          observedAt: "2026-04-24T19:35:12.000Z",
+          side: "opponent",
+          actor: "Nova",
+          evidence: { source: "game-log" }
+        },
+        {
+          key: "resource-row",
+          text: "20:36Exhausted 2 runes.\u21ba",
+          side: "me",
+          actor: "BMU",
+          resource: { runesExhausted: 2 }
+        }
+      ]
+    }, "2026-04-24T19:38:00.000Z", "atlas"));
+    tracker.ingest(event("match-snapshot", {
+      active: true,
+      configuredUsername: "BMU",
+      opponentName: "Nova",
+      rows: [
+        {
+          key: "resource-row",
+          text: "20:36Exhausted 2 runes.\u21ba",
+          side: "me",
+          actor: "BMU",
+          resource: { runesExhausted: 2 }
+        },
+        {
+          key: "play-row",
+          text: "20:37Played Hidden Blade to base.\u21ba",
+          side: "opponent",
+          actor: "Nova",
+          evidence: { source: "game-log", confidence: "confirmed" }
+        }
+      ]
+    }, "2026-04-24T19:39:00.000Z", "atlas"), { enhancedInsightsEnabled: true });
+    const end = event("match-end", {
+      active: false,
+      endText: "You win",
+      rows: [{
+        key: "result-row",
+        text: "20:40BMU won the game.\u21ba",
+        side: "me",
+        actor: "BMU",
+        evidence: { source: "game-log" }
+      }]
+    }, "2026-04-24T19:40:00.000Z", "atlas");
+    tracker.ingest(end, { enhancedInsightsEnabled: true });
+
+    const draft = tracker.buildDraft("atlas", end, {
+      ...settings,
+      enhancedInsightsEnabled: true
+    });
+
+    const replayEvents = tracker.getReplayEvents("atlas");
+    expect(replayEvents.map((item) => item.text)).toContain("Must choose who starts. Both players draw 4 cards once mulligan begins.");
+    expect(replayEvents.map((item) => item.text)).toContain("Played Hidden Blade to base.");
+    expect(replayEvents.map((item) => item.text)).not.toContain("Exhausted 2 runes.");
+    expect(replayEvents.find((item) => item.text === "Played Hidden Blade to base.")?.side).toBe("system");
+    expect(replayEvents.every((item) =>
+      item.sequence === undefined &&
+      item.turnNumber === undefined &&
+      item.activeSide === undefined &&
+      item.evidence === undefined &&
+      item.resource === undefined
+    )).toBe(true);
+    const rawRows = draft.rawEvidence.flatMap((captureEvent) =>
+      Array.isArray(captureEvent.payload.rows) ? captureEvent.payload.rows : []
+    );
+    expect(rawRows).toContainEqual({
+      key: "setup-row",
+      text: "20:35Must choose who starts. Both players draw 4 cards once mulligan begins.\u21ba",
+      observedAt: "2026-04-24T19:35:12.000Z"
+    });
+    expect(rawRows).toContainEqual({
+      key: "resource-row",
+      text: "20:36Exhausted 2 runes.\u21ba"
+    });
+    expect(rawRows).toContainEqual({
+      key: "result-row",
+      text: "20:40BMU won the game.\u21ba"
+    });
+    expect(rawRows.every((row) =>
+      !row || typeof row !== "object" || Array.isArray(row) ||
+      Object.keys(row as Record<string, unknown>).every((key) => key === "key" || key === "text" || key === "observedAt")
+    )).toBe(true);
+    expect(draft.insightContext).toBeUndefined();
+  });
+
+  it("retains enriched Atlas evidence when capture was enabled at start even if disabled later", () => {
+    const tracker = new MatchSessionTracker();
+    tracker.ingest(event("match-start", {
+      active: true,
+      configuredUsername: "BMU",
+      opponentName: "Nova",
+      rows: [{
+        key: "turn-row",
+        text: "20:35BMU's turn\u21ba",
+        side: "me",
+        actor: "BMU",
+        evidence: { source: "atlas-attribute" }
+      }]
+    }, "2026-04-24T20:35:00.000Z", "atlas"), { enhancedInsightsEnabled: true });
+    tracker.ingest(event("match-snapshot", {
+      active: true,
+      configuredUsername: "BMU",
+      opponentName: "Nova",
+      rows: [
+        {
+          key: "resource-row",
+          text: "20:36Exhausted 2 runes.\u21ba",
+          actor: "BMU",
+          resource: { runesExhausted: 2 }
+        },
+        {
+          key: "play-row",
+          text: "20:37Played Hidden Blade to base.\u21ba",
+          side: "opponent",
+          actor: "Nova",
+          evidence: { source: "atlas-attribute", confidence: "confirmed" }
+        }
+      ]
+    }, "2026-04-24T20:37:00.000Z", "atlas"), { enhancedInsightsEnabled: false });
+    const end = event("match-end", {
+      active: false,
+      endText: "You win",
+      rows: [{
+        key: "result-row",
+        text: "20:40BMU won the game.\u21ba",
+        side: "me",
+        actor: "BMU",
+        evidence: { source: "atlas-attribute" }
+      }]
+    }, "2026-04-24T20:40:00.000Z", "atlas");
+    tracker.ingest(end, { enhancedInsightsEnabled: false });
+
+    const draft = tracker.buildDraft("atlas", end, {
+      ...settings,
+      enhancedInsightsEnabled: false
+    });
+
+    const rawRows = draft.rawEvidence.flatMap((captureEvent) =>
+      Array.isArray(captureEvent.payload.rows) ? captureEvent.payload.rows : []
+    );
+    expect(rawRows).toContainEqual(expect.objectContaining({
+      key: "play-row",
+      side: "opponent",
+      actor: "Nova",
+      evidence: { source: "atlas-attribute", confidence: "confirmed" }
+    }));
+    expect(rawRows).toContainEqual(expect.objectContaining({
+      key: "result-row",
+      side: "me",
+      actor: "BMU"
+    }));
+    const replayEvents = tracker.getReplayEvents("atlas");
+    expect(replayEvents.find((item) => item.text === "Exhausted 2 runes.")?.resource).toEqual({
+      runesExhausted: 2,
+      mode: "exhaust-rune"
+    });
+    expect(replayEvents.find((item) => item.text === "Played Hidden Blade to base.")?.side).toBe("opponent");
+    expect(replayEvents.every((item) =>
+      typeof item.sequence === "number" && item.evidence !== undefined && item.activeSide !== undefined
+    )).toBe(true);
+    expect(draft.insightContext?.capturedWithEnhancedInsights).toBe(true);
+  });
+
   it("keeps repeated Atlas turn-end rows as separate replay events", () => {
     const tracker = new MatchSessionTracker();
     tracker.ingest(event("match-start", {
@@ -3107,6 +3459,29 @@ describe("MatchSessionTracker", () => {
     expect(replayEvents.filter((item) => item.type === "turn-end")).toHaveLength(2);
     expect(replayEvents[0].text).toContain("Chose BMU");
     expect(replayEvents.at(-1)?.text).toBe("Drew 1 card.");
+  });
+
+  it("uses stable Atlas row keys when identical rows leave and enter the retained log window", () => {
+    const tracker = new MatchSessionTracker();
+    const repeatedText = "20:35Ended their turn.\u21ba";
+    tracker.ingest(event("match-start", {
+      active: true,
+      rows: [
+        { key: "riftlite-log:g1:semantic:1:end-turn", text: repeatedText },
+        { key: "riftlite-log:g1:semantic:2:end-turn", text: repeatedText },
+        { key: "riftlite-log:g1:semantic:3:draw", text: "20:35Drew 1 card.\u21ba" }
+      ]
+    }, "2026-04-24T19:35:30.000Z", "atlas"));
+    tracker.ingest(event("match-snapshot", {
+      active: true,
+      rows: [
+        { key: "riftlite-log:g1:semantic:2:end-turn", text: repeatedText },
+        { key: "riftlite-log:g1:semantic:3:draw", text: "20:35Drew 1 card.\u21ba" },
+        { key: "riftlite-log:g1:semantic:4:end-turn", text: repeatedText }
+      ]
+    }, "2026-04-24T19:35:45.000Z", "atlas"));
+
+    expect(tracker.getReplayEvents("atlas").filter((item) => item.type === "turn-end")).toHaveLength(3);
   });
 
   it("orders same-minute Atlas rows so actions stay before the turn end", () => {
@@ -3153,7 +3528,7 @@ describe("MatchSessionTracker", () => {
       ]);
   });
 
-  it("filters low-value Atlas replay noise and treats setup draw text as setup", () => {
+  it("filters low-value Atlas replay noise while retaining semantic resource rows", () => {
     const tracker = new MatchSessionTracker();
     tracker.ingest(event("match-start", {
       active: true,
@@ -3164,15 +3539,19 @@ describe("MatchSessionTracker", () => {
         { text: "20:36Recycled 1Order rune.\u21ba" },
         { text: "20:37Played Watchful Sentry to base.\u21ba" }
       ]
-    }, "2026-04-24T19:38:00.000Z", "atlas"));
+    }, "2026-04-24T19:38:00.000Z", "atlas"), { enhancedInsightsEnabled: true });
 
     const replayEvents = tracker.getReplayEvents("atlas");
     expect(replayEvents.map((item) => item.text)).toEqual([
       "Must choose who starts. Both players draw 4 cards once mulligan begins.",
+      "Exhausted 2runes.",
+      "Recycled 1Order rune.",
       "Played Watchful Sentry to base."
     ]);
     expect(replayEvents[0].type).toBe("setup");
-    expect(replayEvents[1].type).toBe("play");
+    expect(replayEvents[1].resource).toEqual({ runesExhausted: 2, mode: "exhaust-rune" });
+    expect(replayEvents[2].resource).toEqual({ runes: ["Order"] });
+    expect(replayEvents[3].type).toBe("play");
   });
 
   it("retains exact signed and overnumbered setup codes for offline resolution", () => {

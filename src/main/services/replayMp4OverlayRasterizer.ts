@@ -7,7 +7,11 @@ export interface ReplayMp4OverlayWindow {
   isDestroyed(): boolean;
   loadURL(url: string): Promise<void>;
   webContents: {
-    capturePage(rect: { x: number; y: number; width: number; height: number }): Promise<ReplayMp4OverlayImage>;
+    invalidate(): void;
+    capturePage(
+      rect: { x: number; y: number; width: number; height: number },
+      options: { stayHidden: boolean }
+    ): Promise<ReplayMp4OverlayImage>;
   };
 }
 
@@ -39,10 +43,22 @@ export async function rasterizeReplayMp4Svg(
   if (rasterWindow.isDestroyed()) {
     throw new Error("Replay export overlay renderer closed unexpectedly.");
   }
-  const image = await rasterWindow.webContents.capturePage({ x: 0, y: 0, width, height });
-  const png = image.toPNG();
-  if (image.isEmpty() || png.byteLength <= 0) {
-    throw new Error("Replay export overlay could not be rendered.");
+  const rect = { x: 0, y: 0, width, height };
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    if (attempt > 0) {
+      rasterWindow.webContents.invalidate();
+      await new Promise<void>((resolve) => setTimeout(resolve, 50));
+      if (rasterWindow.isDestroyed()) {
+        throw new Error("Replay export overlay renderer closed unexpectedly.");
+      }
+    }
+    const image = await rasterWindow.webContents.capturePage(rect, { stayHidden: true });
+    if (!image.isEmpty()) {
+      const png = image.toPNG();
+      if (png.byteLength > 0) {
+        return png;
+      }
+    }
   }
-  return png;
+  throw new Error("Replay export overlay could not be rendered.");
 }

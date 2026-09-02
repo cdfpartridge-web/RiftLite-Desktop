@@ -2,7 +2,9 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 const appSource = readFileSync(new URL("../src/renderer/App.tsx", import.meta.url), "utf8");
+const hubSource = readFileSync(new URL("../src/renderer/InsightsHubView.tsx", import.meta.url), "utf8");
 const comingSoonSource = readFileSync(new URL("../src/renderer/InsightsComingSoon.tsx", import.meta.url), "utf8");
+const deckInsightsSource = readFileSync(new URL("../src/renderer/DeckInsightsView.tsx", import.meta.url), "utf8");
 const learningViewSource = readFileSync(new URL("../src/renderer/LearningInsightsView.tsx", import.meta.url), "utf8");
 const legacyExploreSource = readFileSync(new URL("../src/renderer/InsightsView.tsx", import.meta.url), "utf8");
 const cacheSource = readFileSync(new URL("../src/renderer/insightAnalysisCache.ts", import.meta.url), "utf8");
@@ -10,21 +12,33 @@ const styleSource = readFileSync(new URL("../src/renderer/styles/app.css", impor
 const navigationSource = readFileSync(new URL("../src/shared/navigationModel.ts", import.meta.url), "utf8");
 
 describe("learner-first Insights surface", () => {
-  it("keeps the Insights destination visible behind a safe Coming Soon screen", () => {
+  it("keeps Deck Insights live while Replay Coach shows a scoped Coming Soon state", () => {
     expect(navigationSource).toContain('{ kind: "route", id: "insights", label: "Insights", target: { view: "insights" } }');
     expect(appSource).toContain('insights: "Insights"');
     expect(appSource).toContain('case "insights": return <Lightbulb size={19} />');
-    expect(appSource).toContain('import { InsightsComingSoon } from "./InsightsComingSoon"');
-    expect(appSource).not.toContain('import { LearningInsightsView } from "./LearningInsightsView"');
+    expect(appSource).toContain('import { InsightsHubView } from "./InsightsHubView"');
 
     const routeStart = appSource.indexOf('if (view === "insights")');
     expect(routeStart).toBeGreaterThan(-1);
     const routeSource = appSource.slice(routeStart, routeStart + 900);
-    expect(routeSource).toContain("<InsightsComingSoon />");
-    expect(routeSource).not.toContain("<LearningInsightsView");
-    expect(comingSoonSource).toContain("A smarter way to learn from every match");
-    expect(comingSoonSource).toContain("Your capture data is safe.");
-    expect(comingSoonSource).toContain("Matches and replays continue recording normally");
+    expect(routeSource).toContain("<InsightsHubView");
+    expect(routeSource).toContain("replays={replays}");
+    expect(routeSource).toContain("matches={visibleMatches}");
+    expect(routeSource).toContain("activeDeckId={settings.activeDeckId}");
+    expect(hubSource).toContain('type InsightsMode = "deck" | "coach"');
+    expect(hubSource).toContain("<DeckInsightsView");
+    expect(hubSource).toContain('import { InsightsComingSoon } from "./InsightsComingSoon"');
+    expect(hubSource).toContain("<InsightsComingSoon />");
+    expect(hubSource).not.toContain("<LearningInsightsView");
+    expect(hubSource).toContain("Deck Insights");
+    expect(hubSource).toContain("Replay Coach");
+    expect(hubSource).toContain("Coming soon · being refined");
+    expect(comingSoonSource).toContain("Replay Coach is being refined");
+    expect(comingSoonSource).toContain("Deck Insights remains available");
+    expect(comingSoonSource).toContain("Planned Replay Coach improvements");
+    expect(comingSoonSource).not.toContain("while Insights is unavailable");
+    expect(appSource).toContain("Replay Coach is marked Coming Soon while its advice is refined.");
+    expect(deckInsightsSource).toContain('type DeckInsightsSection = "overview" | "cards" | "matchups"');
   });
 
   it("leads with the Coach, Last Match, Journal and Data Lab learning loop", () => {
@@ -38,7 +52,7 @@ describe("learner-first Insights surface", () => {
       "One rule. Three games. A better habit.",
       "Other lessons forming",
       "Keep doing this",
-      "Three moments to learn from",
+      "Decision review with receipts",
       "Your rules, repetitions and retained habits",
       "Explore the evidence behind your coaching cards"
     ]) expect(learningViewSource).toContain(copy);
@@ -135,7 +149,7 @@ describe("learner-first Insights surface", () => {
     ]) expect(learningViewSource).toContain(receipt);
     expect(learningViewSource).toContain('className="insight-data-receipt"');
     expect(learningViewSource).toContain('className="insight-trust-badges"');
-    expect(learningViewSource).toContain('if (tab !== "review" || !selectedReplayId) return null');
+    expect(learningViewSource).toContain("return selectedReplayForLearning ? extractReplayLearningSignals(selectedReplayForLearning) : null;");
     expect(learningViewSource).toContain("extractReplayLearningSignals(");
     expect(learningViewSource).toContain("<CapturedLearningSignals signals={selectedLearningSignals} />");
     expect(learningViewSource).toContain('className="insights-capability-receipt"');
@@ -199,6 +213,52 @@ describe("learner-first Insights surface", () => {
       'scope="col"'
     ]) expect(legacyExploreSource).toContain(legacyContract);
     expect(appSource).toContain('<details className="replay-evidence-drawer"');
+  });
+
+  it("ships a visual, scoped and locally computed Deck Insights report", () => {
+    expect(deckInsightsSource).toContain("copyDeckInsightSummary(");
+    expect(deckInsightsSource).toContain("bridge.writeClipboardText(text)");
+    expect(deckInsightsSource).not.toContain("navigator.clipboard");
+    for (const contract of [
+      "buildDeckInsightComposition",
+      "buildDeckInsightPerformance",
+      "chanceAtLeastOne",
+      "deckMatchesFor",
+      "localMatchesEligibleForStats",
+      'type DeckInsightsSection = "overview" | "cards" | "matchups"',
+      "Pre-season + current",
+      "Energy curve",
+      "Recent form",
+      "Which cards are worth reviewing?",
+      "Captured reach is a lower bound",
+      "Pre-play hand conversion",
+      "Mulligan decisions",
+      "Opponent breakdown",
+      "Card timing versus outcome",
+      "From hand, hidden zones and elsewhere",
+      "Your observed battlefield results",
+      "Unknown means RiftLite did not capture it, not that it did not happen.",
+      "Observed correlation only.",
+      "The play event cannot create this denominator.",
+      "Stage filtering is paused because this scope contains manually combined games",
+      "Local only · no Firebase reads"
+    ]) expect(deckInsightsSource).toContain(contract);
+    expect(deckInsightsSource).toContain(".filter(replayNeedsRawInsightEnrichment)");
+    expect(deckInsightsSource).toContain("const DECK_RAW_ANALYSIS_CONCURRENCY = 2");
+    expect(deckInsightsSource).toContain("const DECK_RAW_ANALYSIS_BATCH = 64");
+    expect(deckInsightsSource).toContain('if (section !== "cards")');
+    expect(deckInsightsSource).toContain('filters: { gameStage: effectiveGameStage }');
+    expect(deckInsightsSource).toContain('trustGameStage: !hasCombinedEvidence');
+    expect(deckInsightsSource).toContain('aria-label="Search cards"');
+    expect(deckInsightsSource).toContain('aria-label="Sort cards"');
+    expect(deckInsightsSource).toContain("Analyze {Math.min(DECK_RAW_ANALYSIS_BATCH, rawExcludedCount)} older raw capture");
+    expect(deckInsightsSource).toContain("const batch = misses.slice(0, DECK_RAW_ANALYSIS_BATCH)");
+    expect(deckInsightsSource).toContain("mapWithConcurrency(batch, DECK_RAW_ANALYSIS_CONCURRENCY");
+    expect(deckInsightsSource).toContain("persistInsightAnalysisCache(window.localStorage, cache)");
+    expect(deckInsightsSource).toContain("...(match.combinedFromMatchIds ?? [])");
+    expect(deckInsightsSource).toContain("const reportCardsForDeck = report.cards.filter");
+    expect(deckInsightsSource).toContain("const reviewCandidate = reportCardsForDeck");
+    expect(deckInsightsSource).not.toContain("played when observed");
   });
 
   it("ships a responsive, confidence-led learner presentation", () => {

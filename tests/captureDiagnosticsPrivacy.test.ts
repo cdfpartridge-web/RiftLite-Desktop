@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -17,6 +17,37 @@ afterEach(async () => {
 });
 
 describe("CaptureDiagnostics privacy exports", () => {
+  it("clears both current and rotated event logs before accepting new diagnostics", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "riftlite-diagnostics-clear-test-"));
+    temporaryDirectories.push(directory);
+    const eventPath = join(directory, "events.jsonl");
+    const diagnostics = new CaptureDiagnostics(eventPath);
+    await diagnostics.record({
+      id: "enhanced-row",
+      platform: "atlas",
+      kind: "log-row",
+      capturedAt: "2026-09-01T10:00:00.000Z",
+      url: "https://play.riftatlas.com/game",
+      payload: { rows: [{ key: "private", text: "enhanced-private-row" }] }
+    });
+    await writeFile(`${eventPath}.old`, "rotated-enhanced-private-row\n", "utf8");
+
+    await diagnostics.clearStoredEvents();
+
+    expect(await readFile(eventPath, "utf8")).toBe("");
+    await expect(readFile(`${eventPath}.old`, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    await diagnostics.record({
+      id: "post-clear",
+      platform: "atlas",
+      kind: "debug",
+      capturedAt: "2026-09-01T10:01:00.000Z",
+      url: "",
+      payload: { reason: "post-clear" }
+    });
+    expect(await readFile(eventPath, "utf8")).toContain("post-clear");
+    expect(await readFile(eventPath, "utf8")).not.toContain("enhanced-private-row");
+  });
+
   it("writes a redacted file by default and requires explicit approval for sensitive data", async () => {
     const directory = await mkdtemp(join(tmpdir(), "riftlite-diagnostics-test-"));
     temporaryDirectories.push(directory);

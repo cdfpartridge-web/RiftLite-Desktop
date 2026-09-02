@@ -16,6 +16,19 @@ function functionSource(name: string, nextName: string): string {
 }
 
 describe("match review lifecycle integration", () => {
+  it("updates saved Scorepad matches directly without unrelated capture or seat requirements", () => {
+    const confirm = functionSource("confirmDraft", "openNextQueuedReview");
+    const modal = functionSource("MatchReviewModal", "healthLabel");
+
+    expect(confirm).toContain('draft.status === "saved" && (draft.source === "scorepad" || draft.source === "manual")');
+    expect(confirm).toContain("window.riftlite.saveMatchDraft(preparedDraft)");
+    expect(confirm).toContain('draft.status === "saved" ? draft : attachTestingSessionToDraft(draft)');
+    expect(modal).toContain("const editingSavedManualMatch = isScorepadDraft && isSavedDraft");
+    expect(modal).toContain("const missingSeatGames = editingSavedManualMatch ? [] : missingSeatGameNumbers(normalizedGames)");
+    expect(modal).toContain('<LegendInput label="My legend"');
+    expect(modal).toContain('<LegendInput label="Opponent legend"');
+  });
+
   it("parks Review later durably before replay finalization continues in the background", () => {
     const dismiss = functionSource("dismissReviewDraft", "chooseGamePlatform");
 
@@ -67,7 +80,7 @@ describe("match review lifecycle integration", () => {
     expect(advanceAt).toBeGreaterThan(deleteAt);
     expect(remove).toContain("Promise.allSettled");
     const deleteHandlerAt = mainSource.indexOf('handleTrustedAppIpc("matches:delete"');
-    const durableDeleteAt = mainSource.indexOf("await store.deleteMatch(id, fallbackDraft)", deleteHandlerAt);
+    const durableDeleteAt = mainSource.indexOf("await enqueueEnhancedInsightsDataMutation(() => store.deleteMatch(id, fallbackDraft))", deleteHandlerAt);
     const discardAt = mainSource.indexOf("capture.discardMatchReview(id)", deleteHandlerAt);
     expect(durableDeleteAt).toBeGreaterThan(deleteHandlerAt);
     expect(discardAt).toBeGreaterThan(durableDeleteAt);
@@ -116,7 +129,8 @@ describe("match review lifecycle integration", () => {
     const modal = functionSource("MatchReviewModal", "healthLabel");
 
     expect(modal).toContain("const [isDeferring, setIsDeferring] = useState(false)");
-    expect(modal).toContain("await onReviewLater(normalizeReviewDraft(draft))");
+    expect(modal).toContain("await deckNotebookRefreshPromiseRef.current");
+    expect(modal).toContain("await onReviewLater(normalizeReviewDraft(draftRef.current))");
     expect(modal).toContain("The review is still open.");
     expect(modal).toContain("setIsDeferring(false)");
     expect(modal).toContain('aria-label={isSavedDraft ? "Cancel editing" : "Review later"}');

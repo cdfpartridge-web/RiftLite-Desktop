@@ -126,6 +126,7 @@ function coordinatorHarness(options: {
   failSave?: boolean;
   failSaveCount?: number;
   replayCaptureEnabled?: boolean;
+  enhancedInsightsEnabled?: boolean;
   finalizeRawCaptureForMatch?: ReturnType<typeof vi.fn>;
   getSettingsGate?: Promise<void>;
 } = {}): {
@@ -154,7 +155,8 @@ function coordinatorHarness(options: {
       await options.getSettingsGate;
       return {
         ...settings,
-        replayCaptureEnabled: options.replayCaptureEnabled ?? settings.replayCaptureEnabled
+        replayCaptureEnabled: options.replayCaptureEnabled ?? settings.replayCaptureEnabled,
+        enhancedInsightsEnabled: options.enhancedInsightsEnabled ?? settings.enhancedInsightsEnabled
       };
     }),
     getMatches: vi.fn(async () => saved),
@@ -218,6 +220,98 @@ function coordinatorHarness(options: {
 }
 
 describe("CaptureCoordinator", () => {
+  it("pins the main-process Enhanced Insights choice onto the renderer match-start event", async () => {
+    const { coordinator, sent } = coordinatorHarness({ enhancedInsightsEnabled: true });
+
+    await coordinator.handleEvent(event("match-start", {
+      active: true,
+      myName: "BMU",
+      opponentName: "Opponent"
+    }, "2026-09-01T18:00:00.000Z", "atlas"));
+
+    const start = sent.find((item) => item.channel === "capture:event" && (item.payload as CaptureEvent).kind === "match-start");
+    expect((start?.payload as CaptureEvent).payload.enhancedInsightsEnabledAtStart).toBe(true);
+    expect((start?.payload as CaptureEvent).payload.enhancedInsightsSessionStartedAt).toBe("2026-09-01T18:00:00.000Z");
+  });
+
+  it("keeps a semantic-only local replay for Coach when Enhanced Insights is on and ordinary replay capture is off", async () => {
+    const { coordinator, savedReplays } = coordinatorHarness({
+      enhancedInsightsEnabled: true,
+      replayCaptureEnabled: false
+    });
+
+    await coordinator.handleEvent(event("match-start", {
+      active: true,
+      myName: "BMU",
+      opponentName: "Semantic Rival",
+      myChampion: "Akali",
+      opponentChampion: "Irelia",
+      seriesId: "enhanced-semantic-only",
+      matchId: "enhanced-semantic-game",
+      score: { me: "8", opp: "5", source: "atlas-score-track" }
+    }, "2026-09-01T18:30:00.000Z", "atlas"));
+
+    const review = await coordinator.forceReview("atlas");
+    expect(review?.insightContext?.capturedWithEnhancedInsights).toBe(true);
+    await coordinator.waitForAllReplayFinalizations();
+
+    expect(savedReplays).toHaveLength(1);
+    expect(savedReplays[0]).toMatchObject({
+      matchId: review?.id,
+      platform: "atlas",
+      enhancedInsights: {
+        captured: true,
+        captureMode: "semantic-local"
+      },
+      visualFrames: []
+    });
+  });
+
+  it("keeps Enhanced-only Atlas row text out of diagnostics unless the session opted in", async () => {
+    const sourceRows = [{
+      key: "resource-row",
+      text: "Player spent two runes on a hidden response",
+      observedAt: "2026-09-01T18:44:53.321Z",
+      actor: "me",
+      resourceDelta: -2
+    }];
+    const optedOut = coordinatorHarness({ enhancedInsightsEnabled: false });
+    await optedOut.coordinator.handleEvent(event("match-start", {
+      active: true,
+      opponentName: "Private Rival",
+      rows: sourceRows
+    }, "2026-09-01T18:45:00.000Z", "atlas"));
+    const optedOutDiagnostic = optedOut.diagnostics.record.mock.calls
+      .map(([value]) => value as CaptureEvent)
+      .find((value) => value.kind === "match-start");
+    expect(optedOutDiagnostic?.payload.rows).toBeUndefined();
+    expect(optedOutDiagnostic?.payload.payloadKeys).toEqual(expect.arrayContaining(["rows"]));
+    const optedOutRendererEvent = optedOut.sent
+      .filter((item) => item.channel === "capture:event")
+      .map((item) => item.payload as CaptureEvent)
+      .find((value) => value.kind === "match-start");
+    expect(optedOutRendererEvent?.payload.rows).toEqual([{
+      key: "resource-row",
+      text: "Player spent two runes on a hidden response",
+      observedAt: "2026-09-01T18:44:53.321Z"
+    }]);
+
+    const optedIn = coordinatorHarness({ enhancedInsightsEnabled: true });
+    await optedIn.coordinator.handleEvent(event("match-start", {
+      active: true,
+      opponentName: "Private Rival",
+      rows: sourceRows
+    }, "2026-09-01T19:45:00.000Z", "atlas"));
+    const optedInDiagnostic = optedIn.diagnostics.record.mock.calls
+      .map(([value]) => value as CaptureEvent)
+      .find((value) => value.kind === "match-start");
+    expect(optedInDiagnostic?.payload.rows).toEqual([{
+      key: "resource-row",
+      text: "Player spent two runes on a hidden response",
+      observedAt: "2026-09-01T18:44:53.321Z"
+    }]);
+  });
+
   it("deduplicates dual-route capture events before a slow processing queue", async () => {
     vi.useFakeTimers({ now: new Date("2026-08-26T11:17:00.000Z") });
     let releaseSettings: () => void = () => undefined;
@@ -466,7 +560,7 @@ describe("CaptureCoordinator", () => {
     expect(sent.some((item) => item.channel === "match:draft")).toBe(false);
   });
 
-  it("blocks provider switching through active capture and review, then releases it when review closes", async () => {
+  it("blocks provider switching during active capture but not for a durable pending review", async () => {
     const { coordinator } = coordinatorHarness();
     expect(coordinator.getGamePlatformSwitchStatus().allowed).toBe(true);
 
@@ -481,7 +575,8 @@ describe("CaptureCoordinator", () => {
 
     await coordinator.forceReview("tcga");
     await coordinator.waitForAllReplayFinalizations();
-    expect(coordinator.getGamePlatformSwitchStatus()).toMatchObject({ allowed: false });
+    expect(coordinator.getHealth().state).toBe("review-needed");
+    expect(coordinator.getGamePlatformSwitchStatus()).toMatchObject({ allowed: true });
 
     coordinator.dismissMatchReview();
     expect(coordinator.getGamePlatformSwitchStatus().allowed).toBe(true);
@@ -657,6 +752,15 @@ describe("CaptureCoordinator", () => {
     });
     expect(JSON.stringify(saved[0].rawEvidence)).not.toContain("Disconnected Rival");
     expect(sent.filter((item) => item.channel === "match:draft")).toHaveLength(1);
+    const forwardedStarts = sent
+      .filter((item) => item.channel === "capture:event")
+      .map((item) => item.payload as CaptureEvent)
+      .filter((item) => item.kind === "match-start");
+    expect(forwardedStarts.map((item) => item.payload.enhancedInsightsSessionStartedAt)).toEqual([
+      "2026-07-21T12:00:00.000Z",
+      "2026-07-21T12:02:00.000Z"
+    ]);
+    expect(forwardedStarts[1]?.payload.gameNumber).toBe(1);
   });
 
   it("drops a named TCGA 0-0 disconnect without creating a blank report", async () => {

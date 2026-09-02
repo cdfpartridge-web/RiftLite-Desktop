@@ -44,6 +44,12 @@ function event(
   };
 }
 
+function withoutGameNumber(value: ReplayStructuredEvent): ReplayStructuredEvent {
+  const legacy = { ...value } as Partial<ReplayStructuredEvent>;
+  delete legacy.gameNumber;
+  return legacy as ReplayStructuredEvent;
+}
+
 function replay(patch: Partial<ReplayRecord> = {}): ReplayRecord {
   return {
     id: "learning-replay",
@@ -96,7 +102,8 @@ function sideboardChange(patch: Partial<DeckTrackerSideboardChange> = {}): DeckT
 function trackerState(
   capturedAt: string,
   changes: DeckTrackerSideboardChange[],
-  cards: DeckTrackerCardState[]
+  cards: DeckTrackerCardState[],
+  gameNumber = 2
 ): DeckTrackerState {
   return {
     active: true,
@@ -115,7 +122,7 @@ function trackerState(
     corrections: [],
     cards,
     sideboard: {
-      gameNumber: 2,
+      gameNumber,
       phase: "sideboarding",
       autoDetected: true,
       hasManualChanges: false,
@@ -137,10 +144,11 @@ function snapshot(
   id: string,
   seconds: number,
   changes: DeckTrackerSideboardChange[],
-  cards: DeckTrackerCardState[]
+  cards: DeckTrackerCardState[],
+  gameNumber = 2
 ): DeckTrackerSnapshot {
   const capturedAt = at(seconds);
-  return { id, capturedAt, reason: "atlas-event", state: trackerState(capturedAt, changes, cards) };
+  return { id, capturedAt, reason: "atlas-event", state: trackerState(capturedAt, changes, cards, gameNumber) };
 }
 
 describe("Replay learning signals", () => {
@@ -225,6 +233,30 @@ describe("Replay learning signals", () => {
     });
   });
 
+  it("preserves an unknown game number without borrowing Game 1 turn context", () => {
+    const unknownEnd = withoutGameNumber(event("unknown-game-end", 10, "turn-end", {
+      resource: { after: { energy: 2, power: 1, xp: 3, runesReady: 1, runesExhausted: 2 } }
+    }));
+    const unknownScore = withoutGameNumber(event("unknown-game-score", 20, "score", {
+      battlefield: "Minefield",
+      scoreReason: "conquer",
+      pointsScored: 1
+    }));
+    const source = replay({
+      structuredEvents: [
+        event("known-game-one-turn", 1, "turn-start", { gameNumber: 1 }),
+        unknownEnd,
+        unknownScore
+      ]
+    });
+
+    const observation = replayLearningResourceCoverage(source).observations[0];
+    expect(observation).toMatchObject({ eventId: "unknown-game-end" });
+    expect(observation).not.toHaveProperty("gameNumber");
+    expect(observation).not.toHaveProperty("playerTurnNumber");
+    expect(replayLearningBattlefieldConversions(source)[0]).not.toHaveProperty("gameNumber");
+  });
+
   it("deduplicates sideboard changes and reports subsequent captured card flow", () => {
     const original = sideboardChange();
     const updated = sideboardChange({ qty: 2, capturedAt: at(22) });
@@ -275,6 +307,43 @@ describe("Replay learning signals", () => {
       subsequentPlayedCount: null,
       subsequentRecycledCount: null
     });
+  });
+
+  it("does not join sideboard evidence from a later game", () => {
+    const change = sideboardChange({ gameNumber: 2 });
+    const source = replay({
+      deckTrackerSnapshots: [
+        snapshot("game-two-change", 20, [change], [trackerCard(0)], 2),
+        snapshot("game-three-visible", 60, [change], [trackerCard(2)], 3)
+      ],
+      structuredEvents: [
+        event("game-two-other-card", 30, "play", { gameNumber: 2, cardName: "Scout", cardId: "TST-200" }),
+        event("game-three-charm", 40, "play", { gameNumber: 3, cardName: "Charm", cardId: "TST-100" })
+      ]
+    });
+
+    expect(replayLearningSideboardFlows(source)[0]).toMatchObject({
+      gameNumber: 2,
+      subsequentVisibleCount: 0,
+      subsequentPlayedCount: 0,
+      subsequentRecycledCount: 0
+    });
+  });
+
+  it("keeps separate unknown-game sideboard changes separate and unjoined", () => {
+    const first = sideboardChange({ id: "unknown-change-one", gameNumber: undefined, capturedAt: at(20) });
+    const second = sideboardChange({ id: "unknown-change-two", gameNumber: undefined, capturedAt: at(40) });
+    const source = replay({
+      deckTrackerSnapshots: [
+        snapshot("unknown-change-snapshot", 40, [first, second], [trackerCard(2)])
+      ],
+      structuredEvents: [event("later-charm", 50, "play", { gameNumber: 3, cardName: "Charm", cardId: "TST-100" })]
+    });
+
+    const rows = replayLearningSideboardFlows(source);
+    expect(rows).toHaveLength(2);
+    expect(rows.every((row) => row.gameNumber == null)).toBe(true);
+    expect(rows.every((row) => row.subsequentVisibleCount == null && row.subsequentPlayedCount == null)).toBe(true);
   });
 
   it("creates battlefield conversions only from fully attributed explicit score events", () => {
@@ -350,6 +419,24 @@ describe("Replay learning signals", () => {
       sideboard: { state: "unknown" },
       combat: { state: "partial" },
       battlefield: { state: "partial" }
+    });
+  });
+
+  it("does not claim card timing from a turn start in another or unknown game", () => {
+    const unknownTurn = withoutGameNumber(event("unknown-turn", 3, "turn-start"));
+    const unknownPlay = withoutGameNumber(event("unknown-play", 4, "play", { cardName: "Charm", cardId: "TST-100" }));
+    const source = replay({
+      structuredEvents: [
+        event("game-one-turn", 1, "turn-start", { gameNumber: 1 }),
+        event("game-two-play", 2, "play", { gameNumber: 2, cardName: "Charm", cardId: "TST-100" }),
+        unknownTurn,
+        unknownPlay
+      ]
+    });
+
+    expect(replayLearningCapabilityReceipt(source).cardTiming).toMatchObject({
+      state: "partial",
+      evidenceCount: 4
     });
   });
 

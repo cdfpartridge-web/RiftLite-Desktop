@@ -17,8 +17,6 @@ import {
   TrendingUp,
   X
 } from "lucide-react";
-import cardRegistryData from "../../resources/riftbound_card_registry.json";
-import { buildMulliganLabRegistry } from "../shared/mulliganLab";
 import {
   buildReplayInsights,
   replayInsightEventsFromRawPayload,
@@ -29,6 +27,7 @@ import {
   type ReplayInsightsStats
 } from "../shared/replayInsights";
 import type { MatchDraft, ReplayIntelligenceConfidence, ReplayRecord, ReplayStructuredEvent } from "../shared/types";
+import { INSIGHT_CARD_CATALOG } from "./insightCardCatalog";
 
 type InsightsTab = "briefing" | "match" | "patterns" | "cards";
 const INSIGHT_TAB_ORDER: InsightsTab[] = ["briefing", "match", "patterns", "cards"];
@@ -45,8 +44,6 @@ interface InsightFeedbackState {
 }
 
 const INSIGHT_FEEDBACK_STORAGE_KEY = "riftlite:replay-insight-feedback:v1";
-const INSIGHT_CARD_REGISTRY = buildMulliganLabRegistry(cardRegistryData);
-const INSIGHT_CARD_CATALOG = [...INSIGHT_CARD_REGISTRY.byCode.values()];
 
 export function InsightsView({ replays, matches, onOpenReplay }: InsightsViewProps) {
   const [tab, setTab] = useState<InsightsTab>("briefing");

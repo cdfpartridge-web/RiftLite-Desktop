@@ -9,7 +9,7 @@ import {
 describe("community spotlight themes", () => {
   it("defines a theme for every spotlight and no unknown entries", () => {
     expect(Object.keys(COMMUNITY_SPOTLIGHT_THEMES).sort()).toEqual([...COMMUNITY_SPOTLIGHT_IDS].sort());
-    expect(COMMUNITY_SPOTLIGHT_IDS).toHaveLength(15);
+    expect(COMMUNITY_SPOTLIGHT_IDS).toHaveLength(16);
     expect(COMMUNITY_SPOTLIGHT_IDS.slice(0, 2)).toEqual(["riftlab", "frodan"]);
   });
 
@@ -46,6 +46,10 @@ describe("community spotlight themes", () => {
     expect(communitySpotlightTheme("  ZELONIUS ")).toEqual({
       primary: "#F5B51B",
       secondary: "#08784A"
+    });
+    expect(communitySpotlightTheme("  X0TCG ")).toEqual({
+      primary: "#6D3FB3",
+      secondary: "#21B8D6"
     });
   });
 

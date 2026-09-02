@@ -100,6 +100,7 @@ import {
   isAllowedEmbeddedNavigation,
   isAllowedGameMainFrameNavigation,
   isAllowedGamePopupNavigation,
+  RIFTLITE_RULES_WEBVIEW_PARTITION,
   sameWebFrameIdentity,
   type EmbeddedWebviewPolicy
 } from "../shared/embeddedContentSecurity.js";
@@ -113,6 +114,7 @@ import {
   rawCaptureSettingsForDiscordHubSelection
 } from "../shared/replaySharing.js";
 import { publicCommunitySyncEnabled } from "../shared/syncPolicy.js";
+import { normalizeReplayMp4VoiceVolume } from "../shared/replayMp4VoiceVolume.js";
 import {
   RawCaptureIngressLimiter,
   validatedCaptureEvent,
@@ -338,6 +340,7 @@ let tcgaWebReplayCaptureService: TcgaWebReplayCaptureService<
 > | null = null;
 let tcgaWebReplayProductAccountUid = "";
 let tcgaWebReplayConfigurationTail: Promise<void> = Promise.resolve();
+let enhancedInsightsDataMutationQueue: Promise<void> = Promise.resolve();
 const tcgaSeatCaptureBridge = new TcgaSeatCaptureBridge();
 let updater: UpdaterService;
 let registeredScreenshotHotkey = "";
@@ -348,6 +351,16 @@ const atlasInvalidClaimsRecoveryByGuest = new Map<number, () => Promise<void>>()
 const atlasInvalidClaimsRecoveryBudget = new AtlasInvalidClaimsRecoveryBudget();
 const atlasAutomaticRecoverySafetyFence = new AtlasAutomaticRecoverySafetyFence();
 const embeddedWebviewPolicyBySession = new WeakMap<object, EmbeddedWebviewPolicy>();
+
+function enqueueEnhancedInsightsDataMutation<T>(operation: () => Promise<T>): Promise<T> {
+  const result = enhancedInsightsDataMutationQueue.then(operation, operation);
+  enhancedInsightsDataMutationQueue = result.then(() => undefined, () => undefined);
+  return result;
+}
+
+function saveReplayWithEnhancedInsightsDataMutation(replay: ReplayRecord): Promise<ReplayRecord> {
+  return enqueueEnhancedInsightsDataMutation(() => store.saveReplay(replay));
+}
 const rawCaptureDebuggerContents = new WeakSet<WebContents>();
 type TcgaReplayResearchRequest = {
   url: string;
@@ -398,6 +411,7 @@ function installSmokeNetworkIsolation(): void {
   const smokeSessions = new Set([
     electronSession.defaultSession,
     electronSession.fromPartition(RIFTLITE_REPLAY_PARTITION),
+    electronSession.fromPartition(RIFTLITE_RULES_WEBVIEW_PARTITION),
     ...Object.values(GAME_WEBVIEW_PARTITIONS).map((partition) => electronSession.fromPartition(partition))
   ]);
   for (const targetSession of smokeSessions) {
@@ -2156,6 +2170,32 @@ function secureHomeMediaWebContents(
   webContents.on("will-redirect", restrictNavigation);
 }
 
+function secureRulesWebContents(
+  webContents: WebContents,
+  policy: Extract<EmbeddedWebviewPolicy, { kind: "rules" }>
+): void {
+  installRestrictedEmbeddedPermissions(webContents, policy, new Set());
+  webContents.setWindowOpenHandler(({ url }) => {
+    if (isAllowedEmbeddedNavigation(policy, url)) {
+      void webContents.loadURL(url).catch(() => undefined);
+    } else if (/^https?:\/\//i.test(url)) {
+      void openExternalResource(url).catch(() => undefined);
+    }
+    return { action: "deny" };
+  });
+  const restrictNavigation = (event: Electron.Event, url: string) => {
+    if (isAllowedEmbeddedNavigation(policy, url)) {
+      return;
+    }
+    event.preventDefault();
+    if (/^https?:\/\//i.test(url)) {
+      void openExternalResource(url).catch(() => undefined);
+    }
+  };
+  webContents.on("will-navigate", restrictNavigation);
+  webContents.on("will-redirect", restrictNavigation);
+}
+
 function secureRiftLiteReplayWebContents(webContents: WebContents): void {
   const replaySession = webContents.session;
   const isExactReplayRequester = (requestingContents: WebContents | null, requestingUrl: string) => (
@@ -3237,19 +3277,19 @@ async function captureCoachShareCard(
   }
   const captured = await sender.capturePage(bounds);
   if (captured.isEmpty()) {
-    throw new Error("The coaching card capture was empty.");
+    throw new Error("The share card capture was empty.");
   }
   const image = captured.resize({ width: 1200, height: 675, quality: "best" });
   if (action === "copy") {
     clipboard.writeImage(image);
-    return { ok: true, action, message: "Coaching card copied as an image." };
+    return { ok: true, action, message: "Share card copied as an image." };
   }
 
   const settings = await store.getSettings();
   const directory = screenshotDirectory(settings);
   await mkdir(directory, { recursive: true });
   const options: SaveDialogOptions = {
-    title: "Save RiftLite coaching card",
+    title: "Save RiftLite share card",
     defaultPath: join(directory, screenshotFilename(request.label || "Coaching-Quest", "png")),
     filters: [{ name: "PNG image", extensions: ["png"] }]
   };
@@ -3403,7 +3443,6 @@ async function configureReplayHotkeys(): Promise<void> {
 
   const flagHotkey = settings.replayQuickFlagHotkey?.trim();
   if (
-    settings.replayVideoEnabled &&
     settings.replayQuickFlagHotkeyEnabled &&
     flagHotkey &&
     flagHotkey !== registeredShadowClipHotkey
@@ -5400,6 +5439,7 @@ function appendReplayMp4AudioFilters(
   clipRange: ReplayMp4ClipRange | null
 ): string | null {
   const audioLabels: string[] = [];
+  const voiceNoteVolume = normalizeReplayMp4VoiceVolume(options.voiceNoteVolume);
   if (options.includeOriginalAudio && video.hasAudio) {
     const baseAudioFilter = clipRange
       ? `[0:a]atrim=start=${ffmpegSeconds(clipRange.startMs / 1000)}:end=${ffmpegSeconds(clipRange.endMs / 1000)},asetpts=PTS-STARTPTS,aresample=48000[a_base]`
@@ -5411,16 +5451,20 @@ function appendReplayMp4AudioFilters(
     const inputIndex = firstVoiceInputIndex + index;
     const label = `[a_note_${index}]`;
     const delay = Math.max(0, Math.round(voice.delayMs));
-    filterParts.push(`[${inputIndex}:a]aresample=48000,adelay=${delay}|${delay},volume=1.0${label}`);
+    filterParts.push(`[${inputIndex}:a]aresample=48000,adelay=${delay}|${delay},volume=${voiceNoteVolume.toFixed(2)}${label}`);
     audioLabels.push(label);
   });
   if (!audioLabels.length) {
     return null;
   }
   if (audioLabels.length === 1) {
+    if (voiceInputs.length) {
+      filterParts.push(`${audioLabels[0]}alimiter=limit=0.95:level=false:latency=true[aout]`);
+      return "[aout]";
+    }
     return audioLabels[0];
   }
-  filterParts.push(`${audioLabels.join("")}amix=inputs=${audioLabels.length}:duration=longest:dropout_transition=0[aout]`);
+  filterParts.push(`${audioLabels.join("")}amix=inputs=${audioLabels.length}:duration=longest:dropout_transition=0:normalize=0,alimiter=limit=0.95:level=false:latency=true[aout]`);
   return "[aout]";
 }
 
@@ -5677,7 +5721,7 @@ async function exportReplayPresentationMp4(
 ): Promise<string> {
   assertReplayMp4ExportRequestId(requestId);
   if (!payload?.data || payload.data.byteLength <= 0) {
-    throw new Error("No presentation recording was received.");
+    throw new Error("No Full Voiceover recording was received.");
   }
   const context = beginReplayMp4Export(replayId, "presentation", requestId, sender);
   try {
@@ -5688,7 +5732,7 @@ async function exportReplayPresentationMp4(
       emitReplayMp4ExportProgress(context, {
         stage: "completed",
         percent: 100,
-        message: "Presentation MP4 export complete.",
+        message: "Full Voiceover MP4 export complete.",
         outputPath
       });
     }
@@ -5718,7 +5762,7 @@ async function exportReplayPresentationMp4Unlocked(
 ): Promise<string> {
   const ffmpegPath = replayVideoFfmpegPath();
   if (!ffmpegPath || !(await pathExists(ffmpegPath))) {
-    throw new Error("Presentation export needs ffmpeg.");
+    throw new Error("Full Voiceover export needs ffmpeg.");
   }
   const [replays, matches, settings] = await Promise.all([store.getReplays(), store.getMatches(), store.getSettings()]);
   const storedReplay = replays.find((item) => item.id === replayId);
@@ -5733,10 +5777,10 @@ async function exportReplayPresentationMp4Unlocked(
   const durationSuffix = payload.durationMs > 0 ? ` ${Math.round(payload.durationMs / 1000)}s` : "";
   const defaultPath = join(
     directory,
-    `${safeFileComponent(`${search.title} ${search.players.join(" vs ")} presentation ${search.capturedAt.slice(0, 10)}${durationSuffix}`, "RiftLite Presentation")}.mp4`
+    `${safeFileComponent(`${search.title} ${search.players.join(" vs ")} full voiceover ${search.capturedAt.slice(0, 10)}${durationSuffix}`, "RiftLite Full Voiceover")}.mp4`
   );
   const saveOptions: SaveDialogOptions = {
-    title: "Export replay presentation MP4",
+    title: "Export Full Voiceover MP4",
     defaultPath,
     filters: [{ name: "MP4 video", extensions: ["mp4"] }]
   };
@@ -5765,7 +5809,7 @@ async function exportReplayPresentationMp4Unlocked(
     emitReplayMp4ExportProgress(context, {
       stage: "preparing",
       percent: 2,
-      message: "Preparing presentation recording..."
+      message: "Preparing Full Voiceover recording..."
     });
     await writeFile(inputPath, Buffer.from(new Uint8Array(payload.data)));
     const inputProbe = await replayMp4ProbeMedia(ffmpegPath, inputPath, {
@@ -5778,7 +5822,7 @@ async function exportReplayPresentationMp4Unlocked(
     emitReplayMp4ExportProgress(context, {
       stage: "encoding",
       percent: 5,
-      message: "Encoding presentation MP4..."
+      message: "Encoding Full Voiceover MP4..."
     });
     const args = [
       "-y",
@@ -5828,7 +5872,7 @@ async function exportReplayPresentationMp4Unlocked(
             emitReplayMp4ExportProgress(context, {
               stage: "encoding",
               percent,
-              message: `Encoding presentation MP4... ${percent}%`
+              message: `Encoding Full Voiceover MP4... ${percent}%`
             });
           }
         }
@@ -5839,7 +5883,7 @@ async function exportReplayPresentationMp4Unlocked(
     emitReplayMp4ExportProgress(context, {
       stage: "validating",
       percent: 92,
-      message: "Validating the complete presentation MP4..."
+      message: "Validating the complete Full Voiceover MP4..."
     });
     await validateReplayMp4Output(ffmpegPath, partialPath, expectedDurationMs, (processedMs) => {
       const percent = replayMp4ValidationPercent(processedMs, expectedDurationMs);
@@ -5854,7 +5898,7 @@ async function exportReplayPresentationMp4Unlocked(
     emitReplayMp4ExportProgress(context, {
       stage: "validating",
       percent: 99,
-      message: "Finalizing the validated presentation MP4..."
+      message: "Finalizing the validated Full Voiceover MP4..."
     });
     await setReplayMp4WindowsHidden(partialPath, false);
     await promoteReplayMp4Output(partialPath, outputPath, initialDestination);
@@ -6242,7 +6286,7 @@ async function saveImportedReplayBundleData(
     importedAt: importStamp,
     importedFrom: bundlePath
   };
-  return store.saveReplay(replay);
+  return saveReplayWithEnhancedInsightsDataMutation(replay);
 }
 
 async function exportDeckNotebook(deckId: string): Promise<string> {
@@ -7671,7 +7715,7 @@ async function importReplayMediaFromPath(sourcePath: string): Promise<ReplayReco
   const matchingReplayId = matchingMissingReplayIdForMedia(replays, platform, startedAt, endedAt, probe.durationMs);
   const matchingMissingReplay = replays.find((replay) => replay.id === matchingReplayId);
   if (matchingMissingReplay) {
-    const saved = await store.saveReplay({
+    const saved = await saveReplayWithEnhancedInsightsDataMutation({
       ...matchingMissingReplay,
       video,
       importedAt: new Date().toISOString(),
@@ -7682,7 +7726,7 @@ async function importReplayMediaFromPath(sourcePath: string): Promise<ReplayReco
   }
 
   const title = `Recovered ${platform === "atlas" ? "Atlas" : "TCGA"} recording`;
-  const saved = await store.saveReplay({
+  const saved = await saveReplayWithEnhancedInsightsDataMutation({
     id: replayId,
     matchId: replayId,
     platform,
@@ -8250,6 +8294,10 @@ async function createWindow(): Promise<void> {
       installFullscreenShortcut(webContents);
       return;
     }
+    if (policy.kind === "rules") {
+      secureRulesWebContents(webContents, policy);
+      return;
+    }
     if (policy.kind !== "game") {
       webContents.close();
       return;
@@ -8679,6 +8727,7 @@ function registerIpc(): void {
       }
       if (
         Object.prototype.hasOwnProperty.call(patch, "replayVideoEnabled") ||
+        Object.prototype.hasOwnProperty.call(patch, "enhancedInsightsEnabled") ||
         Object.prototype.hasOwnProperty.call(patch, "replayShadowClipEnabled") ||
         Object.prototype.hasOwnProperty.call(patch, "replayShadowClipHotkey") ||
         Object.prototype.hasOwnProperty.call(patch, "replayShadowClipHotkeyEnabled") ||
@@ -8700,6 +8749,19 @@ function registerIpc(): void {
     } finally {
       releaseCaptureMaintenance?.();
     }
+  });
+  handleTrustedAppIpc("insights:clear-data", async (event) => {
+    assertTrustedAppIpcSender(event);
+    return enqueueEnhancedInsightsDataMutation(async () => {
+      const releaseCaptureMaintenance = await capture.beginDataMaintenance();
+      try {
+        const result = await store.clearEnhancedInsightsData();
+        await diagnostics.clearStoredEvents();
+        return result;
+      } finally {
+        releaseCaptureMaintenance();
+      }
+    });
   });
   handleTrustedAppIpc("settings:raw-capture:update", async (_event, patch: Partial<UserSettings["rawCapture"]>) => {
     if (!patch || typeof patch !== "object" || Array.isArray(patch)) {
@@ -8753,77 +8815,83 @@ function registerIpc(): void {
   handleTrustedAppIpc("matches:get", () => store.getMatches());
   handleTrustedAppIpc("matches:deleted", () => store.getDeletedMatches());
   handleTrustedAppIpc("matches:save-draft", async (_event, draft: MatchDraft) => {
-    const saved = await store.saveMatch(draft);
-    queueAccountCloudSync("Match saved");
-    return saved;
+    return enqueueEnhancedInsightsDataMutation(async () => {
+      const saved = await store.saveMatch(draft);
+      queueAccountCloudSync("Match saved");
+      return saved;
+    });
   });
   handleTrustedAppIpc("matches:defer-review", async (_event, draft: MatchDraft) => {
-    const deferred = await store.deferMatchReview(draft);
-    if (deferred.status !== "saved") {
-      // The pending row is durable, so Review later can close immediately.
-      // Keep prepared replay/raw-capture work retryable in the background;
-      // confirmation re-arms it and deletion fences it in CaptureCoordinator.
-      capture.markDeferredReviewReplayFinalizationBackgrounded(deferred.id);
-      const pendingReplayFinalization = new Promise<void>((resolvePending) => setImmediate(resolvePending))
-        .then(() => capture.waitForReplayFinalization(deferred.id));
-      void pendingReplayFinalization.then(
-        () => capture.markDeferredReviewReplayFinalizationComplete(deferred.id),
-        (error) => {
-          void logStartupIssue(
-            `Deferred ${deferred.platform} replay finalization will retry later (${deferred.id})`,
-            error
-          );
-        }
-      );
-    }
-    const latest = (await store.getMatches()).find((candidate) => candidate.id === deferred.id) ?? deferred;
-    queueAccountCloudSync("Match review deferred");
-    return latest;
+    return enqueueEnhancedInsightsDataMutation(async () => {
+      const deferred = await store.deferMatchReview(draft);
+      if (deferred.status !== "saved") {
+        // The pending row is durable, so Review later can close immediately.
+        // Keep prepared replay/raw-capture work retryable in the background;
+        // confirmation re-arms it and deletion fences it in CaptureCoordinator.
+        capture.markDeferredReviewReplayFinalizationBackgrounded(deferred.id);
+        const pendingReplayFinalization = new Promise<void>((resolvePending) => setImmediate(resolvePending))
+          .then(() => capture.waitForReplayFinalization(deferred.id));
+        void pendingReplayFinalization.then(
+          () => capture.markDeferredReviewReplayFinalizationComplete(deferred.id),
+          (error) => {
+            void logStartupIssue(
+              `Deferred ${deferred.platform} replay finalization will retry later (${deferred.id})`,
+              error
+            );
+          }
+        );
+      }
+      const latest = (await store.getMatches()).find((candidate) => candidate.id === deferred.id) ?? deferred;
+      queueAccountCloudSync("Match review deferred");
+      return latest;
+    });
   });
   handleTrustedAppIpc("matches:confirm", async (_event, draft: MatchDraft) => {
-    try {
-      return await confirmMatchLocalFirst(draft, {
-        saveLocally: async (candidate) => {
-          const saved = await capture.confirmMatch(candidate, {
-            deferReplayFinalization: confirmedMatchSupportsBackgroundDelivery(candidate)
-          });
-          return saved.platform === "tcga"
-            ? commitConfirmedTcgaReplayLocally(saved)
-            : saved;
-        },
-        shouldDeliverInBackground: confirmedMatchSupportsBackgroundDelivery,
-        queueBackgroundDelivery: queueConfirmedMatchDelivery,
-        deliverBeforeResponse: async (saved) => {
-          await capture.waitForReplayFinalization(saved.id);
-          const latest = (await store.getMatches()).find((candidate) => candidate.id === saved.id) ?? saved;
-          const synced = await capture.syncConfirmedMatch(latest);
-          queueAccountCloudSync("Match saved");
-          return synced;
-        }
-      });
-    } catch (error) {
-      await logStartupIssue(
-        `Match confirmation failed (${draft.platform}, ${draft.id})`,
-        matchPersistenceDiagnostic(error)
-      );
-      throw error;
-    }
+    return enqueueEnhancedInsightsDataMutation(async () => {
+      try {
+        return await confirmMatchLocalFirst(draft, {
+          saveLocally: async (candidate) => {
+            const saved = await capture.confirmMatch(candidate, {
+              deferReplayFinalization: confirmedMatchSupportsBackgroundDelivery(candidate)
+            });
+            return saved.platform === "tcga"
+              ? commitConfirmedTcgaReplayLocally(saved)
+              : saved;
+          },
+          shouldDeliverInBackground: confirmedMatchSupportsBackgroundDelivery,
+          queueBackgroundDelivery: queueConfirmedMatchDelivery,
+          deliverBeforeResponse: async (saved) => {
+            await capture.waitForReplayFinalization(saved.id);
+            const latest = (await store.getMatches()).find((candidate) => candidate.id === saved.id) ?? saved;
+            const synced = await capture.syncConfirmedMatch(latest);
+            queueAccountCloudSync("Match saved");
+            return synced;
+          }
+        });
+      } catch (error) {
+        await logStartupIssue(
+          `Match confirmation failed (${draft.platform}, ${draft.id})`,
+          matchPersistenceDiagnostic(error)
+        );
+        throw error;
+      }
+    });
   });
   handleTrustedAppIpc("matches:combine-preview", (_event, matchIds: string[]) => store.previewCombinedMatches(matchIds));
   handleTrustedAppIpc("matches:combine-save", async (_event, payload) => {
-    const combined = await store.combineMatches(payload);
+    const combined = await enqueueEnhancedInsightsDataMutation(() => store.combineMatches(payload));
     const synced = await syncService.syncMatch(combined, { quiet: true }).catch(() => combined);
     queueAccountCloudSync("Match repair saved");
     return synced;
   });
   handleTrustedAppIpc("matches:combine-undo", async (_event, combinedMatchId: string) => {
-    const restored = await syncService.undoCombinedMatch(combinedMatchId);
+    const restored = await enqueueEnhancedInsightsDataMutation(() => syncService.undoCombinedMatch(combinedMatchId));
     queueAccountCloudSync("Match combination undone");
     return restored;
   });
   handleTrustedAppIpc("matches:delete", async (_event, id: string, fallbackDraft?: MatchDraft) => {
     try {
-      await store.deleteMatch(id, fallbackDraft);
+      await enqueueEnhancedInsightsDataMutation(() => store.deleteMatch(id, fallbackDraft));
       capture.discardMatchReview(id);
       queueAccountCloudSync("Match deleted");
     } catch (error) {
@@ -8835,12 +8903,12 @@ function registerIpc(): void {
     }
   });
   handleTrustedAppIpc("matches:restore", async (_event, id: string) => {
-    const restored = await store.restoreMatch(id);
+    const restored = await enqueueEnhancedInsightsDataMutation(() => store.restoreMatch(id));
     queueAccountCloudSync("Match restored");
     return restored;
   });
   handleTrustedAppIpc("matches:purge", async (_event, id: string) => {
-    await store.purgeMatch(id);
+    await enqueueEnhancedInsightsDataMutation(() => store.purgeMatch(id));
     capture.dismissMatchReview(id);
     queueAccountCloudSync("Deleted match removed");
   });
@@ -8960,11 +9028,19 @@ function registerIpc(): void {
   });
   handleTrustedAppIpc("replays:get", () => store.getReplays());
   handleTrustedAppIpc("replays:deleted", () => store.getDeletedReplays());
-  handleTrustedAppIpc("replays:save", (_event, replay: ReplayRecord) => store.saveReplay(replay));
-  handleTrustedAppIpc("replays:delete", (_event, id: string) => store.deleteReplay(id));
-  handleTrustedAppIpc("replays:delete-many", (_event, ids: string[]) => store.deleteReplays(ids));
-  handleTrustedAppIpc("replays:restore", (_event, id: string) => store.restoreReplay(id));
-  handleTrustedAppIpc("replays:purge", (_event, id: string) => store.purgeReplay(id));
+  handleTrustedAppIpc("replays:save", (_event, replay: ReplayRecord) => saveReplayWithEnhancedInsightsDataMutation(replay));
+  handleTrustedAppIpc("replays:delete", (_event, id: string) => (
+    enqueueEnhancedInsightsDataMutation(() => store.deleteReplay(id))
+  ));
+  handleTrustedAppIpc("replays:delete-many", (_event, ids: string[]) => (
+    enqueueEnhancedInsightsDataMutation(() => store.deleteReplays(ids))
+  ));
+  handleTrustedAppIpc("replays:restore", (_event, id: string) => (
+    enqueueEnhancedInsightsDataMutation(() => store.restoreReplay(id))
+  ));
+  handleTrustedAppIpc("replays:purge", (_event, id: string) => (
+    enqueueEnhancedInsightsDataMutation(() => store.purgeReplay(id))
+  ));
   handleTrustedAppIpc("replays:export", (_event, replayId: string) => exportReplayBundle(replayId));
   handleTrustedAppIpc("replays:reveal-file", (_event, replayId: string, preferredKind?: ReplayLocalAssetKind) => revealReplayFile(replayId, preferredKind));
   handleTrustedAppIpc("replays:export-mp4", (event, replayId: string, options: ReplayMp4ExportOptions, requestId: number) => exportReplayMp4(replayId, options, requestId, event.sender));
@@ -9050,9 +9126,13 @@ function registerIpc(): void {
   handleTrustedAppIpc("replays:video:chunk", (_event, sessionId: string, chunk: ArrayBuffer | Uint8Array) => appendReplayVideoChunk(sessionId, chunk));
   handleTrustedAppIpc("replays:video:finish", (_event, sessionId: string, options: ReplayVideoFinalizeOptions) => finishReplayVideoCaptureFile(sessionId, options));
   handleTrustedAppIpc("replays:video:merge", (_event, segments: ReplayVideoAsset[], options: ReplayVideoMergeOptions) => mergeReplayVideoSegments(segments, options));
-  handleTrustedAppIpc("replays:video:attach", (_event, matchId: string, video: ReplayVideoAsset) => attachReplayVideo(matchId, video));
+  handleTrustedAppIpc("replays:video:attach", (_event, matchId: string, video: ReplayVideoAsset) => (
+    enqueueEnhancedInsightsDataMutation(() => attachReplayVideo(matchId, video))
+  ));
   handleTrustedAppIpc("replays:video:discard", (_event, video: ReplayVideoAsset) => discardReplayVideoAsset(video));
-  handleTrustedAppIpc("replays:video:delete-by-match", (_event, matchId: string) => deleteReplayVideoByMatch(matchId));
+  handleTrustedAppIpc("replays:video:delete-by-match", (_event, matchId: string) => (
+    enqueueEnhancedInsightsDataMutation(() => deleteReplayVideoByMatch(matchId))
+  ));
   handleTrustedAppIpc("replays:video:keyframe", (_event, options: ReplayVideoKeyframeOptions) => saveReplayVideoKeyframe(options));
   handleTrustedAppIpc("replays:video:load", (_event, video: ReplayVideoAsset) => loadReplayVideo(video));
   handleTrustedAppIpc("legacy:import", async () => {

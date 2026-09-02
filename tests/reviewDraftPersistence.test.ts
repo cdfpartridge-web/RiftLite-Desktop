@@ -57,6 +57,35 @@ async function withStore(
 }
 
 describe("deferred match review persistence", () => {
+  it("persists a corrected Scorepad legend variant across a restart", async () => {
+    await withStore("riftlite-scorepad-edit-", async (store, dbPath, legacyPath) => {
+      const original: MatchDraft = {
+        ...reviewDraft("scorepad-legend-edit", "saved"),
+        platform: "atlas",
+        source: "scorepad",
+        myChampion: "Master Yi",
+        games: [{ gameNumber: 1, result: "Win", myPoints: 8, oppPoints: 5, wentFirst: "" }],
+        sync: { community: "disabled", hubs: {}, teams: {} }
+      };
+      await store.saveMatch(original);
+
+      const edited = await store.saveMatch({
+        ...original,
+        myChampion: "Master Yi, Wuju Bladesmen"
+      });
+
+      expect(edited.myChampion).toBe("Master Yi, Wuju Bladesman");
+      const restarted = new RiftLiteStore(dbPath, legacyPath);
+      await restarted.load();
+      expect((await restarted.getMatches())[0]).toMatchObject({
+        id: original.id,
+        source: "scorepad",
+        status: "saved",
+        myChampion: "Master Yi, Wuju Bladesman"
+      });
+    });
+  });
+
   it("creates the missing pending row and survives a restart", async () => {
     await withStore("riftlite-review-defer-new-", async (store, dbPath, legacyPath) => {
       const draft = { ...reviewDraft("in-memory-only"), notes: "Keep this for later" };

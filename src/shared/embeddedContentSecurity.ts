@@ -4,10 +4,13 @@ import type { GamePlatform } from "./types.js";
 export type EmbeddedWebviewPolicy =
   | { kind: "game"; platform: GamePlatform }
   | { kind: "replay" }
+  | { kind: "rules" }
   | { kind: "home-video"; provider: "youtube"; mediaId: string }
   | { kind: "home-video"; provider: "twitch"; mediaId: string };
 
 export const RIFTLITE_REPLAY_WEBVIEW_PARTITION = "persist:riftlite-replay";
+export const RIFTLITE_RULES_WEBVIEW_PARTITION = "riftlite-riftjudge";
+const RIFTJUDGE_RULES_ORIGIN = "https://app.riftjudge.com";
 const YOUTUBE_PARTITION_PREFIX = "persist:riftlite-home-video-";
 const TWITCH_PARTITION_PREFIX = "riftlite-home-live-twitch-";
 const SAFE_MEDIA_ID = /^[A-Za-z0-9_-]{1,80}$/;
@@ -86,6 +89,15 @@ export function isAllowedReplayWebviewNavigation(value: string): boolean {
   );
 }
 
+export function isAllowedRulesWebviewNavigation(value: string): boolean {
+  const url = parsedUrl(value);
+  return Boolean(
+    url &&
+    usesDefaultHttpsPort(url) &&
+    url.origin === RIFTJUDGE_RULES_ORIGIN
+  );
+}
+
 function youtubePolicy(src: string, partition: string): EmbeddedWebviewPolicy | null {
   if (!partition.startsWith(YOUTUBE_PARTITION_PREFIX)) {
     return null;
@@ -144,6 +156,9 @@ export function embeddedWebviewPolicy(
   if (partition === RIFTLITE_REPLAY_WEBVIEW_PARTITION) {
     return isAllowedReplayWebviewNavigation(src) ? { kind: "replay" } : null;
   }
+  if (partition === RIFTLITE_RULES_WEBVIEW_PARTITION) {
+    return isAllowedRulesWebviewNavigation(src) ? { kind: "rules" } : null;
+  }
   const platform = gamePlatformForTrustedUrl(src, allowSimulator);
   if (platform && partition === GAME_WEBVIEW_PARTITIONS[platform]) {
     return { kind: "game", platform };
@@ -154,6 +169,9 @@ export function embeddedWebviewPolicy(
 export function isAllowedEmbeddedNavigation(policy: EmbeddedWebviewPolicy, value: string): boolean {
   if (policy.kind === "replay") {
     return isAllowedReplayWebviewNavigation(value);
+  }
+  if (policy.kind === "rules") {
+    return isAllowedRulesWebviewNavigation(value);
   }
   if (policy.kind === "game") {
     return gamePlatformForTrustedUrl(value, policy.platform === "sim") === policy.platform;

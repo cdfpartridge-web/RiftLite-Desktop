@@ -1,7 +1,6 @@
 import React, { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import QRCode from "qrcode";
-import cardRegistryData from "../../resources/riftbound_card_registry.json";
 import {
   Activity,
   AlertTriangle,
@@ -108,6 +107,11 @@ import type {
   HubMember,
   HubMessage,
   ImportSummary,
+  InsightDecisionAssessment,
+  InsightDecisionContext,
+  InsightDecisionFamily,
+  InsightDecisionType,
+  InsightPlanOutcome,
   LfgListing,
   MatchGame,
   MatchDraft,
@@ -159,8 +163,30 @@ import type {
   WebReplayUploadDiagnostics,
   WebReplayUploadQueueItem
 } from "../shared/types";
+import {
+  advanceEnhancedInsightLiveSession,
+  type EnhancedInsightLiveSession
+} from "../shared/enhancedInsightLiveSession";
+import {
+  enhancedInsightDecisionsForDraft,
+  normalizePendingEnhancedInsightMarkers,
+  removePersistedEnhancedInsightMarkers,
+  type PendingEnhancedInsightMarker
+} from "../shared/enhancedInsightPendingMarkers";
+import { buildInsightNotebookSnapshot } from "../shared/enhancedInsightNotebookSnapshot";
+import {
+  MAX_REPLAY_MP4_VOICE_VOLUME,
+  MIN_REPLAY_MP4_VOICE_VOLUME,
+  normalizeReplayMp4VoiceVolume,
+  REPLAY_MP4_VOICE_VOLUME_STEP
+} from "../shared/replayMp4VoiceVolume";
 import { buildAtlasReplay, replaySnapshotCardCount, type AtlasReplayViewModel, type ReplayTimelineEvent, type ReplayTurnView } from "../shared/atlasReplay";
 import { buildReplayIntelligence, replayWithIntelligence, type ReplayIntelligenceEvent, type ReplayIntelligenceResult } from "../shared/replayIntelligence";
+import {
+  readReplayVideoTimelineMarkersEnabled,
+  replayVideoTimelineMarkers,
+  writeReplayVideoTimelineMarkersEnabled
+} from "../shared/replayVideoTimelineMarkers";
 import { getRiftLiteAccountState, hasVerifiedRiftLiteAccount, isGenericAccountDisplayName } from "../shared/accountIdentity";
 import { accountLinkErrorMessage, accountLinkUrlForProvider, type AccountLinkProvider } from "../shared/accountLink";
 import {
@@ -233,6 +259,7 @@ import {
   updateAtlasReloadStormState
 } from "../shared/atlasWebviewRecovery";
 import { stopMediaRecorderSafely } from "../shared/mediaRecorderStop";
+import { acquireMicrophoneStream, microphoneErrorMessage } from "../shared/microphoneCapture";
 import { RIFTLITE_BUILD_IDENTITY } from "../shared/buildIdentity";
 import { enqueueReviewDraft, shiftReviewDraft } from "../shared/reviewQueue";
 import {
@@ -302,7 +329,6 @@ import {
   MULLIGAN_LAB_MIN_ELIGIBLE_HANDS,
   MULLIGAN_LAB_MIN_UNIQUE_PLAYERS,
   MULLIGAN_LAB_TRAINING_STORAGE_KEY,
-  buildMulliganLabRegistry,
   completeMulliganLabTrainingSession,
   initialMulliganLabTrainingState,
   mulliganLabApiDeckFingerprintFromSnapshot,
@@ -368,13 +394,17 @@ import {
   type NavigationTarget
 } from "../shared/navigationModel";
 import { GuidedTour } from "./GuidedTour";
+import { DeckShareCardDialog, type DeckShareCardViewModel } from "./DeckShareCard";
 import { HomeDeckThemeIntro } from "./HomeDeckThemeIntro";
-import { InsightsComingSoon } from "./InsightsComingSoon";
+import { InsightsHubView } from "./InsightsHubView";
+import { INSIGHT_ANALYSIS_CACHE_STORAGE_KEY } from "./insightAnalysisCache";
+import { INSIGHT_CARD_REGISTRY } from "./insightCardCatalog";
 import {
   HomeLiveTakeoverPlayer,
   type HomeLiveTakeoverPlayerHandle,
 } from "./HomeLiveTakeoverPlayer";
 import { MulliganLabIntro } from "./MulliganLabIntro";
+import { RULES_SEARCH_DRAWER_ID, RulesSearchDrawer } from "./RulesSearchDrawer";
 import { SideboardLabView } from "./SideboardLabView";
 import { TrainingLabsIntro } from "./TrainingLabsIntro";
 import { resolveBundledReplayCardImage, RiftLiteReplayViewer } from "./RiftLiteReplayViewer";
@@ -436,6 +466,7 @@ const DEFAULT_HEALTH: CaptureHealth = {
 
 const DECK_TRACKER_FEATURE_ENABLED = true;
 const RIFTLITE_WEB_REPLAY_FEATURE_VISIBLE = true;
+const RULES_SEARCH_FEATURE_VISIBLE = false;
 
 const DEFAULT_UPDATE_STATUS: UpdateStatus = {
   state: "idle",
@@ -483,6 +514,9 @@ const FALLBACK_BOOT_SETTINGS: UserSettings = {
   anonymousInstallCreatedAt: "",
   anonymousUsageLastHeartbeatAt: "",
   anonymousUsageLastHeartbeatVersion: "",
+  enhancedInsightsEnabled: false,
+  enhancedInsightsIntroSeen: false,
+  enhancedInsightsPostGamePromptEnabled: true,
   debugMode: false,
   confirmationEnabled: true,
   replayCaptureEnabled: true,
@@ -584,7 +618,7 @@ const HOME_LIVE_TAKEOVER_URL = resolveHomeLiveTakeoverUrl(HOME_CONFIG_URL);
 const MULLIGAN_LAB_URL = new URL("/api/app/mulligan-lab", HOME_CONFIG_URL).toString();
 const MULLIGAN_LAB_TARGET_URL = new URL("/api/app/mulligan-lab/v2", HOME_CONFIG_URL).toString();
 const SIDEBOARD_LAB_URL = new URL("/api/app/sideboard-lab", HOME_CONFIG_URL).toString();
-const MULLIGAN_LAB_REGISTRY = buildMulliganLabRegistry(cardRegistryData);
+const MULLIGAN_LAB_REGISTRY = INSIGHT_CARD_REGISTRY;
 const REPLAY_INTELLIGENCE_CARD_BY_NAME = new Map(
   [...MULLIGAN_LAB_REGISTRY.byCode.values()].map((card) => [card.name.trim().toLowerCase(), card])
 );
@@ -595,13 +629,14 @@ const LAB_TRAINING_LEGEND_NAMES = new Set(LAB_TRAINING_LEGEND_NAME_BY_CANONICAL.
 const RELEASE_NOTES = {
   version: APP_VERSION_META,
   title: `RiftLite v${APP_VERSION_META}`,
-  intro: "This focused hotfix makes RiftAtlas recover safely when only its adverts and page frame load but the lobby itself does not.",
+  intro: "This update makes deck and replay review more useful, easier to share, and clearer about the evidence it has.",
   items: [
-    "RiftLite now detects the partial Atlas page where adverts, event rails, and footer links appear but the real lobby and play controls are missing.",
-    "Lobby monitoring continues across Atlas page transitions, including when returning from a match after the page initially loaded correctly.",
-    "Recovery waits through active recording and the post-match continuation window, then retries without interrupting a game or redirecting deck and match pages.",
-    "The automatic repair remains bounded and preserves Atlas sign-in, decks, cookies, and local data.",
-    "Insights remains a Coming Soon preview while normal match and replay evidence capture continues in the background."
+    "Deck Insights is now the default Insights view, with focused Card Review, matchup context, filters, and honest evidence labels.",
+    "Enhanced Insights Beta can mark the exact moment of a decision and add the reason later in Match Review, while keeping that context local.",
+    "Replay timelines use player and opponent colours, conservative score badges, and a default-off automatic-events control.",
+    "Full Voiceover and coaching-note recording now show clear progress, with more reliable MP4 overlays and adjustable coaching-note volume.",
+    "Saved Scorepad records can be corrected, and deck summaries can be shared as ready-to-post images.",
+    "Replay Coach remains Coming Soon while its coaching experience is refined."
   ]
 };
 const RIOT_LEGAL_NOTICE = `RiftLite was created under Riot Games' "Legal Jibber Jabber" policy using assets owned by Riot Games. Riot Games does not endorse or sponsor this project.`;
@@ -657,6 +692,9 @@ const MATCHUP_PREP_SIZE_KEY = "riftlite-matchup-prep-size-v1";
 const MATCHUP_PREP_HIDDEN_KEY = "riftlite-matchup-prep-hidden-v1";
 const TESTING_SESSIONS_KEY = "riftlite-testing-sessions-v1";
 const ACTIVE_TESTING_SESSION_KEY = "riftlite-active-testing-session-v1";
+const PENDING_ENHANCED_INSIGHT_MARKERS_KEY = "riftlite-pending-enhanced-insight-markers-v1";
+const REPLAY_MP4_VOICE_VOLUME_KEY = "riftlite-replay-mp4-voice-volume-v1";
+const PENDING_ENHANCED_INSIGHT_MARKER_MAX_AGE_MS = 12 * 60 * 60 * 1000;
 const STARTUP_VALUE_TIMEOUT_MS = 6_000;
 const CRITICAL_LOCAL_STARTUP_VALUE_TIMEOUT_MS = 45_000;
 
@@ -724,6 +762,38 @@ function writeActiveTestingSessionId(id: string) {
     }
   } catch {
     // Local-only helper; failing to persist should not block match review.
+  }
+}
+
+function readReplayMp4VoiceVolume(): number {
+  try {
+    return normalizeReplayMp4VoiceVolume(window.localStorage.getItem(REPLAY_MP4_VOICE_VOLUME_KEY));
+  } catch {
+    return normalizeReplayMp4VoiceVolume(undefined);
+  }
+}
+
+function writeReplayMp4VoiceVolume(value: number): void {
+  try {
+    window.localStorage.setItem(REPLAY_MP4_VOICE_VOLUME_KEY, String(normalizeReplayMp4VoiceVolume(value)));
+  } catch {
+    // The export dialog remains usable for this session if local storage is unavailable.
+  }
+}
+
+function readAutomaticReplayTimelineMarkers(): boolean {
+  try {
+    return readReplayVideoTimelineMarkersEnabled(window.localStorage);
+  } catch {
+    return false;
+  }
+}
+
+function writeAutomaticReplayTimelineMarkers(enabled: boolean): void {
+  try {
+    writeReplayVideoTimelineMarkersEnabled(window.localStorage, enabled);
+  } catch {
+    // The checkbox remains usable for this replay if local storage is unavailable.
   }
 }
 
@@ -887,7 +957,6 @@ function normalizeReplayShadowClipSeconds(value: unknown): number {
 
 async function createReplayMicrophoneStream(microphoneDeviceId: string): Promise<MediaStream> {
   const audio: MediaTrackConstraints = {
-    ...(microphoneDeviceId ? { deviceId: { exact: microphoneDeviceId } } : {}),
     echoCancellation: false,
     noiseSuppression: false,
     autoGainControl: false,
@@ -895,15 +964,13 @@ async function createReplayMicrophoneStream(microphoneDeviceId: string): Promise
     sampleRate: 48_000,
     sampleSize: 16
   };
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio });
-    await Promise.all(stream.getAudioTracks().map((track) => track.applyConstraints(audio).catch(() => undefined)));
-    return stream;
-  } catch {
-    return navigator.mediaDevices.getUserMedia({
-      audio: microphoneDeviceId ? { deviceId: { exact: microphoneDeviceId } } : true
-    });
-  }
+  const acquired = await acquireMicrophoneStream(
+    (constraints) => navigator.mediaDevices.getUserMedia(constraints),
+    microphoneDeviceId,
+    audio
+  );
+  await Promise.all(acquired.stream.getAudioTracks().map((track) => track.applyConstraints(audio).catch(() => undefined)));
+  return acquired.stream;
 }
 
 function formatBytes(value: number): string {
@@ -1299,6 +1366,40 @@ type PendingReplayHotkeyFlag = {
   platform: GamePlatform;
   flag: ReplayFlag;
 };
+
+function readPendingEnhancedInsightMarkers(): PendingEnhancedInsightMarker[] {
+  try {
+    const raw = window.localStorage.getItem(PENDING_ENHANCED_INSIGHT_MARKERS_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return normalizePendingEnhancedInsightMarkers(parsed, {
+      nowMs: Date.now(),
+      maxAgeMs: PENDING_ENHANCED_INSIGHT_MARKER_MAX_AGE_MS,
+      maxMarkers: 64
+    });
+  } catch {
+    return [];
+  }
+}
+
+function writePendingEnhancedInsightMarkers(markers: PendingEnhancedInsightMarker[]): void {
+  try {
+    if (markers.length) {
+      window.localStorage.setItem(PENDING_ENHANCED_INSIGHT_MARKERS_KEY, JSON.stringify(markers.slice(-64)));
+    } else {
+      window.localStorage.removeItem(PENDING_ENHANCED_INSIGHT_MARKERS_KEY);
+    }
+  } catch {
+    // A marker remains available in memory if local persistence is unavailable.
+  }
+}
+
+function enhancedInsightContextSignature(context: MatchDraft["insightContext"]): string {
+  if (!context) {
+    return "";
+  }
+  const { updatedAt: _updatedAt, ...durableContext } = context;
+  return JSON.stringify(durableContext);
+}
 
 type PendingReplayVideoSegment = {
   video: ReplayVideoAsset;
@@ -2947,6 +3048,117 @@ const ZELONIUS_SPOTLIGHT: CommunitySpotlight = {
   ]
 };
 
+const X0TCG_SPOTLIGHT: CommunitySpotlight = {
+  id: "x0tcg",
+  name: "X0TCG",
+  kicker: "Coach spotlight",
+  location: "Competitive player, creator, and coach",
+  description: "X0TCG is a competitive Riftbound player, creator, coach, and qualified teacher. Through regular Twitch streams, free consultations on Metafy, and an active online profile, he helps the community grow, learn, and love the game. His teaching background brings an individualised, methodical approach to competitive improvement.",
+  primaryCta: {
+    id: "metafy",
+    label: "Book a free consultation",
+    url: "https://metafy.gg/@x0tcg",
+    description: "Open X0TCG's Metafy profile for free consultations and individual coaching.",
+    icon: Users,
+    featured: true
+  },
+  links: [
+    {
+      id: "twitch",
+      label: "Twitch",
+      url: "https://www.twitch.tv/x0tcg",
+      description: "Regular live Riftbound play, testing, analysis, and community learning.",
+      icon: Radio,
+      featured: true
+    },
+    {
+      id: "linktree",
+      label: "Linktree",
+      url: "https://linktr.ee/x0tcg",
+      description: "Find every X0TCG channel, coaching route, and community link in one place.",
+      icon: Compass
+    },
+    {
+      id: "metafy",
+      label: "Metafy",
+      url: "https://metafy.gg/@x0tcg",
+      description: "Free consultations and coaching shaped around each player's goals.",
+      icon: Users,
+      featured: true
+    },
+    {
+      id: "youtube",
+      label: "YouTube",
+      url: "https://www.youtube.com/@x0tcg-riftbound",
+      description: "Accessible Riftbound guides, gameplay, and competitive decision analysis.",
+      icon: Video,
+      featured: true
+    },
+    {
+      id: "x",
+      label: "X",
+      url: "https://x.com/X0TCG",
+      description: "Follow competitive updates, new content, and Riftbound discussion.",
+      icon: X
+    },
+    {
+      id: "tiktok",
+      label: "TikTok",
+      url: "https://www.tiktok.com/@x0tcg",
+      description: "Short-form Riftbound lessons, gameplay moments, and creator updates.",
+      icon: Video
+    }
+  ],
+  tags: ["Riftbound Coaching", "Content Creator", "Deck Guides", "Live Play", "Gameplay Analysis"],
+  highlights: [
+    {
+      title: "A coach you can trust",
+      text: "Teacher training has shown X0TCG the value of individualised, specific learning built around the person and their goals."
+    },
+    {
+      title: "New-player friendly",
+      text: "A range of accessible content explains the reasoning behind decisions so newer players can follow the learning process."
+    },
+    {
+      title: "Learning focused",
+      text: "Content centres on improving competitive play, with a methodical and open approach to decision-making."
+    },
+    {
+      title: "Wealth of knowledge",
+      text: "A long competitive card-game history includes Yu-Gi-Oh!, Disney Lorcana, Star Wars Unlimited, and now Riftbound."
+    }
+  ],
+  assets: {
+    logo: "community/x0tcg-profile.png",
+    banner: "community/x0tcg-profile.png",
+    tiktok: "community/x0tcg-profile.png",
+    youtube: "community/x0tcg-profile.png",
+    twitch: "community/x0tcg-profile.png"
+  },
+  overviewBanner: "community/x0tcg-profile.png",
+  overviewLogo: "community/x0tcg-profile.png",
+  routes: [
+    {
+      key: "twitch",
+      title: "Regular Twitch streams",
+      subtitle: "Watch live play, testing, and open competitive decision-making.",
+      linkId: "twitch"
+    },
+    {
+      key: "youtube",
+      title: "Learning-led YouTube",
+      subtitle: "Explore accessible guides, deck content, gameplay, and analysis.",
+      linkId: "youtube"
+    },
+    {
+      key: "tiktok",
+      title: "Individual coaching",
+      subtitle: "Start with a free Metafy consultation tailored to your goals.",
+      linkId: "metafy"
+    }
+  ]
+};
+
 const COMMUNITY_SPOTLIGHTS: CommunitySpotlight[] = [
   RIFTLAB_SPOTLIGHT,
   FRODAN_SPOTLIGHT,
@@ -2962,7 +3174,8 @@ const COMMUNITY_SPOTLIGHTS: CommunitySpotlight[] = [
   MASKEDSWAN_SPOTLIGHT,
   ARG0NTCG_SPOTLIGHT,
   TRONISBAD_SPOTLIGHT,
-  ZELONIUS_SPOTLIGHT
+  ZELONIUS_SPOTLIGHT,
+  X0TCG_SPOTLIGHT
 ];
 
 interface CaptureNotice {
@@ -3026,6 +3239,7 @@ function App() {
   const [firstMatchOnboarding, setFirstMatchOnboarding] = useState<FirstMatchOnboardingState | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [expandedNavGroup, setExpandedNavGroup] = useState<NavigationDisclosureId | null>(null);
+  const [rulesSearchOpen, setRulesSearchOpen] = useState(false);
   const [activeView, setActiveView] = useState<ActiveView>("home");
   const [activeCommunityTab, setActiveCommunityTab] = useState<CommunityTab>("community-decks");
   const [communityDeckLegendTarget, setCommunityDeckLegendTarget] = useState("");
@@ -3055,7 +3269,7 @@ function App() {
   const gameGuestAutoRecoveryRef = useRef(new Set<GamePlatform>());
   const reviewDraftRef = useRef<MatchDraft | null>(null);
   const queuedReviewDraftsRef = useRef<MatchDraft[]>([]);
-  const reviewDraftWasOpenRef = useRef(false);
+  const gameHostInputWasBlockedRef = useRef(false);
   const gamePresentationPulseRef = useRef<{
     webview: Electron.WebviewTag;
     token: number;
@@ -3073,6 +3287,7 @@ function App() {
   const atlasEmptyShellAutoRepairRef = useRef(false);
   const atlasRecoveryBusyRef = useRef(false);
   const pendingReviewFallbackTimerRef = useRef<number | undefined>(undefined);
+  const pendingReviewFallbackGenerationRef = useRef(0);
   const diagnosticsRefreshTimerRef = useRef<number | undefined>(undefined);
   const diagnosticsRefreshInFlightRef = useRef(false);
   const webReplayDiagnosticsRequestRef = useRef<Promise<WebReplayUploadDiagnostics | null> | null>(null);
@@ -3093,12 +3308,19 @@ function App() {
   const pendingReplayVideoRef = useRef<PendingReplayVideoSegment | null>(null);
   const pendingReplayVideoSegmentsRef = useRef<PendingReplayVideoSegment[]>([]);
   const pendingReplayHotkeyFlagsRef = useRef<PendingReplayHotkeyFlag[]>([]);
+  const pendingEnhancedInsightMarkersRef = useRef<PendingEnhancedInsightMarker[]>(readPendingEnhancedInsightMarkers());
+  const enhancedInsightLiveSessionRef = useRef<EnhancedInsightLiveSession | null>(null);
+  const enhancedInsightStartEventRef = useRef<CaptureEvent | null>(null);
+  const enhancedInsightMatchOpenRef = useRef(false);
+  const enhancedInsightCurrentGameNumberRef = useRef(1);
+  const enhancedInsightSessionActiveRef = useRef(false);
   const lastReplayStartEventRef = useRef<CaptureEvent | null>(null);
   const armedReplayVideoRef = useRef<Partial<Record<GamePlatform, ArmedReplayVideoSource>>>({});
   const replayVideoPrimeTimerRef = useRef<number | undefined>(undefined);
   const replayVideoResizeResumeTimerRef = useRef<number | undefined>(undefined);
   const lastReplayArmAttemptRef = useRef(0);
   const gameZoom = clampGameZoom(settings?.gameZoomFactor);
+  const [enhancedInsightSessionActive, setEnhancedInsightSessionActive] = useState(false);
   const playActiveDeck = useMemo(
     () => settings?.activeDeckId ? decks.find((deck) => deck.id === settings.activeDeckId) ?? null : null,
     [decks, settings?.activeDeckId]
@@ -3257,17 +3479,11 @@ function App() {
   ): Promise<string> => runReplayMp4ExportWithProgress(
     replayId,
     "presentation",
-    "presentation MP4",
+    "Full Voiceover MP4",
     (requestId) => window.riftlite.exportReplayPresentationMp4(replayId, payload, requestId)
   ), [runReplayMp4ExportWithProgress]);
 
   function openView(nextView: ActiveView, options?: NavigationOptions) {
-    if (nextView === "play" && healthRef.current.state === "review-needed") {
-      setActiveView("matches");
-      void openLatestPendingReview();
-      showActionFeedback("Review the captured match before starting another game.", 5_000);
-      return;
-    }
     if (options?.communityTab) {
       setActiveCommunityTab(options.communityTab);
       if (options.communityTab !== "community-decks" || options.communityDeckLegend === undefined) {
@@ -3747,6 +3963,23 @@ function App() {
       .then((state) => setAtlasKnownOpponentHand(state ?? EMPTY_ATLAS_KNOWN_OPPONENT_HAND))
       .catch(() => setAtlasKnownOpponentHand(EMPTY_ATLAS_KNOWN_OPPONENT_HAND));
     const offEvent = window.riftlite.onCaptureEvent((event) => {
+      if (event.kind === "match-start" || event.kind === "match-end") {
+        const pinnedFromMain = event.payload.enhancedInsightsEnabledAtStart;
+        const enabledAtStart = typeof pinnedFromMain === "boolean"
+          ? pinnedFromMain
+          : settingsRef.current?.enhancedInsightsEnabled === true;
+        const nextSession = advanceEnhancedInsightLiveSession(
+          enhancedInsightLiveSessionRef.current,
+          event,
+          enabledAtStart
+        );
+        enhancedInsightLiveSessionRef.current = nextSession;
+        enhancedInsightStartEventRef.current = nextSession?.startEvent ?? null;
+        enhancedInsightMatchOpenRef.current = Boolean(nextSession);
+        enhancedInsightCurrentGameNumberRef.current = nextSession?.gameNumber ?? 1;
+        enhancedInsightSessionActiveRef.current = nextSession?.enabledAtStart === true;
+        setEnhancedInsightSessionActive(enhancedInsightSessionActiveRef.current);
+      }
       void maybeStartReplayVideo(event);
       updatePrepFromCaptureEvent(event);
       if (DECK_TRACKER_FEATURE_ENABLED) {
@@ -3774,7 +4007,27 @@ function App() {
     const offDraft = window.riftlite.onMatchDraft((draft) => {
       clearPendingReviewFallback();
       const repairedDraft = prepareDraftForReview(draft);
+      enhancedInsightLiveSessionRef.current = null;
+      enhancedInsightStartEventRef.current = null;
+      enhancedInsightMatchOpenRef.current = false;
+      enhancedInsightCurrentGameNumberRef.current = 1;
+      enhancedInsightSessionActiveRef.current = false;
+      setEnhancedInsightSessionActive(false);
       setMatches((current) => upsertMatchPreservingOrder(current, repairedDraft));
+      const enhancedContextChanged = (
+        repairedDraft.insightContext
+        && enhancedInsightContextSignature(repairedDraft.insightContext) !== enhancedInsightContextSignature(draft.insightContext)
+      );
+      if (enhancedContextChanged) {
+        void window.riftlite.saveMatchDraft(repairedDraft)
+          .then((persisted) => {
+            consumePersistedEnhancedInsightMarkers(persisted.insightContext);
+            setMatches((current) => upsertMatchPreservingOrder(current, persisted));
+          })
+          .catch(() => showActionFeedback("Match review opened, but its Enhanced Insights context could not be saved yet.", 5_000));
+      } else {
+        consumePersistedEnhancedInsightMarkers(draft.insightContext);
+      }
       void refreshDecks();
       if (repairedDraft.status === "saved") {
         return;
@@ -4013,12 +4266,12 @@ function App() {
   }, [activePlatform, activeView, mountedGamePlatform, preloadUrl, sidebarCollapsed]);
 
   useEffect(() => {
-    const reviewIsOpen = Boolean(reviewDraft);
-    const reviewWasOpen = reviewDraftWasOpenRef.current;
-    reviewDraftWasOpenRef.current = reviewIsOpen;
+    const hostInputBlocked = Boolean(reviewDraft || rulesSearchOpen);
+    const hostInputWasBlocked = gameHostInputWasBlockedRef.current;
+    gameHostInputWasBlockedRef.current = hostInputBlocked;
     if (!shouldRestoreGameWebviewFocus(
-      reviewWasOpen,
-      reviewIsOpen,
+      hostInputWasBlocked,
+      hostInputBlocked,
       activePlatform,
       mountedGamePlatform,
       preloadUrl,
@@ -4030,7 +4283,7 @@ function App() {
       focusGameWebviewInput("atlas");
     }, delay));
     return () => timers.forEach((timer) => window.clearTimeout(timer));
-  }, [activePlatform, activeView, mountedGamePlatform, preloadUrl, reviewDraft]);
+  }, [activePlatform, activeView, mountedGamePlatform, preloadUrl, reviewDraft, rulesSearchOpen]);
 
   useEffect(() => {
     if (!shouldFocusGameWebviewInput(
@@ -4038,7 +4291,7 @@ function App() {
       mountedGamePlatform,
       preloadUrl,
       activeView === "play",
-      Boolean(reviewDraft)
+      Boolean(reviewDraft || rulesSearchOpen)
     )) {
       return;
     }
@@ -4085,7 +4338,7 @@ function App() {
       document.removeEventListener("visibilitychange", handleVisibilityChange);
       pendingTimers.forEach((timer) => window.clearTimeout(timer));
     };
-  }, [activePlatform, activeView, mountedGamePlatform, preloadUrl, reviewDraft]);
+  }, [activePlatform, activeView, mountedGamePlatform, preloadUrl, reviewDraft, rulesSearchOpen]);
 
   useEffect(() => {
     if (!DECK_TRACKER_FEATURE_ENABLED) {
@@ -4356,13 +4609,26 @@ function App() {
 
   function schedulePendingReviewFallback() {
     clearPendingReviewFallback();
+    const generation = ++pendingReviewFallbackGenerationRef.current;
     pendingReviewFallbackTimerRef.current = window.setTimeout(() => {
       pendingReviewFallbackTimerRef.current = undefined;
-      void openLatestPendingReview();
+      void openLatestPendingReview()
+        .then((opened) => {
+          if (
+            !opened &&
+            generation === pendingReviewFallbackGenerationRef.current &&
+            healthRef.current.state === "review-needed"
+          ) {
+            return window.riftlite.dismissMatchReview();
+          }
+          return undefined;
+        })
+        .catch(() => undefined);
     }, 900);
   }
 
   function clearPendingReviewFallback() {
+    pendingReviewFallbackGenerationRef.current += 1;
     if (!pendingReviewFallbackTimerRef.current) {
       return;
     }
@@ -4399,7 +4665,7 @@ function App() {
     }
   }
 
-  async function openLatestPendingReview() {
+  async function openLatestPendingReview(): Promise<boolean> {
     const [nextSettings, nextMatches] = await Promise.all([
       window.riftlite.getSettings(),
       window.riftlite.getMatches()
@@ -4407,13 +4673,14 @@ function App() {
     setSettings(nextSettings);
     setMatches(nextMatches);
     if (!nextSettings.confirmationEnabled) {
-      return;
+      return false;
     }
     const pendingReview = latestPendingReviewMatch(nextMatches);
     if (!pendingReview) {
-      return;
+      return false;
     }
     setReviewDraft((current) => current && current.status !== "saved" ? current : prepareDraftForReview(pendingReview));
+    return true;
   }
 
   async function forceCaptureReview() {
@@ -4445,9 +4712,11 @@ function App() {
       openNextQueuedReview();
       return;
     }
+    const normalized = normalizeReviewDraft(attachTestingSessionToDraft(draft));
     const deferred = await window.riftlite.deferMatchReview(
-      normalizeReviewDraft(attachTestingSessionToDraft(draft))
+      await finalizeEnhancedInsightNotebookSnapshot(normalized)
     );
+    consumePersistedEnhancedInsightMarkers(deferred.insightContext);
     setMatches((current) => upsertMatchPreservingOrder(current, deferred));
     markReviewDismissed(deferred);
     if (!queuedReviewDraftsRef.current.length) {
@@ -4458,12 +4727,6 @@ function App() {
 
   async function chooseGamePlatform(platform: GamePlatform, openPlay = false): Promise<boolean> {
     const requestId = ++platformSwitchRequestRef.current;
-    if (openPlay && healthRef.current.state === "review-needed") {
-      openView("matches");
-      void openLatestPendingReview();
-      showActionFeedback("Review the captured match before starting another game.", 5_000);
-      return false;
-    }
     const healthPlatformMatches = healthRef.current.platform === "none" || healthRef.current.platform === platform;
     if (platform === activePlatformRef.current && healthPlatformMatches) {
       if (openPlay) openView("play");
@@ -4542,7 +4805,84 @@ function App() {
 
   function prepareDraftForReview(draft: MatchDraft): MatchDraft {
     const repaired = sanitizeDraftDeckDefaults(repairDraftForReview(draft));
-    return appendMatchupPrepNotes(repaired);
+    return appendMatchupPrepNotes(attachEnhancedInsightContext(repaired));
+  }
+
+  function consumePersistedEnhancedInsightMarkers(context: MatchDraft["insightContext"]): void {
+    const remaining = removePersistedEnhancedInsightMarkers(pendingEnhancedInsightMarkersRef.current, context);
+    if (remaining.length === pendingEnhancedInsightMarkersRef.current.length) {
+      return;
+    }
+    pendingEnhancedInsightMarkersRef.current = remaining;
+    writePendingEnhancedInsightMarkers(pendingEnhancedInsightMarkersRef.current);
+  }
+
+  function attachEnhancedInsightContext(draft: MatchDraft): MatchDraft {
+    const matched = enhancedInsightDecisionsForDraft(pendingEnhancedInsightMarkersRef.current, draft);
+
+    const existing = draft.insightContext;
+    const capturedWithEnhancedInsights = existing?.capturedWithEnhancedInsights === true
+      || matched.length > 0;
+    if (!capturedWithEnhancedInsights) {
+      return draft;
+    }
+
+    const notebook = prepNotebookRef.current;
+    const settingsSnapshot = settingsRef.current;
+    const activeDeck = settingsSnapshot?.activeDeckId
+      ? decksRef.current.find((deck) => deck.id === settingsSnapshot.activeDeckId)
+      : undefined;
+    const draftDeckIdentifiers = [draft.deckSourceKey, draft.deckSourceId, draft.deckSourceUrl]
+      .filter((value): value is string => Boolean(value));
+    const activeDeckIdentifiers = new Set(
+      activeDeck
+        ? [activeDeck.id, activeDeck.sourceKey, activeDeck.sourceUrl].filter((value): value is string => Boolean(value))
+        : []
+    );
+    const notebookApplies = Boolean(
+      notebook
+      && activeDeck
+      && draftDeckIdentifiers.some((identifier) => activeDeckIdentifiers.has(identifier))
+    );
+    const activeGoals = notebookApplies && notebook
+      ? notebook.goals.filter((goal) => goal.status === "Active")
+      : [];
+    const decisionsById = new Map<string, InsightDecisionContext>();
+    for (const decision of [...(existing?.decisions ?? []), ...matched]) {
+      decisionsById.set(decision.id, decision);
+    }
+    const now = new Date().toISOString();
+    const shouldCaptureNotebook = notebookApplies && notebook && draft.status !== "saved";
+    const notebookSnapshot = existing?.notebookSnapshot ?? (
+      shouldCaptureNotebook
+        ? buildInsightNotebookSnapshot(
+            notebook,
+            draft.opponentChampion || prepOpponentLegendRef.current,
+            now
+          )
+        : undefined
+    );
+    const activeGoalIds = existing?.notebookSnapshot
+      ? existing.activeGoalIds
+      : draft.status === "saved"
+        ? (existing?.activeGoalIds ?? [])
+        : [...new Set([...(existing?.activeGoalIds ?? []), ...activeGoals.map((goal) => goal.id)])];
+    return {
+      ...draft,
+      insightContext: {
+        version: 1,
+        capturedWithEnhancedInsights: true,
+        activeGoalIds,
+        decisions: [...decisionsById.values()],
+        ...(notebookSnapshot ? { notebookSnapshot } : {}),
+        ...(existing?.planOutcome ? { planOutcome: existing.planOutcome } : {}),
+        ...(existing?.sideboardPlanOutcome ? { sideboardPlanOutcome: existing.sideboardPlanOutcome } : {}),
+        ...(existing?.postGamePromptCompletedAt
+          ? { postGamePromptCompletedAt: existing.postGamePromptCompletedAt }
+          : {}),
+        updatedAt: now
+      }
+    };
   }
 
   function appendMatchupPrepNotes(draft: MatchDraft): MatchDraft {
@@ -4782,8 +5122,57 @@ function App() {
     };
   }
 
+  async function finalizeEnhancedInsightNotebookSnapshot(draft: MatchDraft): Promise<MatchDraft> {
+    if (!draft.insightContext || draft.status === "saved") {
+      return draft;
+    }
+    const selectedDeck = decksRef.current.find((deck) => (
+      deck.id === draft.deckSourceId
+      || deck.id === draft.deckSourceKey
+      || deck.sourceKey === draft.deckSourceId
+      || deck.sourceKey === draft.deckSourceKey
+      || (Boolean(deck.sourceUrl) && deck.sourceUrl === draft.deckSourceUrl)
+    ));
+    if (!selectedDeck) {
+      const { notebookSnapshot: _notebookSnapshot, ...withoutNotebookSnapshot } = draft.insightContext;
+      return {
+        ...draft,
+        insightContext: {
+          ...withoutNotebookSnapshot,
+          activeGoalIds: [],
+          updatedAt: new Date().toISOString()
+        }
+      };
+    }
+    const notebook = prepNotebookRef.current?.deckId === selectedDeck.id
+      ? prepNotebookRef.current
+      : await window.riftlite.getDeckNotebook(selectedDeck.id).catch(() => null);
+    if (!notebook) {
+      return draft;
+    }
+    const now = new Date().toISOString();
+    const notebookSnapshot = buildInsightNotebookSnapshot(notebook, draft.opponentChampion, now);
+    return {
+      ...draft,
+      insightContext: {
+        ...draft.insightContext,
+        activeGoalIds: notebookSnapshot.goals.map((goal) => goal.id),
+        notebookSnapshot,
+        updatedAt: now
+      }
+    };
+  }
+
   async function confirmDraft(draft: MatchDraft) {
-    const saved = await window.riftlite.confirmMatch(normalizeReviewDraft(attachTestingSessionToDraft(draft)));
+    const editingSavedManualMatch = draft.status === "saved" && (draft.source === "scorepad" || draft.source === "manual");
+    const normalizedDraft = normalizeReviewDraft(
+      draft.status === "saved" ? draft : attachTestingSessionToDraft(draft)
+    );
+    const preparedDraft = await finalizeEnhancedInsightNotebookSnapshot(normalizedDraft);
+    const saved = editingSavedManualMatch
+      ? await window.riftlite.saveMatchDraft(preparedDraft)
+      : await window.riftlite.confirmMatch(preparedDraft);
+    consumePersistedEnhancedInsightMarkers(saved.insightContext);
     openNextQueuedReview();
     setMatches((current) => upsertMatchPreservingOrder(current, saved));
     const completedFirstMatch = firstMatchOnboarding?.status === "pending" && saved.status === "saved" && saved.result !== "Incomplete";
@@ -4794,7 +5183,9 @@ function App() {
     const backgroundDelivery = (saved.platform === "atlas" || saved.platform === "tcga") &&
       saved.source !== "manual" &&
       saved.source !== "scorepad";
-    const feedback = completedFirstMatch
+    const feedback = editingSavedManualMatch
+      ? "Scorepad match updated."
+      : completedFirstMatch
       ? backgroundDelivery
         ? "First match saved locally - setup complete. Replay delivery and reporting will continue in the background."
         : "First match saved - setup complete."
@@ -5374,6 +5765,7 @@ function App() {
     if (
       document.visibilityState === "hidden" ||
       reviewDraft ||
+      rulesSearchOpen ||
       activeView !== "play" ||
       platform !== activePlatform ||
       platform !== mountedGamePlatform
@@ -5389,6 +5781,7 @@ function App() {
       !webview ||
       document.visibilityState === "hidden" ||
       reviewDraft ||
+      rulesSearchOpen ||
       activeView !== "play" ||
       platform !== activePlatform ||
       platform !== mountedGamePlatform
@@ -6034,14 +6427,45 @@ function App() {
 
   function addReplayReviewFlagFromHotkey(): void {
     const runtime = replayVideoRef.current;
-    if (!runtime) {
-      showActionFeedback("No active video replay to flag yet.");
+    const enhancedEnabled = enhancedInsightSessionActiveRef.current;
+    const startEvent = enhancedInsightStartEventRef.current;
+    const platform = runtime?.platform ?? startEvent?.platform ?? activePlatformRef.current;
+    if (!runtime && (!enhancedEnabled || !enhancedInsightSessionActiveRef.current || !startEvent || startEvent.platform !== platform)) {
+      showActionFeedback(enhancedEnabled
+        ? "No active match to mark yet."
+        : "No active video replay to flag yet.");
       return;
     }
     const now = new Date();
-    const timeMs = Math.max(0, Date.now() - runtime.startedMs);
+    const startMs = runtime?.startedMs ?? Date.parse(startEvent?.capturedAt ?? "");
+    const timeMs = Number.isFinite(startMs) ? Math.max(0, Date.now() - startMs) : 0;
+    const decisionId = crypto.randomUUID();
+    const decision: InsightDecisionContext | null = enhancedEnabled
+      ? {
+          id: decisionId,
+          gameNumber: enhancedInsightCurrentGameNumberRef.current,
+          capturedAt: now.toISOString(),
+          timeMs,
+          family: "other",
+          assessment: "unsure",
+          source: "live-flag",
+          replayFlagId: `enhanced-insight-${decisionId}`,
+          createdAt: now.toISOString()
+        }
+      : null;
+    if (decision && startEvent) {
+      pendingEnhancedInsightMarkersRef.current = [
+        ...pendingEnhancedInsightMarkersRef.current,
+        { platform, sessionStartedAt: startEvent.capturedAt, decision }
+      ];
+      writePendingEnhancedInsightMarkers(pendingEnhancedInsightMarkersRef.current);
+    }
+    if (!runtime) {
+      showActionFeedback(`Decision marked at ${formatDuration(timeMs)}. You can add context after the match.`);
+      return;
+    }
     const flag: ReplayFlag = {
-      id: crypto.randomUUID(),
+      id: decision ? `enhanced-insight-${decision.id}` : crypto.randomUUID(),
       targetType: "video-time",
       targetId: `pending-video:${runtime.startedAt}:${Math.round(timeMs)}`,
       targetLabel: `Video ${formatDuration(timeMs)}`,
@@ -6052,6 +6476,9 @@ function App() {
       createdAt: now.toISOString(),
       timeMs
     };
+    if (decision) {
+      decision.replayFlagId = flag.id;
+    }
     pendingReplayHotkeyFlagsRef.current = [
       ...pendingReplayHotkeyFlagsRef.current,
       { platform: runtime.platform, flag }
@@ -6891,7 +7318,7 @@ function App() {
   const viewDescription = {
     home: "Your RiftLite launchpad for playing, reviewing, decks, community data, and social tools.",
     play: "Embedded capture is active automatically for TCGA and Atlas.",
-    insights: "A new visual coaching experience is in development.",
+    insights: "Explore your deck structure, observed card use, and matchup patterns. Replay Coach is currently being refined.",
     scorepad: "Score table games or quick-log event matches without sending them to public community stats.",
     matches: "Review, correct, and track locally captured matches.",
     stats: "Personal performance from local RiftLite history.",
@@ -6960,7 +7387,7 @@ function App() {
       && settings.replayShadowClipHotkey.trim().toUpperCase() === "F12"
     )
     || (
-      settings.replayVideoEnabled
+      (settings.replayVideoEnabled || settings.enhancedInsightsEnabled)
       && settings.replayQuickFlagHotkeyEnabled
       && settings.replayQuickFlagHotkey.trim().toUpperCase() === "F12"
     )
@@ -7054,6 +7481,17 @@ function App() {
               </div>
             );
           })}
+          {RULES_SEARCH_FEATURE_VISIBLE ? (
+            <NavButton
+              active={rulesSearchOpen}
+              title="Search Rules"
+              onClick={() => setRulesSearchOpen((current) => !current)}
+              icon={navigationIcon("search-rules")}
+              ariaControls={RULES_SEARCH_DRAWER_ID}
+              ariaExpanded={rulesSearchOpen}
+              ariaHasPopup="dialog"
+            />
+          ) : null}
         </nav>
         <nav className="sidebar-utility-nav" aria-label="RiftLite utilities" data-tour-target="utilities">
           {UTILITY_NAVIGATION_ITEMS.map((item) => (
@@ -7104,9 +7542,9 @@ function App() {
               >
                 <Sparkles size={17} />
               </button>
-              <button className="primary home-top-play" onClick={() => health.state === "review-needed" ? openView("matches") : void chooseGamePlatform(settings.defaultGamePlatform, true)}>
-                {health.state === "review-needed" ? <ClipboardList size={17} /> : <Play size={17} />}
-                {health.state === "review-needed" ? "Open review" : `Play on ${settings.defaultGamePlatform === "atlas" ? "Atlas" : "TCGA"}`}
+              <button className="primary home-top-play" onClick={() => void chooseGamePlatform(settings.defaultGamePlatform, true)}>
+                <Play size={17} />
+                Play on {settings.defaultGamePlatform === "atlas" ? "Atlas" : "TCGA"}
               </button>
             </div>
           ) : (
@@ -7259,6 +7697,17 @@ function App() {
                 onClose={closeAtlasKnownOpponentHand}
               />
             ) : null}
+            {enhancedInsightSessionActive ? (
+              <button
+                type="button"
+                className="enhanced-insights-live-marker"
+                onClick={addReplayReviewFlagFromHotkey}
+                title={`Mark this decision for review${settings.replayQuickFlagHotkey ? ` (${settings.replayQuickFlagHotkey})` : ""}`}
+              >
+                <Flag size={15} aria-hidden="true" />
+                Mark decision
+              </button>
+            ) : null}
           </div>
           {DECK_TRACKER_FEATURE_ENABLED && settings.deckTrackerEnabled ? (
             <DeckTrackerOverlay
@@ -7369,6 +7818,12 @@ function App() {
             onPurgeDeletedMatch={purgeDeletedMatch}
             onRestoreDeletedReplay={restoreDeletedReplay}
             onPurgeDeletedReplay={purgeDeletedReplay}
+            onClearEnhancedInsightsData={async () => {
+              pendingEnhancedInsightMarkersRef.current = [];
+              writePendingEnhancedInsightMarkers([]);
+              window.localStorage.removeItem(INSIGHT_ANALYSIS_CACHE_STORAGE_KEY);
+              return window.riftlite.clearEnhancedInsightsData();
+            }}
             onMatchesChanged={async () => {
               setMatches(await window.riftlite.getMatches());
             }}
@@ -7401,6 +7856,10 @@ function App() {
         ) : null}
       </section>
 
+      {RULES_SEARCH_FEATURE_VISIBLE && rulesSearchOpen ? (
+        <RulesSearchDrawer onClose={() => setRulesSearchOpen(false)} />
+      ) : null}
+
           {reviewDraft ? (
             <MatchReviewModal
               key={reviewDraft.id}
@@ -7408,6 +7867,7 @@ function App() {
               decks={decks}
               battlefields={battlefields}
               previousFlags={previousMatchFlags}
+              enhancedInsightsPostGamePromptEnabled={settings.enhancedInsightsPostGamePromptEnabled !== false}
               onReviewLater={dismissReviewDraft}
               onDelete={deleteReviewDraft}
               onConfirm={confirmDraft}
@@ -7780,6 +8240,7 @@ function navigationIcon(id: string): React.ReactNode {
     case "community-decks": return <Globe2 size={19} />;
     case "spotlight": return <Compass size={19} />;
     case "private-hubs": return <Shield size={19} />;
+    case "search-rules": return <BookOpen size={19} />;
     case "scorepad": return <Calculator size={19} />;
     case "overlay": return <MonitorUp size={19} />;
     case "account-integrations": return <Shield size={19} />;
@@ -7852,16 +8313,37 @@ async function composeReplayRecorderStream(
   }
 }
 
-function NavButton({ active, title, icon, badge, badgeTone = "pending", onClick }: {
+function NavButton({
+  active,
+  title,
+  icon,
+  badge,
+  badgeTone = "pending",
+  ariaControls,
+  ariaExpanded,
+  ariaHasPopup,
+  onClick
+}: {
   active: boolean;
   title: string;
   icon: React.ReactNode;
   badge?: number;
   badgeTone?: "pending" | "error";
+  ariaControls?: string;
+  ariaExpanded?: boolean;
+  ariaHasPopup?: React.AriaAttributes["aria-haspopup"];
   onClick: () => void;
 }) {
   return (
-    <button className={`nav-item ${active ? "active" : ""}`} title={title} onClick={onClick}>
+    <button
+      type="button"
+      className={`nav-item ${active ? "active" : ""}`}
+      title={title}
+      aria-controls={ariaControls}
+      aria-expanded={ariaExpanded}
+      aria-haspopup={ariaHasPopup}
+      onClick={onClick}
+    >
       {icon}<span>{title}</span>
       {badge ? <span className="nav-status-badge" data-tone={badgeTone}>{badge > 99 ? "99+" : badge}</span> : null}
     </button>
@@ -9231,6 +9713,19 @@ function HomeView({
   }, [featuredDeckPerformance]);
   const captureStatus = homeCaptureStatus(health);
   const featuredDeckLegend = normalizeLegendName(featuredDeck?.legend ?? "") || "Legend pending";
+  const [deckShareOpen, setDeckShareOpen] = useState(false);
+  const featuredDeckShare: DeckShareCardViewModel | null = featuredDeck && featuredDeckPerformance
+    ? {
+        deckTitle: featuredDeck.title || `${featuredDeckLegend} deck`,
+        legend: featuredDeckLegend,
+        sourceLabel: featuredDeckSource,
+        totalGames: featuredDeckPerformance.overview.total,
+        decisiveGames: featuredDeckPerformance.overview.decisive,
+        winRateLabel: featuredDeckPerformance.overview.winRateLabel,
+        record: featuredDeckPerformance.overview.record,
+        artSources: homeOfficialDeckArtSources(featuredDeck)
+      }
+    : null;
   const webReplayStatus = homeWebReplayStatus(settings, webReplayDiagnostics, settings.defaultGamePlatform);
   const EmbedWebview = "webview" as unknown as React.ElementType;
   const featuredCreators = COMMUNITY_SPOTLIGHTS;
@@ -9660,14 +10155,27 @@ function HomeView({
                     </div>
                   </div>
                 </div>
-                <button
-                  className="primary modern-primary-action"
-                  onClick={() => onNavigate("decks", featuredDeck
-                    ? { deckFocus: "performance", deckId: featuredDeck.id }
-                    : { deckFocus: decks.length ? "saved" : "library" })}
-                >
-                  <BarChart3 size={17} /> {featuredDeck ? "View deck stats" : "Open my decks"}
-                </button>
+                <div className="modern-deck-glance-actions">
+                  <button
+                    type="button"
+                    className="primary modern-primary-action"
+                    onClick={() => onNavigate("decks", featuredDeck
+                      ? { deckFocus: "performance", deckId: featuredDeck.id }
+                      : { deckFocus: decks.length ? "saved" : "library" })}
+                  >
+                    <BarChart3 size={17} /> {featuredDeck ? "View deck stats" : "Open my decks"}
+                  </button>
+                  {featuredDeckShare ? (
+                    <button
+                      type="button"
+                      className="secondary modern-deck-share-action"
+                      aria-label={`Share ${featuredDeckShare.deckTitle} stats as an image`}
+                      onClick={() => setDeckShareOpen(true)}
+                    >
+                      <Images size={17} /> Share image
+                    </button>
+                  ) : null}
+                </div>
               </div>
               <HomeActiveDeckArtwork deck={featuredDeck ?? null} />
             </article>
@@ -9822,9 +10330,9 @@ function HomeView({
                 );
               })}
             </div>
-            <button className="primary modern-play-now-action" onClick={() => health.state === "review-needed" ? onNavigate("matches") : onPlayPlatform(settings.defaultGamePlatform)}>
-              {health.state === "review-needed" ? <ClipboardList size={17} /> : <Play size={17} />}
-              {health.state === "review-needed" ? "Open review" : `Play on ${settings.defaultGamePlatform === "atlas" ? "Atlas" : "TCGA"}`}
+            <button className="primary modern-play-now-action" onClick={() => onPlayPlatform(settings.defaultGamePlatform)}>
+              <Play size={17} />
+              Play on {settings.defaultGamePlatform === "atlas" ? "Atlas" : "TCGA"}
             </button>
             <div className="modern-play-readiness">
               <span data-tone={captureStatus.tone}><Check size={14} /> {captureStatus.tone === "ready" ? "Capture ready" : captureStatus.label}</span>
@@ -10004,6 +10512,9 @@ function HomeView({
           <div className="home-card-actions"><button className="primary" onClick={openMetafySupport}><ExternalLink size={16} /> Support on Metafy</button></div>
         </article>
       </section>
+      {deckShareOpen && featuredDeckShare ? (
+        <DeckShareCardDialog deck={featuredDeckShare} onClose={() => setDeckShareOpen(false)} />
+      ) : null}
     </section>
   );
 }
@@ -11994,6 +12505,7 @@ function DashboardView({
   onPurgeDeletedMatch,
   onRestoreDeletedReplay,
   onPurgeDeletedReplay,
+  onClearEnhancedInsightsData,
   onMatchesChanged,
   replayFocusId,
   replayFocusTimeMs,
@@ -12084,6 +12596,7 @@ function DashboardView({
   onPurgeDeletedMatch: (id: string) => Promise<void>;
   onRestoreDeletedReplay: (id: string) => Promise<void>;
   onPurgeDeletedReplay: (id: string) => Promise<void>;
+  onClearEnhancedInsightsData: () => Promise<{ matchesUpdated: number; replaysUpdated: number }>;
   onMatchesChanged: () => Promise<void>;
   replayFocusId: string;
   replayFocusTimeMs: number | null;
@@ -12149,7 +12662,20 @@ function DashboardView({
     return <StatsView matches={visibleMatches} />;
   }
   if (view === "insights") {
-    return <InsightsComingSoon />;
+    return (
+      <InsightsHubView
+        replays={replays}
+        matches={visibleMatches}
+        decks={decks}
+        activeDeckId={settings.activeDeckId}
+        enhancedInsightsEnabled={settings.enhancedInsightsEnabled === true}
+        enhancedInsightsIntroSeen={settings.enhancedInsightsIntroSeen === true}
+        enhancedInsightsPostGamePromptEnabled={settings.enhancedInsightsPostGamePromptEnabled !== false}
+        onOpenReplay={onOpenReplay}
+        onNavigate={onNavigate}
+        onSaveEnhancedInsights={onSaveSettings}
+      />
+    );
   }
   if (view === "mulligan-lab") {
     return <MulliganLabView decks={decks} settings={settings} onNavigate={onNavigate} />;
@@ -12263,6 +12789,11 @@ function DashboardView({
         onPurgeDeletedMatch={onPurgeDeletedMatch}
         onRestoreDeletedReplay={onRestoreDeletedReplay}
         onPurgeDeletedReplay={onPurgeDeletedReplay}
+        onClearEnhancedInsightsData={async () => {
+          const result = await onClearEnhancedInsightsData();
+          await Promise.all([onMatchesChanged(), onReplaysChanged()]);
+          return result;
+        }}
       />
     );
   }
@@ -20822,15 +21353,20 @@ function ReplayView({
 
   async function saveReplay(replay: ReplayRecord, focusSavedReplay = true) {
     setStatus("Saving replay...");
+    let saved: ReplayRecord;
     try {
-      const saved = await window.riftlite.saveReplay(replay);
-      await onReplaysChanged(focusSavedReplay ? saved.id : undefined);
-      setStatus("Replay saved.");
-      return true;
+      saved = await window.riftlite.saveReplay(replay);
     } catch (error) {
       setStatus(rendererErrorMessage(error, "Replay save failed."));
       return false;
     }
+    try {
+      await onReplaysChanged(focusSavedReplay ? saved.id : undefined);
+      setStatus("Replay saved.");
+    } catch (error) {
+      setStatus(rendererErrorMessage(error, "Replay saved, but the replay view could not refresh."));
+    }
+    return true;
   }
 
   function toggleReplaySelection(replayId: string) {
@@ -21423,7 +21959,7 @@ function ReplayMp4ExportProgressDialog({
             <>
               <p id="replay-mp4-progress-description">
                 {progress.kind === "presentation"
-                  ? "RiftLite did not publish an unfinished MP4. Your presentation recording is retained; dismiss this message, then choose Retry presentation export."
+                  ? "RiftLite did not publish an unfinished MP4. Your Full Voiceover recording is retained; dismiss this message, then choose Retry voiceover export."
                   : "RiftLite did not publish an unfinished MP4. Your original replay is safe, and you can try the export again."
                 }
               </p>
@@ -21517,6 +22053,7 @@ function ReplayExportDialog({
     includeFlags: true,
     includeDrawings: true,
     includeVoiceNotes: true,
+    voiceNoteVolume: readReplayMp4VoiceVolume(),
     includeOriginalAudio: true,
     layout: "landscape",
     cropFocusX: 0.5,
@@ -21756,6 +22293,27 @@ function ReplayExportDialog({
                 <input type="checkbox" checked={options.includeVoiceNotes} disabled={!voiceNotes} onChange={() => update("includeVoiceNotes")} />
                 <Mic size={14} /> Voice notes {voiceNotes ? `(${voiceNotes})` : ""}
               </label>
+              {voiceNotes ? <>
+                <label className="replay-export-voice-volume" title="Only changes coaching-note volume in the exported MP4">
+                  <span><Volume2 size={14} /> Coaching note volume (MP4)</span>
+                  <input
+                    type="range"
+                    min={MIN_REPLAY_MP4_VOICE_VOLUME}
+                    max={MAX_REPLAY_MP4_VOICE_VOLUME}
+                    step={REPLAY_MP4_VOICE_VOLUME_STEP}
+                    value={normalizeReplayMp4VoiceVolume(options.voiceNoteVolume)}
+                    aria-valuetext={`${Math.round(normalizeReplayMp4VoiceVolume(options.voiceNoteVolume) * 100)}%`}
+                    disabled={!options.includeVoiceNotes}
+                    onChange={(event) => {
+                      const voiceNoteVolume = normalizeReplayMp4VoiceVolume(event.target.value);
+                      setOptions((current) => ({ ...current, voiceNoteVolume }));
+                      writeReplayMp4VoiceVolume(voiceNoteVolume);
+                    }}
+                  />
+                  <strong>{Math.round(normalizeReplayMp4VoiceVolume(options.voiceNoteVolume) * 100)}%</strong>
+                </label>
+                <small className="replay-export-voice-volume-help">Only affects the exported MP4. Your saved notes are unchanged.</small>
+              </> : null}
               <label>
                 <input type="checkbox" checked={options.includeOriginalAudio} onChange={() => update("includeOriginalAudio")} />
                 <Volume2 size={14} /> Original video audio
@@ -22220,7 +22778,7 @@ function ReplayDetail({
   onFocusSeekConsumed: () => void;
   onExport: (clipStartMs: number) => void;
   onExportPresentationMp4: (replayId: string, payload: ReplayPresentationRecordingPayload) => Promise<string>;
-  onSaveReplay: (replay: ReplayRecord) => Promise<boolean>;
+  onSaveReplay: (replay: ReplayRecord, focusSavedReplay?: boolean) => Promise<boolean>;
   onDeleteReplay: () => void;
 }) {
   const analyticsMatch = model.match ? localToAnalytics(model.match) : null;
@@ -22391,7 +22949,9 @@ function ReplayDetail({
     void onSaveReplay({
       ...model.replay,
       schemaVersion: 5,
-      flags
+      flags,
+      annotations: replayAnnotationsRef.current,
+      voiceNotes: replayVoiceNotesRef.current
     });
   }
 
@@ -22400,7 +22960,9 @@ function ReplayDetail({
     void onSaveReplay({
       ...model.replay,
       schemaVersion: 5,
-      annotations
+      flags: replayFlagsRef.current,
+      annotations,
+      voiceNotes: replayVoiceNotesRef.current
     });
   }
 
@@ -22409,6 +22971,8 @@ function ReplayDetail({
     void onSaveReplay({
       ...model.replay,
       schemaVersion: 5,
+      flags: replayFlagsRef.current,
+      annotations: replayAnnotationsRef.current,
       voiceNotes
     });
   }
@@ -22524,7 +23088,7 @@ function ReplayDetail({
     setEditingFlag(null);
   }
 
-  function saveTimelineVoiceNote(flag: ReplayFlag, voiceNote: ReplayVoiceNote) {
+  async function saveTimelineVoiceNote(flag: ReplayFlag, voiceNote: ReplayVoiceNote): Promise<boolean> {
     const currentFlags = replayFlagsRef.current;
     const currentVoiceNotes = replayVoiceNotesRef.current;
     const flags = currentFlags.some((item) => item.id === flag.id) ? currentFlags : [...currentFlags, flag];
@@ -22534,13 +23098,22 @@ function ReplayDetail({
     ];
     replayFlagsRef.current = flags;
     replayVoiceNotesRef.current = voiceNotes;
-    void onSaveReplay({
+    const saved = await onSaveReplay({
       ...model.replay,
       schemaVersion: 5,
       flags,
       annotations: replayAnnotationsRef.current,
       voiceNotes
-    });
+    }, false);
+    if (!saved) {
+      if (replayFlagsRef.current === flags) {
+        replayFlagsRef.current = currentFlags;
+      }
+      if (replayVoiceNotesRef.current === voiceNotes) {
+        replayVoiceNotesRef.current = currentVoiceNotes;
+      }
+    }
+    return saved;
   }
 
   function deleteReplayVoiceNote(flagId: string, layerId: string) {
@@ -23968,16 +24541,17 @@ function blobToDataUrl(blob: Blob): Promise<string> {
 type VoiceRecorderCapture = {
   recorder: MediaRecorder;
   cleanup: () => void;
+  usedSystemDefaultFallback: boolean;
 };
 
 type VoiceStreamCapture = {
   stream: MediaStream;
   cleanup: () => void;
+  usedSystemDefaultFallback: boolean;
 };
 
 async function createVoiceStreamCapture(microphoneDeviceId: string): Promise<VoiceStreamCapture> {
   const rawAudio: MediaTrackConstraints = {
-    ...(microphoneDeviceId ? { deviceId: { exact: microphoneDeviceId } } : {}),
     echoCancellation: false,
     noiseSuppression: false,
     autoGainControl: false,
@@ -23985,14 +24559,12 @@ async function createVoiceStreamCapture(microphoneDeviceId: string): Promise<Voi
     sampleRate: 48_000,
     sampleSize: 16
   };
-  let sourceStream: MediaStream;
-  try {
-    sourceStream = await navigator.mediaDevices.getUserMedia({ audio: rawAudio });
-  } catch {
-    sourceStream = await navigator.mediaDevices.getUserMedia({
-      audio: microphoneDeviceId ? { deviceId: { exact: microphoneDeviceId } } : true
-    });
-  }
+  const acquired = await acquireMicrophoneStream(
+    (constraints) => navigator.mediaDevices.getUserMedia(constraints),
+    microphoneDeviceId,
+    rawAudio
+  );
+  const sourceStream = acquired.stream;
   const sourceTrack = sourceStream.getAudioTracks()[0];
   await sourceTrack?.applyConstraints({
     echoCancellation: false,
@@ -24029,19 +24601,32 @@ async function createVoiceStreamCapture(microphoneDeviceId: string): Promise<Voi
     recorderStream.getTracks().forEach((track) => track.stop());
     void audioContext?.close().catch(() => undefined);
   };
-  return { stream: recorderStream, cleanup };
+  return {
+    stream: recorderStream,
+    cleanup,
+    usedSystemDefaultFallback: acquired.usedSystemDefaultFallback
+  };
 }
 
 async function createVoiceRecorderCapture(microphoneDeviceId: string): Promise<VoiceRecorderCapture> {
   const capture = await createVoiceStreamCapture(microphoneDeviceId);
-  const candidates = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"];
-  const mimeType = candidates.find((candidate) => MediaRecorder.isTypeSupported(candidate)) ?? "";
-  const recorder = new MediaRecorder(capture.stream, {
-    ...(mimeType ? { mimeType } : {}),
-    audioBitsPerSecond: 128_000,
-    bitsPerSecond: 128_000
-  });
-  return { recorder, cleanup: capture.cleanup };
+  try {
+    const candidates = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"];
+    const mimeType = candidates.find((candidate) => MediaRecorder.isTypeSupported(candidate)) ?? "";
+    const recorder = new MediaRecorder(capture.stream, {
+      ...(mimeType ? { mimeType } : {}),
+      audioBitsPerSecond: 128_000,
+      bitsPerSecond: 128_000
+    });
+    return {
+      recorder,
+      cleanup: capture.cleanup,
+      usedSystemDefaultFallback: capture.usedSystemDefaultFallback
+    };
+  } catch (error) {
+    capture.cleanup();
+    throw error;
+  }
 }
 
 function replayVoiceNoteForFlag(notes: ReplayVoiceNote[], flagId: string, layerId?: string): ReplayVoiceNote | undefined {
@@ -24567,7 +25152,7 @@ function ReplayVideoPlayer({
   onSaveKeyframe: (dataUrl: string, timeMs: number) => Promise<void>;
   activeLayerId: string;
   microphoneDeviceId: string;
-  onSaveTimelineVoiceNote: (flag: ReplayFlag, voiceNote: ReplayVoiceNote) => void;
+  onSaveTimelineVoiceNote: (flag: ReplayFlag, voiceNote: ReplayVoiceNote) => Promise<boolean>;
   onAddAnnotation: (annotation: ReplayAnnotation) => void;
   onRemoveAnnotation: (id: string) => void;
   onRemoveAnnotations: (ids: string[]) => void;
@@ -24584,6 +25169,10 @@ function ReplayVideoPlayer({
   const voiceTargetTimeRef = useRef(0);
   const voiceTargetFlagRef = useRef<ReplayFlag | null>(null);
   const voiceTargetClipIdRef = useRef("");
+  const voiceStartRequestRef = useRef(0);
+  const voiceStartPendingRef = useRef(false);
+  const voiceSaveRequestRef = useRef(0);
+  const voiceSavingRef = useRef(false);
   const voicePlaybackTimerRef = useRef<number | null>(null);
   const lastTimeUpdateRef = useRef(0);
   const visibleAnnotationsRef = useRef<ReplayAnnotation[]>([]);
@@ -24610,10 +25199,14 @@ function ReplayVideoPlayer({
   const [presentationPayloadPreparing, setPresentationPayloadPreparing] = useState(false);
   const [presentationExportBusy, setPresentationExportBusy] = useState(false);
   const [presentationStatus, setPresentationStatus] = useState(() => pendingReplayPresentationExports.has(replayId)
-    ? "A presentation recording is ready to export."
+    ? "A Full Voiceover recording is ready to export."
     : ""
   );
   const [recordingVoice, setRecordingVoice] = useState(false);
+  const [voiceStartPending, setVoiceStartPending] = useState(false);
+  const [voiceSaving, setVoiceSaving] = useState(false);
+  const [voiceStatus, setVoiceStatus] = useState("");
+  const [recordingElapsedMs, setRecordingElapsedMs] = useState(0);
   const [activeClipId, setActiveClipId] = useState<string | undefined>();
   const [activeClipStartedAt, setActiveClipStartedAt] = useState<number | undefined>();
   const [playbackClipId, setPlaybackClipId] = useState<string | undefined>();
@@ -24639,11 +25232,23 @@ function ReplayVideoPlayer({
   }, [visibleAnnotations]);
 
   useEffect(() => {
+    if (!recordingVoice && !presentationRecording) {
+      setRecordingElapsedMs(0);
+      return;
+    }
+    const startedAt = recordingVoice ? voiceStartedAtRef.current : presentationStartedAtRef.current;
+    const updateElapsed = () => setRecordingElapsedMs(Math.max(0, Date.now() - startedAt));
+    updateElapsed();
+    const timer = window.setInterval(updateElapsed, 250);
+    return () => window.clearInterval(timer);
+  }, [recordingVoice, presentationRecording]);
+
+  useEffect(() => {
     const retained = pendingReplayPresentationExports.get(replayId) ?? null;
     setPendingPresentationExport(retained);
     setPresentationPayloadPreparing(false);
     setPresentationExportBusy(false);
-    setPresentationStatus(retained ? "A presentation recording is ready to export." : "");
+    setPresentationStatus(retained ? "A Full Voiceover recording is ready to export." : "");
   }, [replayId]);
 
   useEffect(() => {
@@ -24693,8 +25298,27 @@ function ReplayVideoPlayer({
       if (replayPresentationDisposers.get(replayId) === disposePresentationRuntime) {
         replayPresentationDisposers.delete(replayId);
       }
-      voiceRecorderRef.current?.state === "recording" && voiceRecorderRef.current.stop();
+      voiceStartPendingRef.current = false;
+      voiceSavingRef.current = false;
+      voiceStartRequestRef.current += 1;
+      voiceSaveRequestRef.current += 1;
+      const voiceRecorder = voiceRecorderRef.current;
+      voiceRecorderRef.current = null;
+      if (voiceRecorder) {
+        voiceRecorder.ondataavailable = null;
+        voiceRecorder.onstop = null;
+        voiceRecorder.onerror = null;
+        if (voiceRecorder.state === "recording") {
+          try {
+            voiceRecorder.stop();
+          } catch {
+            // The stream cleanup below still releases the microphone.
+          }
+        }
+      }
+      voiceChunksRef.current = [];
       voiceRecorderCleanupRef.current?.();
+      voiceRecorderCleanupRef.current = null;
       audioRef.current?.pause();
       if (voicePlaybackTimerRef.current) {
         window.clearInterval(voicePlaybackTimerRef.current);
@@ -24802,6 +25426,7 @@ function ReplayVideoPlayer({
     if (recorder) {
       recorder.ondataavailable = null;
       recorder.onstop = null;
+      recorder.onerror = null;
       if (recorder.state !== "inactive") {
         try {
           recorder.requestData?.();
@@ -24928,7 +25553,8 @@ function ReplayVideoPlayer({
     presentationGenerationRef.current = nextReplayPresentationGeneration();
     pendingReplayPresentationExports.clear();
     setPendingPresentationExport(null);
-    setPresentationStatus("Discarded the retained presentation recording.");
+    setVoiceStatus("");
+    setPresentationStatus("Discarded the retained Full Voiceover recording.");
   }
 
   async function exportPendingPresentationRecording(
@@ -24946,7 +25572,8 @@ function ReplayVideoPlayer({
     const exportRequestId = nextPresentationExportRequest();
     presentationExportBusyRef.current = true;
     setPresentationExportBusy(true);
-    setPresentationStatus("Choose where to save the retained presentation MP4...");
+    setVoiceStatus("");
+    setPresentationStatus("Choose where to save the retained Full Voiceover MP4...");
     try {
       const outputPath = await onExportPresentationMp4(replayId, payload);
       const clearedRetainedPayload = Boolean(
@@ -24964,19 +25591,19 @@ function ReplayVideoPlayer({
         return;
       }
       if (!outputPath) {
-        setPresentationStatus("Presentation export cancelled. The recording is kept here so you can retry.");
+        setPresentationStatus("Full Voiceover export cancelled. The recording is kept here so you can retry.");
         return;
       }
       if (clearedRetainedPayload) {
         setPendingPresentationExport(null);
       }
-      setPresentationStatus(`Presentation MP4 exported to ${outputPath}`);
+      setPresentationStatus(`Full Voiceover MP4 exported to ${outputPath}`);
     } catch (error) {
       if (
         presentationExportRequestRef.current === exportRequestId
         && isPresentationLifecycleCurrent(generation)
       ) {
-        const message = rendererErrorMessage(error, "Presentation export failed.");
+        const message = rendererErrorMessage(error, "Full Voiceover export failed.");
         setPresentationStatus(`${message} The recording is kept here so you can retry.`);
       }
     } finally {
@@ -24996,19 +25623,25 @@ function ReplayVideoPlayer({
       || presentationStartPendingRef.current
       || presentationRecorderRef.current
       || presentationRecording
+      || voiceStartPendingRef.current
+      || voiceSavingRef.current
+      || voiceRecorderRef.current
+      || recordingVoice
+      || Boolean(playbackClipId)
       || !presentationMountedRef.current
       || presentationDisposedRef.current
       || deletedReplayPresentationIds.has(replayId)
     ) {
       return;
     }
+    setVoiceStatus("");
     const element = videoRef.current;
     if (!element || !element.videoWidth || !element.videoHeight) {
       setPresentationStatus("Replay video is not ready yet.");
       return;
     }
     if (typeof MediaRecorder === "undefined" || typeof HTMLCanvasElement.prototype.captureStream !== "function") {
-      setPresentationStatus("Presentation recording is not available on this system.");
+      setPresentationStatus("Full Voiceover is not available on this system.");
       return;
     }
     if (!navigator.mediaDevices?.getUserMedia) {
@@ -25020,7 +25653,7 @@ function ReplayVideoPlayer({
     canvas.height = Math.max(2, element.videoHeight - (element.videoHeight % 2));
     const context = canvas.getContext("2d", { alpha: false });
     if (!context) {
-      setPresentationStatus("Could not create presentation canvas.");
+      setPresentationStatus("Could not create the Full Voiceover canvas.");
       return;
     }
 
@@ -25034,13 +25667,10 @@ function ReplayVideoPlayer({
     nextPresentationExportRequest();
     // Keep any retained recording until microphone access succeeds and the new
     // MediaRecorder has actually started, so a denied prompt cannot destroy it.
-    setPresentationStatus("Waiting for microphone access before recording...");
+    setPresentationStatus("Connecting microphone... Check the Windows permission prompt if one appeared.");
     let acquiredResourceCleanup: (() => void) | null = null;
     try {
       stopVoicePlayback();
-      if (recordingVoice) {
-        stopTimelineVoiceNote();
-      }
       const voiceCapture = await createVoiceStreamCapture(microphoneDeviceId);
       let voiceCaptureCleaned = false;
       const cleanupVoiceCapture = () => {
@@ -25092,9 +25722,26 @@ function ReplayVideoPlayer({
       presentationCleanupRef.current = cleanupRecordingResources;
       acquiredResourceCleanup = null;
       const recordingIsCurrent = () => isPresentationStartCurrent(startRequestId, generation);
+      let recorderFailed = false;
+      let recorderFailureMessage = "Full Voiceover recording stopped unexpectedly. Please try again.";
       recorder.ondataavailable = (event) => {
         if (recordingIsCurrent() && event.data.size) {
           presentationChunksRef.current.push(event.data);
+        }
+      };
+      recorder.onerror = (event) => {
+        recorderFailed = true;
+        const recorderError = (event as Event & { error?: DOMException }).error;
+        recorderFailureMessage = microphoneErrorMessage(recorderError, recorderFailureMessage);
+        if (recordingIsCurrent()) {
+          setPresentationStatus(recorderFailureMessage);
+        }
+        if (recorder.state === "recording") {
+          try {
+            recorder.stop();
+          } catch {
+            // onstop or lifecycle cleanup will release the recording resources.
+          }
         }
       };
       recorder.onstop = () => {
@@ -25108,11 +25755,15 @@ function ReplayVideoPlayer({
           return;
         }
         setPresentationRecording(false);
-        if (!blob.size) {
-          setPresentationStatus("No presentation video was captured.");
+        if (recorderFailed) {
+          setPresentationStatus(recorderFailureMessage);
           return;
         }
-        setPresentationStatus("Securing presentation recording for export...");
+        if (!blob.size) {
+          setPresentationStatus("No Full Voiceover video was captured.");
+          return;
+        }
+        setPresentationStatus("Preparing recording...");
         setPresentationPayloadPreparing(true);
         void blob.arrayBuffer()
           .then((data) => {
@@ -25128,13 +25779,13 @@ function ReplayVideoPlayer({
               return;
             }
             setPresentationPayloadPreparing(false);
-            setPresentationStatus("Presentation recording retained. Choose a save location for the MP4.");
+            setPresentationStatus("Full Voiceover recording retained. Choose a save location for the MP4.");
             void exportPendingPresentationRecording(payload);
           })
           .catch((error) => {
             if (recordingIsCurrent()) {
               setPresentationPayloadPreparing(false);
-              setPresentationStatus(rendererErrorMessage(error, "The presentation recording could not be prepared for export."));
+              setPresentationStatus(rendererErrorMessage(error, "The Full Voiceover recording could not be prepared for export."));
             }
           });
       };
@@ -25146,7 +25797,10 @@ function ReplayVideoPlayer({
       setPendingPresentationExport(null);
       if (recordingIsCurrent()) {
         setPresentationRecording(true);
-        setPresentationStatus("Presentation recording. Play, pause, draw, and talk; stop to export one MP4.");
+        setPresentationStatus(voiceCapture.usedSystemDefaultFallback
+          ? "Full Voiceover is recording with the system default microphone because the saved microphone is unavailable."
+          : "Full Voiceover is recording. Play, pause, draw, and talk; stop to export one MP4."
+        );
       }
     } catch (error) {
       acquiredResourceCleanup?.();
@@ -25154,7 +25808,7 @@ function ReplayVideoPlayer({
       presentationChunksRef.current = [];
       if (isPresentationStartCurrent(startRequestId, generation)) {
         setPresentationRecording(false);
-        setPresentationStatus(rendererErrorMessage(error, "Presentation recording could not start."));
+        setPresentationStatus(microphoneErrorMessage(error, "Full Voiceover could not start."));
       }
     } finally {
       if (presentationStartRequestRef.current === startRequestId) {
@@ -25168,7 +25822,7 @@ function ReplayVideoPlayer({
 
   function stopPresentationRecording() {
     if (presentationRecorderRef.current?.state === "recording") {
-      setPresentationStatus("Finalising presentation recording...");
+      setPresentationStatus("Preparing recording...");
       presentationRecorderRef.current.requestData?.();
       presentationRecorderRef.current.stop();
     }
@@ -25177,10 +25831,12 @@ function ReplayVideoPlayer({
   function clearVisiblePresentationDrawings() {
     const ids = visibleAnnotationsRef.current.map((annotation) => annotation.id);
     if (!ids.length) {
+      setVoiceStatus("");
       setPresentationStatus("No visible drawings to clear.");
       return;
     }
     onRemoveAnnotations(ids);
+    setVoiceStatus("");
     setPresentationStatus("Cleared visible drawings.");
   }
 
@@ -25338,28 +25994,78 @@ function ReplayVideoPlayer({
 
   async function startTimelineVoiceNote() {
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
-      setStatus("Voice recording is not available on this system.");
+      setVoiceStatus("Coaching-note recording is not available on this system.");
       return;
     }
+    if (
+      voiceStartPendingRef.current
+      || voiceSavingRef.current
+      || voiceRecorderRef.current
+      || recordingVoice
+      || presentationStartPendingRef.current
+      || presentationExportBusyRef.current
+      || presentationPayloadPreparing
+      || presentationRecorderRef.current
+      || presentationRecording
+      || !presentationMountedRef.current
+    ) {
+      return;
+    }
+    const startRequestId = voiceStartRequestRef.current >= Number.MAX_SAFE_INTEGER
+      ? 1
+      : voiceStartRequestRef.current + 1;
+    voiceStartRequestRef.current = startRequestId;
+    voiceStartPendingRef.current = true;
+    setVoiceStartPending(true);
+    setPresentationStatus("");
+    setVoiceStatus("Connecting microphone... Check the Windows permission prompt if one appeared.");
+    videoRef.current?.pause();
+    stopVoicePlayback();
+    let acquiredCleanup: (() => void) | null = null;
     try {
-      videoRef.current?.pause();
       const capture = await createVoiceRecorderCapture(microphoneDeviceId);
+      acquiredCleanup = capture.cleanup;
+      if (voiceStartRequestRef.current !== startRequestId || !presentationMountedRef.current) {
+        acquiredCleanup();
+        acquiredCleanup = null;
+        return;
+      }
       const recorder = capture.recorder;
       voiceChunksRef.current = [];
       voiceRecorderCleanupRef.current = capture.cleanup;
+      acquiredCleanup = null;
       voiceRecorderRef.current = recorder;
       voiceStartedAtRef.current = Date.now();
       voiceTargetTimeRef.current = currentMs;
       voiceTargetFlagRef.current = timelineFlagForVoice(currentMs);
       voiceTargetClipIdRef.current = replayVoiceNoteForFlag(voiceNotes, voiceTargetFlagRef.current.id, activeLayerId)?.id ?? crypto.randomUUID();
+      let recorderFailed = false;
+      let recorderFailureMessage = "Coaching-note recording stopped unexpectedly. Please try again.";
       recorder.ondataavailable = (event) => {
         if (event.data.size) {
           voiceChunksRef.current.push(event.data);
         }
       };
+      recorder.onerror = (event) => {
+        recorderFailed = true;
+        recorderFailureMessage = microphoneErrorMessage(
+          (event as Event & { error?: DOMException }).error,
+          recorderFailureMessage
+        );
+        if (presentationMountedRef.current && voiceStartRequestRef.current === startRequestId) {
+          setVoiceStatus(recorderFailureMessage);
+        }
+        if (recorder.state === "recording") {
+          try {
+            recorder.stop();
+          } catch {
+            // The normal cleanup path below still releases the microphone.
+          }
+        }
+      };
       recorder.onstop = () => {
         const targetTimeMs = voiceTargetTimeRef.current;
-        const durationMs = Date.now() - voiceStartedAtRef.current;
+        const durationMs = Math.max(0, Date.now() - voiceStartedAtRef.current);
         const blob = new Blob(voiceChunksRef.current, { type: recorder.mimeType || "audio/webm" });
         const flag = voiceTargetFlagRef.current ?? timelineFlagForVoice(targetTimeMs);
         const clipId = voiceTargetClipIdRef.current || replayVoiceNoteForFlag(voiceNotes, flag.id, activeLayerId)?.id || crypto.randomUUID();
@@ -25368,16 +26074,37 @@ function ReplayVideoPlayer({
         voiceRecorderRef.current = null;
         voiceTargetFlagRef.current = null;
         voiceTargetClipIdRef.current = "";
-        setRecordingVoice(false);
-        setActiveClipId(undefined);
-        setActiveClipStartedAt(undefined);
-        if (!blob.size) {
-          setStatus("No voice note was captured.");
+        voiceChunksRef.current = [];
+        if (presentationMountedRef.current && voiceStartRequestRef.current === startRequestId) {
+          setRecordingVoice(false);
+          setActiveClipId(undefined);
+          setActiveClipStartedAt(undefined);
+        }
+        if (recorderFailed) {
+          if (presentationMountedRef.current && voiceStartRequestRef.current === startRequestId) {
+            setVoiceStatus(recorderFailureMessage);
+          }
           return;
         }
-        void blobToDataUrl(blob)
-          .then((dataUrl) => {
-            onSaveTimelineVoiceNote(flag, {
+        if (!blob.size) {
+          if (presentationMountedRef.current && voiceStartRequestRef.current === startRequestId) {
+            setVoiceStatus("No coaching note was captured. Please try again.");
+          }
+          return;
+        }
+        const saveRequestId = voiceSaveRequestRef.current >= Number.MAX_SAFE_INTEGER
+          ? 1
+          : voiceSaveRequestRef.current + 1;
+        voiceSaveRequestRef.current = saveRequestId;
+        voiceSavingRef.current = true;
+        if (presentationMountedRef.current) {
+          setVoiceSaving(true);
+          setVoiceStatus(`Saving coaching note at ${formatDuration(targetTimeMs)}...`);
+        }
+        void (async () => {
+          try {
+            const dataUrl = await blobToDataUrl(blob);
+            const saved = await onSaveTimelineVoiceNote(flag, {
               id: clipId,
               flagId: flag.id,
               layerId: activeLayerId,
@@ -25388,30 +26115,108 @@ function ReplayVideoPlayer({
               createdAt: new Date().toISOString(),
               updatedAt: new Date().toISOString()
             });
-            setStatus(`Saved voice note at ${formatDuration(targetTimeMs)}.`);
-          })
-          .catch(() => setStatus("Could not save voice note."));
+            if (presentationMountedRef.current && voiceSaveRequestRef.current === saveRequestId) {
+              setVoiceStatus(saved
+                ? `Coaching note saved at ${formatDuration(targetTimeMs)} (${formatDuration(durationMs)}).`
+                : "Coaching note wasn't saved. Please try recording it again."
+              );
+            }
+          } catch (error) {
+            if (presentationMountedRef.current && voiceSaveRequestRef.current === saveRequestId) {
+              setVoiceStatus(rendererErrorMessage(error, "Coaching note wasn't saved. Please try recording it again."));
+            }
+          } finally {
+            if (voiceSaveRequestRef.current === saveRequestId) {
+              voiceSavingRef.current = false;
+              if (presentationMountedRef.current) {
+                setVoiceSaving(false);
+              }
+            }
+          }
+        })();
       };
-      recorder.start();
+      recorder.start(1000);
       setRecordingVoice(true);
       setActiveClipId(voiceTargetClipIdRef.current);
       setActiveClipStartedAt(voiceStartedAtRef.current);
-      setStatus(`Recording coaching note at ${formatDuration(currentMs)}. Draw now to sync marks to this audio.`);
+      setVoiceStatus(capture.usedSystemDefaultFallback
+        ? "Recording coaching note with the system default microphone because the saved microphone is unavailable."
+        : `Recording coaching note at ${formatDuration(currentMs)}. Draw now to sync marks to this audio.`
+      );
     } catch (error) {
-      setRecordingVoice(false);
-      setActiveClipId(undefined);
-      setActiveClipStartedAt(undefined);
-      voiceRecorderCleanupRef.current?.();
-      voiceRecorderCleanupRef.current = null;
-      setStatus(error instanceof Error ? error.message : "Microphone access was blocked.");
+      acquiredCleanup?.();
+      if (voiceStartRequestRef.current === startRequestId && presentationMountedRef.current) {
+        setRecordingVoice(false);
+        setActiveClipId(undefined);
+        setActiveClipStartedAt(undefined);
+        voiceRecorderCleanupRef.current?.();
+        voiceRecorderCleanupRef.current = null;
+        voiceRecorderRef.current = null;
+        setVoiceStatus(microphoneErrorMessage(error, "Coaching-note recording could not start."));
+      }
+    } finally {
+      if (voiceStartRequestRef.current === startRequestId) {
+        voiceStartPendingRef.current = false;
+        if (presentationMountedRef.current) {
+          setVoiceStartPending(false);
+        }
+      }
     }
   }
 
   function stopTimelineVoiceNote() {
     if (voiceRecorderRef.current?.state === "recording") {
+      setVoiceStatus("Saving coaching note...");
       voiceRecorderRef.current.stop();
     }
   }
+
+  const elapsedRecordingMs = Math.floor(recordingElapsedMs / 1000) * 1000;
+  const recordingFeedback: {
+    state: string;
+    icon: "microphone" | "video" | "success" | "warning";
+    label: string;
+    detail?: string;
+    elapsedMs?: number;
+  } | null = voiceStartPending
+    ? { state: "connecting", icon: "microphone", label: "Connecting microphone...", detail: "Coaching note" }
+    : presentationStartPending
+      ? { state: "connecting", icon: "video", label: "Connecting microphone...", detail: "Full Voiceover" }
+      : recordingVoice
+        ? {
+            state: "recording",
+            icon: "microphone",
+            label: "Recording coaching note",
+            detail: "Drawings are synced to this audio.",
+            elapsedMs: elapsedRecordingMs
+          }
+        : presentationRecording
+          ? {
+              state: "presentation",
+              icon: "video",
+              label: "Recording Full Voiceover",
+              detail: "Play, pause, draw, and talk.",
+              elapsedMs: elapsedRecordingMs
+            }
+          : voiceSaving
+            ? { state: "saving", icon: "microphone", label: "Saving coaching note..." }
+            : presentationPayloadPreparing
+              ? { state: "saving", icon: "video", label: "Preparing recording..." }
+              : presentationExportBusy
+                ? { state: "saving", icon: "video", label: "Exporting MP4..." }
+                : voiceStatus
+                  ? {
+                      state: voiceStatus.includes("saved at") ? "success" : "status",
+                      icon: voiceStatus.includes("saved at") ? "success" : "microphone",
+                      label: voiceStatus
+                    }
+                  : presentationStatus
+                    ? {
+                        state: presentationStatus.includes("exported to") || presentationStatus.includes("recording retained") ? "success" : "status",
+                        icon: presentationStatus.includes("exported to") || presentationStatus.includes("recording retained") ? "success" : "video",
+                        label: presentationStatus
+                      }
+                    : null;
 
   return (
     <section className={`rail-card replay-video-panel ${videoFullscreen ? "replay-video-fullscreen" : ""}`} data-fullscreen={videoFullscreen}>
@@ -25420,7 +26225,8 @@ function ReplayVideoPlayer({
           <h2>Video replay</h2>
           <span>{REPLAY_VIDEO_PROFILES[video.quality]?.label ?? video.quality} - {formatDuration(video.durationMs)} - {formatBytes(video.sizeBytes)}</span>
         </div>
-        <div className="row-actions">
+        <div className="replay-video-action-stack">
+          <div className="row-actions">
           <button
             type="button"
             className={presentationRecording ? "danger" : pendingPresentationExport ? "primary" : "secondary"}
@@ -25430,24 +26236,31 @@ function ReplayVideoPlayer({
                 ? void exportPendingPresentationRecording()
                 : void startPresentationRecording()
             }
-            disabled={Boolean(playbackClipId) || presentationExportBusy || presentationPayloadPreparing || presentationStartPending}
+            disabled={Boolean(playbackClipId)
+              || presentationExportBusy
+              || presentationPayloadPreparing
+              || presentationStartPending
+              || recordingVoice
+              || voiceStartPending
+              || voiceSaving
+            }
             title={pendingPresentationExport
-              ? "Retry saving the retained presentation recording as a validated MP4"
+              ? "Retry saving the retained Full Voiceover recording as a validated MP4"
               : "Record replay playback, pauses, drawings, and microphone narration into one MP4"
             }
           >
             {pendingPresentationExport ? <RefreshCw size={14} /> : <Video size={14} />}
             {presentationRecording
-              ? "Stop presentation"
+              ? "Stop & export"
               : presentationPayloadPreparing
-                ? "Securing recording..."
+                ? "Preparing recording..."
                 : presentationStartPending
-                  ? "Waiting for microphone..."
+                  ? "Connecting microphone..."
                 : presentationExportBusy
-                  ? "Exporting presentation..."
+                  ? "Exporting MP4..."
                   : pendingPresentationExport
-                    ? "Retry presentation export"
-                    : "Presentation MP4"
+                    ? "Retry voiceover export"
+                    : "Full Voiceover"
             }
           </button>
           {pendingPresentationExport && !presentationRecording ? (
@@ -25455,18 +26268,25 @@ function ReplayVideoPlayer({
               <button
                 type="button"
                 className="secondary"
-                disabled={presentationExportBusy || presentationPayloadPreparing || presentationStartPending || Boolean(playbackClipId)}
+                disabled={presentationExportBusy
+                  || presentationPayloadPreparing
+                  || presentationStartPending
+                  || Boolean(playbackClipId)
+                  || recordingVoice
+                  || voiceStartPending
+                  || voiceSaving
+                }
                 onClick={() => void startPresentationRecording()}
-                title="Explicitly replace the retained recording with a new presentation"
+                title="Explicitly replace the retained recording with a new Full Voiceover"
               >
-                <Video size={14} /> Record new
+                <Video size={14} /> Record new voiceover
               </button>
               <button
                 type="button"
                 className="secondary danger"
                 disabled={presentationExportBusy || presentationPayloadPreparing || presentationStartPending}
                 onClick={discardPendingPresentationExport}
-                title="Discard the retained presentation recording"
+                title="Discard the retained Full Voiceover recording"
               >
                 <Trash2 size={14} /> Discard recording
               </button>
@@ -25481,8 +26301,27 @@ function ReplayVideoPlayer({
           >
             <Trash2 size={14} /> Clear drawing
           </button>
-          <button type="button" className={recordingVoice ? "danger" : "secondary"} onClick={() => recordingVoice ? stopTimelineVoiceNote() : void startTimelineVoiceNote()}>
-            <Mic size={14} /> {recordingVoice ? "Stop coaching note" : "Record coaching note"}
+          <button
+            type="button"
+            className={recordingVoice ? "danger" : "secondary"}
+            onClick={() => recordingVoice ? stopTimelineVoiceNote() : void startTimelineVoiceNote()}
+            disabled={!recordingVoice && (
+              voiceStartPending
+              || voiceSaving
+              || presentationRecording
+              || presentationStartPending
+              || presentationPayloadPreparing
+              || presentationExportBusy
+            )}
+          >
+            <Mic size={14} /> {recordingVoice
+              ? "Stop & save note"
+              : voiceStartPending
+                ? "Connecting microphone..."
+                : voiceSaving
+                  ? "Saving coaching note..."
+                  : "Record coaching note"
+            }
           </button>
           {playbackClipId ? (
             <button type="button" className="secondary" onClick={() => voicePlaybackPaused ? resumeVoicePlayback() : pauseVoicePlayback()}>
@@ -25530,6 +26369,32 @@ function ReplayVideoPlayer({
             <Scissors size={14} /> Clip
           </button>
           <button type="button" className="secondary" onClick={() => void saveKeyframe()}><Save size={14} /> Save keyframe</button>
+          </div>
+          {recordingFeedback ? (
+            <div
+              className="replay-recording-feedback"
+              data-state={recordingFeedback.state}
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
+            >
+              {recordingFeedback.icon === "success"
+                ? <Check size={14} aria-hidden="true" />
+                : recordingFeedback.icon === "video"
+                  ? <Video size={14} aria-hidden="true" />
+                  : recordingFeedback.icon === "warning"
+                    ? <AlertTriangle size={14} aria-hidden="true" />
+                    : <Mic size={14} aria-hidden="true" />
+              }
+              <span>
+                <strong>{recordingFeedback.label}</strong>
+                {recordingFeedback.detail ? <small>{recordingFeedback.detail}</small> : null}
+              </span>
+              {typeof recordingFeedback.elapsedMs === "number" ? (
+                <time aria-hidden="true">{formatDuration(recordingFeedback.elapsedMs)}</time>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       </header>
       <div className="replay-video-quick-flag">
@@ -25565,19 +26430,19 @@ function ReplayVideoPlayer({
       {recordingVoice ? (
         <div className="replay-coaching-status" data-state="recording">
           <Mic size={15} />
-          <strong>Recording synced coaching note</strong>
+          <strong>Recording synced coaching note · {formatDuration(elapsedRecordingMs)}</strong>
           <span>The replay is paused. Draw, arrow, highlight, or add text now and it will replay with this audio.</span>
         </div>
       ) : presentationRecording ? (
         <div className="replay-coaching-status" data-state="presentation">
           <Video size={15} />
-          <strong>Recording presentation MP4</strong>
+          <strong>Recording Full Voiceover · {formatDuration(elapsedRecordingMs)}</strong>
           <span>Play, pause, draw, and talk. Stop recording to export one continuous video.</span>
         </div>
       ) : pendingPresentationExport ? (
         <div className="replay-coaching-status" data-state="ready" role="status">
           <Check size={15} />
-          <strong>Presentation recording retained</strong>
+          <strong>Full Voiceover recording retained</strong>
           <span>{formatDuration(pendingPresentationExport.durationMs)} · {formatBytes(pendingPresentationExport.data.byteLength)}. Retry export, record a replacement, or discard it explicitly.</span>
         </div>
       ) : playbackClipId ? (
@@ -25728,7 +26593,6 @@ function ReplayVideoPlayer({
           ))}
         </div>
       ) : null}
-      {presentationStatus ? <p className="muted replay-presentation-status" role="status" aria-live="polite">{presentationStatus}</p> : null}
       {status ? <p className="muted">{status}</p> : null}
     </section>
   );
@@ -25763,10 +26627,8 @@ function ReplayVideoMarkerTimeline({
 }) {
   const durationMs = Math.max(1, video.durationMs || 1);
   const sortedFlags = [...flags].filter((flag) => typeof flag.timeMs === "number").sort((a, b) => (a.timeMs ?? 0) - (b.timeMs ?? 0));
-  const intelligencePins = intelligenceEvents
-    .filter((event) => typeof event.videoTimeMs === "number" && ["mulligan", "play", "combat", "score", "battlefield", "result"].includes(event.type))
-    .filter((event, index, all) => all.findIndex((item) => Math.abs((item.videoTimeMs ?? 0) - (event.videoTimeMs ?? 0)) < 1_500 && item.type === event.type) === index)
-    .slice(0, 80);
+  const intelligencePins = replayVideoTimelineMarkers(intelligenceEvents);
+  const [automaticMarkersEnabled, setAutomaticMarkersEnabled] = useState(readAutomaticReplayTimelineMarkers);
   const seekFromPointer = (event: React.PointerEvent<HTMLDivElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
     if (!rect.width) {
@@ -25777,110 +26639,145 @@ function ReplayVideoMarkerTimeline({
   };
   return (
     <div className="replay-marker-timeline">
-      <div
-        className="replay-marker-rail"
-        role="slider"
-        tabIndex={0}
-        aria-label="Replay timeline"
-        aria-valuemin={0}
-        aria-valuemax={Math.round(durationMs / 1000)}
-        aria-valuenow={Math.round(currentMs / 1000)}
-        aria-valuetext={`${formatDuration(currentMs)} of ${formatDuration(durationMs)}`}
-        onPointerDown={(event) => {
-          const target = event.target as HTMLElement | null;
-          if (target?.closest(".replay-marker-pin")) {
-            return;
-          }
-          event.currentTarget.setPointerCapture(event.pointerId);
-          seekFromPointer(event);
-        }}
-        onPointerMove={(event) => {
-          if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      <div className="replay-marker-rail-wrap">
+        <div
+          className="replay-marker-rail"
+          role="slider"
+          tabIndex={0}
+          aria-label="Replay timeline"
+          aria-valuemin={0}
+          aria-valuemax={Math.round(durationMs / 1000)}
+          aria-valuenow={Math.round(currentMs / 1000)}
+          aria-valuetext={`${formatDuration(currentMs)} of ${formatDuration(durationMs)}`}
+          onPointerDown={(event) => {
+            event.currentTarget.setPointerCapture(event.pointerId);
             seekFromPointer(event);
-          }
-        }}
-        onPointerUp={(event) => {
-          if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-            event.currentTarget.releasePointerCapture(event.pointerId);
-          }
-        }}
-        onPointerCancel={(event) => {
-          if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-            event.currentTarget.releasePointerCapture(event.pointerId);
-          }
-        }}
-        onKeyDown={(event) => {
-          if (event.key === "ArrowLeft") {
-            event.preventDefault();
-            onSeek(currentMs - 5000);
-          } else if (event.key === "ArrowRight") {
-            event.preventDefault();
-            onSeek(currentMs + 5000);
-          } else if (event.key === "Home") {
-            event.preventDefault();
-            onSeek(0);
-          } else if (event.key === "End") {
-            event.preventDefault();
-            onSeek(durationMs);
-          }
-        }}
-      >
-        <span className="replay-marker-progress" style={{ width: `${Math.min(100, Math.max(0, (currentMs / durationMs) * 100))}%` }} />
-        {intelligencePins.map((event) => {
-          const left = Math.min(100, Math.max(0, ((event.videoTimeMs ?? 0) / durationMs) * 100));
-          return (
-            <button
-              type="button"
-              className="replay-intelligence-marker-pin"
-              data-event-type={event.type}
-              data-confidence={event.confidence}
-              style={{ left: `${left}%` }}
-              key={`intelligence:${event.id}`}
-              title={`${event.type.replace("-", " ")} · ${event.text} · ${event.confidence}`}
-              onClick={() => onSeek(event.videoTimeMs ?? 0)}
-              onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}
-            />
-          );
-        })}
-        {sortedFlags.map((flag) => {
-          const note = replayVoiceNoteForFlag(voiceNotes, flag.id, flag.layerId);
-          const isPlayingNote = Boolean(note && playbackClipId === note.id);
-          const left = Math.min(100, Math.max(0, ((flag.timeMs ?? 0) / durationMs) * 100));
-          return (
-            <button
-              type="button"
-              className="replay-marker-pin"
-              data-flag-type={flag.type ?? replayFlagTypeFromLabel(flag.label)}
-              data-has-voice={Boolean(note)}
-              data-playing={isPlayingNote}
-              style={{ left: `${left}%` }}
-              key={flag.id}
-              title={`${replayFlagTypeLabel(flag)}${note ? " - voice note" : ""}. Click to jump${note ? " and play/pause" : ""}; right-click to edit.`}
-              onClick={() => {
-                if (isPlayingNote) {
-                  if (voicePlaybackPaused) {
-                    onResumeVoice();
-                  } else {
-                    onPauseVoice();
+          }}
+          onPointerMove={(event) => {
+            if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+              seekFromPointer(event);
+            }
+          }}
+          onPointerUp={(event) => {
+            if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+              event.currentTarget.releasePointerCapture(event.pointerId);
+            }
+          }}
+          onPointerCancel={(event) => {
+            if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+              event.currentTarget.releasePointerCapture(event.pointerId);
+            }
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "ArrowLeft") {
+              event.preventDefault();
+              onSeek(currentMs - 5000);
+            } else if (event.key === "ArrowRight") {
+              event.preventDefault();
+              onSeek(currentMs + 5000);
+            } else if (event.key === "Home") {
+              event.preventDefault();
+              onSeek(0);
+            } else if (event.key === "End") {
+              event.preventDefault();
+              onSeek(durationMs);
+            }
+          }}
+        >
+          <span className="replay-marker-progress" style={{ width: `${Math.min(100, Math.max(0, (currentMs / durationMs) * 100))}%` }} />
+        </div>
+        <div className="replay-marker-overlay" role="group" aria-label="Replay timeline events">
+          {automaticMarkersEnabled ? intelligencePins.map((marker) => {
+            const { event } = marker;
+            const left = Math.min(100, Math.max(0, ((event.videoTimeMs ?? 0) / durationMs) * 100));
+            return (
+              <button
+                type="button"
+                className="replay-intelligence-marker-pin"
+                data-event-type={event.type}
+                data-side={marker.side}
+                data-marker-lane={marker.side}
+                data-score-marker={marker.isScore || undefined}
+                data-confidence={event.confidence}
+                style={{ left: `${left}%` }}
+                key={`intelligence:${event.id}`}
+                aria-label={marker.accessibleLabel}
+                title={marker.accessibleLabel}
+                onClick={() => onSeek(event.videoTimeMs ?? 0)}
+              >
+                {marker.isScore ? <span aria-hidden="true">{marker.scoreLabel}</span> : null}
+              </button>
+            );
+          }) : null}
+          {sortedFlags.map((flag) => {
+            const note = replayVoiceNoteForFlag(voiceNotes, flag.id, flag.layerId);
+            const isPlayingNote = Boolean(note && playbackClipId === note.id);
+            const left = Math.min(100, Math.max(0, ((flag.timeMs ?? 0) / durationMs) * 100));
+            const markerLabel = `${replayFlagTypeLabel(flag)}${note ? " - voice note" : ""}. Click to jump${note ? " and play/pause" : ""}; right-click to edit.`;
+            return (
+              <button
+                type="button"
+                className="replay-marker-pin"
+                data-flag-type={flag.type ?? replayFlagTypeFromLabel(flag.label)}
+                data-has-voice={Boolean(note)}
+                data-playing={isPlayingNote}
+                style={{ left: `${left}%` }}
+                key={flag.id}
+                aria-label={markerLabel}
+                title={markerLabel}
+                onClick={() => {
+                  if (isPlayingNote) {
+                    if (voicePlaybackPaused) {
+                      onResumeVoice();
+                    } else {
+                      onPauseVoice();
+                    }
+                    return;
                   }
-                  return;
-                }
-                onSeek(flag.timeMs ?? 0);
-                if (note) {
-                  onPlayVoice(note, flag);
-                }
-              }}
-              onPointerDown={(event) => event.stopPropagation()}
-              onContextMenu={(event) => {
-                event.preventDefault();
-                onEditFlag(flag);
-              }}
-            >
-              {isPlayingNote ? (voicePlaybackPaused ? <Play size={13} /> : <Pause size={13} />) : note ? <Mic size={13} /> : <Flag size={13} />}
-            </button>
-          );
-        })}
+                  onSeek(flag.timeMs ?? 0);
+                  if (note) {
+                    onPlayVoice(note, flag);
+                  }
+                }}
+                onContextMenu={(event) => {
+                  event.preventDefault();
+                  onEditFlag(flag);
+                }}
+              >
+                {isPlayingNote ? (voicePlaybackPaused ? <Play size={13} /> : <Pause size={13} />) : note ? <Mic size={13} /> : <Flag size={13} />}
+              </button>
+            );
+          })}
+        </div>
       </div>
+      {intelligencePins.length ? (
+        <div className="replay-timeline-display-options">
+          <label
+            className="replay-timeline-marker-toggle"
+            title="Show or hide captured and reconstructed event and score markers. Manual flags and voice notes stay visible."
+          >
+            <input
+              type="checkbox"
+              checked={automaticMarkersEnabled}
+              onChange={(event) => {
+                const enabled = event.target.checked;
+                setAutomaticMarkersEnabled(enabled);
+                writeAutomaticReplayTimelineMarkers(enabled);
+              }}
+            />
+            <span>Show automatic events &amp; scores</span>
+          </label>
+          {automaticMarkersEnabled ? (
+            <div className="replay-timeline-legend" aria-label="Replay timeline marker legend">
+              <span><i data-side="player" aria-hidden="true" /> Player</span>
+              <span><i data-side="opponent" aria-hidden="true" /> Opponent</span>
+              <span><i data-side="neutral" aria-hidden="true" /> Game / unknown</span>
+              {intelligencePins.some((marker) => marker.isScore) ? <span><b aria-hidden="true">3–2</b> Score</span> : null}
+              <small>Score badges show the captured total. Hover or focus a marker for details.</small>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
       <div className="replay-marker-chips">
         {sortedFlags.map((flag) => {
           const note = replayVoiceNoteForFlag(voiceNotes, flag.id, flag.layerId);
@@ -26522,7 +27419,8 @@ function SettingsView({
   onRestoreDeletedMatch,
   onPurgeDeletedMatch,
   onRestoreDeletedReplay,
-  onPurgeDeletedReplay
+  onPurgeDeletedReplay,
+  onClearEnhancedInsightsData
 }: {
   settings: UserSettings;
   browsers: BrowserInfo[];
@@ -26553,6 +27451,7 @@ function SettingsView({
   onPurgeDeletedMatch: (id: string) => Promise<void>;
   onRestoreDeletedReplay: (id: string) => Promise<void>;
   onPurgeDeletedReplay: (id: string) => Promise<void>;
+  onClearEnhancedInsightsData: () => Promise<{ matchesUpdated: number; replaysUpdated: number }>;
 }) {
   const [showAdvancedDiagnostics, setShowAdvancedDiagnostics] = useState(false);
   const [audioInputs, setAudioInputs] = useState<MediaDeviceInfo[]>([]);
@@ -26565,6 +27464,8 @@ function SettingsView({
   const [backupBusy, setBackupBusy] = useState(false);
   const [shadowClipHotkeyDraft, setShadowClipHotkeyDraft] = useState(settings.replayShadowClipHotkey);
   const [quickFlagHotkeyDraft, setQuickFlagHotkeyDraft] = useState(settings.replayQuickFlagHotkey);
+  const [enhancedInsightsClearBusy, setEnhancedInsightsClearBusy] = useState(false);
+  const [enhancedInsightsStatus, setEnhancedInsightsStatus] = useState("");
   useEffect(() => {
     setShadowClipHotkeyDraft(settings.replayShadowClipHotkey);
   }, [settings.replayShadowClipHotkey]);
@@ -26629,6 +27530,22 @@ function SettingsView({
     }));
     setSupportStatus("Support summary copied.");
     window.setTimeout(() => setSupportStatus(""), 1800);
+  }
+
+  async function clearEnhancedInsightsData() {
+    if (!window.confirm("Delete locally captured Enhanced Insights evidence and decision context? Your matches, videos, screenshots, and ordinary notes will remain.")) {
+      return;
+    }
+    setEnhancedInsightsClearBusy(true);
+    setEnhancedInsightsStatus("Deleting local Enhanced Insights data...");
+    try {
+      const result = await onClearEnhancedInsightsData();
+      setEnhancedInsightsStatus(`Deleted Enhanced Insights data from ${result.matchesUpdated} match${result.matchesUpdated === 1 ? "" : "es"} and ${result.replaysUpdated} replay${result.replaysUpdated === 1 ? "" : "s"}.`);
+    } catch (error) {
+      setEnhancedInsightsStatus(rendererErrorMessage(error, "Enhanced Insights data could not be deleted."));
+    } finally {
+      setEnhancedInsightsClearBusy(false);
+    }
   }
 
   async function runAtlasConnectionTest() {
@@ -26809,6 +27726,55 @@ function SettingsView({
           </label>
           <p className="muted">Shows the active deck's matchup guide and live notes over both Atlas and TCGA. Enabled by default.</p>
         </div>
+        <div className="rail-card enhanced-insights-settings-card">
+          <div className="settings-card-heading-row">
+            <div>
+              <h2>Enhanced Insights Beta</h2>
+              <p className="muted">Keep richer local match evidence so Coach can examine scoring routes, rune timing, information, battlefield commitment, combat, and sideboard follow-through.</p>
+            </div>
+            <span className="enhanced-insights-local-badge"><Shield size={14} /> Local only</span>
+          </div>
+          <label className="toggle-row">
+            <span><Sparkles size={16} /> Capture Enhanced Insights</span>
+            <input
+              type="checkbox"
+              checked={settings.enhancedInsightsEnabled === true}
+              onChange={(event) => void onSave({ enhancedInsightsEnabled: event.target.checked })}
+            />
+          </label>
+          <label className="toggle-row">
+            <span><MessageCircle size={16} /> Ask one quick post-game question</span>
+            <input
+              type="checkbox"
+              checked={settings.enhancedInsightsPostGamePromptEnabled !== false}
+              disabled={settings.enhancedInsightsEnabled !== true}
+              onChange={(event) => void onSave({ enhancedInsightsPostGamePromptEnabled: event.target.checked })}
+            />
+          </label>
+          <div className="settings-note">
+            This does not enable uploads, Web Replays, video recording, microphone access, or anonymous diagnostics. New evidence stays on this device and Coach labels gaps as unknown.
+          </div>
+          <div className="row-actions">
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => void onSave({ enhancedInsightsIntroSeen: false }).then(() => {
+                window.dispatchEvent(new CustomEvent("riftlite:navigate", { detail: { view: "insights" } }));
+              })}
+            >
+              <BookOpen size={15} /> Show introduction
+            </button>
+            <button
+              type="button"
+              className="secondary danger"
+              disabled={enhancedInsightsClearBusy}
+              onClick={() => void clearEnhancedInsightsData()}
+            >
+              <Trash2 size={15} /> {enhancedInsightsClearBusy ? "Deleting..." : "Delete captured insight data"}
+            </button>
+          </div>
+          {enhancedInsightsStatus ? <p className="muted" role="status" aria-live="polite">{enhancedInsightsStatus}</p> : null}
+        </div>
         <div className="rail-card">
           <h2>Replays</h2>
           <p className="muted">Visual frames stay lightweight. Video replay is optional and attaches shareable video to the .riftreplay teaching bundle.</p>
@@ -26918,7 +27884,7 @@ function SettingsView({
             <input
               type="checkbox"
               checked={settings.replayQuickFlagHotkeyEnabled}
-              disabled={!settings.replayVideoEnabled}
+              disabled={!settings.replayVideoEnabled && settings.enhancedInsightsEnabled !== true}
               onChange={(event) => void onSave({ replayQuickFlagHotkeyEnabled: event.target.checked })}
             />
           </label>
@@ -26926,7 +27892,7 @@ function SettingsView({
             Review flag shortcut
             <input
               value={quickFlagHotkeyDraft}
-              disabled={!settings.replayVideoEnabled || !settings.replayQuickFlagHotkeyEnabled}
+              disabled={(!settings.replayVideoEnabled && settings.enhancedInsightsEnabled !== true) || !settings.replayQuickFlagHotkeyEnabled}
               onChange={(event) => setQuickFlagHotkeyDraft(event.target.value)}
               onBlur={() => void saveQuickFlagHotkeyDraft()}
               onKeyDown={(event) => {
@@ -26937,7 +27903,7 @@ function SettingsView({
               placeholder="CommandOrControl+Shift+F"
             />
           </label>
-          <p className="muted">Hotkeys use Electron accelerator names, for example CommandOrControl+Shift+C. The review flag is attached when the full replay saves.</p>
+          <p className="muted">Hotkeys use Electron accelerator names, for example CommandOrControl+Shift+C. With Enhanced Insights, the review marker works without video and asks for context after the match.</p>
           {replayGuardrail ? <div className="settings-note warning">{replayGuardrail}</div> : null}
           <label>Replay folder<input readOnly value={replayPath} /></label>
           <div className="row-actions">
@@ -30638,6 +31604,9 @@ function legendRows(matches: AnalyticsMatch[]): Array<{ name: string; total: num
 function normalizeReviewDraft(draft: MatchDraft): MatchDraft {
   const workingDraft = sanitizeDraftDeckDefaults(repairDraftForReview(draft));
   const games = ensureReviewGames(workingDraft, workingDraft.format).map((game, index) => normalizeReviewGame({ ...game, gameNumber: index + 1 }));
+  const insightContext = games.length === 1
+    ? clearSingleGameSideboardPlanOutcome(workingDraft.insightContext)
+    : workingDraft.insightContext;
   const rawDeckSourceKey = workingDraft.deckSourceKey || workingDraft.deckSourceId || "";
   const hasDeckAttachment = Boolean(
     workingDraft.deckSnapshotJson?.trim()
@@ -30670,7 +31639,21 @@ function normalizeReviewDraft(draft: MatchDraft): MatchDraft {
     deckSourceKey,
     deckSourceUrl: hasDeckAttachment && meaningfulDeckUrl(workingDraft.deckSourceUrl) ? workingDraft.deckSourceUrl ?? "" : "",
     deckSnapshotJson: hasDeckAttachment ? workingDraft.deckSnapshotJson ?? "" : "",
+    ...(insightContext ? { insightContext } : {}),
     games
+  };
+}
+
+function clearSingleGameSideboardPlanOutcome(
+  context: MatchDraft["insightContext"]
+): MatchDraft["insightContext"] {
+  if (!context?.sideboardPlanOutcome) {
+    return context;
+  }
+  const { sideboardPlanOutcome: _sideboardPlanOutcome, ...withoutSideboardPlanOutcome } = context;
+  return {
+    ...withoutSideboardPlanOutcome,
+    updatedAt: new Date().toISOString()
   };
 }
 
@@ -31508,11 +32491,41 @@ function catalogSearchKey(value: string): string {
   return value.toLowerCase().replace(/[’`]/g, "'").replace(/[^a-z0-9]+/g, "");
 }
 
-function MatchReviewModal({ draft, decks, battlefields, previousFlags, onReviewLater, onDelete, onConfirm, onChange }: {
+const INSIGHT_DECISION_TYPE_OPTIONS: Record<InsightDecisionFamily, ReadonlyArray<{ value: InsightDecisionType; label: string }>> = {
+  scoring: [{ value: "scoring", label: "Scoring route" }],
+  resources: [{ value: "resource-use", label: "Rune or resource use" }],
+  information: [{ value: "information", label: "Information or response window" }],
+  battlefield: [{ value: "battlefield-pick", label: "Battlefield choice" }],
+  combat: [{ value: "combat", label: "Combat line" }],
+  mulligan: [
+    { value: "mulligan", label: "General mulligan decision" },
+    { value: "mulligan-keep", label: "Kept this card" },
+    { value: "mulligan-redraw", label: "Redrew this card" }
+  ],
+  sideboard: [
+    { value: "sideboard", label: "General sideboard decision" },
+    { value: "sideboard-in", label: "Boarded this card in" },
+    { value: "sideboard-out", label: "Boarded this card out" }
+  ],
+  other: [
+    { value: "other", label: "Other decision" },
+    { value: "sequencing", label: "Sequencing decision" }
+  ]
+};
+
+function insightDecisionSubjectPrompt(family: InsightDecisionFamily): string | null {
+  if (family === "battlefield") return "Battlefield name";
+  if (family === "mulligan" || family === "sideboard") return "Card name";
+  if (family === "resources" || family === "combat" || family === "other") return "Card, unit, or resource (optional)";
+  return null;
+}
+
+function MatchReviewModal({ draft, decks, battlefields, previousFlags, enhancedInsightsPostGamePromptEnabled, onReviewLater, onDelete, onConfirm, onChange }: {
   draft: MatchDraft;
   decks: SavedDeck[];
   battlefields: BattlefieldOption[];
   previousFlags: string[];
+  enhancedInsightsPostGamePromptEnabled: boolean;
   onReviewLater: (draft: MatchDraft) => Promise<void>;
   onDelete: (draft: MatchDraft) => Promise<void>;
   onConfirm: (draft: MatchDraft) => Promise<void>;
@@ -31521,12 +32534,21 @@ function MatchReviewModal({ draft, decks, battlefields, previousFlags, onReviewL
   const [isSaving, setIsSaving] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isDeferring, setIsDeferring] = useState(false);
+  const [isDeckNotebookLoading, setIsDeckNotebookLoading] = useState(false);
   const [deleteConfirmationOpen, setDeleteConfirmationOpen] = useState(false);
   const [saveError, setSaveError] = useState("");
   const [seatErrorGames, setSeatErrorGames] = useState<number[]>([]);
   const [previousFlagChoice, setPreviousFlagChoice] = useState("");
   const deleteCancelButtonRef = useRef<HTMLButtonElement | null>(null);
   const bo3GamesCacheRef = useRef<MatchGame[]>(draft.games.length > 1 ? ensureReviewGames(draft, "Bo3") : []);
+  const draftRef = useRef(draft);
+  const deckNotebookLoadRequestRef = useRef(0);
+  const deckNotebookRefreshPromiseRef = useRef<Promise<void>>(Promise.resolve());
+  const mountedRef = useRef(true);
+  draftRef.current = draft;
+  const isScorepadDraft = draft.source === "scorepad" || draft.source === "manual";
+  const isSavedDraft = draft.status === "saved";
+  const editingSavedManualMatch = isScorepadDraft && isSavedDraft;
 
   useEffect(() => {
     if (draft.format !== "Bo1" && draft.games.length > 1) {
@@ -31541,11 +32563,72 @@ function MatchReviewModal({ draft, decks, battlefields, previousFlags, onReviewL
     deleteCancelButtonRef.current?.focus({ preventScroll: true });
   }, [deleteConfirmationOpen]);
 
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      deckNotebookLoadRequestRef.current += 1;
+    };
+  }, []);
+
   function patch(next: Partial<MatchDraft>) {
     if (saveError) {
       setSaveError("");
     }
-    onChange({ ...draft, ...next });
+    const nextDraft = { ...draftRef.current, ...next };
+    draftRef.current = nextDraft;
+    onChange(nextDraft);
+  }
+
+  function patchInsightContext(next: Partial<NonNullable<MatchDraft["insightContext"]>>) {
+    const currentInsightContext = draftRef.current.insightContext;
+    if (!currentInsightContext) {
+      return;
+    }
+    const now = new Date().toISOString();
+    patch({
+      insightContext: {
+        ...currentInsightContext,
+        ...next,
+        postGamePromptCompletedAt: now,
+        updatedAt: now
+      }
+    });
+  }
+
+  function patchInsightDecision(id: string, next: Partial<InsightDecisionContext>) {
+    const currentInsightContext = draftRef.current.insightContext;
+    if (!currentInsightContext) {
+      return;
+    }
+    const now = new Date().toISOString();
+    patchInsightContext({
+      decisions: currentInsightContext.decisions.map((decision) => decision.id === id
+        ? { ...decision, ...next, updatedAt: now }
+        : decision)
+    });
+  }
+
+  function patchInsightDecisionFamily(id: string, family: InsightDecisionFamily) {
+    const current = draftRef.current.insightContext?.decisions.find((decision) => decision.id === id);
+    if (!current) {
+      return;
+    }
+    const options = INSIGHT_DECISION_TYPE_OPTIONS[family];
+    patchInsightDecision(id, {
+      family,
+      decision: options.some((option) => option.value === current.decision)
+        ? current.decision
+        : options[0]?.value,
+      subject: family === "battlefield"
+        ? current.subject?.battlefieldName ? { battlefieldName: current.subject.battlefieldName } : undefined
+        : current.subject?.cardName ? {
+            cardKey: current.subject.cardKey,
+            cardName: current.subject.cardName,
+            cardId: current.subject.cardId
+          } : undefined,
+      initiative: family === "battlefield" ? current.initiative : undefined
+    });
   }
 
   async function saveMatch() {
@@ -31553,17 +32636,20 @@ function MatchReviewModal({ draft, decks, battlefields, previousFlags, onReviewL
       return;
     }
     setSaveError("");
-    const normalizedGames = ensureReviewGames(draft, draft.format);
-    const missingSeatGames = missingSeatGameNumbers(normalizedGames);
+    setIsSaving(true);
+    await deckNotebookRefreshPromiseRef.current.catch(() => undefined);
+    const latestDraft = draftRef.current;
+    const normalizedGames = ensureReviewGames(latestDraft, latestDraft.format);
+    const missingSeatGames = editingSavedManualMatch ? [] : missingSeatGameNumbers(normalizedGames);
     if (missingSeatGames.length) {
       setSeatErrorGames(missingSeatGames);
       setSaveError(seatRequirementMessage(missingSeatGames));
+      setIsSaving(false);
       return;
     }
     setSeatErrorGames([]);
-    setIsSaving(true);
     try {
-      await onConfirm(normalizeReviewDraft(draft));
+      await onConfirm(normalizeReviewDraft(latestDraft));
     } catch (error) {
       setSaveError(matchReviewErrorMessage(error, "Save did not complete."));
       setIsSaving(false);
@@ -31577,7 +32663,8 @@ function MatchReviewModal({ draft, decks, battlefields, previousFlags, onReviewL
     setSaveError("");
     setIsDeferring(true);
     try {
-      await onReviewLater(normalizeReviewDraft(draft));
+      await deckNotebookRefreshPromiseRef.current;
+      await onReviewLater(normalizeReviewDraft(draftRef.current));
     } catch (error) {
       setSaveError(matchReviewErrorMessage(
         error,
@@ -31690,11 +32777,15 @@ function MatchReviewModal({ draft, decks, battlefields, previousFlags, onReviewL
       ? [normalizeReviewGame(bestReviewGameForBo1(draft))]
       : ensureReviewGames(sourceDraft, format);
     const summary = reviewMatchSummary(games, draft.result);
+    const insightContext = format === "Bo1"
+      ? clearSingleGameSideboardPlanOutcome(draft.insightContext)
+      : draft.insightContext;
     patch({
       format,
       games,
       score: summary.score || draft.score,
       result: summary.result,
+      ...(insightContext ? { insightContext } : {}),
       ...draftFromPrimaryReviewGame(draft, games[0] ?? createReviewGame(draft, 1))
     });
   }
@@ -31719,14 +32810,38 @@ function MatchReviewModal({ draft, decks, battlefields, previousFlags, onReviewL
     patch({ format: "Bo3", games: nextGames, score: summary.score || draft.score, result: summary.result });
   }
 
-  function patchDeckSelection(deckId: string) {
+  function patchDeckSelection(deckId: string): Promise<void> {
+    const refresh = refreshDeckSelection(deckId);
+    deckNotebookRefreshPromiseRef.current = refresh;
+    return refresh;
+  }
+
+  async function refreshDeckSelection(deckId: string): Promise<void> {
+    const requestId = ++deckNotebookLoadRequestRef.current;
+    setIsDeckNotebookLoading(false);
+    const currentDraft = draftRef.current;
+    const insightContext = currentDraft.insightContext
+      ? (() => {
+          const { notebookSnapshot: _notebookSnapshot, ...withoutNotebookSnapshot } = currentDraft.insightContext!;
+          return {
+            ...withoutNotebookSnapshot,
+            activeGoalIds: [],
+            decisions: withoutNotebookSnapshot.decisions.map((decision) => {
+              const { goalId: _goalId, ...withoutGoal } = decision;
+              return withoutGoal;
+            }),
+            updatedAt: new Date().toISOString()
+          };
+        })()
+      : undefined;
     if (!deckId) {
       patch({
         deckName: "",
         deckSourceId: "",
         deckSourceKey: "",
         deckSourceUrl: "",
-        deckSnapshotJson: ""
+        deckSnapshotJson: "",
+        ...(insightContext ? { insightContext } : {})
       });
       return;
     }
@@ -31742,8 +32857,51 @@ function MatchReviewModal({ draft, decks, battlefields, previousFlags, onReviewL
       deckSourceId: deck.sourceKey || deck.id,
       deckSourceKey: deck.sourceKey,
       deckSourceUrl: deck.sourceUrl,
-      deckSnapshotJson: deck.snapshotJson
+      deckSnapshotJson: deck.snapshotJson,
+      ...(insightContext ? { insightContext } : {})
     });
+    if (!insightContext) {
+      return;
+    }
+    setIsDeckNotebookLoading(true);
+    try {
+      const notebook = await window.riftlite.getDeckNotebook(deck.id).catch(() => null);
+      if (!notebook || !mountedRef.current || deckNotebookLoadRequestRef.current !== requestId) {
+        return;
+      }
+      const latestDraft = draftRef.current;
+      const selectedDeckIdentifiers = new Set(
+        [deck.id, deck.sourceKey, deck.sourceUrl].filter((value): value is string => Boolean(value))
+      );
+      if (![latestDraft.deckSourceId, latestDraft.deckSourceKey, latestDraft.deckSourceUrl]
+        .some((value) => Boolean(value) && selectedDeckIdentifiers.has(value!))) {
+        return;
+      }
+      const now = new Date().toISOString();
+      const notebookSnapshot = buildInsightNotebookSnapshot(notebook, latestDraft.opponentChampion, now);
+      const goalIds = new Set(notebookSnapshot.goals.map((goal) => goal.id));
+      const latestInsightContext = latestDraft.insightContext;
+      if (!latestInsightContext) {
+        return;
+      }
+      patch({
+        insightContext: {
+          ...latestInsightContext,
+          activeGoalIds: [...goalIds],
+          decisions: latestInsightContext.decisions.map((decision) => {
+            if (!decision.goalId || goalIds.has(decision.goalId)) return decision;
+            const { goalId: _goalId, ...withoutGoal } = decision;
+            return withoutGoal;
+          }),
+          notebookSnapshot,
+          updatedAt: now
+        }
+      });
+    } finally {
+      if (mountedRef.current && deckNotebookLoadRequestRef.current === requestId) {
+        setIsDeckNotebookLoading(false);
+      }
+    }
   }
 
   function addPreviousFlag(flag: string) {
@@ -31769,11 +32927,13 @@ function MatchReviewModal({ draft, decks, battlefields, previousFlags, onReviewL
   const attachedDeck = decks.find((deck) => deck.id === draft.deckSourceId || deck.sourceKey === (draft.deckSourceKey || draft.deckSourceId));
   const deckSelectValue = attachedDeck?.id ?? (meaningfulDeckName(draft.deckName) ? "__current" : "");
   const bo1SeatInvalid = seatErrorGames.includes(1);
-  const isScorepadDraft = draft.source === "scorepad" || draft.source === "manual";
-  const isSavedDraft = draft.status === "saved";
   const confidence = reviewCaptureConfidence(draft, reviewGames, isScorepadDraft);
   const bo3Notice = isMultiGameReview ? reviewBo3Notice(draft, reviewGames) : "";
   const isAutomaticTcgaSave = draft.platform === "tcga" && !isScorepadDraft;
+  const enhancedInsightDecisions = draft.insightContext?.decisions ?? [];
+  const showEnhancedInsightReview = !isScorepadDraft
+    && draft.insightContext?.capturedWithEnhancedInsights === true
+    && (enhancedInsightsPostGamePromptEnabled || enhancedInsightDecisions.length > 0);
   const saveProgressTitle = isAutomaticTcgaSave
     ? "Securing this TCGA match locally"
     : "Saving this match";
@@ -31851,8 +33011,13 @@ function MatchReviewModal({ draft, decks, battlefields, previousFlags, onReviewL
             <label>My score<input type="number" min="0" step="1" value={scoreValues.me} onChange={(event) => patchScore("me", event.target.value)} /></label>
             <label>Opponent score<input type="number" min="0" step="1" value={scoreValues.opp} onChange={(event) => patchScore("opp", event.target.value)} /></label>
           </div> : null}
-          <label>My legend<input value={draft.myChampion} onChange={(event) => patch({ myChampion: event.target.value })} /></label>
-          <label>Opponent legend<input value={draft.opponentChampion} onChange={(event) => patch({ opponentChampion: event.target.value })} /></label>
+          {isScorepadDraft ? <>
+            <LegendInput label="My legend" value={draft.myChampion} onChange={(value) => patch({ myChampion: value })} placeholder="Search legends" />
+            <LegendInput label="Opponent legend" value={draft.opponentChampion} onChange={(value) => patch({ opponentChampion: value })} placeholder="Search legends" />
+          </> : <>
+            <label>My legend<input value={draft.myChampion} onChange={(event) => patch({ myChampion: event.target.value })} /></label>
+            <label>Opponent legend<input value={draft.opponentChampion} onChange={(event) => patch({ opponentChampion: event.target.value })} /></label>
+          </>}
           {!isMultiGameReview ? <>
             <BattlefieldInput label="My battlefield" value={draft.myBattlefield} options={battlefields} onChange={(value) => patchBattlefield("me", value)} />
             <BattlefieldInput label="Opponent battlefield" value={draft.opponentBattlefield} options={battlefields} onChange={(value) => patchBattlefield("opp", value)} />
@@ -31894,11 +33059,11 @@ function MatchReviewModal({ draft, decks, battlefields, previousFlags, onReviewL
               </div>
             </section>
           ) : null}
-          <label>Deck<select value={deckSelectValue} onChange={(event) => patchDeckSelection(event.target.value)}>
+          <label>Deck<select value={deckSelectValue} onChange={(event) => { void patchDeckSelection(event.target.value); }}>
             <option value="">No deck logged</option>
             {deckSelectValue === "__current" ? <option value="__current">{draft.deckName}</option> : null}
             {decks.map((deck) => <option value={deck.id} key={deck.id}>{deck.title}</option>)}
-          </select></label>
+          </select>{isDeckNotebookLoading ? <small role="status">Refreshing Testing goals...</small> : null}</label>
           <label>Deck name<input value={draft.deckName} onChange={(event) => patch({ deckName: event.target.value })} placeholder="No deck logged" /></label>
           <label className="wide">Flags<input value={draft.flags} onChange={(event) => patch({ flags: event.target.value })} placeholder="ladder, tournament, testing" /></label>
           <label className="wide review-previous-flags">
@@ -31916,14 +33081,228 @@ function MatchReviewModal({ draft, decks, battlefields, previousFlags, onReviewL
             </div>
           </label>
           {!isScorepadDraft ? (
-            <label className="toggle-row wide review-replay-toggle">
-              <span><Images size={16} /> Save replay files for this match</span>
-              <input
-                type="checkbox"
-                checked={draft.keepReplay !== false}
-                onChange={(event) => patch({ keepReplay: event.target.checked })}
-              />
-            </label>
+            <>
+              <label className="toggle-row wide review-replay-toggle">
+                <span><Images size={16} /> {draft.insightContext?.capturedWithEnhancedInsights
+                  ? "Keep local replay evidence for Coach"
+                  : "Save replay files for this match"}</span>
+                <input
+                  type="checkbox"
+                  checked={draft.keepReplay !== false}
+                  onChange={(event) => patch({ keepReplay: event.target.checked })}
+                />
+              </label>
+              {draft.insightContext?.capturedWithEnhancedInsights ? (
+                <p className="wide review-replay-evidence-note" data-disabled={draft.keepReplay === false ? "true" : undefined}>
+                  <Shield size={13} /> This local semantic record can support Replay Coach when it returns. Turn it off to keep the match result and ordinary notes without this match's replay evidence.
+                </p>
+              ) : null}
+            </>
+          ) : null}
+          {showEnhancedInsightReview && draft.insightContext ? (
+            <section className="review-enhanced-insights wide" aria-labelledby="review-enhanced-insights-title">
+              <header>
+                <span><Sparkles size={17} aria-hidden="true" /></span>
+                <div>
+                  <h3 id="review-enhanced-insights-title">Add the context capture cannot see</h3>
+                  <p>{enhancedInsightsPostGamePromptEnabled
+                    ? "One quick answer helps Coach separate a deliberate adaptation from a missed line. This stays local."
+                    : "Add detail to the decisions you marked during the game. This stays local."}</p>
+                </div>
+                <small><Shield size={13} /> Private evidence</small>
+              </header>
+              {enhancedInsightsPostGamePromptEnabled ? <>
+                <div className="review-insight-question">
+                  <strong>{draft.insightContext.activeGoalIds.length
+                    ? "How did this game relate to your current testing plan?"
+                    : "How closely did you follow your intended game plan?"}</strong>
+                  <div className="review-insight-choice-row">
+                    {([
+                      ["followed", "Followed it"],
+                      ["adapted", "Adapted deliberately"],
+                      ["no-opportunity", "No opportunity"],
+                      ["unsure", "Unsure"]
+                    ] as const).map(([value, label]) => (
+                      <button
+                        type="button"
+                        key={value}
+                        className={draft.insightContext?.planOutcome === value ? "active" : "secondary"}
+                        aria-pressed={draft.insightContext?.planOutcome === value}
+                        onClick={() => patchInsightContext({ planOutcome: value as InsightPlanOutcome })}
+                      >{label}</button>
+                    ))}
+                  </div>
+                </div>
+                {isMultiGameReview ? (
+                  <div className="review-insight-question">
+                    <strong>How did the sideboard plan play out?</strong>
+                    <div className="review-insight-choice-row">
+                      {([
+                        ["followed", "Followed it"],
+                        ["adapted", "Changed the plan"],
+                        ["no-opportunity", "No sideboard chance"],
+                        ["unsure", "Unsure"]
+                      ] as const).map(([value, label]) => (
+                        <button
+                          type="button"
+                          key={value}
+                          className={draft.insightContext?.sideboardPlanOutcome === value ? "active" : "secondary"}
+                          aria-pressed={draft.insightContext?.sideboardPlanOutcome === value}
+                          onClick={() => patchInsightContext({ sideboardPlanOutcome: value as InsightPlanOutcome })}
+                        >{label}</button>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+              </> : null}
+              {enhancedInsightDecisions.length ? (
+                <div className="review-insight-markers">
+                  <div>
+                    <strong>{enhancedInsightDecisions.length} marked decision{enhancedInsightDecisions.length === 1 ? "" : "s"}</strong>
+                    <span>Optional: label the moment now, or leave it for replay review.</span>
+                  </div>
+                  {enhancedInsightDecisions.map((decision, index) => (
+                    <article key={decision.id}>
+                      <div className="review-insight-marker-heading">
+                        <span><Flag size={14} /> Mark {index + 1}{typeof decision.timeMs === "number" ? ` · ${formatDuration(decision.timeMs)}` : ""}</span>
+                        <small>Exact point retained</small>
+                      </div>
+                      <div className="review-insight-marker-fields">
+                        <label>
+                          Decision area
+                          <select
+                            value={decision.family}
+                            onChange={(event) => patchInsightDecisionFamily(decision.id, event.target.value as InsightDecisionFamily)}
+                          >
+                            <option value="other">Choose later</option>
+                            <option value="scoring">Scoring route</option>
+                            <option value="resources">Rune / resource timing</option>
+                            <option value="information">Information / response window</option>
+                            <option value="battlefield">Battlefield commitment</option>
+                            <option value="combat">Combat</option>
+                            <option value="mulligan">Mulligan</option>
+                            <option value="sideboard">Sideboard</option>
+                          </select>
+                        </label>
+                        <label>
+                          Decision detail
+                          <select
+                            value={decision.decision ?? INSIGHT_DECISION_TYPE_OPTIONS[decision.family][0]?.value ?? "other"}
+                            onChange={(event) => patchInsightDecision(decision.id, { decision: event.target.value as InsightDecisionType })}
+                          >
+                            {INSIGHT_DECISION_TYPE_OPTIONS[decision.family].map((option) => (
+                              <option key={option.value} value={option.value}>{option.label}</option>
+                            ))}
+                          </select>
+                        </label>
+                        <label>
+                          What was happening?
+                          <select
+                            value={decision.assessment ?? "unsure"}
+                            onChange={(event) => patchInsightDecision(decision.id, { assessment: event.target.value as InsightDecisionAssessment })}
+                          >
+                            <option value="unsure">Not sure yet</option>
+                            <option value="intentional">Intentional line</option>
+                            <option value="forced">Forced by the game state</option>
+                            <option value="missed">I think I missed something</option>
+                            <option value="good-line">Worth repeating</option>
+                            <option value="capture-wrong">Capture looks wrong</option>
+                          </select>
+                        </label>
+                        {insightDecisionSubjectPrompt(decision.family) ? (
+                          <label>
+                            {insightDecisionSubjectPrompt(decision.family)}
+                            <input
+                              value={decision.family === "battlefield"
+                                ? decision.subject?.battlefieldName ?? ""
+                                : decision.subject?.cardName ?? ""}
+                              onChange={(event) => patchInsightDecision(decision.id, {
+                                subject: decision.family === "battlefield"
+                                  ? { battlefieldName: event.target.value }
+                                  : { cardName: event.target.value }
+                              })}
+                              placeholder={decision.family === "battlefield" ? "e.g. The Grand Plaza" : "What did the decision concern?"}
+                            />
+                          </label>
+                        ) : null}
+                        {decision.family === "battlefield" ? (
+                          <label>
+                            Initiative
+                            <select
+                              value={decision.initiative ?? ""}
+                              onChange={(event) => patchInsightDecision(decision.id, {
+                                initiative: event.target.value === "1st" || event.target.value === "2nd"
+                                  ? event.target.value
+                                  : undefined
+                              })}
+                            >
+                              <option value="">Unknown / not relevant</option>
+                              <option value="1st">Going first</option>
+                              <option value="2nd">Going second</option>
+                            </select>
+                          </label>
+                        ) : null}
+                        {draft.insightContext?.notebookSnapshot?.goals.length ? (
+                          <label>
+                            Testing goal
+                            <select
+                              value={decision.goalId ?? ""}
+                              onChange={(event) => patchInsightDecision(decision.id, { goalId: event.target.value || undefined })}
+                            >
+                              <option value="">No specific goal</option>
+                              {draft.insightContext.notebookSnapshot.goals.map((goal) => (
+                                <option key={goal.id} value={goal.id}>{goal.text}</option>
+                              ))}
+                            </select>
+                          </label>
+                        ) : null}
+                      </div>
+                      <label>
+                        Optional note
+                        <input
+                          value={decision.note ?? ""}
+                          onChange={(event) => patchInsightDecision(decision.id, { note: event.target.value })}
+                          placeholder="What were you considering?"
+                        />
+                      </label>
+                      <details
+                        className="review-insight-strategic-context"
+                        data-populated={decision.intendedPlan || decision.constraint || decision.alternative ? "true" : undefined}
+                      >
+                        <summary>Add strategic context (optional)</summary>
+                        <div>
+                          <label>
+                            Intended plan
+                            <input
+                              value={decision.intendedPlan ?? ""}
+                              onChange={(event) => patchInsightDecision(decision.id, { intendedPlan: event.target.value })}
+                              placeholder="What were you trying to accomplish?"
+                            />
+                          </label>
+                          <label>
+                            Constraint or trigger
+                            <input
+                              value={decision.constraint ?? ""}
+                              onChange={(event) => patchInsightDecision(decision.id, { constraint: event.target.value })}
+                              placeholder="What visible information changed the line?"
+                            />
+                          </label>
+                          <label>
+                            Alternative considered
+                            <input
+                              value={decision.alternative ?? ""}
+                              onChange={(event) => patchInsightDecision(decision.id, { alternative: event.target.value })}
+                              placeholder="What other line did you consider?"
+                            />
+                          </label>
+                        </div>
+                      </details>
+                    </article>
+                  ))}
+                </div>
+              ) : null}
+              <footer><Activity size={14} /> Coach will show an evidence receipt and keep unsupported details labelled unknown.</footer>
+            </section>
           ) : null}
           <label className="wide">Notes<textarea value={draft.notes} onChange={(event) => patch({ notes: event.target.value })} /></label>
         </div>
@@ -31948,8 +33327,8 @@ function MatchReviewModal({ draft, decks, battlefields, previousFlags, onReviewL
           </> : <>
             <span className={saveError ? "save-error" : ""}><Flag size={16} /> {saveError ? "The review is still open. Resolve the issue above, then try again." : reviewFooterHint(draft, isScorepadDraft)}</span>
             <button className="danger" disabled={isSaving || isDeleting || isDeferring} onClick={() => void deleteCapture()}><Trash2 size={16} /> {isDeleting ? "Deleting..." : "Delete capture"}</button>
-            <button className="secondary" disabled={isSaving || isDeleting || isDeferring} onClick={() => void reviewLater()}>{isDeferring ? isSavedDraft ? "Closing..." : "Keeping..." : isSavedDraft ? "Cancel" : "Review later"}</button>
-            <button className="primary" disabled={isSaving || isDeleting || isDeferring} onClick={() => void saveMatch()}><Check size={16} /> {isSaving ? "Saving..." : "Save match"}</button>
+            <button className="secondary" disabled={isSaving || isDeleting || isDeferring || isDeckNotebookLoading} onClick={() => void reviewLater()}>{isDeferring ? isSavedDraft ? "Closing..." : "Keeping..." : isSavedDraft ? "Cancel" : "Review later"}</button>
+            <button className="primary" disabled={isSaving || isDeleting || isDeferring || isDeckNotebookLoading} onClick={() => void saveMatch()}><Check size={16} /> {isSaving ? "Saving..." : isDeckNotebookLoading ? "Refreshing goals..." : "Save match"}</button>
           </>}
         </footer>
       </section>

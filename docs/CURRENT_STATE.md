@@ -1,24 +1,26 @@
 # RiftLite Current Engineering State
 
-> **Current development state:** RiftLite v0.9.42 is live for Windows and macOS. For a new chat, read `docs/HANDOVER_2026-08-09_POST_V0.9.42.md`, this file, and `docs/release-notes-v0.9.42.md`.
+> **Current-status notice (2026-08-30):** Start with [`docs/START_HERE.md`](./START_HERE.md) and [`docs/HANDOVER-2026-08-30.md`](./HANDOVER-2026-08-30.md). The v0.9.42 material below is retained as historical release context and is not current operational truth.
 
-Last updated: 2026-08-09
+> **Historical snapshot from 2026-08-09:** At that time RiftLite v0.9.42 was live for Windows and macOS. Do not use this snapshot to infer the current version, branch, artifacts, or deployment state.
 
-For a new Codex chat, read `docs/HANDOVER_2026-08-09_POST_V0.9.42.md` first. This file remains the longer architecture and append-only release history; some older sections are historical rather than current operational truth.
+Historical snapshot last updated: 2026-08-09
 
-## Canonical Repository
+This file remains the longer architecture and append-only release history. For a new Codex chat, use the current Start Here and handover documents instead.
 
-- Active cross-platform release source repo:
+## Historical 2026-08-09 repository snapshot
+
+- Active cross-platform release source repo at that time:
   `C:\Users\cdfpa\OneDrive\Documents\Claude\Projects\Riftlite Beta 0.6\desktop-v06`
-- Current package version: `0.9.42` (customer-facing `v0.9.42`)
-- Current branch: `agent/release-v0.9.12`
+- Package version at that time: `0.9.42` (customer-facing `v0.9.42`)
+- Branch at that time: `agent/release-v0.9.12`
 - Windows GitHub release repository (`windows` remote): `cdfpartridge-web/RiftLite-Desktop`
 - macOS GitHub release repository (`origin` remote): `cdfpartridge-web/RiftLite-Desktop-mac`
-- Current published Windows release: `v0.9.42` (2026-08-09)
-- Current published macOS release: `mac-v0.9.42` (2026-08-09)
+- Published Windows release in this snapshot: `v0.9.42` (2026-08-09)
+- Published macOS release in this snapshot: `mac-v0.9.42` (2026-08-09)
 - Windows installer output:
   `C:\Users\cdfpa\OneDrive\Documents\Claude\Projects\Riftlite Beta 0.6\desktop-v06\release\RiftLiteBetaInstall.exe`
-- Current local Windows installer: v0.9.42 `release\RiftLiteBetaInstall.exe`, 221,597,813 bytes, SHA-256 `CD3BD7375ABDDECFB0D60308B34DD9DDCD5BB76CE68E2D3C4E1F8EA4EE3C3E67`.
+- Local Windows installer in this snapshot: v0.9.42 `release\RiftLiteBetaInstall.exe`, 221,597,813 bytes, SHA-256 `CD3BD7375ABDDECFB0D60308B34DD9DDCD5BB76CE68E2D3C4E1F8EA4EE3C3E67`.
 
 Always name the remote explicitly when pushing: Windows source/tags go to `windows`; macOS source/tags go to `origin`. The repositories and release tags are deliberately separate.
 
@@ -525,7 +527,7 @@ Full subsystem handover and operational reference:
 - Settings exposes **Automatically upload Atlas replays** only for a linked RiftLite account.
 - Completed Atlas captures upload through the authenticated Replay V2 init/raw/complete protocol and are owned by that Firebase account.
 - Continuous BO3 captures carry a privacy-safe result summary (`format`, perspective-relative series/game results, and points only) inside the immutable raw artifact. Names, account/player IDs, battlefield labels, notes, chat, decks, and raw match evidence are excluded. The website restores missing canonical per-game winners/scores from this summary without replacing raw-derived results.
-- The web player presents data-driven between-game scenes, including exact perspective-player sideboard cards Out/In from the confirmed `submit_sideboard` action, quantities, first-player choice without fake dice when no initiative roll occurred, BO3 game/series score, and a privacy-safe generic opponent lock state.
+- The web player presents data-driven between-game scenes, including exact perspective-player sideboard cards Out/In from the confirmed `submit_sideboard` action or its matching authoritative `set_player_fields.fields.deck` patch, quantities, first-player choice without fake dice when no initiative roll occurred, BO3 game/series score, and a privacy-safe generic opponent lock state.
 - If the match-end DOM evidence omits the Atlas room code, raw capture finalization may use the sole session inside the existing strict match-time window even when that session learned a room identity from WebSocket traffic. Ambiguous and stale candidates remain rejected.
 - The website `/replays` page exposes public and signed-in owner libraries.
 - The desktop **RiftLite web replay** tab embeds `/replays/embed?embed=1` in an isolated Electron partition.
@@ -1204,3 +1206,67 @@ The old task remains useful as an archive, but day-to-day engineering context sh
 - Validation passed the focused replay tests (8 files / 26 tests), all 95 desktop test files / 812 tests, TypeScript, the complete production build, the development Electron smoke test, and `git diff --check`.
 - Files: `src/main/main.ts`, new `src/main/services/replayMp4OverlayRasterizer.ts`, and new `tests/replayMp4OverlayRasterizer.test.ts`.
 - No installer was built or published. The existing v0.9.12 installer does not contain this fix, and no GitHub, website, Discord, or production-data action occurred.
+
+## 2026-09-01 replay marker controls, web score tags, and Atlas timestamp accuracy (local only)
+
+- The desktop replay-video timeline now has a persisted, default-off **Show automatic events & scores** checkbox. It controls only generated evidence/score pins; manual flags, coaching notes, voice notes, and clip controls remain available.
+- The reported **Harnessed Dragon at 2:49** marker came from Atlas's minute-only timestamp being reconstructed at `:00`: that video frame is an opponent hand reveal, and the actual play happened roughly 53 seconds later. Future Atlas rows retain stable, room-scoped first-observed timing through rerenders, front trimming, tracking, and storage. Evidence explicitly marked inferred is no longer promoted to confirmed or shown as an automatic pin.
+- The isolated website worktree adds a separate browser-local, persisted, default-off **Score tags** checkbox with green player/red opponent canonical score tags. Ambiguous or incomplete baselines, resets, simultaneous changes, missing game identity, and cross-game carryover fail closed; player-name privacy and manual note/clip layers remain intact.
+- Desktop focused/full coverage and lint passed; the sole full-run five-second Mac packaging timeout passed in isolation. The production build, direct Windows NSIS packaging, installer/updater verification, and packaged-app smoke test then passed. Website focused/broad coverage, lint, webpack production build, and Playwright interaction QA passed; its sole broad-run BO3 timeout also passed in isolation.
+- A local, unpublished Windows v0.9.65 installer was rebuilt at `release\RiftLiteBetaInstall.exe`: `261,334,478` bytes, SHA-256 `677224ACCDF24BCC387F3644EF98986A01B62E1663A27B63C0273F74BE0E2B1D`. Blockmap: `249,359` bytes, SHA-256 `5D79736C71E9078B4F0971D505764610718B2365DEC70ECAA3F0866F3EAA83BD`. `latest.yml`: `344` bytes, SHA-256 `2272B7870833BBA7786F2BF7B6AB9A6CADE9C40D9E09DBEFB758A18586896ED6`.
+- The local Web Replay fixture was healthy at `http://127.0.0.1:3107/replays/tcga/score-tags`. No deployment, commit, push, tag, release, updater publish, Discord action, or production-data mutation occurred.
+
+## 2026-09-01 Deck Insights clipboard repair (local only)
+
+- **Copy report** used the browser Clipboard API, which RiftLite's restrictive Electron session correctly denies. It now uses the existing trusted `writeClipboardText` IPC bridge without widening browser permissions and gives immediate accessible success/failure feedback.
+- Validation passed 2 focused files / 14 tests, TypeScript/lint, the full production build, direct Windows NSIS packaging with publishing disabled, Windows artifact/updater/executable verification, packaged-app smoke, and `git diff --check`.
+- The 21:29 local v0.9.65 test installer above supersedes the earlier 20:47 build and includes this repair. No deployment, commit, push, tag, release, updater publish, Discord action, or production-data mutation occurred.
+
+## 2026-09-01 Replay Coach Coming Soon state (now in local installer)
+
+- Deck Insights remains live and is still the default Insights mode. Replay Coach now renders a dedicated Coming Soon screen instead of mounting `LearningInsightsView`; the underlying coaching implementation and existing local evidence are preserved.
+- The holding screen and adjacent app copy make clear that Coach is being refined, Deck Insights remains available, ordinary match/replay capture continues, and no existing local evidence is deleted. Enhanced Insights capture controls remain available.
+- Validation passed 4 focused files / 30 tests, TypeScript/lint, and `git diff --check`.
+- This was initially left source-only at the user's request. It is now included in the 2026-09-02 local v0.9.65 installer described below.
+
+## 2026-09-01 Card Review and coaching-note MP4 export (now in local installer)
+
+- Deck Insights now uses a focused Card Review rather than the saturated **played when observed** percentage. It separates verified Game 1/post-board/stage-unknown play counts, independent pre-play hand conversion, mulligan evidence, timing, and conservative review prompts. Inferred events cannot enter verified metrics; manual corrections/dismissals and raw-only Atlas enrichment are honored; unknown-stage plays block contradictory absence claims.
+- MP4 flag-overlay rendering now survives the reproduced hidden Chromium first-paint race by invalidating the page, capturing with `stayHidden`, and retrying once after 50 ms. Persistent failures still stop safely.
+- MP4 export has a device-local voice-note volume slider from 50% to 300%, default 150%. FFmpeg mixing disables `amix` normalization and adds limiting, fixing multi-note attenuation without changing saved notes, ordinary playback, Full Voiceover, or the replay-audio-only path.
+- Focused validation passed **66 Card Review tests** and **41 replay MP4 tests**. Electron TypeScript, lint, the full **175-file / 1,664-test** suite, final independent P1/P2 evidence audits, a real 12-overlay Electron probe, bundled-FFmpeg graph smoke, and `git diff --check` passed.
+- This work was initially source-only. It is now included in the 2026-09-02 local v0.9.65 installer described below.
+
+## 2026-09-02 Web Replay Score tags live and desktop installer rebuilt locally
+
+- Website commit `dbe1ada91663cf55a89732a220af7c0ba36c1994` (`feat(web-replay): add score timeline tags`) is on live `main`. Vercel deployment `dpl_85L5htFj7YfwB12W4Bg6vBVXh4qr` is Ready on `https://www.riftlite.com` and `https://riftlite.com`.
+- Live Web Replay has the persisted, default-off **Score tags** checkbox, green player/red opponent canonical score markers, click-to-seek, conservative ambiguity suppression, clip filtering, and preserved note/name privacy. Production Playwright QA passed on a real public replay with a clean console.
+- Website validation passed **2 focused files / 61 tests**, **137 files passed / 1 skipped; 983 tests passed / 9 skipped** broadly, lint with zero errors and 14 existing warnings, and the webpack production build including its TypeScript phase. The website worktree is clean and HEAD/local `origin/main`/live remote `main` all match `dbe1ada`. Firestore rules and production replay data were untouched.
+- A local unpublished Windows v0.9.65 installer was rebuilt from the current dirty desktop tree with `--publish never`. The full gate passed lint, the **5-file / 81-test** account gate, all **175 files / 1,664 tests**, Electron/game-preload/renderer production builds, NSIS packaging, release metadata/executable verification, and packaged smoke. One unrelated first-run five-second packaging-test timeout passed in isolation before the complete clean rerun.
+- Installer: `release\RiftLiteBetaInstall.exe`, `261,324,389` bytes, SHA-256 `0231A65AB378520B6534FC4234C5716702AEB4E19C90C8968A6848FFEF9CD38B`. Blockmap: `250,048` bytes, SHA-256 `E4F2FF23A2C2E417B93CB5B0D691E5F727B0B06DFF3DAFE2D47B6D4F3A8D51C6`. `latest.yml`: `344` bytes, SHA-256 `8ADFB8EF4905C7F36CCA64D08A0EABC4FD5BE213CF1B66E631BA154118237F65`.
+- The rebuilt installer contains Replay Coach Coming Soon, the Card Review redesign, the coaching-note overlay retry, and the MP4 coaching-note volume/mixing repair. It remains local and unpublished; because it is still labelled v0.9.65, it must not replace the public v0.9.65 release.
+
+## 2026-09-02 Web Replay multi-game start tags (live)
+
+- The existing browser-local, default-off **Score tags** layer now also derives compact `G1`, `G2`, and `G3` tags for multi-game replays. They are visually distinct, accessible, click-to-seek, persist with the existing preference, and obey shared-clip boundaries. BO1/single-game replays receive no game tags.
+- The derivation fails closed. Every game record must match its exact indexed start boundary and the whole ordered series topology; later games require explicit game-number evidence. Score resets, inferred phase rollovers, stale setup rows, mismatched/orphan boundaries, duplicate numbering, and partial invalid series cannot produce game tags.
+- Validation passed **2 focused files / 67 tests**, the broad **137 files / 1 skipped; 989 tests / 9 skipped** suite, lint with zero errors and 14 existing warnings, the webpack production build with TypeScript, and `git diff --check`. Local Playwright verified G1/G2/G3 styling, exact G2 seeking, persistence, and in-range-only shared-clip tags with zero console errors. Final independent review found no remaining actionable issues; a read-only public BO3 check derived the exact three canonical starts.
+- The five-file website change was committed as `b4765fc28efdd0537e3cbe44fb5818a4d83309d2`, pushed directly to website `main`, and deployed as `dpl_GU2bhi6mKj5DjcdtkDmkq7YThPgu`. Vercel is **Ready** on `https://www.riftlite.com` and `https://riftlite.com`; HEAD, local `origin/main`, and live remote `main` all match `b4765fc`, and the worktree is clean.
+- Production Playwright QA on public three-game replay `rl2_64c432485d6b5ecc7032824acfd0bdb9` verified visible G1/G2/G3 tags, persisted enablement after reload, exact G2 seeking to `9:11.961`, and zero console errors or warnings. Firestore rules and production replay data were untouched, and this deployment changed no desktop application source or installer artifacts.
+
+## 2026-09-02 local Windows v0.9.70 rebuild and customer guide
+
+- The current dirty desktop tree now uses package/build identity v0.9.70. Production continuity identifiers remain unchanged, so the existing RiftLite profile, matches, decks, replays, settings, media paths, and `riftlite:` links stay on their established roots.
+- `npm run electron:build` passed lint, the **5-file / 81-test** account gate, all **175 files / 1,666 tests**, Electron/game-preload/renderer production builds, NSIS packaging with `--publish never`, Windows artifact/updater/executable verification, and packaged-app smoke.
+- Installer: `release\RiftLiteBetaInstall.exe`, `262,473,332` bytes, SHA-256 `4A6DD9DDDB542413D2ECC4C36DFE809BB85416DBD51E3108F2F8EE9F050B8225`. Blockmap: `250,079` bytes, SHA-256 `2F2F315ACA1D6B54E36713110A579E0A764E6B90E5756BAC87883FFE139FDBCA`. `latest.yml`: `344` bytes, SHA-256 `59A350138BEAE56ACE7F85E22F332D35AEACD3C4B140C9686DCF54F47787ECE8`.
+- Customer-facing changes since v0.9.64 are documented in `docs\release-notes-v0.9.70.md`, the plain-text `docs\RiftLite-v0.9.70-Whats-New.txt`, and the seven-page `docs\RiftLite-v0.9.70-Whats-New.docx`. The DOCX rendered cleanly page by page, passed ZIP integrity, and had no high-severity accessibility findings; it is `734,244` bytes with SHA-256 `21ACEDF8905F37240151FBDF1C1CCF5B1DB89B8A7ACFDC148E247610034679C6`.
+- This is a local Windows test build. Nothing was committed, pushed, tagged, published, deployed, sent to Discord, or written to production data, and no v0.9.70 macOS build exists yet.
+
+## 2026-09-02 v0.9.71 release candidate and final web deployment
+
+- The desktop package/build identity is now v0.9.71. Search Rules is hidden behind `RULES_SEARCH_FEATURE_VISIBLE = false`; the sidebar action and drawer mount are both gated while the implementation, security policy, focus handling, styling, and tests remain preserved for later work.
+- The v0.9.70 local installer is superseded because it still exposes Search Rules. Only fresh v0.9.71 Windows and native macOS artifacts built from the final immutable release source may be published.
+- Public release notes are `docs\release-notes-v0.9.71.md`, with a matching plain-text edition at `docs\RiftLite-v0.9.71-Whats-New.txt`. They omit Search Rules and describe sideboard recovery plus X0TCG's video slot as live web features.
+- Website commit `135d2398f33f77888adb3716b87ba81d16966b8d` was pushed to `cdfpartridge-web/Riftlite` `main` and deployed as Vercel production deployment `dpl_9eNwYuMFd4j56VhDLrzWXDbv2Sih`. All production aliases are Ready.
+- Web validation passed 993 tests, lint with zero errors and 14 pre-existing warnings, and the webpack production build. Live production QA verified the reported replay's exact local sideboard swap while keeping opponent choices hidden; `/api/app/home` reports `maxItems: 17` and one X0TCG video. Firestore rules, Sanity data, production replay data, and analytics records were unchanged.
+- The user explicitly directed installer publication after the v0.9.71 change. The handover's real-game desktop acceptance checks remain unrecorded and are being carried as a known release risk rather than represented as passed.

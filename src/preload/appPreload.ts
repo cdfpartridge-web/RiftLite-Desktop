@@ -36,6 +36,7 @@ import type {
 const api: RiftLiteApi = {
   getSettings: () => ipcRenderer.invoke("settings:get") as Promise<UserSettings>,
   saveSettings: (settings) => ipcRenderer.invoke("settings:save", settings) as Promise<UserSettings>,
+  clearEnhancedInsightsData: () => ipcRenderer.invoke("insights:clear-data") as ReturnType<RiftLiteApi["clearEnhancedInsightsData"]>,
   updateRawCaptureSettings: (settings) => ipcRenderer.invoke("settings:raw-capture:update", settings) as Promise<UserSettings>,
   setWebReplayDiscordShareHub: (hubId, selected) => ipcRenderer.invoke("settings:web-replay-discord-hub:set", hubId, selected) as Promise<UserSettings>,
   getCaptureHealth: () => ipcRenderer.invoke("capture:health:get") as Promise<CaptureHealth>,

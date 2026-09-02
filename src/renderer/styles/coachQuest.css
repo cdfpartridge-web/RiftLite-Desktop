@@ -431,6 +431,7 @@
 }
 
 .coach-share-dialog {
+  box-sizing: border-box;
   display: grid;
   gap: 18px;
   width: min(1280px, 100%);
@@ -477,6 +478,8 @@
 .coach-share-dialog__footer { min-height: 42px; }
 .coach-share-dialog__footer > p { gap: 7px; margin: 0; color: #8da3b4; font-size: 0.75rem; }
 .coach-share-dialog__footer > p > svg { color: #65e6ac; }
+.coach-share-dialog__footer > p[data-tone="error"] { color: #ffadb8; }
+.coach-share-dialog__footer > p[data-tone="error"] > svg { color: #ff7185; }
 .coach-share-dialog__footer > div { gap: 8px; }
 
 @media (max-width: 760px) {

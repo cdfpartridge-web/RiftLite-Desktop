@@ -1,5 +1,7 @@
 # RiftLite Handover — Post v0.9.42
 
+> **Superseded:** For current work, read `docs/START_HERE.md` and `docs/HANDOVER-2026-08-30.md`. This document is retained as v0.9.42 historical context.
+
 Date: 2026-08-09
 
 ## Live release state

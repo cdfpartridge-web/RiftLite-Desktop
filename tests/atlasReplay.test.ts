@@ -118,6 +118,29 @@ describe("atlas replay builder", () => {
       ]);
   });
 
+  it("uses a retained first-observed timestamp for raw Atlas rows", () => {
+    const observedAt = "2026-04-26T12:03:53.321Z";
+    const observedDate = new Date(observedAt);
+    const label = `${String(observedDate.getHours()).padStart(2, "0")}:${String(observedDate.getMinutes()).padStart(2, "0")}`;
+    const model = buildAtlasReplay(replay([
+      event("match-snapshot", "2026-04-26T12:11:53.321Z", {
+        active: true,
+        rows: [{
+          key: "harnessed-dragon-play",
+          text: `${label}Played Harnessed Dragon from hand to base.`,
+          observedAt
+        }]
+      })
+    ]), match());
+
+    expect(model.events.find((item) => item.cardName === "Harnessed Dragon")).toMatchObject({
+      type: "play",
+      capturedAt: observedAt,
+      fromZone: "hand",
+      toZone: "base"
+    });
+  });
+
   it("keeps scoreboard events when Atlas exposes score changes but no clean action row", () => {
     const model = buildAtlasReplay(replay([
       event("match-snapshot", "2026-04-26T12:00:00.000Z", { active: true, score: { me: "0", opp: "0" }, rows: [] }),
@@ -154,6 +177,30 @@ describe("atlas replay builder", () => {
     expect(model.turns.map((turn) => turn.label)).toEqual(["Setup", "BMU's turn", "Nova's turn", "BMU's turn"]);
     expect(model.turns[1].events.map((item) => item.text)).toContain("Ended their turn.");
     expect(model.turns[2].events.map((item) => item.text)).toContain("Ended their turn.");
+  });
+
+  it("uses stable row keys when identical raw rows leave and enter the retained log window", () => {
+    const repeatedText = "20:35Ended their turn.\u21ba";
+    const model = buildAtlasReplay(replay([
+      event("match-snapshot", "2026-04-26T19:35:30.000Z", {
+        active: true,
+        rows: [
+          { key: "riftlite-log:g1:semantic:1:end-turn", text: repeatedText },
+          { key: "riftlite-log:g1:semantic:2:end-turn", text: repeatedText },
+          { key: "riftlite-log:g1:semantic:3:draw", text: "20:35Drew 1 card.\u21ba" }
+        ]
+      }),
+      event("match-snapshot", "2026-04-26T19:35:45.000Z", {
+        active: true,
+        rows: [
+          { key: "riftlite-log:g1:semantic:2:end-turn", text: repeatedText },
+          { key: "riftlite-log:g1:semantic:3:draw", text: "20:35Drew 1 card.\u21ba" },
+          { key: "riftlite-log:g1:semantic:4:end-turn", text: repeatedText }
+        ]
+      })
+    ]), match());
+
+    expect(model.events.filter((item) => item.type === "turn-end")).toHaveLength(3);
   });
 
   it("keeps same-minute raw Atlas rows in a playable turn order", () => {

@@ -5,8 +5,15 @@ import {
   replayInsightOpeningHandEventsFromRawPayload,
   type ReplayInsightCardCatalogEntry
 } from "../src/shared/replayInsights.js";
+import { replayWithIntelligence } from "../src/shared/replayIntelligence.js";
 import { parseReplayCardActionText } from "../src/shared/replayCardText.js";
-import type { MatchDraft, ReplayRecord, ReplayStructuredCard, ReplayStructuredEvent } from "../src/shared/types.js";
+import type {
+  MatchDraft,
+  ReplayIntelligenceCorrection,
+  ReplayRecord,
+  ReplayStructuredCard,
+  ReplayStructuredEvent
+} from "../src/shared/types.js";
 
 const START = "2026-08-24T10:00:00.000Z";
 const LATE_CARD: ReplayStructuredCard = { id: "late", code: "TST-005", name: "Patient Guardian", type: "unit", imageUrl: "" };
@@ -257,7 +264,7 @@ describe("Replay Insights", () => {
       gameNumber: 1,
       cardName: LATE_CARD.name
     });
-    expect(insight?.body).toContain("kept Patient Guardian");
+    expect(insight?.body).toContain("played copy cannot be linked to the kept copy");
     expect(insight?.evidence.map((evidence) => evidence.eventId)).toEqual(["mulligan", "late-play"]);
     expect(insight?.evidence[1]?.videoTimeMs).toBe(115_000);
   });
@@ -267,7 +274,7 @@ describe("Replay Insights", () => {
     const report = buildReplayInsights([source], [match("unused-keep")], { cardCatalog: CATALOG, now: START });
     const insight = report.insights.find((item) => item.id.includes("unplayed-opening-card"));
 
-    expect(insight?.title).toBe("No play of Patient Guardian was captured after the keep");
+    expect(insight?.title).toBe("No play of Patient Guardian was captured in a game with a keep");
     expect(`${insight?.body} ${insight?.action}`.toLowerCase()).not.toContain("playable");
     expect(`${insight?.body} ${insight?.action}`.toLowerCase()).not.toContain("mistake");
     expect(insight?.dataReceipt).toMatchObject({
@@ -295,6 +302,190 @@ describe("Replay Insights", () => {
       unplayed: 0,
       completePlayCaptureAppearances: 0
     });
+  });
+
+  it("does not make a no-play claim when the same card name has an untrusted-stage play", () => {
+    const source = replay("unknown-stage-blocks-absence", [
+      ...lateKeepEvents(LATE_CARD, false),
+      event("unknown-stage-late-play", 115, "play", {
+        gameNumber: 0,
+        cardName: LATE_CARD.name,
+        cardId: LATE_CARD.code,
+        fromZone: "hand",
+        toZone: "battlefield"
+      })
+    ]);
+    const report = buildReplayInsights([source], [match(source.id)], { cardCatalog: CATALOG, now: START });
+    const card = report.cards.find((item) => item.cardName === LATE_CARD.name);
+
+    expect(card?.prePlayHand).toMatchObject({ observedGames: 1, laterPlayedGames: 0, noCapturedPlayGames: 0 });
+    expect(card?.playReach).toEqual({ preboardGames: 0, postboardGames: 0, unknownStageGames: 1 });
+    expect(report.insights.some((item) => item.id.includes("unplayed-opening-card"))).toBe(false);
+  });
+
+  it("does not make a drawn-unplayed claim when a same-name play has an untrusted stage", () => {
+    const source = replay("unknown-stage-blocks-drawn-unplayed", [
+      event("known-draw", 12, "draw", {
+        cardName: LATE_CARD.name,
+        cardId: LATE_CARD.code,
+        fromZone: "deck",
+        toZone: "hand"
+      }),
+      event("known-recycle", 20, "move", {
+        cardName: LATE_CARD.name,
+        cardId: LATE_CARD.code,
+        fromZone: "hand",
+        toZone: "recycle"
+      }),
+      event("unknown-stage-play", 30, "play", {
+        gameNumber: 0,
+        cardName: LATE_CARD.name,
+        cardId: LATE_CARD.code,
+        fromZone: "hand",
+        toZone: "battlefield"
+      })
+    ]);
+    const report = buildReplayInsights([source], [match(source.id)], { cardCatalog: CATALOG, now: START });
+
+    expect(report.insights.some((item) => item.id.includes("drawn-unplayed"))).toBe(false);
+    expect(report.cards.find((item) => item.cardName === LATE_CARD.name)?.recycledOrDiscarded).toBe(1);
+  });
+
+  it("keeps inferred opening evidence out of an otherwise confirmed hand-conversion journey", () => {
+    const inferredOpeningEvents = lateKeepEvents().map((item) => (
+      item.id === "mulligan"
+        ? { ...item, evidence: { source: "state-diff" as const, confidence: "inferred" as const } }
+        : item
+    ));
+    const source = replay("inferred-opening-rates", inferredOpeningEvents);
+    const report = buildReplayInsights([source], [match(source.id)], { cardCatalog: CATALOG, now: START });
+    const card = report.cards.find((item) => item.cardName === LATE_CARD.name);
+
+    expect(card).toMatchObject({ kept: 1, played: 1, playReach: { preboardGames: 1, postboardGames: 0, unknownStageGames: 0 } });
+    expect(card?.mulligan).toEqual({ offeredGames: 0, keptGames: 0, redrawnGames: 0, latePlayedGames: 0 });
+    expect(card?.prePlayHand).toEqual({
+      observedGames: 0,
+      laterPlayedGames: 0,
+      noCapturedPlayGames: 0,
+      recycledOrDiscardedGames: 0
+    });
+    expect(card?.firstPlayTurns).toEqual({
+      byTurn3Games: 0,
+      turns4To5Games: 1,
+      turn6PlusGames: 0,
+      unknownTurnGames: 0
+    });
+
+    const inferredPlaySource = replay("inferred-play-rates", lateKeepEvents().map((item) => (
+      item.id === "late-play"
+        ? { ...item, evidence: { source: "state-diff" as const, confidence: "inferred" as const } }
+        : item
+    )));
+    const inferredPlayReport = buildReplayInsights(
+      [inferredPlaySource],
+      [match(inferredPlaySource.id)],
+      { cardCatalog: CATALOG, now: START }
+    );
+    const inferredPlayCard = inferredPlayReport.cards.find((item) => item.cardName === LATE_CARD.name);
+    expect(inferredPlayCard).toMatchObject({
+      confidence: "inferred",
+      played: 0,
+      playReach: { preboardGames: 0, postboardGames: 0, unknownStageGames: 0 }
+    });
+    expect(inferredPlayCard?.mulligan).toEqual({ offeredGames: 1, keptGames: 1, redrawnGames: 0, latePlayedGames: 0 });
+    expect(inferredPlayCard?.prePlayHand).toMatchObject({ observedGames: 1, laterPlayedGames: 0 });
+    expect(inferredPlayCard?.firstPlayTurns).toEqual({ byTurn3Games: 0, turns4To5Games: 0, turn6PlusGames: 0, unknownTurnGames: 0 });
+    expect(inferredPlayReport.stats).toMatchObject({ capturedLocalPlays: 0, knownSourcePlays: 0 });
+    expect(inferredPlayReport.stats.cardSourceZones).toEqual([]);
+    expect(inferredPlayReport.stats.cardTurnOutcomes).toEqual([]);
+  });
+
+  it("keeps verified play reach while separating inferred hand evidence event by event", () => {
+    const inferredDraw = event("mixed-draw", 12, "draw", {
+      cardName: LATE_CARD.name,
+      cardId: LATE_CARD.code,
+      fromZone: "deck",
+      toZone: "hand",
+      evidence: { source: "state-diff", confidence: "inferred" }
+    });
+    const confirmedPlay = event("mixed-play", 42, "play", {
+      cardName: LATE_CARD.name,
+      cardId: LATE_CARD.code,
+      fromZone: "hand",
+      toZone: "battlefield"
+    });
+    const report = buildReplayInsights([
+      replay("mixed-confidence", [
+        event("mixed-turn-1", 10, "turn-start", { text: "Player's turn" }),
+        inferredDraw,
+        confirmedPlay
+      ])
+    ], [match("mixed-confidence")], { cardCatalog: CATALOG, now: START });
+    const card = report.cards.find((item) => item.cardName === LATE_CARD.name);
+
+    expect(card).toMatchObject({
+      played: 1,
+      playReach: { preboardGames: 1, postboardGames: 0, unknownStageGames: 0 },
+      prePlayHand: { observedGames: 0, laterPlayedGames: 0 }
+    });
+    expect(report.stats.cardSourceZones.find((row) => row.cardName === LATE_CARD.name)?.evidence.map((item) => item.eventId)).toEqual(["mixed-play"]);
+  });
+
+  it("does not let an inferred play suppress a later confirmed play", () => {
+    const source = replay("mixed-play-confidence", [
+      event("mixed-first-turn", 10, "turn-start", { text: "Player's turn" }),
+      event("mixed-inferred-play", 12, "play", {
+        cardName: "Charm",
+        cardId: "TST-100",
+        fromZone: "hand",
+        evidence: { source: "state-diff", confidence: "inferred" }
+      }),
+      event("mixed-opponent-turn", 20, "turn-start", { side: "opponent", text: "Opponent's turn" }),
+      event("mixed-second-turn", 30, "turn-start", { text: "Player's turn" }),
+      event("mixed-confirmed-play", 32, "play", { cardName: "Charm", cardId: "TST-100", fromZone: "hand" })
+    ]);
+    const report = buildReplayInsights([source], [matchWithResult(source.id, "Win")], {
+      cardCatalog: [{ code: "TST-100", name: "Charm" }],
+      now: START
+    });
+    const card = report.cards.find((item) => item.cardName === "Charm");
+    const sourceRow = report.stats.cardSourceZones.find((row) => row.cardName === "Charm");
+
+    expect(card).toMatchObject({ played: 1, playReach: { preboardGames: 1, postboardGames: 0, unknownStageGames: 0 } });
+    expect(sourceRow).toMatchObject({ totalPlays: 1, hand: 1 });
+    expect(sourceRow?.evidence.map((item) => item.eventId)).toEqual(["mixed-confirmed-play"]);
+  });
+
+  it("keeps missing or globally untrusted game numbers out of G1 and post-board buckets", () => {
+    const unknownEvents = turnsWithPlay("Charm", 1, { cardId: "TST-100" }).map((item) => ({ ...item, gameNumber: 0 }));
+    const unknownSource = replay("unknown-stage", unknownEvents);
+    const all = buildReplayInsights([unknownSource], [matchWithResult(unknownSource.id, "Win")], {
+      cardCatalog: [{ code: "TST-100", name: "Charm" }],
+      now: START
+    });
+    const unknownCard = all.cards.find((item) => item.cardName === "Charm");
+    const preboard = buildReplayInsights([unknownSource], [matchWithResult(unknownSource.id, "Win")], {
+      filters: { gameStage: "preboard" },
+      cardCatalog: [{ code: "TST-100", name: "Charm" }],
+      now: START
+    });
+
+    expect(unknownCard?.playReach).toEqual({ preboardGames: 0, postboardGames: 0, unknownStageGames: 1 });
+    expect(all.stats.cardTurnOutcomes).toEqual([]);
+    expect(preboard.cards).toEqual([]);
+
+    const explicitSource = replay("combined-stage", turnsWithPlay("Charm", 1, { cardId: "TST-100" }));
+    const combined = buildReplayInsights([explicitSource], [matchWithResult(explicitSource.id, "Win")], {
+      cardCatalog: [{ code: "TST-100", name: "Charm" }],
+      trustGameStage: false,
+      now: START
+    });
+    expect(combined.cards.find((item) => item.cardName === "Charm")?.playReach).toEqual({
+      preboardGames: 0,
+      postboardGames: 0,
+      unknownStageGames: 1
+    });
+    expect(combined.stats.outcomeSplits.some((row) => row.basis === "game-stage")).toBe(false);
   });
 
   it("does not invent a named opening-hand claim from a text-only mulligan", () => {
@@ -329,6 +520,27 @@ describe("Replay Insights", () => {
     });
   });
 
+  it("counts keep and redraw as overlapping game cohorts for multiple copies of one card name", () => {
+    const secondCopy = { ...LATE_CARD, id: "late-copy-2" };
+    const source = replay("split-copies", [
+      event("split-mulligan", 1, "mulligan", {
+        mulligan: {
+          options: [LATE_CARD, secondCopy],
+          kept: [LATE_CARD],
+          redrawn: [secondCopy],
+          redrawCount: 1
+        }
+      })
+    ]);
+    const report = buildReplayInsights([source], [match(source.id)], { cardCatalog: CATALOG, now: START });
+
+    expect(report.cards.find((item) => item.cardName === LATE_CARD.name)?.mulligan).toMatchObject({
+      offeredGames: 1,
+      keptGames: 1,
+      redrawnGames: 1
+    });
+  });
+
   it("promotes recurring late keeps only when the sample gate is met", () => {
     const sources = ["a", "b", "c"].map((id) => replay(id, lateKeepEvents()));
     const matches = sources.map((source) => match(source.id));
@@ -338,7 +550,7 @@ describe("Replay Insights", () => {
     expect(earlySignal.insights.find((item) => item.id.includes("late-after-keep"))).toMatchObject({
       scope: "pattern",
       sampleSize: 3,
-      title: "Patient Guardian's first captured play repeatedly followed a keep late",
+      title: "Patient Guardian keep games often also had a late card-name play",
       patternStrength: "exploratory"
     });
     expect(establishedOnly.insights.some((item) => item.id.includes("late-after-keep"))).toBe(false);
@@ -543,7 +755,7 @@ describe("Replay Insights", () => {
     expect(enrichedEvents.find((item) => item.actionId === "insight:raw-chosen-champion")).toMatchObject({
       type: "setup",
       side: "me",
-      gameNumber: 1,
+      gameNumber: 0,
       cardName: "Akali, Deadly Weapon",
       cardId: "VEN-021",
       destination: "champion"
@@ -827,6 +1039,107 @@ describe("Replay Insights", () => {
     });
     expect(replayStats(report).battlefieldPickOrders[0]?.percentage).toBeCloseTo(66.7, 1);
     expect(replayStats(report).battlefieldPickOrders.some((row) => row.sequence.includes("Do not infer this pick"))).toBe(false);
+  });
+
+  it("uses confirmed raw enrichment when an Atlas replay has no base timeline events", () => {
+    const source: ReplayRecord = {
+      ...replay("raw-only-atlas", []),
+      platform: "atlas",
+      events: [],
+      structuredEvents: []
+    };
+    const rawPlay = event("raw-only-play", 42, "play", {
+      cardName: "Charm",
+      cardId: "TST-100",
+      fromZone: "hand",
+      toZone: "chain"
+    });
+    const report = buildReplayInsights([source], [matchWithResult(source.id, "Win")], {
+      cardCatalog: [{ code: "TST-100", name: "Charm" }],
+      enrichmentEventsByReplayId: new Map([[source.id, [rawPlay]]]),
+      now: START
+    });
+    const charm = report.cards.find((item) => item.cardName === "Charm");
+
+    expect(charm).toMatchObject({
+      played: 1,
+      playReach: { preboardGames: 1, postboardGames: 0, unknownStageGames: 0 },
+      firstPlayTurns: { byTurn3Games: 0, turns4To5Games: 0, turn6PlusGames: 0, unknownTurnGames: 1 }
+    });
+    expect(replayStats(report).cardSourceZones.find((row) => row.cardName === "Charm")).toMatchObject({
+      totalPlays: 1,
+      hand: 1
+    });
+    expect(replayStats(report).cardTurnOutcomes).toEqual([]);
+  });
+
+  it("keeps a manually dismissed false play out of Card Review aggregates", () => {
+    const original = replay("dismissed-card-review-play", lateKeepEvents());
+    const correction: ReplayIntelligenceCorrection = {
+      id: "dismiss-late-play",
+      eventId: "late-play",
+      updatedAt: START,
+      dismissed: true
+    };
+    const source = replayWithIntelligence(original, match(original.id), [correction]);
+    const report = buildReplayInsights([source], [match(source.id)], { cardCatalog: CATALOG, now: START });
+    const card = report.cards.find((item) => item.cardName === LATE_CARD.name);
+
+    expect(original.structuredEvents?.some((item) => item.id === "late-play")).toBe(true);
+    expect(report.stats).toMatchObject({ capturedLocalPlays: 0, knownSourcePlays: 0 });
+    expect(replayStats(report).cardSourceZones.some((row) => row.cardName === LATE_CARD.name)).toBe(false);
+    expect(replayStats(report).cardTurnOutcomes.some((row) => row.cardName === LATE_CARD.name)).toBe(false);
+    expect(card).toMatchObject({
+      played: 0,
+      playReach: { preboardGames: 0, postboardGames: 0, unknownStageGames: 0 },
+      firstPlayTurns: { byTurn3Games: 0, turns4To5Games: 0, turn6PlusGames: 0, unknownTurnGames: 0 }
+    });
+  });
+
+  it("uses manually corrected card and side fields in Card Review aggregates", () => {
+    const original = replay("corrected-card-review-play", [
+      event("corrected-player-turn", 10, "turn-start", { side: "me", text: "Player's turn" }),
+      event("corrected-card-play", 12, "play", {
+        side: "opponent",
+        text: "Opponent played Wrong Card from hidden.",
+        cardName: "Wrong Card",
+        cardId: "TST-WRONG",
+        fromZone: "hidden",
+        toZone: "chain"
+      })
+    ]);
+    const correction: ReplayIntelligenceCorrection = {
+      id: "correct-card-review-play",
+      eventId: "corrected-card-play",
+      updatedAt: START,
+      side: "me",
+      text: "Played Charm from hand.",
+      cardName: "Charm",
+      cardId: "TST-100",
+      fromZone: "hand",
+      toZone: "chain"
+    };
+    const source = replayWithIntelligence(original, match(original.id), [correction]);
+    const report = buildReplayInsights([source], [matchWithResult(source.id, "Win")], {
+      cardCatalog: [
+        { code: "TST-100", name: "Charm" },
+        { code: "TST-WRONG", name: "Wrong Card" }
+      ],
+      now: START
+    });
+    const charmSource = replayStats(report).cardSourceZones.find((row) => row.cardName === "Charm");
+    const charmTiming = replayStats(report).cardTurnOutcomes.find((row) => row.cardName === "Charm");
+
+    expect(report.cards.find((item) => item.cardName === "Charm")).toMatchObject({
+      played: 1,
+      playReach: { preboardGames: 1, postboardGames: 0, unknownStageGames: 0 }
+    });
+    expect(report.cards.some((item) => item.cardName === "Wrong Card")).toBe(false);
+    expect(charmSource).toMatchObject({ totalPlays: 1, hand: 1, hidden: 0 });
+    expect(charmSource?.evidence[0]?.confidence).toBe("manual");
+    expect(charmTiming).toMatchObject({ playerTurnNumber: 1, games: 1, wins: 1 });
+    expect(replayStats(report).cardSourceZones.some((row) => row.cardName === "Wrong Card")).toBe(false);
+    expect(replayStats(report).cardTurnOutcomes.some((row) => row.cardName === "Wrong Card")).toBe(false);
   });
 
   it("reports local card plays by hand, hidden, other and unknown source zones", () => {
@@ -1117,5 +1430,37 @@ describe("Replay Insights", () => {
     expect(sourceRow?.evidence).toHaveLength(1);
     expect(outcomeRow).toMatchObject({ games: 1, wins: 1, playerTurnNumber: 1 });
     expect(outcomeRow?.evidence).toHaveLength(1);
+  });
+
+  it("preserves inferred enrichment confidence instead of promoting the play into review metrics", () => {
+    const source = { ...replay("stats-inferred-enrichment", [
+      event("inferred-enrichment-turn", 10, "turn-start", { side: "me", text: "Player's turn" }),
+      event("inferred-enrichment-legacy", 12, "play", {
+        side: "system",
+        text: "Played Charm from hand.",
+        cardName: "Charm from hand"
+      })
+    ]), platform: "atlas" as const };
+    const inferred = event("inferred-enrichment-raw", 12, "play", {
+      side: "me",
+      text: "Played Charm from hand.",
+      cardName: "Charm",
+      cardId: "TST-100",
+      fromZone: "hand",
+      evidence: { source: "state-diff", confidence: "inferred" }
+    });
+    const report = buildReplayInsights([source], [matchWithResult(source.id, "Win")], {
+      cardCatalog: [{ code: "TST-100", name: "Charm" }],
+      enrichmentEventsByReplayId: new Map([[source.id, [inferred]]]),
+      now: START
+    });
+
+    expect(report.stats).toMatchObject({ capturedLocalPlays: 0, knownSourcePlays: 0 });
+    expect(report.stats.cardSourceZones).toEqual([]);
+    expect(report.cards.find((item) => item.cardName === "Charm")?.playReach).toEqual({
+      preboardGames: 0,
+      postboardGames: 0,
+      unknownStageGames: 0
+    });
   });
 });

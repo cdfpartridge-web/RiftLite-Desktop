@@ -74,6 +74,10 @@ interface SessionState {
   replayLastBattlefields: string;
   replayLastTurnText: string;
   replayLastTurnAt: number;
+  replayCurrentTurnSide: ReplayStructuredEvent["side"];
+  replayNextSequence: number;
+  replayTurnNumberByGame: Map<number, number>;
+  enhancedInsightsEnabledAtStart: boolean;
   sticky: Record<string, unknown>;
   currentGame: GameDraftState;
   completedGames: MatchGame[];
@@ -85,11 +89,17 @@ interface SessionState {
 // evidence, not match boundaries, unless the previous session has gone quiet
 // long enough that the normal match-start signal may genuinely have been lost.
 const ATLAS_SNAPSHOT_NEW_SESSION_MIN_GAP_MS = 120_000;
+const MAX_REPLAY_EVENTS = 420;
+// Reserve a small, bounded opening window for each BO3 game, then spend the
+// remaining budget on the newest events. A pure tail loses mulligan/turn-one
+// evidence in exactly the long games where coaching review is most valuable.
+const MAX_OPENING_REPLAY_EVENTS_PER_GAME = 24;
+const MAX_RETAINED_OPENING_REPLAY_EVENTS = 72;
 
 export class MatchSessionTracker {
   private readonly sessions = new Map<GamePlatform, SessionState>();
 
-  ingest(event: CaptureEvent): SessionState | undefined {
+  ingest(event: CaptureEvent, options: { enhancedInsightsEnabled?: boolean } = {}): SessionState | undefined {
     if (event.kind === "capture-ready") {
       return this.sessions.get(event.platform);
     }
@@ -99,18 +109,18 @@ export class MatchSessionTracker {
       return undefined;
     }
     if (!session && (event.kind === "match-start" || active)) {
-      session = createSession(event);
+      session = createSession(event, options.enhancedInsightsEnabled === true);
       this.sessions.set(event.platform, session);
     }
     if (!session) {
       return undefined;
     }
     if (shouldStartFreshSession(session, event)) {
-      session = createSession(event);
+      session = createSession(event, options.enhancedInsightsEnabled === true);
       this.sessions.set(event.platform, session);
     }
     session.updatedAt = event.capturedAt;
-    session.evidence.push(event);
+    session.evidence.push(retainedCaptureEvidence(event, session.enhancedInsightsEnabledAtStart));
     if (session.evidence.length > 160) {
       session.evidence = session.evidence.slice(-160);
     }
@@ -275,7 +285,7 @@ export class MatchSessionTracker {
     settings: UserSettings,
     resolved: ResolvedSnapshot = {}
   ): MatchDraft {
-    const session = this.sessions.get(platform) ?? createSession(endEvent);
+    const session = this.sessions.get(platform) ?? createSession(endEvent, false);
     mergeSticky(session.sticky, endEvent.payload);
     updateCurrentGame(session, endEvent);
     const hasTerminalResult = Boolean(resultFromText(session.sticky.endText));
@@ -316,6 +326,17 @@ export class MatchSessionTracker {
       status,
       capturedAt: session.startedAt,
       updatedAt: now,
+      ...(session.enhancedInsightsEnabledAtStart
+        ? {
+            insightContext: {
+              version: 1 as const,
+              capturedWithEnhancedInsights: true,
+              activeGoalIds: [],
+              decisions: [],
+              updatedAt: now
+            }
+          }
+        : {}),
       result,
       format,
       score: scoreFromGames(games),
@@ -333,7 +354,10 @@ export class MatchSessionTracker {
       flags: "",
       notes: "",
       games,
-      rawEvidence: [...session.evidence, endEvent].slice(-160),
+      rawEvidence: [
+        ...session.evidence,
+        retainedCaptureEvidence(endEvent, session.enhancedInsightsEnabledAtStart)
+      ].slice(-160),
       sync: {
         community: publicCommunitySyncEnabled(settings) ? "pending" : "disabled",
         hubs: privateHubSyncEnabled(settings)
@@ -347,7 +371,7 @@ export class MatchSessionTracker {
   }
 }
 
-function createSession(event: CaptureEvent): SessionState {
+function createSession(event: CaptureEvent, enhancedInsightsEnabledAtStart: boolean): SessionState {
   const sticky: Record<string, unknown> = {};
   mergeSticky(sticky, event.payload);
   return {
@@ -355,7 +379,7 @@ function createSession(event: CaptureEvent): SessionState {
     platform: event.platform,
     startedAt: event.capturedAt,
     updatedAt: event.capturedAt,
-    evidence: [event],
+    evidence: [retainedCaptureEvidence(event, enhancedInsightsEnabledAtStart)],
     replayEvents: [],
     replaySeenRows: new Set<string>(),
     replayVisibleCards: new Map<string, ReplayCardState>(),
@@ -364,10 +388,40 @@ function createSession(event: CaptureEvent): SessionState {
     replayLastBattlefields: "",
     replayLastTurnText: "",
     replayLastTurnAt: 0,
+    replayCurrentTurnSide: "system",
+    replayNextSequence: 1,
+    replayTurnNumberByGame: new Map(),
+    enhancedInsightsEnabledAtStart,
     sticky,
     currentGame: createGameState(1),
     completedGames: [],
     atlasCompletedGameIdentities: []
+  };
+}
+
+function retainedCaptureEvidence(event: CaptureEvent, enhancedInsightsEnabledAtStart: boolean): CaptureEvent {
+  if (enhancedInsightsEnabledAtStart || event.platform !== "atlas" || !Array.isArray(event.payload.rows)) {
+    return event;
+  }
+  return {
+    ...event,
+    payload: {
+      ...event.payload,
+      // Before Enhanced Insights, persisted Atlas rows contained ordinary
+      // replay timing, stable identity and visible log text. Keep that input
+      // while failing closed on actor/side/resource metadata added for richer
+      // coaching capture.
+      rows: event.payload.rows.map((row) => {
+        if (!isRecord(row)) {
+          return row;
+        }
+        return {
+          ...(row.key !== undefined ? { key: row.key } : {}),
+          ...(row.text !== undefined ? { text: row.text } : {}),
+          ...(row.observedAt !== undefined ? { observedAt: row.observedAt } : {})
+        };
+      })
+    }
   };
 }
 
@@ -792,12 +846,15 @@ function updateCurrentGame(session: SessionState, event: CaptureEvent): void {
 
 function updateReplayStream(session: SessionState, event: CaptureEvent): void {
   const score = readScore(event.payload);
+  const scoreDeltaSide = session.enhancedInsightsEnabledAtStart
+    ? replayScoreDeltaSide(session.replayLastScore, score)
+    : undefined;
   if (session.platform === "sim") {
     addSimReplayEvent(session, event);
   } else if (session.platform === "atlas") {
     addReplayScoreEvent(session, event, score);
     addReplayBattlefieldEvent(session, event);
-    addReplayRows(session, event, score);
+    addReplayRows(session, event, score, scoreDeltaSide);
     addReplayResultEvent(session, event, score);
   } else {
     addTcgaSetupEvents(session, event, score);
@@ -807,8 +864,10 @@ function updateReplayStream(session: SessionState, event: CaptureEvent): void {
     addReplayScoreEvent(session, event, score);
     addReplayResultEvent(session, event, score);
   }
-  if (session.replayEvents.length > 420) {
-    session.replayEvents = session.replayEvents.slice(-420);
+  if (session.replayEvents.length > MAX_REPLAY_EVENTS) {
+    session.replayEvents = session.enhancedInsightsEnabledAtStart
+      ? retainBoundedReplayEvents(session.replayEvents)
+      : session.replayEvents.slice(-MAX_REPLAY_EVENTS);
   }
 }
 
@@ -984,10 +1043,22 @@ function addTcgaCardMovementEvents(session: SessionState, event: CaptureEvent): 
   session.replayVisibleCards = nextVisible;
 }
 
-function addReplayRows(session: SessionState, event: CaptureEvent, score: { me?: number; opp?: number }): void {
+function addReplayRows(
+  session: SessionState,
+  event: CaptureEvent,
+  score: { me?: number; opp?: number },
+  scoreDeltaSide?: ReplayStructuredEvent["side"]
+): void {
   const rows = Array.isArray(event.payload.rows) ? event.payload.rows : [];
   const occurrenceCounts = new Map<string, number>();
   const chronologicalRows = chronologicalReplayRows(rows);
+  const preparedRows: Array<{
+    record: Record<string, unknown>;
+    parsed: { time: string; text: string };
+    signature: string;
+    type: ReplayStructuredEvent["type"];
+    index: number;
+  }> = [];
   for (let index = 0; index < chronologicalRows.length; index += 1) {
     const row = chronologicalRows[index];
     const record = isRecord(row) ? row : {};
@@ -996,18 +1067,67 @@ function addReplayRows(session: SessionState, event: CaptureEvent, score: { me?:
     if (!parsed.text || isReplayChatRow(rawText) || isReplayNoiseRow(parsed.text)) {
       continue;
     }
+    if (!session.enhancedInsightsEnabledAtStart && isEnhancedResourceReplayRow(parsed.text)) {
+      continue;
+    }
     const occurrenceKey = replayRowSignature(`${parsed.time}|${parsed.text}`);
     const occurrence = (occurrenceCounts.get(occurrenceKey) ?? 0) + 1;
     occurrenceCounts.set(occurrenceKey, occurrence);
-    const signature = replayRowSignature(`${parsed.time}|${parsed.text}|${occurrence}`);
+    const stableRowKey = readString(record.key);
+    const signature = stableRowKey.startsWith("riftlite-log:")
+      ? replayRowSignature(`stable|${stableRowKey}`)
+      : replayRowSignature(`${parsed.time}|${parsed.text}|${occurrence}`);
+    const type = classifyReplayText(parsed.text);
+    preparedRows.push({ record, parsed, signature, type, index });
+  }
+
+  const unseenScoreRows = preparedRows.filter((row) =>
+    row.type === "score" && !session.replaySeenRows.has(row.signature)
+  ).length;
+  let currentTurnSide = session.replayCurrentTurnSide;
+  for (const row of preparedRows) {
+    const { record, parsed, signature, type, index } = row;
+    const explicitSide = session.enhancedInsightsEnabledAtStart
+      ? replaySideFromEvidence(record, parsed.text, event.payload)
+      : replayLegacySideFromText(parsed.text, event.payload);
+    if (session.enhancedInsightsEnabledAtStart && type === "turn-start") {
+      currentTurnSide = explicitSide === "me" || explicitSide === "opponent" ? explicitSide : "system";
+    }
+    let side = explicitSide;
+    if (
+      session.enhancedInsightsEnabledAtStart &&
+      side !== "me" &&
+      side !== "opponent" &&
+      replayEventUsesTurnActor(type) &&
+      (currentTurnSide === "me" || currentTurnSide === "opponent")
+    ) {
+      side = currentTurnSide;
+    }
+    if (
+      session.enhancedInsightsEnabledAtStart &&
+      type === "score" &&
+      side !== "me" &&
+      side !== "opponent" &&
+      unseenScoreRows === 1 &&
+      (scoreDeltaSide === "me" || scoreDeltaSide === "opponent")
+    ) {
+      side = scoreDeltaSide;
+    }
     if (session.replaySeenRows.has(signature)) {
+      if (type === "turn-end") {
+        currentTurnSide = "system";
+      }
       continue;
     }
     session.replaySeenRows.add(signature);
-    const type = classifyReplayText(parsed.text);
     const card = replayCardFromText(parsed.text);
     const battlefield = type === "setup" ? "" : replayBattlefieldFromText(parsed.text);
-    const capturedAt = replayRowCapturedAt(event.capturedAt, parsed.time, index);
+    const capturedAt = replayRowCapturedAt(
+      event.capturedAt,
+      parsed.time,
+      index,
+      readString(record.observedAt)
+    );
     pushReplayEvent(session, {
       id: `${event.id}:row:${session.replayEvents.length + 1}`,
       sourceEventId: event.id,
@@ -1015,7 +1135,7 @@ function addReplayRows(session: SessionState, event: CaptureEvent, score: { me?:
       capturedAt,
       labelTime: parsed.time || replayTimeLabel(event.capturedAt),
       type,
-      side: replaySideFromText(parsed.text, event.payload),
+      side,
       text: parsed.text,
       cardName: card.name,
       destination: card.destination,
@@ -1023,9 +1143,27 @@ function addReplayRows(session: SessionState, event: CaptureEvent, score: { me?:
       toZone: card.toZone,
       battlefield,
       pointsScored: replayPointsScored(parsed.text),
-      score: type === "score" ? replayScore(score) : undefined
+      score: type === "score" ? replayScore(score) : undefined,
+      ...(session.enhancedInsightsEnabledAtStart
+        ? {
+            resource: replayResourceFromText(parsed.text),
+            evidence: {
+              source: "game-log" as const,
+              confidence: explicitSide === "me" || explicitSide === "opponent"
+                ? "confirmed" as const
+                : side === "me" || side === "opponent"
+                  ? "reconstructed" as const
+                  : "inferred" as const,
+              complete: false
+            }
+          }
+        : {})
     });
+    if (type === "turn-end") {
+      currentTurnSide = "system";
+    }
   }
+  session.replayCurrentTurnSide = currentTurnSide;
 }
 
 function addReplayScoreEvent(session: SessionState, event: CaptureEvent, score: { me?: number; opp?: number }): void {
@@ -1114,7 +1252,61 @@ function addReplayResultEvent(session: SessionState, event: CaptureEvent, score:
 }
 
 function pushReplayEvent(session: SessionState, event: ReplayStructuredEvent): void {
-  session.replayEvents.push(event);
+  if (!session.enhancedInsightsEnabledAtStart) {
+    session.replayEvents.push(event);
+    return;
+  }
+  const gameNumber = Number.isInteger(event.gameNumber) && (event.gameNumber ?? 0) > 0
+    ? event.gameNumber!
+    : session.currentGame.gameNumber;
+  let turnNumber = session.replayTurnNumberByGame.get(gameNumber) ?? 0;
+  if (event.type === "turn-start") {
+    turnNumber += 1;
+    session.replayTurnNumberByGame.set(gameNumber, turnNumber);
+  }
+  const source = session.platform === "sim"
+    ? "game-data"
+    : /:row:/i.test(event.id)
+      ? "game-log"
+      : event.type === "scoreboard" || event.type === "setup"
+        ? "capture-snapshot"
+        : "state-diff";
+  session.replayEvents.push({
+    ...event,
+    sequence: event.sequence ?? session.replayNextSequence,
+    gameNumber,
+    ...(event.turnNumber == null && turnNumber > 0 ? { turnNumber } : {}),
+    activeSide: event.activeSide ?? (event.side === "me" || event.side === "opponent" ? event.side : "system"),
+    evidence: event.evidence ?? {
+      source,
+      confidence: source === "game-data" || source === "game-log" ? "confirmed" : "reconstructed",
+      complete: false
+    }
+  });
+  session.replayNextSequence += 1;
+}
+
+function retainBoundedReplayEvents(events: ReplayStructuredEvent[]): ReplayStructuredEvent[] {
+  if (events.length <= MAX_REPLAY_EVENTS) {
+    return events;
+  }
+  const retainedIndexes = new Set<number>();
+  const openingCountByGame = new Map<number, number>();
+  for (let index = 0; index < events.length && retainedIndexes.size < MAX_RETAINED_OPENING_REPLAY_EVENTS; index += 1) {
+    const gameNumber = Number.isFinite(events[index].gameNumber) && events[index].gameNumber > 0
+      ? Math.floor(events[index].gameNumber)
+      : 1;
+    const openingCount = openingCountByGame.get(gameNumber) ?? 0;
+    if (openingCount >= MAX_OPENING_REPLAY_EVENTS_PER_GAME) {
+      continue;
+    }
+    retainedIndexes.add(index);
+    openingCountByGame.set(gameNumber, openingCount + 1);
+  }
+  for (let index = events.length - 1; index >= 0 && retainedIndexes.size < MAX_REPLAY_EVENTS; index -= 1) {
+    retainedIndexes.add(index);
+  }
+  return events.filter((_event, index) => retainedIndexes.has(index));
 }
 
 function collectTcgaReplayCards(payload: Record<string, unknown>): ReplayCardState[] {
@@ -1383,7 +1575,24 @@ function replayPointsScored(value: string): number | undefined {
   return match ? Number.parseInt(match[1], 10) : undefined;
 }
 
-function replaySideFromText(value: string, payload: Record<string, unknown>): ReplayStructuredEvent["side"] {
+function replaySideFromEvidence(row: Record<string, unknown>, value: string, payload: Record<string, unknown>): ReplayStructuredEvent["side"] {
+  const explicitSide = normalizeReplayEvidenceSide(
+    readString(row.side) || readString(row.playerSide) || readString(row.owner)
+  );
+  if (explicitSide) return explicitSide;
+  const explicitActor = readString(row.actor) || readString(row.playerName) || readString(row.player);
+  const actorSide = replayKnownActorSide(explicitActor, payload);
+  if (actorSide) return actorSide;
+  if (/^you\b/i.test(value)) return "me";
+  if (/^opponent\b/i.test(value)) return "opponent";
+  const owner = value.match(/^(.{1,48}?)['\u2019]s turn\b/i)?.[1] ??
+    value.match(/^(?:starting|started)\s+turn(?:\s+\d+)?\s+(?:for|[-:])\s*(.{1,48}?)(?:\.|$)/i)?.[1] ??
+    value.match(/^(.{1,48}?)\s+(?=played|moved|drew|draws|conquered|scored|attacked|blocked|defended|exhausted|recycled|readied)/i)?.[1] ??
+    "";
+  return replayKnownActorSide(owner, payload) ?? "system";
+}
+
+function replayLegacySideFromText(value: string, payload: Record<string, unknown>): ReplayStructuredEvent["side"] {
   if (/^you\b/i.test(value)) return "me";
   if (/^opponent\b/i.test(value)) return "opponent";
   const owner = value.match(/^(.{1,48}?)['\u2019]s turn\b/i)?.[1] ?? "";
@@ -1393,6 +1602,65 @@ function replaySideFromText(value: string, payload: Record<string, unknown>): Re
   if (ownerKey && myKey && ownerKey === myKey) return "me";
   if (ownerKey && oppKey && ownerKey === oppKey) return "opponent";
   return "system";
+}
+
+function normalizeReplayEvidenceSide(value: string): "me" | "opponent" | null {
+  const normalized = normalizeNameKey(value);
+  if (["me", "my", "mine", "self", "local", "player", "you", "your"].includes(normalized)) return "me";
+  if (["opponent", "enemy", "remote", "their"].includes(normalized)) return "opponent";
+  return null;
+}
+
+function replayKnownActorSide(actor: string, payload: Record<string, unknown>): "me" | "opponent" | null {
+  const ownerKey = normalizeNameKey(actor.replace(/[.:]+$/, ""));
+  if (!ownerKey) return null;
+  const myKey = normalizeNameKey(readString(payload.configuredUsername) || readString(payload.myName));
+  const oppKey = normalizePlayerNameKey(readString(payload.opponentName));
+  if (myKey && ownerKey === myKey) return "me";
+  if (oppKey && ownerKey === oppKey) return "opponent";
+  return null;
+}
+
+function replayEventUsesTurnActor(type: ReplayStructuredEvent["type"]): boolean {
+  return type === "turn-end" ||
+    type === "play" ||
+    type === "move" ||
+    type === "draw" ||
+    type === "score" ||
+    type === "combat" ||
+    type === "action";
+}
+
+function replayResourceFromText(value: string): ReplayStructuredEvent["resource"] {
+  const runeAction = value.match(/^(Exhausted|Readied|Recycled)\s+(\d+)\s*([A-Za-z][A-Za-z -]*?)?\s*runes?\.?$/i);
+  if (runeAction) {
+    const action = runeAction[1].toLowerCase();
+    const count = Math.min(24, Math.max(0, Number.parseInt(runeAction[2], 10)));
+    const runeName = cleanReplayDestination(runeAction[3] ?? "").replace(/\s+rune$/i, "");
+    const runes = runeName && count > 0 ? Array.from({ length: count }, () => runeName) : undefined;
+    if (action === "exhausted") {
+      return { runesExhausted: count, ...(runes ? { runes } : {}), mode: "exhaust-rune" };
+    }
+    if (action === "readied") {
+      return { runesReady: count, ...(runes ? { runes } : {}), mode: "ready-rune" };
+    }
+    return runes ? { runes } : undefined;
+  }
+  const resourceAction = value.match(/^(Gained|Paid|Spent)\s+(\d+)\s+(Energy|Power|XP)\.?$/i);
+  if (resourceAction) {
+    const amount = Math.max(0, Number.parseInt(resourceAction[2], 10));
+    const key = resourceAction[3].toLowerCase() as "energy" | "power" | "xp";
+    return {
+      [key]: amount,
+      mode: /^gained$/i.test(resourceAction[1]) ? "gain" : "pay"
+    };
+  }
+  const resourceSet = value.match(/^Set\s+(Energy|Power|XP)\s+to\s+(\d+)\.?$/i);
+  if (resourceSet) {
+    const key = resourceSet[1].toLowerCase() as "energy" | "power" | "xp";
+    return { [key]: Math.max(0, Number.parseInt(resourceSet[2], 10)), mode: "set" };
+  }
+  return undefined;
 }
 
 function readSimEvent(value: unknown): RiftboundSimEvent | null {
@@ -1460,6 +1728,26 @@ function scoreTotal(score: { me?: number; opp?: number }): number {
   return score.me + score.opp;
 }
 
+function replayScoreDeltaSide(
+  previousLabel: string,
+  score: { me?: number; opp?: number }
+): ReplayStructuredEvent["side"] | undefined {
+  const previous = parseScoreLabel(previousLabel);
+  if (
+    typeof previous.me !== "number" ||
+    typeof previous.opp !== "number" ||
+    typeof score.me !== "number" ||
+    typeof score.opp !== "number"
+  ) {
+    return undefined;
+  }
+  const myDelta = score.me - previous.me;
+  const opponentDelta = score.opp - previous.opp;
+  if (myDelta > 0 && opponentDelta === 0) return "me";
+  if (opponentDelta > 0 && myDelta === 0) return "opponent";
+  return undefined;
+}
+
 function cleanReplayText(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
@@ -1477,9 +1765,13 @@ function isReplayChatRow(value: string): boolean {
 }
 
 function isReplayNoiseRow(value: string): boolean {
-  return /^Rolled a d20\.?$/i.test(value) ||
-    /^Exhausted\s+\d+\s*[A-Za-z]*\s*runes?\.?$/i.test(value) ||
-    /^Recycled\s+\d+\s*[A-Za-z]*\s*runes?\.?$/i.test(value);
+  return /^Rolled a d20\.?$/i.test(value);
+}
+
+function isEnhancedResourceReplayRow(value: string): boolean {
+  return /^(?:Exhausted|Readied|Recycled)\s+\d+\s*[A-Za-z -]*\s*runes?\.?$/i.test(value)
+    || /^(?:Gained|Paid|Spent)\s+\d+\s+(?:Energy|Power|XP)\.?$/i.test(value)
+    || /^Set\s+(?:Energy|Power|XP)\s+to\s+\d+\.?$/i.test(value);
 }
 
 function replayTimeLabel(value: string): string {
@@ -1487,18 +1779,39 @@ function replayTimeLabel(value: string): string {
   return Number.isNaN(date.getTime()) ? "" : date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
-function replayRowCapturedAt(baseIso: string, time: string, order: number): string {
+function replayRowCapturedAt(baseIso: string, time: string, order: number, observedAt = ""): string {
   const date = new Date(baseIso);
   const match = time.match(/^(\d{1,2}):(\d{2})$/);
   if (!match || Number.isNaN(date.getTime())) {
-    return baseIso;
+    return validObservedReplayRowTime(observedAt, baseIso) ?? baseIso;
   }
   date.setHours(Number.parseInt(match[1], 10), Number.parseInt(match[2], 10), 0, Math.min(order, 999));
   const baseTime = new Date(baseIso).getTime();
   if (date.getTime() - baseTime > 12 * 60 * 60 * 1000) {
     date.setDate(date.getDate() - 1);
   }
+  const observed = validObservedReplayRowTime(observedAt, baseIso);
+  if (observed) {
+    const observedOffset = Date.parse(observed) - date.getTime();
+    if (observedOffset >= -2_000 && observedOffset <= 75_000) {
+      return observed;
+    }
+  }
   return date.toISOString();
+}
+
+function validObservedReplayRowTime(observedAt: string, baseIso: string): string | null {
+  const observedTime = Date.parse(observedAt);
+  const baseTime = Date.parse(baseIso);
+  if (
+    !Number.isFinite(observedTime) ||
+    !Number.isFinite(baseTime) ||
+    observedTime > baseTime + 5_000 ||
+    baseTime - observedTime > 12 * 60 * 60 * 1000
+  ) {
+    return null;
+  }
+  return new Date(observedTime).toISOString();
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -1516,6 +1829,8 @@ function completeCurrentGame(session: SessionState, hasTerminalResult = false, s
   session.replayLastBattlefields = "";
   session.replayLastTurnText = "";
   session.replayLastTurnAt = 0;
+  session.replayCurrentTurnSide = "system";
+  session.replayTurnNumberByGame.delete(currentGame.gameNumber);
   session.replayVisibleCards = new Map<string, ReplayCardState>();
   session.replayCardBaselineReady = false;
 }

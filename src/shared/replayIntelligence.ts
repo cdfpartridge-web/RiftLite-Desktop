@@ -120,6 +120,13 @@ function confidenceFor(replay: ReplayRecord, event: ReplayTimelineEvent): {
   confidence: ReplayIntelligenceConfidence;
   reason: string;
 } {
+  if (event.evidence) {
+    return {
+      source: event.evidence.source,
+      confidence: event.evidence.confidence,
+      reason: replayEvidenceReason(event.evidence)
+    };
+  }
   if (event.actionId === "insight:turn-attributed") {
     return {
       source: "capture-snapshot",
@@ -155,6 +162,32 @@ function confidenceFor(replay: ReplayRecord, event: ReplayTimelineEvent): {
     };
   }
   return { source: "capture-snapshot", confidence: "reconstructed", reason: "Reconstructed from captured game snapshots." };
+}
+
+function replayEvidenceReason(evidence: NonNullable<ReplayTimelineEvent["evidence"]>): string {
+  if (evidence.source === "game-log") {
+    if (evidence.confidence === "confirmed") {
+      return "The retained RiftAtlas action log supplied explicit event evidence.";
+    }
+    if (evidence.confidence === "reconstructed") {
+      return "The retained RiftAtlas action log supplied the action; some event context was reconstructed.";
+    }
+    return "The retained RiftAtlas action log supplied the row, but its context was incomplete and inferred.";
+  }
+  if (evidence.source === "game-data") {
+    return evidence.confidence === "confirmed"
+      ? "Reported directly by the captured game-data stream."
+      : "Derived from incomplete captured game-data evidence.";
+  }
+  if (evidence.source === "state-diff") {
+    return "Reconstructed from a change between consecutive visible game states.";
+  }
+  if (evidence.source === "manual") {
+    return "Reviewed and corrected manually.";
+  }
+  return evidence.confidence === "inferred"
+    ? "Inferred from incomplete captured snapshots."
+    : "Reconstructed from captured game snapshots.";
 }
 
 export function replayEventVideoTimeMs(replay: ReplayRecord, event: Pick<ReplayTimelineEvent, "capturedAt">): number | undefined {

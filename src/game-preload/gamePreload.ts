@@ -15,6 +15,7 @@ import {
   chooseAtlasOpponentIdentityName,
   compareAtlasPlayerIdentityCandidates
 } from "../shared/atlasPlayerIdentity.js";
+import { AtlasLogRowObservationTracker } from "../shared/atlasLogRowObservations.js";
 import {
   ATLAS_EMPTY_SHELL_MIN_AGE_MS,
   ATLAS_PERSISTENT_EMPTY_SHELL_MIN_AGE_MS,
@@ -252,6 +253,9 @@ let atlasBattlefieldSeatRoomCode = "";
 let atlasBattlefieldSeatSocketId = "";
 const atlasAuthoritativeMatchTracker = new AtlasAuthoritativeMatchTracker();
 let atlasAuthoritativeMatchState: AtlasAuthoritativeMatchSignal | null = null;
+const atlasLogRowObservationTracker = new AtlasLogRowObservationTracker();
+const atlasLogRowElementIdentity = new WeakMap<Element, string>();
+let atlasLogRowNextElementIdentity = 1;
 
 type CounterPlayer = {
   name: string;
@@ -1243,10 +1247,7 @@ function readAtlasSnapshot(): Record<string, unknown> {
     ? atlasAuthoritativeMatchState
     : null;
   const nonGamePage = isAtlasNonGamePage();
-  const logRows = Array.from(document.querySelectorAll("ul li, [role='log'] li, [class*='log' i] li, [class*='matchLog' i] li"))
-    .slice(-28)
-    .map((row, index) => ({ key: `${index}:${textOf(row).slice(0, 120)}`, text: textOf(row) }))
-    .filter((row) => row.text);
+  const logRows = readAtlasLogRows(roomCode);
   const zoneCards = collectCards("[data-card-id], [data-drop-zone] [data-card-id], [data-zone-owner] [data-drop-zone]", {
     limit: 42,
     includeText: true,
@@ -1396,6 +1397,81 @@ function readAtlasSnapshot(): Record<string, unknown> {
     ...(DECK_TRACKER_FEATURE_ENABLED ? { deckTrackerCards: collectAtlasDeckTrackerCards(zoneCards) } : {}),
     endText: terminalText
   };
+}
+
+function readAtlasLogRows(roomCode: string): Array<{ key: string; text: string; observedAt: string; side?: string; actor?: string }> {
+  const observationRoom = atlasLogObservationRoom(roomCode);
+  const candidates = Array.from(document.querySelectorAll("ul li, [role='log'] li, [class*='log' i] li, [class*='matchLog' i] li"))
+    .map((row) => {
+      const text = textOf(row);
+      const explicitKey = attr(row, "data-log-id") || attr(row, "id");
+      const semanticDataId = attr(row, "data-id");
+      const side = attr(row, "data-side") || attr(row, "data-player-side") || attr(row, "data-owner");
+      const actor = attr(row, "data-actor") || attr(row, "data-player-name") || attr(row, "data-player");
+      const semanticRow = [text, side, actor, semanticDataId]
+        .map((value) => value.replace(/\s+/g, " ").trim().toLowerCase().slice(0, 600))
+        .join("\u241f");
+      return {
+        row,
+        text,
+        explicitKey,
+        semanticRow,
+        side,
+        actor,
+        instanceHint: atlasLogRowElementHint(row)
+      };
+    })
+    .filter((row) => row.text)
+    .slice(-120);
+  const observations = atlasLogRowObservationTracker.observe(
+    observationRoom,
+    candidates.map((row) => ({
+      fingerprint: row.semanticRow,
+      explicitId: row.explicitKey || undefined,
+      instanceHint: row.instanceHint
+    })),
+    now
+  );
+  return candidates.map((row, index) => ({
+    key: observations[index].key,
+    text: row.text,
+    observedAt: observations[index].observedAt,
+    ...(row.side ? { side: row.side.slice(0, 48) } : {}),
+    ...(row.actor ? { actor: row.actor.slice(0, 80) } : {})
+  }))
+    .slice(-28);
+}
+
+function atlasLogObservationRoom(roomCode: string): string {
+  const explicitRoom = roomCode || atlasBattlefieldSeatRoomCode || atlasAuthoritativeMatchState?.roomCode || atlasRoomCodeFromUrl(location.href);
+  const normalizedRoom = normalizeNameKey(explicitRoom);
+  return normalizedRoom
+    ? `room:${normalizedRoom}`
+    : `route:${location.host.toLowerCase()}${location.pathname.toLowerCase()}`;
+}
+
+function atlasLogRowElementHint(row: Element): string {
+  const retained = atlasLogRowElementIdentity.get(row);
+  if (retained) return retained;
+  const identity = `element:${atlasLogRowNextElementIdentity}`;
+  atlasLogRowNextElementIdentity += 1;
+  atlasLogRowElementIdentity.set(row, identity);
+  return identity;
+}
+
+function replayRowsSnapshotSignature(value: unknown): string {
+  if (!Array.isArray(value)) {
+    return "";
+  }
+  return value.slice(-28).map((row) => {
+    if (!row || typeof row !== "object" || Array.isArray(row)) {
+      return String(row ?? "").slice(0, 240);
+    }
+    const record = row as Record<string, unknown>;
+    return [record.key, record.text, record.side, record.actor]
+      .map((part) => typeof part === "string" ? part.replace(/\s+/g, " ").trim().slice(0, 600) : "")
+      .join("|");
+  }).join("\u241e");
 }
 
 function isAtlasTransientGameOverlay(terminalText: string, sideboarding: boolean): boolean {
@@ -2780,6 +2856,7 @@ function publishSnapshot(reason: string): void {
     myBattlefield: data.myBattlefield || data.myBattlefieldImage,
     opponentBattlefield: data.opponentBattlefield || data.opponentBattlefieldImage,
     turnText: data.turnText,
+    replayRows: replayRowsSnapshotSignature(data.rows),
     tcgaPhase: data.tcgaPhase,
     tcgaCardZoneOverlay: data.tcgaCardZoneOverlay,
     atlasTransientOverlay: data.atlasTransientOverlay,
@@ -2828,6 +2905,7 @@ function publishSnapshot(reason: string): void {
       previousActive = false;
       send("match-end", { ...lastActiveSnapshot, ...data, reason: "result-text-detected" });
       lastActiveSnapshot = {};
+      atlasLogRowObservationTracker.reset();
     }
   }
 
@@ -2839,6 +2917,7 @@ function publishSnapshot(reason: string): void {
         send("match-end", { ...lastActiveSnapshot, ...data, ...finalSnapshot, reason: "inactive-debounce" });
         lastActiveSnapshot = {};
         lastActiveRoomCode = "";
+        atlasLogRowObservationTracker.reset();
       }
       endTimer = undefined;
     }, platform === "atlas" ? atlasInactiveEndGraceMs(location.href, data.format) : 3000);
@@ -2892,13 +2971,18 @@ function installAtlasInteractionThrottle(): void {
 }
 
 function mutationText(mutation: MutationRecord): string {
-  const target = mutation.target as Element;
-  const targetText = `${target.nodeName} ${target.id ?? ""} ${target.className ?? ""}`;
+  const rawTarget = mutation.target;
+  const targetElement = rawTarget instanceof Element ? rawTarget : rawTarget.parentElement;
+  const logTarget = targetElement?.closest("[role='log'], [class*='log' i], [class*='history' i]");
+  const meaningfulTarget = logTarget ?? targetElement?.closest(
+    "li, [class*='score' i], [class*='turn' i]"
+  ) ?? targetElement;
+  const targetText = `${rawTarget.nodeName} ${meaningfulTarget?.getAttribute("role") ?? ""} ${meaningfulTarget?.id ?? ""} ${meaningfulTarget?.className ?? ""} ${textOf(meaningfulTarget).slice(0, 160)}`;
   const addedText = Array.from(mutation.addedNodes)
     .slice(0, 6)
     .map((node) => {
       if (!(node instanceof Element)) {
-        return node.nodeName;
+        return `${node.nodeName} ${(node.textContent ?? "").replace(/\s+/g, " ").trim().slice(0, 80)}`;
       }
       return `${node.nodeName} ${node.id ?? ""} ${node.className ?? ""} ${textOf(node).slice(0, 80)}`;
     })

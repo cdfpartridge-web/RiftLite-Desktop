@@ -28,6 +28,18 @@ describe("Home launchpad", () => {
     expect(homeSource).toContain('onNavigate("sideboard-lab")');
   });
 
+  it("shows the current release highlights without exposing deferred rules search", () => {
+    const releaseNotesStart = appSource.indexOf("const RELEASE_NOTES =");
+    const releaseNotesEnd = appSource.indexOf("const RIOT_LEGAL_NOTICE", releaseNotesStart);
+    const releaseNotesSource = appSource.slice(releaseNotesStart, releaseNotesEnd);
+
+    expect(releaseNotesSource).toContain("Deck Insights is now the default Insights view");
+    expect(releaseNotesSource).toContain("Enhanced Insights Beta can mark the exact moment of a decision");
+    expect(releaseNotesSource).toContain("Replay Coach remains Coming Soon");
+    expect(releaseNotesSource).not.toContain("Search Rules");
+    expect(releaseNotesSource).not.toContain("partial Atlas page");
+  });
+
   it("keeps the active deck's artwork and performance in sync, with sensible fallbacks", () => {
     expect(homeSource).toContain("activeDeck ?? mostRecentlyPlayedPerformance?.deck ?? mostRecentlyImportedDeck");
     expect(homeSource).not.toContain("mostRecentlyPlayedPerformance?.deck ?? activeDeck ?? mostRecentlyImportedDeck");
@@ -41,14 +53,33 @@ describe("Home launchpad", () => {
     expect(artSource).not.toContain("snapshot?.legendEntry?.imageUrl");
   });
 
+  it("opens a local deck-share image from the featured deck's aggregate stats", () => {
+    expect(appSource).toContain('import { DeckShareCardDialog, type DeckShareCardViewModel } from "./DeckShareCard"');
+    expect(homeSource).toContain("const featuredDeckShare: DeckShareCardViewModel | null");
+    expect(homeSource).toContain("decisiveGames: featuredDeckPerformance.overview.decisive");
+    expect(homeSource).toContain("artSources: homeOfficialDeckArtSources(featuredDeck)");
+    expect(homeSource).toContain("Share image");
+    expect(homeSource).toContain("setDeckShareOpen(true)");
+    expect(homeSource).toContain("<DeckShareCardDialog deck={featuredDeckShare}");
+    expect(stylesSource).toContain(".modern-deck-glance-actions");
+    expect(stylesSource).toContain(".modern-deck-share-action");
+  });
+
   it("persists the default provider while preserving capture-safe platform switching", () => {
     expect(appSource).toContain('nextHealth.state === "match-detected" || nextHealth.state === "review-needed"');
-    expect(appSource).toContain('nextView === "play" && healthRef.current.state === "review-needed"');
-    expect(appSource).toContain('openPlay && healthRef.current.state === "review-needed"');
+    expect(appSource).not.toContain('nextView === "play" && healthRef.current.state === "review-needed"');
+    expect(appSource).not.toContain('openPlay && healthRef.current.state === "review-needed"');
+    expect(appSource).not.toContain("Review the captured match before starting another game.");
+    expect(appSource).not.toContain('health.state === "review-needed" ? openView("matches")');
+    expect(homeSource).not.toContain('health.state === "review-needed" ? onNavigate("matches")');
+    expect(appSource).toContain("pendingReviewFallbackGenerationRef");
+    expect(appSource).toContain('healthRef.current.state === "review-needed"');
+    expect(appSource).toContain("return window.riftlite.dismissMatchReview()");
     expect(appSource).toContain("defaultPlatformSaveQueueRef");
     expect(appSource).toContain("window.riftlite.saveSettings({ defaultGamePlatform: platform })");
     expect(appSource).toContain("const persistedSettings = await window.riftlite.getSettings()");
     expect(appSource).toContain("chooseGamePlatform(settings.defaultGamePlatform, true)");
+    expect(appSource).toContain('onClick={() => onPlayPlatform(settings.defaultGamePlatform)}');
     expect(appSource).toContain('className="segmented home-default-platform"');
     expect(appSource).toContain('saveDefaultGamePlatform(settings.defaultGamePlatform === "atlas" ? "tcga" : "atlas")');
     expect(appSource).toContain("Switch default game to");

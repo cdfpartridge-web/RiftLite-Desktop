@@ -75,7 +75,7 @@ describe("RiftLiteStore combined-match lifecycle", () => {
     const handler = source.slice(start, end);
 
     expect(start).toBeGreaterThan(-1);
-    expect(handler).toContain("await syncService.undoCombinedMatch(combinedMatchId)");
+    expect(handler).toContain("await enqueueEnhancedInsightsDataMutation(() => syncService.undoCombinedMatch(combinedMatchId))");
     expect(handler).not.toContain("await store.undoCombinedMatch(combinedMatchId)");
   });
 });

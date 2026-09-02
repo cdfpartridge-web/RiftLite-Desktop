@@ -112,18 +112,36 @@ export function sanitizeBackupCaptureEvent(event: CaptureEvent): CaptureEvent {
   };
 }
 
-function sanitizeBackupMatch(match: MatchDraft): MatchDraft {
+function sanitizeBackupMatch(match: MatchDraft, forceStripEvidence = false): MatchDraft {
+  const hasEnhancedInsightData = forceStripEvidence || Boolean(match.insightContext);
+  const { insightContext: _insightContext, ...withoutEnhancedInsights } = match;
   return {
-    ...match,
-    rawEvidence: (match.rawEvidence ?? []).map(sanitizeBackupCaptureEvent)
-  };
+    ...withoutEnhancedInsights,
+    rawEvidence: hasEnhancedInsightData
+      ? []
+      : (match.rawEvidence ?? []).map(sanitizeBackupCaptureEvent)
+  } as MatchDraft;
 }
 
-function sanitizeBackupReplay(replay: ReplayRecord): ReplayRecord {
+function sanitizeBackupReplay(replay: ReplayRecord, enhancedMatchIds: ReadonlySet<string>): ReplayRecord {
+  const { enhancedInsights, ...withoutEnhancedInsights } = replay;
+  const hasEnhancedInsightData = Boolean(
+    enhancedInsights
+    || replay.matchSnapshot?.insightContext?.capturedWithEnhancedInsights
+    || (replay.flags ?? []).some((flag) => flag.id.startsWith("enhanced-insight-"))
+    || enhancedMatchIds.has(replay.matchId)
+  );
+  const { intelligence: _intelligence, ...withoutEnhancedEvidence } = withoutEnhancedInsights;
   return {
-    ...replay,
-    events: (replay.events ?? []).map(sanitizeBackupCaptureEvent),
-    matchSnapshot: replay.matchSnapshot ? sanitizeBackupMatch(replay.matchSnapshot) : undefined
+    ...(hasEnhancedInsightData ? withoutEnhancedEvidence : withoutEnhancedInsights),
+    events: hasEnhancedInsightData
+      ? []
+      : (replay.events ?? []).map(sanitizeBackupCaptureEvent),
+    ...(hasEnhancedInsightData ? { structuredEvents: [] } : {}),
+    flags: (replay.flags ?? []).filter((flag) => !flag.id.startsWith("enhanced-insight-")),
+    matchSnapshot: replay.matchSnapshot
+      ? sanitizeBackupMatch(replay.matchSnapshot, hasEnhancedInsightData)
+      : undefined
   };
 }
 
@@ -132,12 +150,17 @@ function sanitizeBackupReplay(replay: ReplayRecord): ReplayRecord {
  * content. Names, notes and structured gameplay remain restoreable.
  */
 export function sanitizeBackupFile(backup: RiftLiteBackupFile): RiftLiteBackupFile {
+  const enhancedMatchIds = new Set(
+    [...backup.matches, ...backup.deletedMatches]
+      .filter((match) => Boolean(match.insightContext))
+      .map((match) => match.id)
+  );
   return {
     ...backup,
     settings: redactSensitiveSettings(backup.settings),
-    matches: backup.matches.map(sanitizeBackupMatch),
-    deletedMatches: backup.deletedMatches.map(sanitizeBackupMatch),
-    replays: backup.replays.map(sanitizeBackupReplay),
-    deletedReplays: backup.deletedReplays.map(sanitizeBackupReplay)
+    matches: backup.matches.map((match) => sanitizeBackupMatch(match)),
+    deletedMatches: backup.deletedMatches.map((match) => sanitizeBackupMatch(match)),
+    replays: backup.replays.map((replay) => sanitizeBackupReplay(replay, enhancedMatchIds)),
+    deletedReplays: backup.deletedReplays.map((replay) => sanitizeBackupReplay(replay, enhancedMatchIds))
   };
 }

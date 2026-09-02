@@ -131,6 +131,46 @@ export interface ReplayInsightCardReport {
   lateKeeps: number;
   immediatePlays: number;
   averageKnownHandTimeMs?: number;
+  /**
+   * Review-grade opening-hand decisions are counted once per captured game and card name.
+   * They describe whether at least one copy was offered, kept, or redrawn;
+   * stable per-copy identity is not available on every platform. Inferred-only
+   * events are excluded from these rates.
+   */
+  mulligan?: {
+    offeredGames: number;
+    keptGames: number;
+    redrawnGames: number;
+    /** Games with a keep and a late card-name play; this does not link copies. */
+    latePlayedGames: number;
+  };
+  /**
+   * A hand observation must occur before the matching card-name play. The play
+   * event itself never creates this denominator.
+   */
+  prePlayHand?: {
+    observedGames: number;
+    laterPlayedGames: number;
+    noCapturedPlayGames: number;
+    recycledOrDiscardedGames: number;
+  };
+  /** First captured play of this card name, counted once per game. */
+  firstPlayTurns?: {
+    byTurn3Games: number;
+    turns4To5Games: number;
+    turn6PlusGames: number;
+    unknownTurnGames: number;
+  };
+  /**
+   * Review-grade positive play evidence split by trusted game stage. Inferred
+   * plays are excluded, and a play without a trusted game number stays in the
+   * unknown-stage bucket rather than being presented as Game 1.
+   */
+  playReach?: {
+    preboardGames: number;
+    postboardGames: number;
+    unknownStageGames: number;
+  };
   confidence: ReplayIntelligenceConfidence;
   replayIds: string[];
 }
@@ -284,6 +324,8 @@ export interface BuildReplayInsightsOptions {
   minimumPatternSample?: number;
   /** Explorer aggregations are CPU-only but can be skipped until the Explore tab is opened. */
   includeExplorerStats?: boolean;
+  /** Set false when replay order was combined or otherwise cannot support game-stage claims. */
+  trustGameStage?: boolean;
   now?: string | Date;
 }
 
@@ -296,6 +338,7 @@ interface ReplayAnalysis {
   openingHandEvents: ReplayStructuredEvent[];
   chosenChampionIdentitiesByGame: Map<number, Set<string>>;
   hasEnrichmentEvents: boolean;
+  trustGameStage: boolean;
   deckFingerprint: string;
 }
 
@@ -343,6 +386,21 @@ interface MutableCardReport {
   immediatePlays: number;
   handTimeTotalMs: number;
   handTimeSamples: number;
+  mulliganOfferedGames: Set<string>;
+  mulliganKeptGames: Set<string>;
+  mulliganRedrawnGames: Set<string>;
+  mulliganLatePlayedGames: Set<string>;
+  prePlayObservedGames: Set<string>;
+  prePlayLaterPlayedGames: Set<string>;
+  prePlayNoCapturedPlayGames: Set<string>;
+  prePlayRecycledOrDiscardedGames: Set<string>;
+  firstPlayByTurn3Games: Set<string>;
+  firstPlayTurns4To5Games: Set<string>;
+  firstPlayTurn6PlusGames: Set<string>;
+  firstPlayUnknownTurnGames: Set<string>;
+  playedPreboardGames: Set<string>;
+  playedPostboardGames: Set<string>;
+  playedUnknownStageGames: Set<string>;
   confidences: ReplayIntelligenceConfidence[];
   replayIds: Set<string>;
   evidence: ReplayInsightEvidence[];
@@ -362,6 +420,8 @@ const LONG_HAND_TIME_MS = 90_000;
 const RAW_INSIGHT_ACTION_ID = "insight:raw-authoritative";
 const RAW_CHOSEN_CHAMPION_ACTION_ID = "insight:raw-chosen-champion";
 const TURN_ATTRIBUTED_ACTION_ID = "insight:turn-attributed";
+/** Structured-event sentinel for evidence whose original game number is unavailable. */
+const UNTRUSTED_GAME_NUMBER = 0;
 
 export function buildReplayInsights(
   replays: ReplayRecord[],
@@ -408,6 +468,7 @@ export function buildReplayInsights(
             : options.openingHandEventsByReplayId?.get(replay.id) ?? [],
         chosenChampionIdentitiesByGame,
         hasEnrichmentEvents: enrichmentEvents.length > 0,
+        trustGameStage: options.trustGameStage !== false,
         deckFingerprint: deckSnapshotHash(match?.deckSnapshotJson ?? "")
       } satisfies ReplayAnalysis;
     })
@@ -422,13 +483,13 @@ export function buildReplayInsights(
   for (const analysis of analyses) {
     const gameNumbers = replayGameNumbers(analysis);
     for (const gameNumber of gameNumbers) {
-      if (!gameMatchesFilters(analysis.match, gameNumber, filters)) continue;
+      if (!gameMatchesFilters(analysis, gameNumber, filters)) continue;
       analyzedGames.add(`${analysis.replay.id}:${gameNumber}`);
       eligibleGames.push({ analysis, gameNumber });
-      collectOpeningHandInsights(analysis, gameNumber, catalog, insights, cardReports);
+      collectOpeningHandInsights(analysis, gameNumber, catalog, insights, cardReports, filters.gameStage ?? "all");
       collectCurveInsights(analysis, gameNumber, insights, matchupPatterns);
       collectScoreInsights(analysis, gameNumber, insights);
-      collectCardJourneyInsights(analysis, gameNumber, catalog, insights, cardReports);
+      collectCardJourneyInsights(analysis, gameNumber, catalog, insights, cardReports, filters.gameStage ?? "all");
     }
   }
 
@@ -506,7 +567,7 @@ function buildReplayInsightStats(
   let knownSourcePlays = 0;
 
   for (const scope of scopedGames) {
-    const plays = localPlaysForGame(scope, catalog);
+    const plays = localPlaysForGame(scope, catalog, filters.gameStage ?? "all");
     capturedLocalPlays += plays.length;
     for (const play of plays) {
       const source = cardPlaySource(play.event);
@@ -538,7 +599,7 @@ function buildReplayInsightStats(
 
     const result = replayInsightGameResult(scope.analysis, scope.gameNumber);
     if (!result) continue;
-    for (const [visibleCardKey, firstAvailablePlayerTurn] of knownCardAvailabilityForGame(scope, catalog, plays)) {
+    for (const [visibleCardKey, firstAvailablePlayerTurn] of knownCardAvailabilityForGame(scope, catalog, plays, filters.gameStage ?? "all")) {
       const observations = timingEligibilityByCard.get(visibleCardKey) ?? [];
       observations.push({ firstAvailablePlayerTurn, result });
       timingEligibilityByCard.set(visibleCardKey, observations);
@@ -548,6 +609,7 @@ function buildReplayInsightStats(
       if (!firstPlayByCard.has(play.cardKey)) firstPlayByCard.set(play.cardKey, play);
     }
     for (const play of firstPlayByCard.values()) {
+      if (trustedGameStageForEvent(play.analysis, play.event) === "unknown") continue;
       const turn = scope.analysis.turnByEvent.get(play.event.id);
       if (!turn || turn.gameNumber !== scope.gameNumber || turn.side !== "me" || turn.playerTurnNumber < 1) continue;
       const key = `${play.cardKey}:turn-${turn.playerTurnNumber}`;
@@ -690,10 +752,14 @@ function replayInsightGameResult(analysis: ReplayAnalysis, gameNumber: number): 
 }
 
 function replayInsightHasCompleteEnoughPlayCapture(analysis: ReplayAnalysis, gameNumber: number): boolean {
+  if (!analysis.trustGameStage || !replayInsightHasTrustedGameStage(analysis, gameNumber)) return false;
   if (!replayInsightGameResult(analysis, gameNumber)) return false;
   if (analysis.intelligence.summary.coverage.grade === "limited") return false;
-  const relevantEvents = analysis.model.events.filter((event) => replayTimelineEventGameNumber(analysis, event) === gameNumber);
-  const evidenceEvents = analysis.intelligence.events.filter((event) => (event.gameNumber ?? 1) === gameNumber);
+  if (analysis.intelligence.events.some((event) => (
+    event.type === "play" && trustedGameStageForEvent(analysis, event) === "unknown"
+  ))) return false;
+  const relevantEvents = analysis.model.events.filter((event) => event.gameNumber === gameNumber);
+  const evidenceEvents = analysis.intelligence.events.filter((event) => event.gameNumber === gameNumber);
   const evidenceWeight = evidenceEvents.reduce((total, event) => (
     total + (event.confidence === "confirmed" || event.confidence === "manual" ? 1 : event.confidence === "reconstructed" ? 0.65 : 0.3)
   ), 0);
@@ -706,8 +772,8 @@ function replayInsightHasCompleteEnoughPlayCapture(analysis: ReplayAnalysis, gam
   ).size;
   const hasTerminalEvidence = relevantEvents.some((event) => event.type === "result");
   const hasStructuredChannel = Boolean(
-    analysis.replay.structuredEvents?.some((event) => (event.gameNumber ?? 1) === gameNumber)
-    || analysis.hasEnrichmentEvents
+    analysis.replay.structuredEvents?.some((event) => event.gameNumber === gameNumber)
+    || (analysis.hasEnrichmentEvents && relevantEvents.some((event) => event.actionId === RAW_INSIGHT_ACTION_ID))
   );
   if (!hasStructuredChannel) return false;
   if (analysis.replay.platform === "tcga") {
@@ -731,10 +797,17 @@ function summarizeResults(results: Array<"Win" | "Loss" | "Draw">): {
 
 function localPlaysForGame(
   scope: ReplayInsightEligibleGame,
-  catalog: Map<string, ReplayInsightCardCatalogEntry>
+  catalog: Map<string, ReplayInsightCardCatalogEntry>,
+  gameStage: ReplayInsightGameStage
 ): ReplayInsightResolvedPlay[] {
-  const candidates = scope.analysis.model.events
-    .filter((event) => event.type === "play" && event.side === "me" && replayTimelineEventGameNumber(scope.analysis, event) === scope.gameNumber)
+  const candidates = scope.analysis.intelligence.events
+    .filter((event) => (
+      event.type === "play"
+        && event.side === "me"
+        && replayTimelineEventGameNumber(scope.analysis, event) === scope.gameNumber
+        && reviewGradeTimelineEventConfidence(scope.analysis, event) !== "inferred"
+        && gameStageIncludesTrustedEvent(scope.analysis, event, gameStage)
+    ))
     .sort((left, right) => eventTime(left) - eventTime(right));
   const result: ReplayInsightResolvedPlay[] = [];
   for (const event of candidates) {
@@ -767,7 +840,8 @@ function localPlaysForGame(
 function knownCardAvailabilityForGame(
   scope: ReplayInsightEligibleGame,
   catalog: Map<string, ReplayInsightCardCatalogEntry>,
-  plays: ReplayInsightResolvedPlay[]
+  plays: ReplayInsightResolvedPlay[],
+  gameStage: ReplayInsightGameStage
 ): Map<string, number> {
   const firstAvailable = new Map<string, number>();
   const record = (key: string, playerTurnNumber: number) => {
@@ -777,7 +851,8 @@ function knownCardAvailabilityForGame(
   };
 
   for (const opening of scope.analysis.openingHandEvents) {
-    if ((opening.gameNumber ?? 1) !== scope.gameNumber) continue;
+    if (opening.gameNumber !== scope.gameNumber || !gameStageIncludesTrustedEvent(scope.analysis, opening, gameStage)) continue;
+    if (rawEventEvidence(scope.analysis, opening, "Opening hand recorded").confidence === "inferred") continue;
     for (const card of opening.mulligan?.kept ?? []) {
       if (isChosenChampionCard(scope.analysis, scope.gameNumber, catalog, card.name, card.code || card.id)) continue;
       record(canonicalCardKey(catalog, card.name, card.code || card.id), 0);
@@ -785,7 +860,9 @@ function knownCardAvailabilityForGame(
   }
 
   for (const event of scope.analysis.intelligence.events) {
-    if ((event.gameNumber ?? 1) !== scope.gameNumber || event.side !== "me") continue;
+    if (event.gameNumber !== scope.gameNumber || event.side !== "me") continue;
+    if (event.confidence === "inferred") continue;
+    if (!gameStageIncludesTrustedEvent(scope.analysis, event, gameStage)) continue;
     const enteredHand = event.type === "draw" || normalizeZone(event.toZone || event.destination) === "hand";
     if (!enteredHand || !isReportableCard(event.cardName, event.cardId, catalog)) continue;
     if (isChosenChampionCard(scope.analysis, scope.gameNumber, catalog, event.cardName, event.cardId)) continue;
@@ -832,9 +909,35 @@ function cardPlaySource(event: ReplayTimelineEvent): "hand" | "hidden" | "trash"
 }
 
 function playEvidence(play: ReplayInsightResolvedPlay, label: string): ReplayInsightEvidence {
-  const confidence = play.analysis.intelligence.events.find((event) => event.id === play.event.id)?.confidence
-    ?? confidenceFromReplay(play.analysis.replay);
+  const confidence = reviewGradeTimelineEventConfidence(play.analysis, play.event);
   return rawTimelineEvidence(play.analysis, play.event, confidence, label);
+}
+
+function reviewGradeTimelineEventConfidence(
+  analysis: ReplayAnalysis,
+  event: ReplayTimelineEvent
+): ReplayIntelligenceConfidence {
+  return analysis.intelligence.events.find((candidate) => candidate.id === event.id)?.confidence
+    ?? confidenceFromReplay(analysis.replay);
+}
+
+function trustedGameStageForEvent(
+  analysis: ReplayAnalysis,
+  event: Pick<ReplayTimelineEvent, "gameNumber">
+): Exclude<ReplayInsightGameStage, "all"> | "unknown" {
+  if (!analysis.trustGameStage) return "unknown";
+  const gameNumber = event.gameNumber;
+  if (typeof gameNumber !== "number" || !Number.isInteger(gameNumber) || gameNumber < 1 || gameNumber > 3) return "unknown";
+  return gameNumber === 1 ? "preboard" : "postboard";
+}
+
+function gameStageIncludesTrustedEvent(
+  analysis: ReplayAnalysis,
+  event: Pick<ReplayTimelineEvent, "gameNumber">,
+  gameStage: ReplayInsightGameStage
+): boolean {
+  if (gameStage === "all") return true;
+  return trustedGameStageForEvent(analysis, event) === gameStage;
 }
 
 function buildBattlefieldPositionChoices(scopedGames: ReplayInsightEligibleGame[]): ReplayInsightBattlefieldPositionChoice[] {
@@ -926,7 +1029,7 @@ function buildBattlefieldPickOrders(
     if (!representative || !match) continue;
     const allowedGames = new Set(scopes.map((scope) => scope.gameNumber));
     const orderedGames = [...match.games]
-      .filter((game) => game.gameNumber >= 1 && game.gameNumber <= 3 && allowedGames.has(game.gameNumber) && gameMatchesFilters(match, game.gameNumber, filters))
+      .filter((game) => game.gameNumber >= 1 && game.gameNumber <= 3 && allowedGames.has(game.gameNumber) && gameMatchesFilters(representative.analysis, game.gameNumber, filters))
       .sort((left, right) => left.gameNumber - right.gameNumber);
     if (orderedGames.length < 2 || orderedGames.some((game) => !game.myBattlefield?.trim())) continue;
     const sequence = orderedGames.map((game) => game.myBattlefield!.trim());
@@ -1019,7 +1122,9 @@ function buildOutcomeSplits(
     const game = scope.analysis.match?.games.find((candidate) => candidate.gameNumber === scope.gameNumber);
     if (game?.wentFirst === "1st") add("initiative:first", "initiative", "Went first", scope.result);
     if (game?.wentFirst === "2nd") add("initiative:second", "initiative", "Went second", scope.result);
-    add(scope.gameNumber === 1 ? "stage:preboard" : "stage:postboard", "game-stage", scope.gameNumber === 1 ? "Game 1 / pre-board" : "Post-sideboard", scope.result);
+    if (replayInsightHasTrustedGameStage(scope.analysis, scope.gameNumber)) {
+      add(scope.gameNumber === 1 ? "stage:preboard" : "stage:postboard", "game-stage", scope.gameNumber === 1 ? "Game 1 / pre-board" : "Post-sideboard", scope.result);
+    }
   }
   return [...groups.values()].map((group): ReplayInsightOutcomeSplit => {
     const outcome = summarizeResults(group.results);
@@ -1068,7 +1173,7 @@ function repairReplayInsightModel(
   model: AtlasReplayViewModel,
   enrichmentEvents: ReplayStructuredEvent[]
 ): AtlasReplayViewModel {
-  if (replay.platform !== "atlas" || !model.events.length) return model;
+  if (replay.platform !== "atlas" || (!model.events.length && !enrichmentEvents.length)) return model;
 
   const rawEvidence = buildRawEvidenceBuckets(enrichmentEvents);
   const compoundActionSide = compoundActionSideByEvent(model, replay);
@@ -1106,6 +1211,7 @@ function repairReplayInsightModel(
         : normalized.actionId;
     patchedById.set(event.id, {
       ...normalized,
+      gameNumber: authoritative?.gameNumber ?? normalized.gameNumber,
       side: repairedSide,
       cardName: authoritative?.cardName || normalized.cardName,
       cardId: authoritative?.cardId || normalized.cardId,
@@ -1113,6 +1219,7 @@ function repairReplayInsightModel(
       fromZone: authoritative?.fromZone || normalized.fromZone,
       toZone: authoritative?.toZone || normalized.toZone,
       visibility: authoritative?.visibility || normalized.visibility,
+      evidence: authoritative?.evidence ?? normalized.evidence,
       actionId
     });
   }
@@ -1183,7 +1290,8 @@ function rawEvidenceTimelineEvent(event: ReplayStructuredEvent): ReplayTimelineE
     token: event.token,
     combat: event.combat,
     snapshot: event.snapshot,
-    score: event.score
+    score: event.score,
+    evidence: event.evidence
   };
 }
 
@@ -1301,11 +1409,95 @@ function collectOpeningHandInsights(
   gameNumber: number,
   catalog: Map<string, ReplayInsightCardCatalogEntry>,
   insights: ReplayInsightDraft[],
-  reports: Map<string, MutableCardReport>
+  reports: Map<string, MutableCardReport>,
+  gameStage: ReplayInsightGameStage
 ): void {
   const mulligans = analysis.openingHandEvents.filter((event) =>
-    event.gameNumber === gameNumber && event.mulligan?.kept?.length
+    event.gameNumber === gameNumber
+      && gameStageIncludesTrustedEvent(analysis, event, gameStage)
+      && Boolean(
+        event.mulligan?.options?.length
+        || event.mulligan?.kept?.length
+        || event.mulligan?.redrawn?.length
+      )
   );
+  const gameKey = `${analysis.replay.id}:${gameNumber}`;
+  const openingCardStates = new Map<string, {
+    card: ReplayStructuredCard;
+    offered: boolean;
+    kept: boolean;
+    redrawn: boolean;
+    evidence: ReplayInsightEvidence;
+    reviewGrade: boolean;
+    confidences: ReplayIntelligenceConfidence[];
+  }>();
+  const recordOpeningCards = (
+    cards: ReplayStructuredCard[],
+    state: "offered" | "kept" | "redrawn",
+    evidence: ReplayInsightEvidence
+  ) => {
+    for (const card of uniqueCards(cards)) {
+      if (isChosenChampionCard(analysis, gameNumber, catalog, card.name, card.code || card.id)) continue;
+      const key = canonicalCardKey(catalog, card.name, card.code || card.id);
+      if (!key) continue;
+      const current = openingCardStates.get(key) ?? {
+        card,
+        offered: false,
+        kept: false,
+        redrawn: false,
+        evidence,
+        reviewGrade: evidence.confidence !== "inferred",
+        confidences: []
+      };
+      current[state] = true;
+      current.reviewGrade = current.reviewGrade && evidence.confidence !== "inferred";
+      current.confidences.push(evidence.confidence);
+      openingCardStates.set(key, current);
+    }
+  };
+  for (const mulligan of mulligans) {
+    const evidence = rawEventEvidence(analysis, mulligan, "Opening hand recorded");
+    const kept = mulligan.mulligan?.kept ?? [];
+    const redrawn = mulligan.mulligan?.redrawn ?? [];
+    const offered = mulligan.mulligan?.options?.length
+      ? mulligan.mulligan.options
+      : [...kept, ...redrawn];
+    recordOpeningCards(offered, "offered", evidence);
+    recordOpeningCards(kept, "kept", evidence);
+    recordOpeningCards(redrawn, "redrawn", evidence);
+  }
+  for (const state of openingCardStates.values()) {
+    const report = mutableCardReport(reports, state.card.name, state.card.code || state.card.id, catalog);
+    const reviewGradeOpening = state.reviewGrade;
+    if (state.kept) report.kept += 1;
+    if (reviewGradeOpening && state.offered) report.mulliganOfferedGames.add(gameKey);
+    if (reviewGradeOpening && state.kept) {
+      report.mulliganKeptGames.add(gameKey);
+      report.prePlayObservedGames.add(gameKey);
+    }
+    if (reviewGradeOpening && state.redrawn) report.mulliganRedrawnGames.add(gameKey);
+    report.confidences.push(lowestConfidence(state.confidences));
+    report.replayIds.add(analysis.replay.id);
+    report.evidence.push(state.evidence);
+
+    if (reviewGradeOpening && state.kept) {
+      const offeredAt = Date.parse(state.evidence.capturedAt);
+      const matchingPlays = analysis.intelligence.events.filter((event) => (
+        event.gameNumber === gameNumber
+          && event.side === "me"
+          && event.type === "play"
+          && (!Number.isFinite(offeredAt) || eventTime(event) >= offeredAt)
+          && canonicalCardKey(catalog, event.cardName, event.cardId)
+             === canonicalCardKey(catalog, state.card.name, state.card.code || state.card.id)
+      ));
+      const firstReviewGradePlay = matchingPlays.find((event) => event.confidence !== "inferred");
+      if (firstReviewGradePlay) {
+        report.prePlayLaterPlayedGames.add(gameKey);
+      } else if (!matchingPlays.length && replayInsightHasCompleteEnoughPlayCapture(analysis, gameNumber)) {
+        report.prePlayNoCapturedPlayGames.add(gameKey);
+      }
+    }
+  }
   for (const mulligan of mulligans) {
     const keptCards = (mulligan.mulligan?.kept ?? []).filter((card) => (
       !isChosenChampionCard(analysis, gameNumber, catalog, card.name, card.code || card.id)
@@ -1348,27 +1540,32 @@ function collectOpeningHandInsights(
       const key = canonicalCardKey(catalog, card.name, card.code || card.id);
       if (!key) continue;
       const matchingEvents = analysis.intelligence.events.filter((event) =>
-        (event.gameNumber ?? 1) === gameNumber
+        event.gameNumber === gameNumber
           && event.side === "me"
           && eventTime(event) >= eventTime(mulligan)
           && canonicalCardKey(catalog, event.cardName, event.cardId) === key
       );
-      const firstPlay = matchingEvents.find((event) => event.type === "play");
+      const anyPlay = matchingEvents.find((event) => event.type === "play");
+      const firstPlay = matchingEvents.find((event) => event.type === "play" && event.confidence !== "inferred");
       const drawnBeforePlay = matchingEvents.some((event) =>
-        event.type === "draw" && (!firstPlay || eventTime(event) <= eventTime(firstPlay))
+        event.type === "draw"
+          && event.confidence !== "inferred"
+          && (!firstPlay || eventTime(event) <= eventTime(firstPlay))
       );
       const context = firstPlay ? analysis.turnByEvent.get(firstPlay.id) : undefined;
       const confidence = drawnBeforePlay
         ? "inferred"
         : lowestConfidence([mulliganEvidence.confidence, ...(firstPlay ? [firstPlay.confidence] : [])]);
       const report = mutableCardReport(reports, card.name, card.code || card.id, catalog);
-      report.kept += 1;
       report.confidences.push(confidence);
       report.replayIds.add(analysis.replay.id);
       report.evidence.push(mulliganEvidence);
 
       if (firstPlay && context && context.side === "me" && context.playerTurnNumber >= LATE_OPENING_PLAY_TURN) {
-        report.lateKeeps += 1;
+        if (confidence !== "inferred") {
+          report.lateKeeps += 1;
+          report.mulliganLatePlayedGames.add(gameKey);
+        }
         const playEvidence = eventEvidence(analysis, firstPlay, `First captured play on your turn ${context.playerTurnNumber}`);
         report.evidence.push(playEvidence);
         insights.push({
@@ -1379,8 +1576,8 @@ function collectOpeningHandInsights(
           priority: 96,
           title: `${card.name}'s first captured play was on your turn ${context.playerTurnNumber}`,
           body: drawnBeforePlay
-            ? `A copy of ${card.name} was kept in the opening hand. The first captured play was on your turn ${context.playerTurnNumber}, although another copy was drawn before then.`
-            : `You kept ${card.name} in the opening hand; the first captured play of that name was on your turn ${context.playerTurnNumber}.`,
+            ? `This game included a kept copy of ${card.name}; the first review-grade play of that card name was on your turn ${context.playerTurnNumber}, after another copy was drawn.`
+            : `This game included a keep of ${card.name}; the first review-grade play of that card name was on your turn ${context.playerTurnNumber}. The played copy cannot be linked to the kept copy.`,
           action: "Review whether the keep supported your early plan or whether this slot could have searched for a faster card.",
           confidence,
           sampleSize: 1,
@@ -1393,15 +1590,15 @@ function collectOpeningHandInsights(
           opponentLegend: analysis.match?.opponentChampion,
           evidence: [mulliganEvidence, playEvidence]
         });
-      } else if (!firstPlay && replayInsightHasCompleteEnoughPlayCapture(analysis, gameNumber)) {
+      } else if (!anyPlay && replayInsightHasCompleteEnoughPlayCapture(analysis, gameNumber)) {
         insights.push({
           id: insightId(analysis.replay.id, gameNumber, "unplayed-opening-card", key),
           scope: "match",
           category: "opening-hand",
           tone: "watch",
           priority: 88,
-          title: `No play of ${card.name} was captured after the keep`,
-          body: `RiftLite captured ${card.name} in the kept opening hand and captured no play of that card name before the completed game ended. Multiple copies cannot always be distinguished.`,
+          title: `No play of ${card.name} was captured in a game with a keep`,
+          body: `RiftLite captured a keep of ${card.name} and captured no play of that card name before the completed game ended. Multiple copies cannot be distinguished.`,
           action: "Check whether the card provided useful flexibility, became stranded, or should have been part of the redraw.",
           confidence: mulliganEvidence.confidence,
           sampleSize: 1,
@@ -1422,8 +1619,8 @@ function collectOpeningHandInsights(
           category: "positive",
           tone: "positive",
           priority: 62,
-          title: `${card.name} was kept and played by your turn ${context.playerTurnNumber}`,
-          body: `You kept this 2-cost card and a play of it was captured on your turn ${context.playerTurnNumber}.`,
+          title: `A keep game included a ${card.name} play by your turn ${context.playerTurnNumber}`,
+          body: `This game included a keep of the 2-cost card name and a play of that name on your turn ${context.playerTurnNumber}; RiftLite cannot prove it was the same copy.`,
           action: "This is useful evidence for how the deck wants its opening hand to function.",
           confidence,
           sampleSize: 1,
@@ -1448,7 +1645,7 @@ function collectCurveInsights(
   matchupPatterns: Map<string, MatchupPattern>
 ): void {
   const playerTurns = analysis.model.turns.filter((turn) =>
-    turn.side === "me" && turn.events.some((event) => (event.gameNumber ?? 1) === gameNumber)
+    turn.side === "me" && turn.events.some((event) => event.gameNumber === gameNumber)
   );
   if (
     playerTurns.length < 2
@@ -1457,7 +1654,7 @@ function collectCurveInsights(
   ) return;
   const firstTwo = playerTurns.slice(0, 2);
   const playCounts = firstTwo.map((turn) => turn.events.filter((event) =>
-    event.side === "me" && event.type === "play" && (event.gameNumber ?? 1) === gameNumber
+    event.side === "me" && event.type === "play" && event.gameNumber === gameNumber
   ).length);
   const secondTurnAnchor = firstTwo[1]?.events[0];
   if (!secondTurnAnchor) return;
@@ -1530,7 +1727,7 @@ function collectCurveInsights(
 
 function collectScoreInsights(analysis: ReplayAnalysis, gameNumber: number, insights: ReplayInsightDraft[]): void {
   const firstScore = analysis.intelligence.events.find((event) =>
-    (event.gameNumber ?? 1) === gameNumber
+    event.gameNumber === gameNumber
       && event.side === "me"
       && (event.type === "score" || event.type === "scoreboard")
       && ((event.pointsScored ?? 0) > 0 || scoreIncreaseForMe(event))
@@ -1564,12 +1761,17 @@ function collectCardJourneyInsights(
   gameNumber: number,
   catalog: Map<string, ReplayInsightCardCatalogEntry>,
   insights: ReplayInsightDraft[],
-  reports: Map<string, MutableCardReport>
+  reports: Map<string, MutableCardReport>,
+  gameStage: ReplayInsightGameStage
 ): void {
   const completePlayCapture = replayInsightHasCompleteEnoughPlayCapture(analysis, gameNumber);
   const openingKeys = new Set(
     analysis.openingHandEvents
-      .filter((event) => event.gameNumber === gameNumber)
+      .filter((event) => (
+        event.gameNumber === gameNumber
+          && gameStageIncludesTrustedEvent(analysis, event, gameStage)
+          && rawEventEvidence(analysis, event, "Opening hand recorded").confidence !== "inferred"
+      ))
       .flatMap((event) => event.mulligan?.kept ?? [])
       .map((card) => canonicalCardKey(catalog, card.name, card.code || card.id))
   );
@@ -1584,34 +1786,93 @@ function collectCardJourneyInsights(
     journeyGroups.set(key, group);
   }
   for (const [key, journeys] of journeyGroups) {
+    const gameKey = `${analysis.replay.id}:${gameNumber}`;
     const journey = journeys.find((item) => item.cardId) ?? journeys[0];
     const outcomes = new Set(journeys.flatMap((item) => item.outcomes));
     const confidence = lowestConfidence(journeys.map((item) => item.confidence));
     const knownHandTimeMs = Math.max(0, ...journeys.map((item) => item.knownHandTimeMs ?? 0)) || undefined;
     const report = mutableCardReport(reports, journey.cardName, journey.cardId, catalog);
-    report.appearances += 1;
-    report.played += outcomes.has("played") ? 1 : 0;
-    if (completePlayCapture) {
-      report.completePlayCaptureAppearances += 1;
-      report.unplayed += outcomes.has("played") ? 0 : 1;
-    }
-    report.recycledOrDiscarded += outcomes.has("recycled") || outcomes.has("discarded") ? 1 : 0;
-    report.confidences.push(confidence);
-    report.replayIds.add(analysis.replay.id);
-    if (knownHandTimeMs) {
-      report.handTimeTotalMs += knownHandTimeMs;
-      report.handTimeSamples += 1;
-    }
     const journeyEvents = journeys.flatMap((item) => item.events)
       .map((item) => analysis.intelligence.events.find((event) => event.id === item.eventId))
       .filter((event): event is ReplayIntelligenceEvent => Boolean(event))
       .filter((event, index, events) => events.findIndex((candidate) => candidate.id === event.id) === index)
       .sort((left, right) => eventTime(left) - eventTime(right));
+    if (gameStage !== "all" && !journeyEvents.some((event) => gameStageIncludesTrustedEvent(analysis, event, gameStage))) continue;
+
     const firstEntry = journeyEvents.find((event) => event.type === "draw" || normalizeZone(event.toZone || event.destination) === "hand");
+    const firstReviewGradeEntry = journeyEvents.find((event) => (
+      event.confidence !== "inferred"
+        && gameStageIncludesTrustedEvent(analysis, event, gameStage)
+        && (event.type === "draw" || normalizeZone(event.toZone || event.destination) === "hand")
+    ));
     const firstPlay = journeyEvents.find((event) => event.type === "play");
-    if (firstEntry && firstPlay) {
-      const entryTurn = analysis.turnByEvent.get(firstEntry.id);
-      const playTurn = analysis.turnByEvent.get(firstPlay.id);
+    const firstReviewGradePlay = journeyEvents.find((event) => (
+      event.type === "play"
+        && event.confidence !== "inferred"
+        && gameStageIncludesTrustedEvent(analysis, event, gameStage)
+    ));
+    const reviewGradeRecycleOrDiscard = journeyEvents.some((event) => (
+      event.confidence !== "inferred"
+        && gameStageIncludesTrustedEvent(analysis, event, gameStage)
+        && replayInsightEventIsRecycleOrDiscard(event)
+    ));
+    // An unattributed play may belong to this game. Keep the verified recycle/
+    // discard observation, but fail closed on any claim that no play happened.
+    const hasUntrustedStagePlayForCard = analysis.intelligence.events.some((event) => (
+      event.type === "play"
+        && event.side === "me"
+        && trustedGameStageForEvent(analysis, event) === "unknown"
+        && canonicalCardKey(catalog, event.cardName, event.cardId) === key
+    ));
+
+    report.appearances += 1;
+    if (firstReviewGradePlay) {
+      report.played += 1;
+      const playStage = trustedGameStageForEvent(analysis, firstReviewGradePlay);
+      if (playStage === "preboard") report.playedPreboardGames.add(gameKey);
+      else if (playStage === "postboard") report.playedPostboardGames.add(gameKey);
+      else report.playedUnknownStageGames.add(gameKey);
+    }
+    if (completePlayCapture && (!firstPlay || firstReviewGradePlay)) {
+      report.completePlayCaptureAppearances += 1;
+      if (!firstPlay) report.unplayed += 1;
+    }
+    if (reviewGradeRecycleOrDiscard) report.recycledOrDiscarded += 1;
+    report.confidences.push(confidence);
+    report.replayIds.add(analysis.replay.id);
+    if (knownHandTimeMs && confidence !== "inferred") {
+      report.handTimeTotalMs += knownHandTimeMs;
+      report.handTimeSamples += 1;
+    }
+
+    if (firstReviewGradePlay) {
+      const playTurn = analysis.turnByEvent.get(firstReviewGradePlay.id);
+      if (playTurn?.side === "me" && playTurn.playerTurnNumber >= 1 && playTurn.playerTurnNumber <= 3) {
+        report.firstPlayByTurn3Games.add(gameKey);
+      } else if (playTurn?.side === "me" && playTurn.playerTurnNumber >= 4 && playTurn.playerTurnNumber <= 5) {
+        report.firstPlayTurns4To5Games.add(gameKey);
+      } else if (playTurn?.side === "me" && playTurn.playerTurnNumber >= 6) {
+        report.firstPlayTurn6PlusGames.add(gameKey);
+      } else {
+        report.firstPlayUnknownTurnGames.add(gameKey);
+      }
+    }
+    const firstEntryIndex = firstReviewGradeEntry ? journeyEvents.findIndex((event) => event.id === firstReviewGradeEntry.id) : -1;
+    const firstPlayIndex = firstReviewGradePlay ? journeyEvents.findIndex((event) => event.id === firstReviewGradePlay.id) : -1;
+    const knownBeforePlay = openingKeys.has(key)
+      || (firstEntryIndex >= 0 && (firstPlayIndex < 0 || firstEntryIndex < firstPlayIndex));
+    if (knownBeforePlay) {
+      report.prePlayObservedGames.add(gameKey);
+      if (reviewGradeRecycleOrDiscard) {
+        report.prePlayRecycledOrDiscardedGames.add(gameKey);
+      }
+      if (firstReviewGradePlay && (openingKeys.has(key) || firstEntryIndex < firstPlayIndex)) {
+        report.prePlayLaterPlayedGames.add(gameKey);
+      } else if (!firstPlay && completePlayCapture) report.prePlayNoCapturedPlayGames.add(gameKey);
+    }
+    if (firstReviewGradeEntry && firstReviewGradePlay && firstEntryIndex < firstPlayIndex) {
+      const entryTurn = analysis.turnByEvent.get(firstReviewGradeEntry.id);
+      const playTurn = analysis.turnByEvent.get(firstReviewGradePlay.id);
       if (entryTurn && playTurn && entryTurn.turnNumber === playTurn.turnNumber) report.immediatePlays += 1;
     }
     const firstEvidenceEvent = firstEntry ?? journeyEvents[0];
@@ -1621,6 +1882,7 @@ function collectCardJourneyInsights(
       !openingKeys.has(key)
       && outcomes.has("drawn")
       && !outcomes.has("played")
+      && !hasUntrustedStagePlayForCard
       && (completePlayCapture || outcomes.has("recycled") || outcomes.has("discarded"))
       && ((knownHandTimeMs ?? 0) >= LONG_HAND_TIME_MS || outcomes.has("recycled") || outcomes.has("discarded"))
     ) {
@@ -1684,8 +1946,8 @@ function collectCardPatterns(
         category: "opening-hand",
         tone: "opportunity",
         priority: 95,
-        title: `${report.cardName}'s first captured play repeatedly followed a keep late`,
-        body: `You kept ${report.cardName} ${report.kept} times, and its first captured play was on your turn ${LATE_OPENING_PLAY_TURN} or later in ${report.lateKeeps} of those games. Card copies cannot always be distinguished.`,
+        title: `${report.cardName} keep games often also had a late card-name play`,
+        body: `${report.kept} captured games included a keep of ${report.cardName}; ${report.lateKeeps} of those games first showed a play of that card name on your turn ${LATE_OPENING_PLAY_TURN} or later. The played copy may be different.`,
         action: "Test redrawing this card more aggressively unless the matchup specifically rewards holding it."
       }));
     }
@@ -1699,7 +1961,7 @@ function collectCardPatterns(
         category: "card-efficiency",
         tone: "watch",
         priority: 82,
-        title: `${report.cardName} was repeatedly captured leaving hand without a play`,
+        title: `${report.cardName} was repeatedly captured as recycled or discarded`,
         body: `${report.cardName} was captured as recycled or discarded in ${report.recycledOrDiscarded} of ${report.appearances} analyzed appearances.`,
         action: "Check whether this flexibility is the card's job or a sign that another card would be useful more often."
       }));
@@ -1803,6 +2065,21 @@ function mutableCardReport(
     immediatePlays: 0,
     handTimeTotalMs: 0,
     handTimeSamples: 0,
+    mulliganOfferedGames: new Set(),
+    mulliganKeptGames: new Set(),
+    mulliganRedrawnGames: new Set(),
+    mulliganLatePlayedGames: new Set(),
+    prePlayObservedGames: new Set(),
+    prePlayLaterPlayedGames: new Set(),
+    prePlayNoCapturedPlayGames: new Set(),
+    prePlayRecycledOrDiscardedGames: new Set(),
+    firstPlayByTurn3Games: new Set(),
+    firstPlayTurns4To5Games: new Set(),
+    firstPlayTurn6PlusGames: new Set(),
+    firstPlayUnknownTurnGames: new Set(),
+    playedPreboardGames: new Set(),
+    playedPostboardGames: new Set(),
+    playedUnknownStageGames: new Set(),
     confidences: [],
     replayIds: new Set(),
     evidence: []
@@ -1826,6 +2103,29 @@ function finalizeCardReport(report: MutableCardReport): ReplayInsightCardReport 
     lateKeeps: report.lateKeeps,
     immediatePlays: report.immediatePlays,
     averageKnownHandTimeMs: report.handTimeSamples ? Math.round(report.handTimeTotalMs / report.handTimeSamples) : undefined,
+    mulligan: {
+      offeredGames: report.mulliganOfferedGames.size,
+      keptGames: report.mulliganKeptGames.size,
+      redrawnGames: report.mulliganRedrawnGames.size,
+      latePlayedGames: report.mulliganLatePlayedGames.size
+    },
+    prePlayHand: {
+      observedGames: report.prePlayObservedGames.size,
+      laterPlayedGames: report.prePlayLaterPlayedGames.size,
+      noCapturedPlayGames: report.prePlayNoCapturedPlayGames.size,
+      recycledOrDiscardedGames: report.prePlayRecycledOrDiscardedGames.size
+    },
+    firstPlayTurns: {
+      byTurn3Games: report.firstPlayByTurn3Games.size,
+      turns4To5Games: report.firstPlayTurns4To5Games.size,
+      turn6PlusGames: report.firstPlayTurn6PlusGames.size,
+      unknownTurnGames: report.firstPlayUnknownTurnGames.size
+    },
+    playReach: {
+      preboardGames: report.playedPreboardGames.size,
+      postboardGames: report.playedPostboardGames.size,
+      unknownStageGames: report.playedUnknownStageGames.size
+    },
     confidence: lowestConfidence(report.confidences),
     replayIds: [...report.replayIds]
   };
@@ -1917,7 +2217,13 @@ function replayMatchesFilters(
   return true;
 }
 
-function gameMatchesFilters(match: MatchDraft | undefined, gameNumber: number, filters: ReplayInsightFilters): boolean {
+function gameMatchesFilters(analysis: ReplayAnalysis, gameNumber: number, filters: ReplayInsightFilters): boolean {
+  const match = analysis.match;
+  if (
+    filters.gameStage !== undefined
+      && filters.gameStage !== "all"
+      && !replayInsightHasTrustedGameStage(analysis, gameNumber)
+  ) return false;
   if (filters.gameStage === "preboard" && gameNumber !== 1) return false;
   if (filters.gameStage === "postboard" && gameNumber <= 1) return false;
   if (filters.wentFirst) {
@@ -1925,6 +2231,12 @@ function gameMatchesFilters(match: MatchDraft | undefined, gameNumber: number, f
     if (game?.wentFirst !== filters.wentFirst) return false;
   }
   return true;
+}
+
+function replayInsightHasTrustedGameStage(analysis: ReplayAnalysis, gameNumber: number): boolean {
+  if (!analysis.trustGameStage || gameNumber < 1 || gameNumber > 3) return false;
+  return analysis.model.events.some((event) => event.gameNumber === gameNumber)
+    || analysis.openingHandEvents.some((event) => event.gameNumber === gameNumber);
 }
 
 function buildCardCatalog(entries: Iterable<ReplayInsightCardCatalogEntry>): Map<string, ReplayInsightCardCatalogEntry> {
@@ -1950,7 +2262,8 @@ function buildChosenChampionIdentitiesByGame(
     const hasChosenChampionRole = event.actionId === RAW_CHOSEN_CHAMPION_ACTION_ID
       || [event.fromZone, event.toZone, event.destination].some(isChosenChampionZone);
     if (!hasChosenChampionRole) continue;
-    const gameNumber = event.gameNumber ?? 1;
+    const gameNumber = event.gameNumber;
+    if (typeof gameNumber !== "number" || gameNumber < UNTRUSTED_GAME_NUMBER || gameNumber > 3) continue;
     const identities = result.get(gameNumber) ?? new Set<string>();
     for (const identity of cardIdentityTokens(catalog, event.cardName, event.cardId)) identities.add(identity);
     if (identities.size) result.set(gameNumber, identities);
@@ -2032,11 +2345,11 @@ function rawEventEvidence(analysis: ReplayAnalysis, event: ReplayStructuredEvent
     capturedAt: event.capturedAt,
     videoTimeMs: replayEventVideoTimeMs(analysis.replay, event),
     label,
-    confidence: event.id.startsWith("raw-opening:")
+    confidence: event.evidence?.confidence ?? (event.id.startsWith("raw-opening:")
       ? "reconstructed"
       : analysis.replay.platform === "sim" || analysis.replay.platform === "atlas"
         ? "confirmed"
-        : "reconstructed"
+        : "reconstructed")
   };
 }
 
@@ -2252,6 +2565,14 @@ function normalizeZone(value = ""): string {
   return cardKey(value);
 }
 
+function replayInsightEventIsRecycleOrDiscard(event: ReplayIntelligenceEvent): boolean {
+  const destination = normalizeZone(event.toZone || event.destination);
+  return destination.includes("recycle")
+    || destination.includes("discard")
+    || destination.includes("trash")
+    || /\brecycl|\bdiscard|\btrash/i.test(event.text);
+}
+
 function insightId(replayId: string, gameNumber: number, kind: string, detail = ""): string {
   return ["match", replayId, gameNumber, kind, detail].filter(Boolean).join(":");
 }
@@ -2302,19 +2623,20 @@ export function replayInsightOpeningHandEventsFromRawPayload(
 
 function rawChosenChampionSetupEvents(replay: ReplayRecord, model: RiftLiteReplayModel): ReplayStructuredEvent[] {
   const result: ReplayStructuredEvent[] = [];
-  const recordedGames = new Set<number>();
+  const recordedGames = new Set<number | "unknown">();
   for (const frame of model.frames) {
-    const gameNumber = frame.gameNumber ?? 1;
-    if (recordedGames.has(gameNumber)) continue;
+    const gameNumber = frame.gameNumber ?? UNTRUSTED_GAME_NUMBER;
+    const gameKey = gameNumber || "unknown";
+    if (recordedGames.has(gameKey)) continue;
     const champion = frame.local.champion
       ?? frame.local.zones.champion?.cards.find((card) => Boolean(card.name || card.code));
     if (!champion || (!champion.name && !champion.code)) continue;
-    recordedGames.add(gameNumber);
+    recordedGames.add(gameKey);
     const capturedAt = typeof frame.ts === "number" && Number.isFinite(frame.ts)
       ? new Date(frame.ts).toISOString()
       : replay.capturedAt;
     result.push({
-      id: `raw-chosen-champion:${replay.id}:${gameNumber}`,
+      id: `raw-chosen-champion:${replay.id}:${gameKey}`,
       sourceEventId: champion.id || frame.id,
       gameNumber,
       capturedAt,
@@ -2347,9 +2669,9 @@ function rawOpeningHandEvents(replay: ReplayRecord, model: RiftLiteReplayModel):
     ? new Date(frame.ts).toISOString()
     : replay.capturedAt;
   return [{
-      id: `raw-opening:${replay.id}:${frame.gameNumber ?? 1}`,
+      id: `raw-opening:${replay.id}:${frame.gameNumber ?? "unknown"}`,
       sourceEventId: frame.id,
-      gameNumber: frame.gameNumber ?? 1,
+      gameNumber: frame.gameNumber ?? UNTRUSTED_GAME_NUMBER,
       capturedAt,
       labelTime: "Opening hand",
       type: "mulligan",
@@ -2381,7 +2703,7 @@ function rawCardActionEvents(replay: ReplayRecord, model: RiftLiteReplayModel): 
     const capturedAt = typeof event.ts === "number" && Number.isFinite(event.ts)
       ? new Date(event.ts).toISOString()
       : replay.capturedAt;
-    const gameNumber = rawReplayEventGameNumber(model, event);
+    const gameNumber = rawReplayEventGameNumber(model, event) ?? UNTRUSTED_GAME_NUMBER;
     result.push({
       id: `raw-action:${replay.id}:${event.id}`,
       sourceEventId: event.id,
@@ -2429,11 +2751,11 @@ function nearbyRawCardEvidence(
   });
 }
 
-function rawReplayEventGameNumber(model: RiftLiteReplayModel, event: RiftLiteReplayEvent): number {
+function rawReplayEventGameNumber(model: RiftLiteReplayModel, event: RiftLiteReplayEvent): number | undefined {
   const direct = model.frames[event.frameIndex]?.gameNumber;
   if (direct) return direct;
   const containing = model.frames.find((frame) => frame.events.some((candidate) => candidate.id === event.id));
-  return containing?.gameNumber ?? 1;
+  return containing?.gameNumber;
 }
 
 function cardsSharedBetweenHands(original: RiftLiteReplayCard[], final: RiftLiteReplayCard[]): RiftLiteReplayCard[] {

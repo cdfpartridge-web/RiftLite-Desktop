@@ -1,5 +1,5 @@
 import { app } from "electron";
-import { appendFile, mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { CaptureDiagnosticsSummary, CaptureEvent, CapturePlatformEvidence, GamePlatform } from "../../shared/types.js";
 import { diagnosticBundleDocument } from "../../shared/diagnosticPrivacy.js";
@@ -45,6 +45,22 @@ export class CaptureDiagnostics {
         await this.ensureFile();
         await this.rotateIfNeeded(Buffer.byteLength(line));
         await appendFile(this.filePath, line, "utf8");
+      });
+    return this.writeQueue;
+  }
+
+  async clearStoredEvents(): Promise<void> {
+    this.writeQueue = this.writeQueue
+      .catch(() => undefined)
+      .then(async () => {
+        await mkdir(dirname(this.filePath), { recursive: true });
+        await unlink(`${this.filePath}.old`).catch((error: NodeJS.ErrnoException) => {
+          if (error.code !== "ENOENT") throw error;
+        });
+        await writeFile(this.filePath, "", "utf8");
+        this.ensured = true;
+        this.bytesSinceRotateCheck = 0;
+        this.nextRotateCheckAt = 0;
       });
     return this.writeQueue;
   }

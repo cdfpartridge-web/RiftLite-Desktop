@@ -77,6 +77,95 @@ export interface MatchGame {
   wentFirst?: "1st" | "2nd" | "undecided" | "";
 }
 
+export type InsightDecisionFamily =
+  | "scoring"
+  | "resources"
+  | "information"
+  | "battlefield"
+  | "combat"
+  | "mulligan"
+  | "sideboard"
+  | "other";
+
+export type InsightDecisionType =
+  | "mulligan-keep"
+  | "mulligan-redraw"
+  | "mulligan"
+  | "sideboard-in"
+  | "sideboard-out"
+  | "sideboard"
+  | "battlefield-pick"
+  | "resource-use"
+  | "combat"
+  | "sequencing"
+  | "scoring"
+  | "information"
+  | "other";
+
+export type InsightDecisionAssessment =
+  | "intentional"
+  | "forced"
+  | "missed"
+  | "unsure"
+  | "capture-wrong"
+  | "good-line";
+
+export type InsightPlanOutcome = "followed" | "adapted" | "no-opportunity" | "unsure";
+
+export interface InsightDecisionContext {
+  id: string;
+  gameNumber?: number;
+  replayFlagId?: string;
+  eventId?: string;
+  capturedAt?: string;
+  timeMs?: number;
+  family: InsightDecisionFamily;
+  decision?: InsightDecisionType;
+  assessment?: InsightDecisionAssessment;
+  subject?: {
+    cardKey?: string;
+    cardName?: string;
+    cardId?: string;
+    battlefieldName?: string;
+  };
+  initiative?: "1st" | "2nd";
+  goalId?: string;
+  intendedPlan?: string;
+  constraint?: string;
+  alternative?: string;
+  note?: string;
+  source: "live-flag" | "post-game" | "replay" | "coach-reflection";
+  createdAt: string;
+  updatedAt?: string;
+}
+
+/** Local player-owned context. This field is intentionally excluded from public match sync. */
+export interface MatchInsightContext {
+  version: 1;
+  capturedWithEnhancedInsights: boolean;
+  planOutcome?: InsightPlanOutcome;
+  sideboardPlanOutcome?: InsightPlanOutcome;
+  activeGoalIds: string[];
+  decisions: InsightDecisionContext[];
+  notebookSnapshot?: InsightNotebookSnapshot;
+  postGamePromptCompletedAt?: string;
+  updatedAt: string;
+}
+
+export interface InsightNotebookSnapshot {
+  deckId: string;
+  opponentLegend: string;
+  guide: DeckMatchupGuide;
+  guideSource: "default" | "matchup";
+  goals: Array<{
+    id: string;
+    text: string;
+    createdAt: string;
+    updatedAt?: string;
+  }>;
+  capturedAt: string;
+}
+
 export interface MatchDraft {
   id: string;
   platform: GamePlatform;
@@ -100,6 +189,7 @@ export interface MatchDraft {
   webReplayLocalReplayId?: string;
   testingSessionId?: string;
   testingSessionLabel?: string;
+  insightContext?: MatchInsightContext;
   status: "pending-review" | "saved" | "incomplete";
   capturedAt: string;
   updatedAt: string;
@@ -584,6 +674,15 @@ export interface ReplayStructuredEvent {
   visibility?: "public" | "private-local" | "private-opponent" | "hidden";
   actionId?: string;
   undoOf?: string;
+  sequence?: number;
+  turnNumber?: number;
+  phase?: string;
+  activeSide?: "me" | "opponent" | "system" | "unknown";
+  evidence?: {
+    source: ReplayIntelligenceSource;
+    confidence: ReplayIntelligenceConfidence;
+    complete?: boolean;
+  };
   battlefield: string;
   pointsScored?: number;
   scoreReason?: "hold" | "conquer" | "manual" | "card-effect";
@@ -601,6 +700,7 @@ export interface ReplayStructuredEvent {
     runesExhausted?: number;
     runes?: string[];
     mode?: "gain" | "pay" | "set" | "ready-rune" | "exhaust-rune";
+    before?: ReplayStructuredResourceState;
     after?: ReplayStructuredResourceState;
   };
   counter?: {
@@ -619,7 +719,28 @@ export interface ReplayStructuredEvent {
     winner?: "me" | "opponent" | "draw" | "unresolved";
     attackers?: ReplayStructuredCard[];
     defenders?: ReplayStructuredCard[];
+    survivors?: ReplayStructuredCard[];
+    attackerMightBefore?: number;
+    defenderMightBefore?: number;
+    attackerMightAfter?: number;
+    defenderMightAfter?: number;
   };
+  interaction?: {
+    chainId?: string;
+    windowId?: string;
+    targetCardIds?: string[];
+    passed?: boolean;
+    declinedResponse?: boolean;
+  };
+  battlefieldState?: Array<{
+    name: string;
+    code?: string;
+    controller: "me" | "opponent" | "contested" | "uncontrolled" | "unknown";
+    localUnits?: ReplayStructuredCard[];
+    opponentUnits?: ReplayStructuredCard[];
+    localMight?: number;
+    opponentMight?: number;
+  }>;
   snapshot?: ReplayStructuredSnapshot;
   score?: {
     me?: number;
@@ -794,6 +915,12 @@ export interface ReplayRecord {
   deckTrackerSnapshots?: DeckTrackerSnapshot[];
   rawCapture?: RawCaptureReplayMetadata;
   coachingPack?: ReplayCoachingPackMetadata;
+  enhancedInsights?: {
+    version: 1;
+    captured: boolean;
+    capturedAt: string;
+    captureMode: "semantic-local";
+  };
   matchSnapshot?: MatchDraft;
   search?: ReplaySearchMetadata;
   intelligence?: ReplayIntelligenceSummary;
@@ -1099,6 +1226,7 @@ export interface ReplayMp4ExportOptions {
   includeFlags: boolean;
   includeDrawings: boolean;
   includeVoiceNotes: boolean;
+  voiceNoteVolume?: number;
   includeOriginalAudio: boolean;
   mode?: "full" | "clip";
   clipStartMs?: number;
@@ -1615,6 +1743,9 @@ export interface UserSettings {
   anonymousInstallCreatedAt: string;
   anonymousUsageLastHeartbeatAt: string;
   anonymousUsageLastHeartbeatVersion: string;
+  enhancedInsightsEnabled?: boolean;
+  enhancedInsightsIntroSeen?: boolean;
+  enhancedInsightsPostGamePromptEnabled?: boolean;
     debugMode: boolean;
   confirmationEnabled: boolean;
   replayCaptureEnabled: boolean;
@@ -2280,6 +2411,7 @@ export interface AtlasConnectionDiagnostics {
 export interface RiftLiteApi {
   getSettings(): Promise<UserSettings>;
   saveSettings(settings: Partial<UserSettings>): Promise<UserSettings>;
+  clearEnhancedInsightsData(): Promise<{ matchesUpdated: number; replaysUpdated: number }>;
   updateRawCaptureSettings(settings: Partial<RawCaptureSettings>): Promise<UserSettings>;
   setWebReplayDiscordShareHub(hubId: string, selected: boolean): Promise<UserSettings>;
   getCaptureHealth(): Promise<CaptureHealth>;

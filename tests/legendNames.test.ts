@@ -13,6 +13,8 @@ describe("normalizeLegendName", () => {
 
   it("keeps Master Yi legend variants distinct", () => {
     expect(normalizeLegendName("Wuju Bladesman - Starter")).toBe("Master Yi, Wuju Bladesman");
+    expect(normalizeLegendName("Wuju Bladesmen")).toBe("Master Yi, Wuju Bladesman");
+    expect(normalizeLegendName("Master Yi, Wuju Bladesmen")).toBe("Master Yi, Wuju Bladesman");
     expect(normalizeLegendName("Wuju Master")).toBe("Master Yi, Wuju Master");
     expect(normalizeLegendName("Master Yi, Wuji Master")).toBe("Master Yi, Wuju Master");
     expect(normalizeLegendName("Master Yi, Wuju Bladesman")).toBe("Master Yi, Wuju Bladesman");

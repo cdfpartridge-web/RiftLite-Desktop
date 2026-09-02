@@ -29,16 +29,20 @@ import {
   Trophy,
   X
 } from "lucide-react";
-import cardRegistryData from "../../resources/riftbound_card_registry.json";
 import { riftboundBasePrintCode, riftboundCardCodeAliases } from "../shared/cardIdentity";
 import {
   createLabTrainingHandoff,
   resolveLabTrainingDeckId,
   storeLabTrainingHandoff
 } from "../shared/labTrainingHandoff";
-import { buildMulliganLabRegistry, MULLIGAN_LAB_CURRENT_SEASON_STARTED_ON } from "../shared/mulliganLab";
+import { MULLIGAN_LAB_CURRENT_SEASON_STARTED_ON } from "../shared/mulliganLab";
 import { legendImageUrl } from "../shared/legendImages";
 import type { ActiveView } from "../shared/navigationModel";
+import {
+  buildEnhancedInsightsContext,
+  type EnhancedInsightReviewCandidate,
+  type EnhancedInsightsContextReport
+} from "../shared/enhancedInsightsContext";
 import {
   createReplayCoachingFocus,
   defineReplayCoachingExperiment,
@@ -77,6 +81,7 @@ import {
 } from "../shared/replayLearningSignals";
 import type {
   MatchDraft,
+  DeckNotebook,
   ReplayIntelligenceConfidence,
   ReplayRecord,
   ReplayStructuredEvent,
@@ -99,13 +104,12 @@ import {
   type CoachQuestViewModel
 } from "./CoachQuestCard";
 import { CoachShareCardDialog } from "./CoachShareCardDialog";
+import { INSIGHT_CARD_CATALOG as CARD_CATALOG } from "./insightCardCatalog";
 
 type CoachTab = "coach" | "review" | "progress" | "explore";
 const COACH_TAB_ORDER: CoachTab[] = ["coach", "review", "progress", "explore"];
 const RAW_ANALYSIS_CONCURRENCY = 2;
 const MAX_BACKGROUND_RAW_REPLAYS = 256;
-const CARD_REGISTRY = buildMulliganLabRegistry(cardRegistryData);
-const CARD_CATALOG = [...CARD_REGISTRY.byCode.values()];
 const CARD_ART_BY_CODE = new Map(CARD_CATALOG.flatMap((card) => (
   riftboundCardCodeAliases(card.code).map((code) => [code.toLocaleLowerCase(), card] as const)
 )));
@@ -116,6 +120,7 @@ interface LearningInsightsViewProps {
   replays: ReplayRecord[];
   matches: MatchDraft[];
   decks: SavedDeck[];
+  activeDeckId?: string;
   onOpenReplay: (replayId: string, timeMs?: number, correctionEventId?: string) => void;
   onNavigate: (view: ActiveView) => void;
 }
@@ -124,6 +129,7 @@ export function LearningInsightsView({
   replays,
   matches,
   decks,
+  activeDeckId = "",
   onOpenReplay,
   onNavigate
 }: LearningInsightsViewProps) {
@@ -147,6 +153,7 @@ export function LearningInsightsView({
   const [planDraft, setPlanDraft] = useState("");
   const [shareQuest, setShareQuest] = useState<CoachQuestViewModel | null>(null);
   const [shareCaption, setShareCaption] = useState("");
+  const [selectedNotebook, setSelectedNotebook] = useState<DeckNotebook | null>(null);
   const legacyDismissed = useMemo(readLegacyDismissed, []);
 
   const rawCandidates = useMemo(() => backgroundRawCandidates(
@@ -240,15 +247,44 @@ export function LearningInsightsView({
 
   const matchById = useMemo(() => new Map(matches.map((match) => [match.id, match])), [matches]);
   const replayById = useMemo(() => new Map(replays.map((replay) => [replay.id, replay])), [replays]);
+  const selectedReplay = selectedReplayId ? replayById.get(selectedReplayId) : undefined;
+  const selectedMatch = selectedReplay
+    ? matchById.get(selectedReplay.matchId) ?? selectedReplay.matchSnapshot
+    : undefined;
+  const selectedReplayForLearning = useMemo(() => {
+    if (!selectedReplay) return null;
+    const enrichment = rawInsightEvents.get(selectedReplay.id) ?? [];
+    return enrichment.length
+      ? { ...selectedReplay, structuredEvents: [...(selectedReplay.structuredEvents ?? []), ...enrichment] }
+      : selectedReplay;
+  }, [rawInsightEvents, selectedReplay]);
   const selectedLearningSignals = useMemo(() => {
-    if (tab !== "review" || !selectedReplayId) return null;
-    const replay = replayById.get(selectedReplayId);
-    if (!replay) return null;
-    const enrichment = rawInsightEvents.get(replay.id) ?? [];
-    return extractReplayLearningSignals(enrichment.length
-      ? { ...replay, structuredEvents: [...(replay.structuredEvents ?? []), ...enrichment] }
-      : replay);
-  }, [rawInsightEvents, replayById, selectedReplayId, tab]);
+    return selectedReplayForLearning ? extractReplayLearningSignals(selectedReplayForLearning) : null;
+  }, [selectedReplayForLearning]);
+  const selectedDeckId = useMemo(() => {
+    const matchDeckKey = selectedMatch?.deckSourceKey || selectedMatch?.deckSourceId || "";
+    const matchedDeck = decks.find((deck) => deck.id === matchDeckKey || deck.sourceKey === matchDeckKey);
+    return matchedDeck?.id ?? (matchDeckKey ? "" : activeDeckId);
+  }, [activeDeckId, decks, selectedMatch?.deckSourceId, selectedMatch?.deckSourceKey]);
+  useEffect(() => {
+    let cancelled = false;
+    setSelectedNotebook(null);
+    if (!selectedDeckId) return () => { cancelled = true; };
+    void window.riftlite.getDeckNotebook(selectedDeckId)
+      .then((notebook) => { if (!cancelled) setSelectedNotebook(notebook); })
+      .catch(() => { if (!cancelled) setSelectedNotebook(null); });
+    return () => { cancelled = true; };
+  }, [selectedDeckId]);
+  const selectedEnhancedContext = useMemo(() => {
+    if (!selectedReplayForLearning) return null;
+    return buildEnhancedInsightsContext({
+      replay: selectedReplayForLearning,
+      capabilityReceipt: selectedLearningSignals?.capabilities,
+      matchInsightContext: selectedMatch?.insightContext ?? selectedReplayForLearning.matchSnapshot?.insightContext,
+      notebook: selectedNotebook,
+      opponentLegend: selectedMatch?.opponentChampion
+    });
+  }, [selectedLearningSignals?.capabilities, selectedMatch?.insightContext, selectedMatch?.opponentChampion, selectedNotebook, selectedReplayForLearning]);
   const replayByMatchId = useMemo(() => {
     const result = new Map<string, ReplayRecord>();
     for (const replay of [...replays].sort((left, right) => Date.parse(right.capturedAt) - Date.parse(left.capturedAt))) {
@@ -544,6 +580,13 @@ export function LearningInsightsView({
 
       {tab === "coach" ? <section id="coach-panel-coach" role="tabpanel" aria-labelledby="coach-tab-coach" className="insights-coach-view">
         {activeFocus ? <CoachJourney step={pendingCheckins.length || activeProgress?.readyForReview ? 3 : 2} /> : null}
+        {selectedEnhancedContext?.reviewCandidates.length ? (
+          <EnhancedCoachReviewQueue
+            report={selectedEnhancedContext}
+            onReview={() => setTab("review")}
+            onOpenReplay={onOpenReplay}
+          />
+        ) : null}
         {featuredQuest ? <div className="insights-coach-featured">
           <CoachQuestCard
             quest={featuredQuest}
@@ -569,9 +612,10 @@ export function LearningInsightsView({
       {tab === "review" ? <section id="coach-panel-review" role="tabpanel" aria-labelledby="coach-tab-review" className="insights-match-layout insights-review-view">
         <aside className="rail-card insights-match-list"><header><span>Recent games</span><strong>{analyzedReplays.length} replay{analyzedReplays.length === 1 ? "" : "s"}</strong></header><div>{analyzedReplays.map((replay) => { const match = matchById.get(replay.matchId) ?? replay.matchSnapshot; const count = visibleInsights.filter((insight) => insight.replayId === replay.id).length; return <button type="button" data-active={selectedReplayId === replay.id} onClick={() => setSelectedReplayId(replay.id)} key={replay.id}><span><strong>{matchTitle(replay, match)}</strong><small>{new Date(replay.capturedAt).toLocaleDateString()} · {match?.result ?? "Captured"}</small></span><b>{count}</b></button>; })}</div></aside>
         <div className="insights-section">
-          <header className="insights-section-heading"><div><span>Three moments to learn from</span><h3>{selectedReplayId ? matchTitle(replayById.get(selectedReplayId), matchById.get(replayById.get(selectedReplayId)?.matchId ?? "") ?? replayById.get(selectedReplayId)?.matchSnapshot) : "Select a replay"}</h3></div>{selectedReplayId ? <button type="button" className="secondary" onClick={() => onOpenReplay(selectedReplayId)}><Film size={14} /> Watch full replay</button> : null}</header>
+          <header className="insights-section-heading"><div><span>Decision review with receipts</span><h3>{selectedReplayId ? matchTitle(replayById.get(selectedReplayId), matchById.get(replayById.get(selectedReplayId)?.matchId ?? "") ?? replayById.get(selectedReplayId)?.matchSnapshot) : "Select a replay"}</h3></div>{selectedReplayId ? <button type="button" className="secondary" onClick={() => onOpenReplay(selectedReplayId)}><Film size={14} /> Watch full replay</button> : null}</header>
           <DecisionMap insights={matchInsights} />
-          {matchInsights.length ? <ol className="insights-last-match-timeline">{matchInsights.slice(0, 3).map((insight, index) => <ReplayDecisionMoment insight={insight} index={index} reflection={reflectedByInsight.get(insight.id)?.value} onReflect={recordReflection} onOpenReplay={onOpenReplay} key={insight.id} />)}</ol> : <LearningEmpty title="No decision needs promotion" body="This replay may have limited structured evidence, or its captured choices did not trigger a factual review question." />}
+          {selectedEnhancedContext ? <EnhancedDecisionReview report={selectedEnhancedContext} onOpenReplay={onOpenReplay} /> : null}
+          {matchInsights.length ? <ol className="insights-last-match-timeline">{matchInsights.slice(0, 3).map((insight, index) => <ReplayDecisionMoment insight={insight} index={index} reflection={reflectedByInsight.get(insight.id)?.value} onReflect={recordReflection} onOpenReplay={onOpenReplay} key={insight.id} />)}</ol> : selectedEnhancedContext?.reviewCandidates.length ? null : <LearningEmpty title="No decision needs promotion" body="This replay may have limited structured evidence, or its captured choices did not trigger a factual review question." />}
           {selectedLearningSignals ? <details className="insights-data-quality"><summary><Database size={14} /> Data quality & captured evidence <ChevronDown size={13} /></summary><CapturedLearningSignals signals={selectedLearningSignals} /></details> : null}
         </div>
       </section> : null}
@@ -594,6 +638,88 @@ export function LearningInsightsView({
       {shareQuest ? <CoachShareCardDialog quest={shareQuest} caption={shareCaption} onClose={() => setShareQuest(null)} /> : null}
     </section>
   );
+}
+
+function EnhancedCoachReviewQueue({ report, onReview, onOpenReplay }: {
+  report: EnhancedInsightsContextReport;
+  onReview: () => void;
+  onOpenReplay: (replayId: string, timeMs?: number, correctionEventId?: string) => void;
+}) {
+  const candidate = report.reviewCandidates[0];
+  if (!candidate) return null;
+  const evidence = preferredEnhancedEvidence(candidate);
+  return <section className="enhanced-coach-review-queue">
+    <header>
+      <span><ListChecks size={17} /></span>
+      <div><small>Player context · review before turning it into a rule</small><h3>{candidate.title}</h3></div>
+      <strong data-state={candidate.evidenceState}>{enhancedEvidenceStateLabel(candidate.evidenceState)}</strong>
+    </header>
+    <p>{candidate.observation}</p>
+    <aside><CircleHelp size={15} /><span>{candidate.reviewQuestion}</span></aside>
+    <footer>
+      <span>{report.reviewCandidates.length} review candidate{report.reviewCandidates.length === 1 ? "" : "s"} · {report.evidenceReceipt.playerAuthored.decisionContexts} decision context{report.evidenceReceipt.playerAuthored.decisionContexts === 1 ? "" : "s"}</span>
+      {evidence ? <button type="button" className="secondary compact" onClick={() => onOpenReplay(evidence.replayId, evidence.videoTimeMs, evidence.eventId)}><Play size={13} /> Open moment</button> : null}
+      <button type="button" className="primary compact" onClick={onReview}><BookOpen size={13} /> Review evidence</button>
+    </footer>
+  </section>;
+}
+
+function EnhancedDecisionReview({ report, onOpenReplay }: {
+  report: EnhancedInsightsContextReport;
+  onOpenReplay: (replayId: string, timeMs?: number, correctionEventId?: string) => void;
+}) {
+  return <section className="enhanced-decision-review">
+    <header>
+      <div><span>Enhanced review queue</span><h4>{report.reviewCandidates.length
+        ? `${report.reviewCandidates.length} player-grounded question${report.reviewCandidates.length === 1 ? "" : "s"}`
+        : "No player-grounded question yet"}</h4></div>
+      <span data-state={report.evidenceReceipt.state}><ShieldCheck size={13} /> {enhancedReceiptStateLabel(report.evidenceReceipt.state)}</span>
+    </header>
+    {report.reviewCandidates.length ? <ol>
+      {report.reviewCandidates.slice(0, 5).map((candidate) => {
+        const evidence = preferredEnhancedEvidence(candidate);
+        return <li key={candidate.id}>
+          <div className="enhanced-decision-review-index"><span>{candidate.kind === "plan-deviation" ? "Plan" : candidate.kind === "capture-correction" ? "Fix" : "Ask"}</span></div>
+          <div>
+            <header><strong>{candidate.title}</strong><small data-state={candidate.evidenceState}>{enhancedEvidenceStateLabel(candidate.evidenceState)}</small></header>
+            <p>{candidate.observation}</p>
+            <aside><CircleHelp size={14} /><span>{candidate.reviewQuestion}</span></aside>
+            {candidate.relevantCapabilities.length ? <div className="enhanced-candidate-capabilities">{candidate.relevantCapabilities.map((capability) => <span data-state={capability.state} key={capability.key}>{capability.label}: {capability.state}</span>)}</div> : null}
+          </div>
+          {evidence ? <button type="button" className="secondary compact" onClick={() => onOpenReplay(evidence.replayId, evidence.videoTimeMs, evidence.eventId)}><Play size={13} /> {typeof evidence.videoTimeMs === "number" ? formatReplayTime(evidence.videoTimeMs) : "Replay"}</button> : null}
+        </li>;
+      })}
+    </ol> : <p className="enhanced-decision-review-empty">Add a live marker or answer the post-game question. Saved plans and goals remain context, but RiftLite will not invent a decision from them.</p>}
+    <details className="enhanced-evidence-receipt">
+      <summary><Database size={14} /> Evidence receipt <ChevronDown size={13} /></summary>
+      <div className="enhanced-evidence-capabilities">{report.evidenceReceipt.capabilities.map((capability) => <span data-state={capability.state} title={capability.detail} key={capability.key}><i /><strong>{capability.label}</strong><small>{capability.state} · {capability.evidenceCount}</small></span>)}</div>
+      <div className="enhanced-evidence-summary">
+        <span><strong>{report.evidenceReceipt.playerAuthored.flags}</strong> flags</span>
+        <span><strong>{report.evidenceReceipt.playerAuthored.decisionContexts}</strong> decision notes</span>
+        <span><strong>{report.evidenceReceipt.savedPlan.activeGoals}</strong> active goals</span>
+        <span><strong>{report.evidenceReceipt.savedPlan.deviations}</strong> plan deviations to review</span>
+      </div>
+      {report.evidenceReceipt.limitations.length ? <ul>{report.evidenceReceipt.limitations.map((limitation) => <li key={limitation}>{limitation}</li>)}</ul> : null}
+    </details>
+  </section>;
+}
+
+function preferredEnhancedEvidence(candidate: EnhancedInsightReviewCandidate) {
+  return candidate.evidence.find((evidence) => typeof evidence.videoTimeMs === "number") ?? candidate.evidence[0];
+}
+
+function enhancedEvidenceStateLabel(state: EnhancedInsightReviewCandidate["evidenceState"]): string {
+  if (state === "available") return "Evidence available";
+  if (state === "partial") return "Partial evidence";
+  if (state === "unknown") return "Capture gap";
+  return "Player-authored";
+}
+
+function enhancedReceiptStateLabel(state: EnhancedInsightsContextReport["evidenceReceipt"]["state"]): string {
+  if (state === "reviewable") return "Reviewable";
+  if (state === "context-limited") return "Context limited";
+  if (state === "player-context-only") return "Player context only";
+  return "No supported evidence";
 }
 
 function CoachJourney({ step }: { step: number }) {
@@ -988,7 +1114,11 @@ function CapturedLearningSignals({ signals }: { signals: ReplayLearningSignals }
     {hasDetailedSignals ? <div className="insights-captured-signal-grid">
       {resourceRows.length ? <article>
         <header><span>End-of-turn resources</span><small>{signals.resourceCoverage.provenEndStates}/{signals.resourceCoverage.capturedPlayerTurnEnds} captured endings proven</small></header>
-        <div>{resourceRows.map((row) => <p key={row.eventId}><strong>{row.playerTurnNumber ? `Your turn ${row.playerTurnNumber}` : `Game ${row.gameNumber} turn end`}</strong><span>{resourceObservationText(row.unused)}</span></p>)}</div>
+        <div>{resourceRows.map((row) => <p key={row.eventId}><strong>{row.playerTurnNumber
+          ? `Your turn ${row.playerTurnNumber}`
+          : row.gameNumber
+            ? `Game ${row.gameNumber} turn end`
+            : "Turn end · game unknown"}</strong><span>{resourceObservationText(row.unused)}</span></p>)}</div>
       </article> : null}
       {sideboardRows.length ? <article>
         <header><span>Post-board card journeys</span><small>What was captured after each change</small></header>

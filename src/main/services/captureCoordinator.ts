@@ -1,6 +1,6 @@
 import { BrowserWindow, Notification } from "electron";
 import { randomUUID } from "node:crypto";
-import type { CaptureEvent, CaptureHealth, GamePlatform, MatchDraft, MatchGame, PrivateHubSyncResult, ReplayRecord, ReplayScreenshotFrame } from "../../shared/types.js";
+import type { CaptureEvent, CaptureHealth, GamePlatform, MatchDraft, MatchGame, PrivateHubSyncResult, ReplayFlag, ReplayRecord, ReplayScreenshotFrame } from "../../shared/types.js";
 import { replayWithIntelligence } from "../../shared/replayIntelligence.js";
 import { CaptureDiagnostics } from "./captureDiagnostics.js";
 import { DeckService } from "./deckService.js";
@@ -255,7 +255,7 @@ export class CaptureCoordinator {
     const trackedEvent = withConfiguredCaptureContext(event, settings?.username ?? "");
     if (this.shouldIgnoreAtlasNonGameEvent(trackedEvent)) {
       const currentCount = this.health.eventCount + 1;
-      void this.diagnostics.record(compactCaptureEvent(trackedEvent)).catch(() => undefined);
+      void this.diagnostics.record(compactCaptureDiagnosticEvent(trackedEvent, false)).catch(() => undefined);
       this.health = {
         platform: trackedEvent.platform,
         state: "watching",
@@ -272,9 +272,10 @@ export class CaptureCoordinator {
     );
     const ignoreFinalizedAtlasResultEcho = pendingReviewPublished ||
       this.isRecentAtlasDraftPublicationEcho(trackedEvent);
-    void this.diagnostics.record(compactCaptureEvent(trackedEvent)).catch(() => undefined);
     const currentCount = this.health.eventCount + 1;
     if (ignoreFinalizedAtlasResultEcho) {
+      const enhancedInsightsEnabledAtStart = this.tracker.get(trackedEvent.platform)?.enhancedInsightsEnabledAtStart === true;
+      void this.diagnostics.record(compactCaptureDiagnosticEvent(trackedEvent, enhancedInsightsEnabledAtStart)).catch(() => undefined);
       void this.diagnostics.record({
         id: randomUUID(),
         platform: trackedEvent.platform,
@@ -308,6 +309,8 @@ export class CaptureCoordinator {
       this.recentAtlasDraftPublications.delete("atlas");
     }
     if (this.shouldIgnoreFalseTcgaResultEnd(trackedEvent)) {
+      const enhancedInsightsEnabledAtStart = this.tracker.get(trackedEvent.platform)?.enhancedInsightsEnabledAtStart === true;
+      void this.diagnostics.record(compactCaptureDiagnosticEvent(trackedEvent, enhancedInsightsEnabledAtStart)).catch(() => undefined);
       this.health = {
         platform: trackedEvent.platform,
         state: "watching",
@@ -326,15 +329,33 @@ export class CaptureCoordinator {
       lastEventAt: event.capturedAt,
       eventCount: currentCount
     };
-    if (event.kind !== "match-end" && this.shouldEmitRendererEvent(trackedEvent)) {
-      this.emit("capture:event", compactCaptureEvent(trackedEvent));
-    }
+    const shouldEmitRendererCaptureEvent = event.kind !== "match-end" && this.shouldEmitRendererEvent(trackedEvent);
     if (event.kind !== "match-end") {
       this.emitHealth(event.kind === "match-start");
     }
 
     await this.finalizeSessionBeforeRollover(trackedEvent, settings);
-    const session = this.tracker.ingest(trackedEvent);
+    const session = this.tracker.ingest(trackedEvent, {
+      enhancedInsightsEnabled: settings?.enhancedInsightsEnabled === true
+    });
+    void this.diagnostics.record(compactCaptureDiagnosticEvent(
+      trackedEvent,
+      session?.enhancedInsightsEnabledAtStart === true
+    )).catch(() => undefined);
+    if (shouldEmitRendererCaptureEvent) {
+      const rendererEvent = trackedEvent.kind === "match-start" && session
+        ? {
+            ...trackedEvent,
+            payload: {
+              ...trackedEvent.payload,
+              enhancedInsightsEnabledAtStart: session.enhancedInsightsEnabledAtStart,
+              enhancedInsightsSessionStartedAt: session.startedAt,
+              gameNumber: session.currentGame.gameNumber
+            }
+          }
+        : trackedEvent;
+      this.emit("capture:event", compactCaptureEvent(rendererEvent));
+    }
     if (session && event.kind !== "capture-ready") {
       this.ensureTimedReplayCapture(trackedEvent.platform, settings);
     }
@@ -895,7 +916,11 @@ export class CaptureCoordinator {
 
     const rawCaptureIdentity = rawCaptureFinishIdentity(latest, prepared.endEvent);
     let replay: ReplayRecord | undefined;
-    if (prepared.settings?.replayCaptureEnabled !== false && latest.keepReplay !== false) {
+    const shouldPersistLocalReplay = latest.keepReplay !== false && (
+      prepared.settings?.replayCaptureEnabled !== false
+      || latest.insightContext?.capturedWithEnhancedInsights === true
+    );
+    if (shouldPersistLocalReplay) {
       try {
         replay = await this.store.saveReplayIfMatchActive(
           this.createReplay(
@@ -1000,8 +1025,7 @@ export class CaptureCoordinator {
       this.pendingAtlasReviews.size ||
       hasBlockingReplayFinalization ||
       hasBlockingDeferredReplayFinalization ||
-      this.pendingConfirmedReplayFinalizationMatchIds.size ||
-      this.health.state === "review-needed"
+      this.pendingConfirmedReplayFinalizationMatchIds.size
     );
   }
 
@@ -1011,7 +1035,7 @@ export class CaptureCoordinator {
     }
     return {
       allowed: false,
-      message: "Finish or stop the current match and complete its review before switching game provider."
+      message: "Finish or stop the current match before switching game provider."
     };
   }
 
@@ -1274,6 +1298,35 @@ export class CaptureCoordinator {
         ...deferredFinalization,
         draft: result
       });
+    }
+    if (result.insightContext?.capturedWithEnhancedInsights) {
+      const replay = (await this.store.getReplays().catch(() => []))
+        .find((candidate) => candidate.matchId === result.id || candidate.matchSnapshot?.id === result.id);
+      if (replay) {
+        const flagsById = new Map((replay.flags ?? []).map((flag) => [flag.id, flag]));
+        for (const flag of enhancedInsightReplayFlags(result, replay.id)) {
+          flagsById.set(flag.id, { ...flagsById.get(flag.id), ...flag });
+        }
+        try {
+          await this.store.saveReplay({
+            ...replay,
+            matchSnapshot: result,
+            flags: [...flagsById.values()],
+            enhancedInsights: enhancedInsightReplayMetadata(result)
+          });
+        } catch (error) {
+          this.health = {
+            ...this.health,
+            state: "review-needed",
+            message: "Match saved locally; Enhanced Insights replay update needs retry"
+          };
+          this.emitHealth(true);
+          throw new Error(
+            "The match is saved locally, but its Enhanced Insights replay update did not finish. Try Save match again.",
+            { cause: error }
+          );
+        }
+      }
     }
     if (draft.keepReplay === false) {
       await this.store.deleteReplayByMatch(draft.id).catch(() => undefined);
@@ -2422,6 +2475,7 @@ export class CaptureCoordinator {
     visualFrames: ReplayScreenshotFrame[] = [],
     deckTrackerSnapshots: ReplayRecord["deckTrackerSnapshots"] = []
   ): ReplayRecord {
+    const enhancedInsights = enhancedInsightReplayMetadata(draft);
     return replayWithIntelligence({
       id: `replay-${draft.id}`,
       matchId: draft.id,
@@ -2437,6 +2491,8 @@ export class CaptureCoordinator {
       structuredEvents,
       visualFrames,
       deckTrackerSnapshots,
+      ...(enhancedInsights ? { enhancedInsights } : {}),
+      flags: enhancedInsightReplayFlags(draft, `replay-${draft.id}`),
       matchSnapshot: draft
     }, draft);
   }
@@ -2456,6 +2512,44 @@ export class CaptureCoordinator {
     }
     return `${label(event.platform)} watcher active`;
   }
+}
+
+function enhancedInsightReplayMetadata(draft: MatchDraft): ReplayRecord["enhancedInsights"] | undefined {
+  if (draft.insightContext?.capturedWithEnhancedInsights !== true) {
+    return undefined;
+  }
+  return {
+    version: 1,
+    captured: true,
+    capturedAt: draft.capturedAt,
+    captureMode: "semantic-local"
+  };
+}
+
+function enhancedInsightReplayFlags(draft: MatchDraft, replayId: string): ReplayFlag[] {
+  return (draft.insightContext?.decisions ?? [])
+    .filter((decision) => decision.source === "live-flag")
+    .map((decision) => ({
+      id: decision.replayFlagId || `enhanced-insight-${decision.id}`,
+      targetType: decision.eventId ? "turn" : "replay",
+      targetId: decision.eventId || replayId,
+      targetLabel: typeof decision.timeMs === "number"
+        ? `Decision at ${Math.max(0, Math.round(decision.timeMs / 1000))}s`
+        : "Marked decision",
+      type: decision.assessment === "good-line"
+        ? "good-line"
+        : decision.assessment === "missed"
+          ? "mistake"
+          : decision.family === "battlefield"
+            ? "battlefield-decision"
+            : "key-turn",
+      label: "Review decision",
+      note: decision.note?.trim() || "Marked during the live match for later review.",
+      capturedAt: decision.capturedAt || decision.createdAt,
+      createdAt: decision.createdAt,
+      ...(decision.updatedAt ? { updatedAt: decision.updatedAt } : {}),
+      ...(typeof decision.timeMs === "number" ? { timeMs: Math.max(0, decision.timeMs) } : {})
+    }));
 }
 
 function label(platform: GamePlatform): string {
@@ -2629,6 +2723,15 @@ function rawCaptureFinishIdentity(draft: MatchDraft, endEvent: CaptureEvent): Ca
   };
 }
 
+function compactCaptureDiagnosticEvent(event: CaptureEvent, enhancedInsightsEnabledAtStart: boolean): CaptureEvent {
+  const compact = compactCaptureEvent(event);
+  if (enhancedInsightsEnabledAtStart || !Array.isArray(compact.payload.rows)) {
+    return compact;
+  }
+  const { rows: _rows, ...payload } = compact.payload;
+  return { ...compact, payload };
+}
+
 function uniqueCaptureIdentityValues(values: string[]): string[] {
   const unique = new Map<string, string>();
   for (const value of values) {
@@ -2676,6 +2779,10 @@ function compactPayload(payload: Record<string, unknown> = {}): Record<string, u
     "exitCode",
     "active",
     "format",
+    "enhancedInsightsEnabledAtStart",
+    "enhancedInsightsSessionStartedAt",
+    "gameNumber",
+    "atlasBo3GameNumber",
     "atlasResultKind",
     "atlasGameInstanceId",
     "atlasLocalPlayerSeat",
@@ -2782,9 +2889,11 @@ function compactPayload(payload: Record<string, unknown> = {}): Record<string, u
   if (Array.isArray(payload.rows)) {
     next.rows = payload.rows.slice(-10).map((row) => {
       const record = row && typeof row === "object" && !Array.isArray(row) ? row as Record<string, unknown> : {};
+      const observedAt = compactObservedAt(record.observedAt);
       return {
         key: truncateValue(record.key, 80),
-        text: truncateValue(record.text, 180)
+        text: truncateValue(record.text, 180),
+        ...(observedAt ? { observedAt } : {})
       };
     });
   }
@@ -2844,6 +2953,14 @@ function truncateValue(value: unknown, limit: number): string {
 
 function isUnresolvedCardCode(value: string): boolean {
   return /^[A-Z]{2,5}-(?:(?:SP|R|T)\d{1,4}|\d{1,4}[A-Z]?)(?:\*|-STAR)?(?:\/\d+)?$/i.test(value.trim());
+}
+
+function compactObservedAt(value: unknown): string {
+  if (typeof value !== "string" || value.length > 64) {
+    return "";
+  }
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString().slice(0, 40) : "";
 }
 
 function isIntermediateAtlasConfirmGameResult(event: CaptureEvent): boolean {

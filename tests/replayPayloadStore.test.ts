@@ -115,4 +115,20 @@ describe("ReplayPayloadStore", () => {
       await rm(directory, { recursive: true, force: true });
     }
   });
+
+  it("removes a superseded immutable payload without failing when it is already absent", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "riftlite-replay-payload-remove-"));
+    try {
+      const store = new ReplayPayloadStore(directory);
+      const prepared = await store.prepare(replay());
+      const reference = replayPayloadReference(prepared.stored);
+      expect(reference).not.toBeNull();
+
+      await store.remove(reference!);
+      expect(await readdir(directory)).toEqual([]);
+      await expect(store.remove(reference!)).resolves.toBeUndefined();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
 });

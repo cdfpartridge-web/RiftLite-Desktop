@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, unlink, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { promisify } from "node:util";
 import { gunzip, gzip } from "node:zlib";
@@ -9,6 +9,7 @@ import type { DeckTrackerSnapshot, ReplayRecord } from "../../shared/types.js";
 const gzipAsync = promisify(gzip);
 const gunzipAsync = promisify(gunzip);
 const REPLAY_PAYLOAD_MAX_EXPANDED_BYTES = 256 * 1024 * 1024;
+const REPLAY_PAYLOAD_TEMP_FILE_PATTERN = /^\.[a-f0-9]{20}-[a-f0-9]{64}\.json\.gz\.\d+\.[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}\.tmp$/;
 
 export const REPLAY_PAYLOAD_POINTER_KEY = "__riftliteReplayPayload";
 
@@ -59,6 +60,8 @@ export interface PreparedReplayPayload {
 }
 
 export class ReplayPayloadStore {
+  private readonly activeTemporaryFiles = new Set<string>();
+
   constructor(private readonly directory: string) {}
 
   async prepare(replay: ReplayRecord): Promise<PreparedReplayPayload> {
@@ -114,6 +117,33 @@ export class ReplayPayloadStore {
     };
   }
 
+  async remove(reference: ReplayPayloadReference): Promise<void> {
+    try {
+      await unlink(this.pathFor(reference.fileName));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
+    }
+  }
+
+  async removeTemporaryFiles(): Promise<void> {
+    if (!existsSync(this.directory)) {
+      return;
+    }
+    const entries = await readdir(this.directory, { withFileTypes: true });
+    for (const entry of entries) {
+      const path = join(this.directory, entry.name);
+      if (
+        entry.isFile()
+        && REPLAY_PAYLOAD_TEMP_FILE_PATTERN.test(entry.name)
+        && !this.activeTemporaryFiles.has(path)
+      ) {
+        await unlink(path);
+      }
+    }
+  }
+
   private async writeImmutable(fileName: string, contents: Buffer): Promise<void> {
     const path = this.pathFor(fileName);
     if (existsSync(path)) {
@@ -121,6 +151,7 @@ export class ReplayPayloadStore {
     }
     await mkdir(this.directory, { recursive: true });
     const tempPath = join(this.directory, `.${fileName}.${process.pid}.${randomUUID()}.tmp`);
+    this.activeTemporaryFiles.add(tempPath);
     try {
       await writeFile(tempPath, contents, { flag: "wx" });
       if (existsSync(path)) {
@@ -130,6 +161,7 @@ export class ReplayPayloadStore {
       await rename(tempPath, path);
     } finally {
       await unlink(tempPath).catch(() => undefined);
+      this.activeTemporaryFiles.delete(tempPath);
     }
   }
 

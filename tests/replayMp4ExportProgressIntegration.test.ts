@@ -73,7 +73,7 @@ describe("replay MP4 export progress integration", () => {
     expect(dialog).toContain("The final file is not ready yet.");
     expect(dialog).toContain("passed its integrity check");
     expect(dialog).toContain("RiftLite did not publish an unfinished MP4");
-    expect(dialog).toContain("Your presentation recording is retained");
+    expect(dialog).toContain("Your Full Voiceover recording is retained");
     expect(dialog).toContain("Show in folder");
     expect(dialog).toContain("{!working ? (");
     expect(dialog).not.toContain("onClick={onDismiss} aria-label");
@@ -112,14 +112,16 @@ describe("replay MP4 export progress integration", () => {
     expect(appSource).toContain("const pendingReplayPresentationExports = new Map<string, ReplayPresentationRecordingPayload>()");
     expect(player).toContain("function retainPresentationExport(");
     expect(player).toContain("async function exportPendingPresentationRecording(");
-    expect(player).toContain("Presentation export cancelled. The recording is kept here so you can retry.");
+    expect(player).toContain("Full Voiceover export cancelled. The recording is kept here so you can retry.");
     expect(player).toContain("The recording is kept here so you can retry.");
     expect(player).toContain("pendingReplayPresentationExports.get(replayId) === payload");
-    expect(player).toContain("Retry presentation export");
-    expect(player).toContain("Record new");
+    expect(player).toContain("Retry voiceover export");
+    expect(player).toContain("Record new voiceover");
     expect(player).toContain("Discard recording");
     expect(player).toContain('data-state="ready"');
-    expect(player).toContain('className="muted replay-presentation-status" role="status" aria-live="polite"');
+    expect(player).toContain('className="replay-recording-feedback"');
+    expect(player).toContain('aria-live="polite"');
+    expect(player).toContain('aria-atomic="true"');
     expect(player).not.toContain("window.riftlite.exportReplayPresentationMp4");
     expect(styleSource).toContain('.replay-coaching-status[data-state="ready"]');
   });
@@ -183,7 +185,7 @@ describe("replay MP4 export progress integration", () => {
     expect(staleGuardAt).toBeGreaterThan(microphoneAwaitAt);
     expect(cleanupAt).toBeGreaterThan(staleGuardAt);
     expect(player).toContain("voiceCapture.stream.getTracks().forEach((track) => track.stop())");
-    expect(player).toContain('"Waiting for microphone..."');
+    expect(player).toContain('"Connecting microphone..."');
     expect(player).toContain("presentationPayloadPreparing || presentationStartPending");
   });
 
@@ -193,7 +195,8 @@ describe("replay MP4 export progress integration", () => {
     const disposeAt = player.indexOf("function disposePresentationRuntime()");
     const detachDataAt = player.indexOf("recorder.ondataavailable = null", disposeAt);
     const detachStopAt = player.indexOf("recorder.onstop = null", detachDataAt);
-    const stopAt = player.indexOf("recorder.stop()", detachStopAt);
+    const detachErrorAt = player.indexOf("recorder.onerror = null", detachStopAt);
+    const stopAt = player.indexOf("recorder.stop()", detachErrorAt);
     const cleanupAt = player.indexOf("cleanupPresentationRecording()", stopAt);
 
     expect(player).toContain("replayPresentationDisposers.set(replayId, disposePresentationRuntime)");
@@ -202,7 +205,8 @@ describe("replay MP4 export progress integration", () => {
     expect(player).toContain("window.cancelAnimationFrame(presentationAnimationRef.current)");
     expect(detachDataAt).toBeGreaterThan(disposeAt);
     expect(detachStopAt).toBeGreaterThan(detachDataAt);
-    expect(stopAt).toBeGreaterThan(detachStopAt);
+    expect(detachErrorAt).toBeGreaterThan(detachStopAt);
+    expect(stopAt).toBeGreaterThan(detachErrorAt);
     expect(cleanupAt).toBeGreaterThan(stopAt);
     expect(deletionState).toContain("deletedReplayPresentationIds.add(replayId)");
     expect(deletionState).toContain("pendingReplayPresentationExports.delete(replayId)");

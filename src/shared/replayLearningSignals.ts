@@ -20,7 +20,7 @@ export interface ReplayLearningResourceValues {
 
 export interface ReplayLearningUnusedResourceObservation {
   eventId: string;
-  gameNumber: number;
+  gameNumber?: number;
   capturedAt: string;
   playerTurnNumber?: number;
   proof: "turn-end-snapshot" | "turn-end-resource-after";
@@ -66,7 +66,7 @@ export interface ReplayLearningSideboardFlowRow {
 
 export interface ReplayLearningBattlefieldConversion {
   eventId: string;
-  gameNumber: number;
+  gameNumber?: number;
   capturedAt: string;
   side: ReplayStructuredEvent["side"];
   battlefield: string;
@@ -138,8 +138,8 @@ export function replayLearningResourceCoverage(replay: ReplayRecord): ReplayLear
   let capturedPlayerTurnEnds = 0;
   let provenEndStates = 0;
   for (const event of events) {
-    const gameNumber = validGameNumber(event.gameNumber);
-    if (event.type === "turn-start" && event.side === "me") {
+    const gameNumber = validOptionalGameNumber(event.gameNumber);
+    if (event.type === "turn-start" && event.side === "me" && gameNumber != null) {
       localTurnByGame.set(gameNumber, (localTurnByGame.get(gameNumber) ?? 0) + 1);
     }
     if (event.type !== "turn-end" || event.side !== "me") continue;
@@ -154,11 +154,11 @@ export function replayLearningResourceCoverage(replay: ReplayRecord): ReplayLear
     const state = proof ? resourceValues(snapshotState ?? afterState) : null;
     if (!proof || !state || !resourceStateHasEvidence(state)) continue;
     provenEndStates += 1;
-    const playerTurnNumber = localTurnByGame.get(gameNumber);
+    const playerTurnNumber = gameNumber != null ? localTurnByGame.get(gameNumber) : undefined;
     if (observations.length < MAX_RESOURCE_OBSERVATIONS) {
       observations.push({
         eventId: event.id,
-        gameNumber,
+        ...(gameNumber != null ? { gameNumber } : {}),
         capturedAt: event.capturedAt,
         ...(playerTurnNumber ? { playerTurnNumber } : {}),
         proof,
@@ -206,7 +206,10 @@ export function replayLearningSideboardFlows(replay: ReplayRecord): ReplayLearni
   for (const change of changes) {
     const identity = cardIdentity(change);
     if (!identity) continue;
-    const key = `${identity}|game:${validOptionalGameNumber(change.gameNumber) ?? "unknown"}`;
+    const gameNumber = validOptionalGameNumber(change.gameNumber);
+    const key = gameNumber != null
+      ? `${identity}|game:${gameNumber}`
+      : `${identity}|game:unknown:${change.id}`;
     const group = groups.get(key) ?? [];
     group.push(change);
     groups.set(key, group);
@@ -216,15 +219,19 @@ export function replayLearningSideboardFlows(replay: ReplayRecord): ReplayLearni
     const sorted = [...group].sort(compareCapturedAt);
     const representative = sorted.find((change) => change.name || change.code || change.cardId) ?? sorted[0];
     if (!representative) continue;
+    const gameNumber = validOptionalGameNumber(representative.gameNumber);
     const boardedIn = sorted.filter((change) => change.direction === "in");
     const firstInAt = boardedIn[0]?.capturedAt;
-    const eventWindow = firstInAt
-      ? events.filter((event) => timestamp(event.capturedAt) >= timestamp(firstInAt))
+    const eventWindow = firstInAt && gameNumber != null
+      ? events.filter((event) => (
+          validOptionalGameNumber(event.gameNumber) === gameNumber
+          && timestamp(event.capturedAt) >= timestamp(firstInAt)
+        ))
       : [];
     const cardEvents = firstInAt
       ? eventWindow.filter((event) => event.side === "me" && eventMatchesCard(event, representative))
       : [];
-    const trackerVisible = firstInAt
+    const trackerVisible = firstInAt && gameNumber != null
       ? subsequentTrackerVisibleCount(snapshots, representative, firstInAt)
       : null;
     const namedVisible = firstInAt && eventWindow.length
@@ -244,7 +251,7 @@ export function replayLearningSideboardFlows(replay: ReplayRecord): ReplayLearni
       ...(representative.cardId ? { cardId: representative.cardId } : {}),
       ...(representative.code ? { code: representative.code } : {}),
       ...(representative.imageUrl ? { imageUrl: representative.imageUrl } : {}),
-      ...(validOptionalGameNumber(representative.gameNumber) ? { gameNumber: validOptionalGameNumber(representative.gameNumber) } : {}),
+      ...(gameNumber != null ? { gameNumber } : {}),
       changeIds: sorted.map((change) => change.id),
       sources,
       firstChangedAt: sorted[0]!.capturedAt,
@@ -275,7 +282,9 @@ export function replayLearningBattlefieldConversions(replay: ReplayRecord): Repl
     .slice(0, MAX_BATTLEFIELD_CONVERSIONS)
     .map((event) => ({
       eventId: event.id,
-      gameNumber: validGameNumber(event.gameNumber),
+      ...(validOptionalGameNumber(event.gameNumber) != null
+        ? { gameNumber: validOptionalGameNumber(event.gameNumber) }
+        : {}),
       capturedAt: event.capturedAt,
       side: event.side,
       battlefield: event.battlefield.trim(),
@@ -309,10 +318,13 @@ export function replayLearningCapabilityReceipt(
   ));
   const namedLocalPlays = events.filter((event) => event.type === "play" && event.side === "me" && Boolean(event.cardName || event.cardId));
   const localTurnStarts = events.filter((event) => event.type === "turn-start" && event.side === "me");
-  const timedLocalPlays = namedLocalPlays.filter((play) => localTurnStarts.some((start) => (
-    validGameNumber(start.gameNumber) === validGameNumber(play.gameNumber)
-    && timestamp(start.capturedAt) <= timestamp(play.capturedAt)
-  )));
+  const timedLocalPlays = namedLocalPlays.filter((play) => {
+    const gameNumber = validOptionalGameNumber(play.gameNumber);
+    return gameNumber != null && localTurnStarts.some((start) => (
+      validOptionalGameNumber(start.gameNumber) === gameNumber
+      && timestamp(start.capturedAt) <= timestamp(play.capturedAt)
+    ));
+  });
   const snapshots = boundedSnapshots(replay);
   const combatEvents = events.filter((event) => event.type === "combat");
   const detailedCombatEvents = combatEvents.filter((event) => Boolean(event.combat));
@@ -405,11 +417,16 @@ function subsequentTrackerVisibleCount(
   change: DeckTrackerSideboardChange,
   changedAt: string
 ): number | null {
+  const gameNumber = validOptionalGameNumber(change.gameNumber);
+  if (gameNumber == null) return null;
   const changedAtMs = timestamp(changedAt);
-  const before = [...snapshots]
+  const sameGameSnapshots = snapshots.filter((snapshot) => (
+    validOptionalGameNumber(snapshot.state.sideboard.gameNumber) === gameNumber
+  ));
+  const before = [...sameGameSnapshots]
     .filter((snapshot) => timestamp(snapshot.capturedAt) < changedAtMs)
     .sort((left, right) => timestamp(right.capturedAt) - timestamp(left.capturedAt))[0];
-  const afterCards = snapshots
+  const afterCards = sameGameSnapshots
     .filter((snapshot) => timestamp(snapshot.capturedAt) >= changedAtMs)
     .flatMap((snapshot) => snapshot.state.cards.filter((card) => trackerCardMatchesChange(card, change)));
   if (!afterCards.length) return null;
@@ -478,10 +495,6 @@ function compareCapturedAt(left: { capturedAt: string }, right: { capturedAt: st
 function timestamp(value: string): number {
   const parsed = Date.parse(value);
   return Number.isFinite(parsed) ? parsed : 0;
-}
-
-function validGameNumber(value: number | undefined): number {
-  return validOptionalGameNumber(value) ?? 1;
 }
 
 function validOptionalGameNumber(value: number | undefined): number | undefined {

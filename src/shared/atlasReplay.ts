@@ -70,6 +70,7 @@ export interface ReplayTimelineEvent {
   combat?: ReplayStructuredEvent["combat"];
   snapshot?: ReplayStructuredEvent["snapshot"];
   screenshot?: ReplayScreenshotKeyframe;
+  evidence?: ReplayStructuredEvent["evidence"];
 }
 
 export interface ReplayTurnView {
@@ -242,6 +243,7 @@ function buildStructuredEvents(
       snapshot: event.snapshot,
       score: event.score,
       screenshot: event.screenshot,
+      evidence: event.evidence,
       replayOrder
     }))
     .filter((event) => !isReplayNoiseText(event.text))
@@ -366,16 +368,24 @@ function collectReplayRows(events: CaptureEvent[]): RawReplayRow[] {
       const occurrenceKey = normalizeRowSignature(`${parsed.time}|${parsed.text}`);
       const occurrence = (occurrenceCounts.get(occurrenceKey) ?? 0) + 1;
       occurrenceCounts.set(occurrenceKey, occurrence);
-      const signature = normalizeRowSignature(`${parsed.time}|${parsed.text}|${occurrence}`);
+      const stableRowKey = readString(record.key);
+      const signature = stableRowKey.startsWith("riftlite-log:")
+        ? normalizeRowSignature(`stable|${stableRowKey}`)
+        : normalizeRowSignature(`${parsed.time}|${parsed.text}|${occurrence}`);
       if (seen.has(signature)) {
         continue;
       }
       seen.add(signature);
       sequence += 1;
       rows.push({
-        key: readString(record.key) || signature,
+        key: stableRowKey || signature,
         text,
-        capturedAt: replayRowCapturedAt(event.capturedAt, parsed.time, index),
+        capturedAt: replayRowCapturedAt(
+          event.capturedAt,
+          parsed.time,
+          index,
+          readString(record.observedAt)
+        ),
         snapshotScore,
         sourceEventId: event.id,
         sequence
@@ -1427,18 +1437,39 @@ function timeLabel(value: string): string {
   return Number.isNaN(date.getTime()) ? "" : date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
-function replayRowCapturedAt(baseIso: string, time: string, order: number): string {
+function replayRowCapturedAt(baseIso: string, time: string, order: number, observedAt = ""): string {
   const date = new Date(baseIso);
   const match = time.match(/^(\d{1,2}):(\d{2})$/);
   if (!match || Number.isNaN(date.getTime())) {
-    return baseIso;
+    return validObservedReplayRowTime(observedAt, baseIso) ?? baseIso;
   }
   date.setHours(Number.parseInt(match[1], 10), Number.parseInt(match[2], 10), 0, Math.min(order, 999));
   const baseTime = new Date(baseIso).getTime();
   if (date.getTime() - baseTime > 12 * 60 * 60 * 1000) {
     date.setDate(date.getDate() - 1);
   }
+  const observed = validObservedReplayRowTime(observedAt, baseIso);
+  if (observed) {
+    const observedOffset = Date.parse(observed) - date.getTime();
+    if (observedOffset >= -2_000 && observedOffset <= 75_000) {
+      return observed;
+    }
+  }
   return date.toISOString();
+}
+
+function validObservedReplayRowTime(observedAt: string, baseIso: string): string | null {
+  const observedTime = Date.parse(observedAt);
+  const baseTime = Date.parse(baseIso);
+  if (
+    !Number.isFinite(observedTime) ||
+    !Number.isFinite(baseTime) ||
+    observedTime > baseTime + 5_000 ||
+    baseTime - observedTime > 12 * 60 * 60 * 1000
+  ) {
+    return null;
+  }
+  return new Date(observedTime).toISOString();
 }
 
 function compareReplayEvents(a: ReplayTimelineEvent, b: ReplayTimelineEvent): number {
