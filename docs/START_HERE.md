@@ -7,7 +7,7 @@ This is the shortest safe entry point for a new Codex chat.
 ## Read in this order
 
 1. [Current handover](./HANDOVER-2026-08-30.md) — current desktop, website, release, and worktree truth.
-2. [v0.9.65 release notes](./release-notes-v0.9.65.md) — behavior in the committed/public desktop baseline.
+2. [v0.9.71 release notes](./release-notes-v0.9.71.md) — behavior in the current public desktop release.
 3. [Web Replay system handover](./WEB_REPLAY_SYSTEM_HANDOVER.md) — only when working on Web Replays, raw capture, or replay upload/delivery.
 4. [Long-form engineering history](./CURRENT_STATE.md) — historical architecture and release history; its older status sections are not current operational truth.
 
@@ -24,12 +24,12 @@ C:\Users\cdfpa\OneDrive\Documents\Claude\Projects\Riftlite Beta 0.6\desktop-v06
 
 Branch: `hotfix/atlas-shell-recovery`
 
-Committed baseline: `3b72267` / public v0.9.65
+Release source: `459c334` / public v0.9.71
 
 ## Three things not to get wrong
 
-1. The desktop working tree contains valuable **uncommitted** Match Review, Deck Insights, Enhanced Insights, sharing, rules, voiceover, and supporting test work. Do not reset, checkout, clean, or overwrite it.
-2. The current dirty tree is a v0.9.71 release candidate with Search Rules hidden. The existing local v0.9.70 installer still contains the visible rules drawer and is superseded; it must not be published. Public Windows and macOS remain v0.9.65 until fresh v0.9.71 artifacts are built from immutable committed source.
+1. The v0.9.71 source is committed and published. Five known untracked entries remain: three historical v0.9.70 documents, `tmp-app-diff.txt`, and `tmp/`. Do not reset, checkout, clean, publish, or overwrite them casually; `tmp/` may contain sensitive browser state.
+2. Search Rules is hidden in v0.9.71 behind a disabled release flag while its implementation remains preserved. Windows `v0.9.71` and macOS `mac-v0.9.71` are public from immutable source commit `459c334`; the superseded local v0.9.70 materials must never be uploaded as current.
 3. The website worktree is clean at live commit `135d239`, including sideboard-choice recovery and X0TCG's YouTube rotation. The older primary website checkout is still not the right place to resume replay work without first synchronising it.
 
 ## Verify the handover has not drifted
