@@ -37,7 +37,7 @@ describe("learner-first Insights surface", () => {
     expect(comingSoonSource).toContain("Deck Insights remains available");
     expect(comingSoonSource).toContain("Planned Replay Coach improvements");
     expect(comingSoonSource).not.toContain("while Insights is unavailable");
-    expect(appSource).toContain("Replay Coach is marked Coming Soon while its advice is refined.");
+    expect(appSource).toContain("Replay Coach remains Coming Soon while its coaching experience is refined.");
     expect(deckInsightsSource).toContain('type DeckInsightsSection = "overview" | "cards" | "matchups"');
   });
 
