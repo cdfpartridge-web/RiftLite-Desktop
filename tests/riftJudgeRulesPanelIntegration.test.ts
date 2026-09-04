@@ -37,7 +37,7 @@ describe("RiftJudge rules search integration", () => {
       appSource.indexOf("function focusNativeGameWebview"),
       appSource.indexOf("async function setGameZoom")
     );
-    expect(focusHelpers.match(/rulesSearchOpen \|\|/g)?.length).toBe(2);
+    expect(focusHelpers.match(/rulesSearchOpenRef\.current \|\|/g)?.length).toBe(2);
     expect(appSource).toContain("gameHostInputWasBlockedRef.current = hostInputBlocked");
   });
 

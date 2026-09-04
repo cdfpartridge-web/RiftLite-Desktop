@@ -33,11 +33,13 @@ describe("Home launchpad", () => {
     const releaseNotesEnd = appSource.indexOf("const RIOT_LEGAL_NOTICE", releaseNotesStart);
     const releaseNotesSource = appSource.slice(releaseNotesStart, releaseNotesEnd);
 
-    expect(releaseNotesSource).toContain("Deck Insights is now the default Insights view");
-    expect(releaseNotesSource).toContain("Enhanced Insights Beta can mark the exact moment of a decision");
+    expect(releaseNotesSource).toContain("restore Atlas's existing Player name field");
+    expect(releaseNotesSource).toContain("reinforces native focus and presentation");
+    expect(releaseNotesSource).toContain("does not reload Atlas, clear site data, sign you out");
+    expect(releaseNotesSource).toContain("Matches page now stays the same width");
     expect(releaseNotesSource).toContain("Replay Coach remains Coming Soon");
     expect(releaseNotesSource).not.toContain("Search Rules");
-    expect(releaseNotesSource).not.toContain("partial Atlas page");
+    expect(releaseNotesSource).not.toContain("Deck Insights is now the default Insights view");
   });
 
   it("keeps the active deck's artwork and performance in sync, with sensible fallbacks", () => {

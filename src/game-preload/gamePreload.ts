@@ -16,6 +16,7 @@ import {
   compareAtlasPlayerIdentityCandidates
 } from "../shared/atlasPlayerIdentity.js";
 import { AtlasLogRowObservationTracker } from "../shared/atlasLogRowObservations.js";
+import { readAtlasLobbyPlayerField } from "../shared/atlasLobbyPlayerField.js";
 import {
   ATLAS_EMPTY_SHELL_MIN_AGE_MS,
   ATLAS_PERSISTENT_EMPTY_SHELL_MIN_AGE_MS,
@@ -31,7 +32,11 @@ import {
 } from "../shared/atlasShellHealth.js";
 import { riftboundCardCodeFromValue } from "../shared/cardIdentity.js";
 import { gamePlatformForTrustedUrl } from "../shared/embeddedContentSecurity.js";
-import { GAME_WEBVIEW_EDITABLE_FOCUS_IPC_CHANNEL } from "../shared/gameWebview.js";
+import {
+  GAME_WEBVIEW_EDITABLE_FOCUS_IPC_CHANNEL,
+  GAME_WEBVIEW_INTERACTION_DIAGNOSTIC_IPC_CHANNEL,
+  type AtlasGameInteractionDiagnosticPhase
+} from "../shared/gameWebview.js";
 import { resolveGameWebviewPlatformIdentity } from "../shared/gameWebviewIdentity.js";
 import {
   ATLAS_BATTLEFIELD_SEAT_IPC_CHANNEL,
@@ -190,7 +195,16 @@ function isEditableElement(target: EventTarget | null): boolean {
     return false;
   }
   return Boolean(target.closest(
-    "input, textarea, [contenteditable]:not([contenteditable=\"false\"])"
+    "input, textarea, select, [contenteditable]:not([contenteditable=\"false\"])"
+  ));
+}
+
+function isAtlasInteractiveControl(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) {
+    return false;
+  }
+  return Boolean(target.closest(
+    "button, input, textarea, select, a[href], [role=\"button\"], [role=\"link\"], [contenteditable]:not([contenteditable=\"false\"])"
   ));
 }
 
@@ -199,10 +213,48 @@ function installAtlasEditableFocusBridge(): void {
     return;
   }
   let lastFocusRequestAt = Number.NEGATIVE_INFINITY;
+  const lastDiagnosticByPhase = new Map<AtlasGameInteractionDiagnosticPhase, {
+    signature: string;
+    reportedAt: number;
+  }>();
+  const acknowledgeInteraction = (phase: AtlasGameInteractionDiagnosticPhase) => {
+    window.setTimeout(() => {
+      const diagnostic = {
+        phase,
+        documentFocused: document.hasFocus(),
+        documentVisible: document.visibilityState === "visible",
+        activeControl: isAtlasInteractiveControl(document.activeElement)
+      };
+      const signature = [
+        diagnostic.documentFocused,
+        diagnostic.documentVisible,
+        diagnostic.activeControl
+      ].map(Number).join("");
+      const observedAt = performance.now();
+      const previous = lastDiagnosticByPhase.get(phase);
+      if (
+        previous &&
+        (previous.signature === signature || observedAt - previous.reportedAt < 30_000)
+      ) {
+        return;
+      }
+      lastDiagnosticByPhase.set(phase, { signature, reportedAt: observedAt });
+      // Exact-schema, diagnostic-only IPC. Do not add the event target, typed
+      // key, form value, label, page text, or any credential-shaped field.
+      ipcRenderer.send(GAME_WEBVIEW_INTERACTION_DIAGNOSTIC_IPC_CHANNEL, diagnostic);
+    }, phase === "pointer-received" ? 160 : 0);
+  };
   const requestNativeGuestFocus = (event: Event) => {
-    if (!isEditableElement(event.target)) {
+    if (!event.isTrusted) {
       return;
     }
+    const interaction = event.type === "focusin"
+      ? (isEditableElement(event.target) ? "editable-focus" : "")
+      : (isAtlasInteractiveControl(event.target) ? "interactive-pointer" : "");
+    if (!interaction) {
+      return;
+    }
+    acknowledgeInteraction(event.type === "focusin" ? "focus-received" : "pointer-received");
     const now = performance.now();
     if (now - lastFocusRequestAt < 100) {
       return;
@@ -210,8 +262,14 @@ function installAtlasEditableFocusBridge(): void {
     lastFocusRequestAt = now;
     ipcRenderer.send(GAME_WEBVIEW_EDITABLE_FOCUS_IPC_CHANNEL);
   };
+  const acknowledgeKeyboard = (event: Event) => {
+    if (event.isTrusted && isEditableElement(event.target)) {
+      acknowledgeInteraction("keyboard-received");
+    }
+  };
   window.addEventListener("pointerdown", requestNativeGuestFocus, { capture: true, passive: true });
   window.addEventListener("focusin", requestNativeGuestFocus, true);
+  window.addEventListener("keydown", acknowledgeKeyboard, { capture: true, passive: true });
 }
 
 let previousActive = false;
@@ -238,6 +296,7 @@ let atlasDeferredMutationSnapshot = false;
 let atlasEmptyShellReported = false;
 let atlasStalledShellReported = false;
 let atlasShellReadyReported = false;
+let atlasPlayerFieldLastReportAt = 0;
 let atlasShellRecoveryRouteActive = false;
 let atlasShellReadyCandidateAt = 0;
 let atlasShellReadyCandidateTimer: number | undefined;
@@ -2475,6 +2534,19 @@ function reportAtlasShellStatusIfNeeded(reportMode: AtlasShellReportMode = "obse
   }
   if (!updateAtlasShellRecoveryRouteMonitoring()) {
     return;
+  }
+  // Keep partially collapsed form controls separate from shell-empty recovery.
+  // This runs even after shell-ready and with diagnostic logging switched off.
+  // Main independently probes the live document and owns the one-attempt budget.
+  const playerFieldState = readAtlasLobbyPlayerField();
+  if (playerFieldState === "collapsed") {
+    const checkedAt = Date.now();
+    if (!atlasPlayerFieldLastReportAt || checkedAt - atlasPlayerFieldLastReportAt >= 15_000) {
+      atlasPlayerFieldLastReportAt = checkedAt;
+      send("debug", { reason: "atlas-lobby-player-field-collapsed" });
+    }
+  } else {
+    atlasPlayerFieldLastReportAt = 0;
   }
   const hiddenShellSelector = "[hidden], [inert], [aria-hidden='true'], .sr-only, [class*='sr-only'], script, style, template, noscript";
   const isVisibleShellElement = (element: Element) => {

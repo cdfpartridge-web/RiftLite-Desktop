@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  ATLAS_GAME_INTERACTION_DIAGNOSTIC_PHASES,
   GAME_WEBVIEW_EDITABLE_FOCUS_IPC_CHANNEL,
+  GAME_WEBVIEW_INTERACTION_DIAGNOSTIC_IPC_CHANNEL,
   GAME_WEBVIEW_PARTITIONS,
   gameWebviewIsReady,
   nextMountedGamePlatform,
   shouldFocusGameWebviewInput,
+  shouldInvalidateGameGuestPresentation,
+  validatedAtlasGameInteractionDiagnostic,
   shouldRestoreGameWebviewFocus
 } from "../src/shared/gameWebview.js";
 
@@ -28,8 +32,45 @@ describe("game webview lifecycle", () => {
     expect(GAME_WEBVIEW_PARTITIONS.atlas).toBe("persist:riftlite-atlas");
   });
 
-  it("uses a dedicated channel for editable Atlas focus recovery", () => {
+  it("uses separate channels for Atlas native focus and diagnostic acknowledgement", () => {
     expect(GAME_WEBVIEW_EDITABLE_FOCUS_IPC_CHANNEL).toBe("game-webview:editable-focus");
+    expect(GAME_WEBVIEW_INTERACTION_DIAGNOSTIC_IPC_CHANNEL).toBe("game-webview:interaction-diagnostic");
+    expect(ATLAS_GAME_INTERACTION_DIAGNOSTIC_PHASES).toEqual([
+      "pointer-received",
+      "focus-received",
+      "keyboard-received"
+    ]);
+  });
+
+  it("accepts only the exact privacy-safe Atlas interaction diagnostic schema", () => {
+    const safe = {
+      phase: "keyboard-received",
+      documentFocused: true,
+      documentVisible: true,
+      activeControl: true
+    } as const;
+
+    const validated = validatedAtlasGameInteractionDiagnostic(safe);
+    expect(validated).toEqual(safe);
+    expect(Object.keys(validated ?? {}).sort()).toEqual([
+      "activeControl",
+      "documentFocused",
+      "documentVisible",
+      "phase"
+    ]);
+    expect(validatedAtlasGameInteractionDiagnostic({ ...safe, phase: "key-a" })).toBeNull();
+    expect(validatedAtlasGameInteractionDiagnostic({ ...safe, documentFocused: "yes" })).toBeNull();
+    expect(validatedAtlasGameInteractionDiagnostic({ ...safe, value: "credential-sentinel" })).toBeNull();
+    expect(validatedAtlasGameInteractionDiagnostic({ ...safe, key: "credential-sentinel" })).toBeNull();
+    expect(validatedAtlasGameInteractionDiagnostic({ ...safe, text: "credential-sentinel" })).toBeNull();
+    expect(validatedAtlasGameInteractionDiagnostic({ ...safe, credential: "credential-sentinel" })).toBeNull();
+  });
+
+  it("invalidates compositor surfaces only for an explicitly requested Atlas recovery", () => {
+    expect(shouldInvalidateGameGuestPresentation("atlas", true)).toBe(true);
+    expect(shouldInvalidateGameGuestPresentation("atlas", false)).toBe(false);
+    expect(shouldInvalidateGameGuestPresentation("tcga", true)).toBe(false);
+    expect(shouldInvalidateGameGuestPresentation("sim", true)).toBe(false);
   });
 
   it("allows Atlas input focus recovery only while its ready Play surface is unobstructed", () => {

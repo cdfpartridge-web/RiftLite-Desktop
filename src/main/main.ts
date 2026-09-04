@@ -84,8 +84,11 @@ import {
   atlasAuthoritativeMatchSignalFromState
 } from "../shared/atlasAuthoritativeMatch.js";
 import { atlasCardRenderingCssForUrl } from "../shared/atlasCardRendering.js";
+import { ATLAS_LOBBY_PLAYER_FIELD_PROBE } from "../shared/atlasLobbyPlayerField.js";
+import { AtlasLobbyPlayerFieldRepair } from "./services/atlasLobbyPlayerFieldRepair.js";
 import { AtlasInvalidClaimsRecoveryBudget } from "../shared/atlasInvalidClaimsRecovery.js";
 import { AtlasKnownOpponentHandTracker } from "../shared/atlasKnownOpponentHand.js";
+import { shouldPresentAtlasResourceFailure } from "../shared/atlasResourceFailure.js";
 import {
   atlasExplicitRepairUrl,
   clearAtlasWebviewRuntime,
@@ -106,7 +109,10 @@ import {
 } from "../shared/embeddedContentSecurity.js";
 import {
   GAME_WEBVIEW_EDITABLE_FOCUS_IPC_CHANNEL,
-  GAME_WEBVIEW_PARTITIONS
+  GAME_WEBVIEW_INTERACTION_DIAGNOSTIC_IPC_CHANNEL,
+  GAME_WEBVIEW_PARTITIONS,
+  shouldInvalidateGameGuestPresentation,
+  validatedAtlasGameInteractionDiagnostic
 } from "../shared/gameWebview.js";
 import { gameWebviewPlatformArgument } from "../shared/gameWebviewIdentity.js";
 import {
@@ -347,6 +353,8 @@ let registeredScreenshotHotkey = "";
 let registeredShadowClipHotkey = "";
 let registeredReplayFlagHotkey = "";
 const gameWebContentsByPlatform = new Map<GamePlatform, WebContents>();
+const atlasPresentationInvalidatedAtByGuest = new WeakMap<WebContents, number>();
+const ATLAS_PRESENTATION_INVALIDATE_MIN_INTERVAL_MS = 750;
 const atlasInvalidClaimsRecoveryByGuest = new Map<number, () => Promise<void>>();
 const atlasInvalidClaimsRecoveryBudget = new AtlasInvalidClaimsRecoveryBudget();
 const atlasAutomaticRecoverySafetyFence = new AtlasAutomaticRecoverySafetyFence();
@@ -429,8 +437,10 @@ let atlasWebviewRecoveryInFlight: Promise<AtlasWebviewRecoveryResult> | null = n
 let atlasWebviewRecoveryActiveTrigger: AtlasWebviewRecoveryTrigger | null = null;
 let atlasConnectionDiagnostics = emptyAtlasConnectionDiagnostics();
 const atlasRecentResourceFailures: AtlasResourceFailureDiagnostic[] = [];
+let atlasRecoveryCompletedAt: number | undefined;
 let atlasSessionDiagnosticsInstalled = false;
 const atlasEmptyShellMainRecovery = new AtlasEmptyShellMainRecoveryGuard();
+const atlasLobbyPlayerFieldRepairsByGuest = new Map<number, AtlasLobbyPlayerFieldRepair>();
 const ATLAS_EMPTY_SHELL_MAIN_RELOAD_DELAY_MS = 5_000;
 const ATLAS_INVALID_CLAIMS_RECOVERY_DELAY_MS = 5_000;
 
@@ -663,6 +673,7 @@ function refreshAtlasWebviewRuntime(
         ? await clearAtlasWebviewSiteData(atlasSession)
         : await clearAtlasWebviewRuntime(atlasSession);
       warnings.push(...cleanup.warnings);
+      atlasRecoveryCompletedAt = Date.now();
       await capture.handleEvent({
         id: `atlas-webview-recovery-complete-${Date.now()}`,
         platform: "atlas",
@@ -836,17 +847,24 @@ function installAtlasSessionDiagnostics(): void {
 }
 
 function recordAtlasResourceFailure(failure: AtlasResourceFailureDiagnostic, requestUrl: string): void {
-  const duplicate = atlasRecentResourceFailures.find((candidate) =>
-    candidate.reason === failure.reason &&
-    candidate.origin === failure.origin &&
-    candidate.resourceType === failure.resourceType &&
-    candidate.statusCode === failure.statusCode &&
-    candidate.error === failure.error &&
-    Date.parse(failure.capturedAt) - Date.parse(candidate.capturedAt) < 15_000
-  );
-  if (duplicate) return;
-  atlasRecentResourceFailures.unshift(failure);
-  atlasRecentResourceFailures.splice(12);
+  if (shouldPresentAtlasResourceFailure({
+    failure,
+    requestUrl,
+    observedAt: Date.parse(failure.capturedAt),
+    recoveryCompletedAt: atlasRecoveryCompletedAt
+  })) {
+    const duplicate = atlasRecentResourceFailures.find((candidate) =>
+      candidate.reason === failure.reason &&
+      candidate.origin === failure.origin &&
+      candidate.resourceType === failure.resourceType &&
+      candidate.statusCode === failure.statusCode &&
+      candidate.error === failure.error &&
+      Date.parse(failure.capturedAt) - Date.parse(candidate.capturedAt) < 15_000
+    );
+    if (duplicate) return;
+    atlasRecentResourceFailures.unshift(failure);
+    atlasRecentResourceFailures.splice(12);
+  }
   void capture.handleEvent({
     id: `atlas-resource-failure-${Date.now()}-${randomUUID()}`,
     platform: "atlas",
@@ -1748,6 +1766,18 @@ function isTrustedAppIpcSender(event: {
     Boolean(event.senderFrame && isTrustedAppPageUrl(event.senderFrame.url));
 }
 
+function isCurrentTrustedGameWebContents(platform: GamePlatform, contents: WebContents): boolean {
+  if (contents.isDestroyed()) {
+    return false;
+  }
+  const policy = embeddedWebviewPolicyBySession.get(contents.session);
+  return contents.session === electronSession.fromPartition(GAME_WEBVIEW_PARTITIONS[platform]) &&
+    gameWebContentsByPlatform.get(platform)?.id === contents.id &&
+    policy?.kind === "game" &&
+    policy.platform === platform &&
+    isAllowedEmbeddedNavigation(policy, contents.getURL());
+}
+
 function trustedGameIpcPlatform(event: {
   sender: WebContents;
   senderFrame?: { processId: number; routingId: number; url: string } | null;
@@ -1760,15 +1790,64 @@ function trustedGameIpcPlatform(event: {
     return null;
   }
   if (
-    event.sender.session !== electronSession.fromPartition(GAME_WEBVIEW_PARTITIONS[policy.platform]) ||
-    gameWebContentsByPlatform.get(policy.platform)?.id !== event.sender.id ||
-    !isAllowedEmbeddedNavigation(policy, event.sender.getURL()) ||
+    !isCurrentTrustedGameWebContents(policy.platform, event.sender) ||
     !event.senderFrame ||
     !isAllowedEmbeddedNavigation(policy, event.senderFrame.url)
   ) {
     return null;
   }
   return policy.platform;
+}
+
+function focusCurrentTrustedGameGuest(
+  platform: GamePlatform,
+  contents: WebContents,
+  options: { focusHost: boolean; invalidatePresentation: boolean }
+): boolean {
+  const window = mainWindow;
+  if (
+    !window ||
+    window.isDestroyed() ||
+    window.webContents.isDestroyed() ||
+    !window.isFocused() ||
+    !isCurrentTrustedGameWebContents(platform, contents)
+  ) {
+    return false;
+  }
+  if (options.focusHost) {
+    try {
+      window.webContents.focus();
+    } catch {
+      // The trusted guest focus below is still the primary recovery action.
+    }
+  }
+  if (shouldInvalidateGameGuestPresentation(platform, options.invalidatePresentation)) {
+    const invalidatedAt = Date.now();
+    const previousInvalidatedAt = atlasPresentationInvalidatedAtByGuest.get(contents) ?? Number.NEGATIVE_INFINITY;
+    if (invalidatedAt - previousInvalidatedAt >= ATLAS_PRESENTATION_INVALIDATE_MIN_INTERVAL_MS) {
+      atlasPresentationInvalidatedAtByGuest.set(contents, invalidatedAt);
+      // Electron can retain a live but stale OOPIF surface after a guest
+      // remount. Invalidate both compositor surfaces only after all current
+      // guest, URL-policy, and foreground-window checks have passed.
+      try {
+        window.webContents.invalidate();
+      } catch {
+        // Continue to the guest surface and native focus independently.
+      }
+      try {
+        contents.invalidate();
+      } catch {
+        // A compositor race must never suppress the native focus repair.
+      }
+    }
+  }
+  try {
+    contents.focus();
+    return true;
+  } catch {
+    // The guest may be replaced between the trust check and native focus.
+    return false;
+  }
 }
 
 function assertTrustedAppIpcSender(event: {
@@ -8031,9 +8110,20 @@ function handleAtlasShellStatusEvent(sender: WebContents, event: CaptureEvent): 
   const reportedUrl = event.url;
   if (
     platformFromUrl(senderUrl) !== "atlas" ||
-    platformFromUrl(reportedUrl) !== "atlas" ||
-    !atlasEmptyShellMainRecovery.isCurrentNavigation(sender.id, reportedUrl)
+    platformFromUrl(reportedUrl) !== "atlas"
   ) {
+    return;
+  }
+  if (reason === "atlas-lobby-player-field-collapsed") {
+    // A blocked external navigation may leave the real lobby intact while the
+    // empty-shell tracker still holds the attempted destination. This separate
+    // CSS controller tracks committed documents and remeasures the live guest.
+    if (reportedUrl === senderUrl) {
+      void atlasLobbyPlayerFieldRepairsByGuest.get(sender.id)?.check();
+    }
+    return;
+  }
+  if (!atlasEmptyShellMainRecovery.isCurrentNavigation(sender.id, reportedUrl)) {
     return;
   }
   if (reason === "atlas-auth-session-invalid") {
@@ -8418,8 +8508,53 @@ async function createWindow(): Promise<void> {
         installTcgaReplayResearchTap(webContents);
       }
     };
+    let atlasPlayerFieldCommittedUrl = webContents.getURL();
+    const atlasPlayerFieldRepairSafe = () => {
+      if (policy.platform !== "atlas" || webContents.isDestroyed() || webContents.isLoadingMainFrame()) {
+        return false;
+      }
+      const currentUrl = webContents.getURL();
+      return canStartAtlasAutomaticRecovery({
+        targetGuestId: webContents.id,
+        currentGuestId: gameWebContentsByPlatform.get("atlas")?.id ?? null,
+        currentUrl,
+        navigationCurrent: currentUrl === atlasPlayerFieldCommittedUrl,
+        platformSwitchAllowed: capture.getGamePlatformSwitchStatus().allowed,
+        protectedByGameEntry: atlasAutomaticRecoverySafetyFence.isProtected(webContents.id, currentUrl)
+      });
+    };
+    const atlasPlayerFieldRepair = new AtlasLobbyPlayerFieldRepair({
+      isSafe: atlasPlayerFieldRepairSafe,
+      readField: () => webContents.executeJavaScript(ATLAS_LOBBY_PLAYER_FIELD_PROBE),
+      applyCss: async () => {
+        // The controller rechecks document identity and live safety immediately
+        // before calling. Only trusted local CSS is ever inserted, at most once
+        // more per document; no old style removal or navigation is necessary.
+        await webContents.insertCSS(atlasCardRenderingCssForUrl(webContents.getURL()));
+      },
+      report: (outcome) => {
+        reportGuestLifecycle(`atlas-lobby-player-field-${outcome}`);
+        if (outcome === "failed") {
+          const window = mainWindow;
+          if (window && !window.isDestroyed() && !window.webContents.isDestroyed()) {
+            window.webContents.send("game-webview:failure", {
+              platform: "atlas",
+              reason: "lobby-layout",
+              message: "Atlas's Player name box could not be displayed. Find Match and Host Room need a player name. Refresh Atlas when you are ready, then enter your name above Quick Match.",
+              canAutoRemount: false
+            });
+          }
+        }
+      }
+    });
+    if (policy.platform === "atlas") {
+      atlasLobbyPlayerFieldRepairsByGuest.set(webContents.id, atlasPlayerFieldRepair);
+    }
     webContents.on("did-start-navigation", (_navigationEvent, url, isInPlace, isMainFrame) => {
       if (isMainFrame && !isInPlace) {
+        // A prevented link can start navigation without replacing the document.
+        // Cancel pending work now, but renew its budget only on a real commit.
+        atlasPlayerFieldRepair.navigationChanged(false);
         mainNavigationStartedAt = Date.now();
         if (policy.platform === "tcga") {
           tcgaSeatCaptureBridge.forgetWebContents(webContents.id);
@@ -8472,22 +8607,32 @@ async function createWindow(): Promise<void> {
         );
       }
     });
-    webContents.on("did-navigate", refreshGuestContext);
+    webContents.on("did-navigate", (_navigationEvent, url) => {
+      atlasPlayerFieldCommittedUrl = url;
+      atlasPlayerFieldRepair.navigationChanged(true);
+      refreshGuestContext();
+    });
     webContents.on("did-navigate-in-page", (_navigationEvent, url, isMainFrame) => {
       if (isMainFrame && policy.platform === "atlas") {
+        atlasPlayerFieldCommittedUrl = url;
+        atlasPlayerFieldRepair.navigationChanged(false);
         atlasEmptyShellMainRecovery.beginNavigation(webContents.id, url);
+        void atlasPlayerFieldRepair.check();
       }
       refreshGuestContext();
     });
     webContents.on("dom-ready", () => {
       refreshGuestContext();
       installAtlasCardRendering();
+      void atlasPlayerFieldRepair.check();
     });
     installAtlasCardRendering();
     webContents.once("destroyed", () => {
       const wasCurrentAtlasGuest = policy.platform === "atlas"
         && gameWebContentsByPlatform.get("atlas")?.id === webContents.id;
       invalidateAtlasCardRendering();
+      atlasPlayerFieldRepair.dispose();
+      atlasLobbyPlayerFieldRepairsByGuest.delete(webContents.id);
       rawCaptureIngressLimiter.forget(webContents.id);
       forgetGameWebContents(webContents);
       atlasEmptyShellMainRecovery.forgetGuest(webContents.id);
@@ -9478,35 +9623,14 @@ function registerIpc(): void {
       throw new Error("Game webview focus request has an invalid platform.");
     }
     const contents = gameWebContentsByPlatform.get(platform);
-    const policy = contents && !contents.isDestroyed()
-      ? embeddedWebviewPolicyBySession.get(contents.session)
-      : null;
-    if (
-      !mainWindow ||
-      mainWindow.isDestroyed() ||
-      !mainWindow.isFocused() ||
-      !contents ||
-      contents.isDestroyed() ||
-      contents.session !== electronSession.fromPartition(GAME_WEBVIEW_PARTITIONS[platform]) ||
-      !policy ||
-      policy.kind !== "game" ||
-      policy.platform !== platform ||
-      !isAllowedEmbeddedNavigation(policy, contents.getURL())
-    ) {
+    const focusOptions = { focusHost: true, invalidatePresentation: platform === "atlas" };
+    if (!contents || !focusCurrentTrustedGameGuest(platform, contents, focusOptions)) {
       return false;
     }
-    mainWindow.webContents.focus();
-    contents.focus();
     setTimeout(() => {
-      if (
-        mainWindow &&
-        !mainWindow.isDestroyed() &&
-        mainWindow.isFocused() &&
-        !contents.isDestroyed()
-      ) {
-        mainWindow.webContents.focus();
-        contents.focus();
-      }
+      // Revalidate the guest, partition, URL policy, and foreground window.
+      // A remount or navigation must make this delayed retry a no-op.
+      focusCurrentTrustedGameGuest(platform, contents, focusOptions);
     }, 80);
     return true;
   });
@@ -9571,25 +9695,40 @@ function registerIpc(): void {
       return;
     }
     const contents = ipcEvent.sender;
-    if (
-      !mainWindow ||
-      mainWindow.isDestroyed() ||
-      !mainWindow.isFocused() ||
-      contents.isDestroyed()
-    ) {
+    const focusOptions = { focusHost: false, invalidatePresentation: true };
+    if (!focusCurrentTrustedGameGuest("atlas", contents, focusOptions)) {
       return;
     }
-    contents.focus();
     setTimeout(() => {
-      if (
-        mainWindow &&
-        !mainWindow.isDestroyed() &&
-        mainWindow.isFocused() &&
-        !contents.isDestroyed()
-      ) {
-        contents.focus();
-      }
+      // Never refocus a replaced or navigated guest after the pointer event.
+      focusCurrentTrustedGameGuest("atlas", contents, focusOptions);
     }, 40);
+  });
+  ipcMain.on(GAME_WEBVIEW_INTERACTION_DIAGNOSTIC_IPC_CHANNEL, (ipcEvent, value: unknown) => {
+    if (trustedGameIpcPlatform(ipcEvent) !== "atlas") {
+      return;
+    }
+    const diagnostic = validatedAtlasGameInteractionDiagnostic(value);
+    if (!diagnostic) {
+      return;
+    }
+    const capturedAt = new Date().toISOString();
+    void diagnostics.record({
+      id: `atlas-interaction-${Date.now()}-${randomUUID()}`,
+      platform: "atlas",
+      kind: "debug",
+      capturedAt,
+      // The trust check above already validates the live URL. Keep this
+      // diagnostic route-free so room/auth paths cannot enter the log.
+      url: "https://play.riftatlas.com/",
+      payload: {
+        reason: "atlas-interaction-acknowledgement",
+        phase: diagnostic.phase,
+        documentFocused: diagnostic.documentFocused,
+        documentVisible: diagnostic.documentVisible,
+        activeControl: diagnostic.activeControl
+      }
+    }).catch(() => undefined);
   });
   ipcMain.on("capture:tcga-research-event", (ipcEvent, value: unknown) => {
     if (

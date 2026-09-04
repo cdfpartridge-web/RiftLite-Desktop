@@ -220,6 +220,11 @@ describe("Atlas empty-shell recovery integration", () => {
   });
 
   it("ignores a queued shell-ready event from a replaced webview", () => {
+    const presentation = sourceBetween(
+      rendererSource,
+      "const presentGame = () => {",
+      "return bindGameWebviewEvents(webview, {"
+    );
     const binding = sourceBetween(
       rendererSource,
       "return bindGameWebviewEvents(webview, {",
@@ -228,6 +233,28 @@ describe("Atlas empty-shell recovery integration", () => {
 
     expect(binding).toContain("if (gameRef.current === webview)");
     expect(binding).toContain("handleWebviewIpc(event)");
+    expect(presentation).toContain("if (gameRef.current !== webview)");
+    expect(presentation).toContain("refreshGamePresentation(platform, webview)");
+    expect(presentation).toContain('focusGameWebviewInput("atlas")');
+  });
+
+  it("retries bounded Atlas presentation recovery after an explicit repair remount", () => {
+    const timerStart = rendererSource.indexOf("const remountRecoveryTimers = [50, 280, 900]");
+    const retryStart = rendererSource.lastIndexOf("useEffect(() => {", timerStart);
+    const retryEnd = rendererSource.indexOf("\n\n  useEffect(() => {", timerStart);
+    const retryEffect = rendererSource.slice(retryStart, retryEnd);
+
+    expect(timerStart).toBeGreaterThan(-1);
+    expect(retryStart).toBeGreaterThan(-1);
+    expect(retryEnd).toBeGreaterThan(retryStart);
+    expect(retryEffect).toContain('activePlatform !== "atlas"');
+    expect(retryEffect).toContain('mountedGamePlatform !== "atlas"');
+    expect(retryEffect).toContain('refreshGamePresentation("atlas")');
+    expect(retryEffect).toContain('focusGameWebviewInput("atlas")');
+    expect(retryEffect).toContain("gameWebviewEpoch");
+    expect(retryEffect).toContain("atlasExplicitRepairToken");
+    expect(retryEffect).not.toContain("recoverAtlasWebview(");
+    expect(retryEffect).not.toContain("setGameWebviewEpoch");
   });
 
   it("forces one renderer remount after a targeted Atlas sign-in reset", () => {

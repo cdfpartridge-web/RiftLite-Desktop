@@ -1345,7 +1345,7 @@ export interface GamePlatformSwitchStatus {
 
 export interface GameWebviewFailure {
   platform: GamePlatform;
-  reason: "load-failed" | "render-process-gone" | "unresponsive" | "authentication-reset" | "authentication-blocked" | "authentication-refreshed";
+  reason: "load-failed" | "render-process-gone" | "unresponsive" | "authentication-reset" | "authentication-blocked" | "authentication-refreshed" | "lobby-layout";
   message: string;
   canAutoRemount: boolean;
 }

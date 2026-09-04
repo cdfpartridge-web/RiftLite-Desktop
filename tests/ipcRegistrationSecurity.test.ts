@@ -53,15 +53,27 @@ describe("IPC registration boundary", () => {
     expect(handler).not.toContain("capture.handleEvent");
   });
 
-  it("accepts editable focus recovery only from the trusted Atlas guest", () => {
+  it("accepts interactive focus recovery only from the trusted Atlas guest", () => {
     const start = registerIpcSource.indexOf("ipcMain.on(GAME_WEBVIEW_EDITABLE_FOCUS_IPC_CHANNEL");
-    const end = registerIpcSource.indexOf('ipcMain.on("capture:tcga-research-event"', start);
+    const end = registerIpcSource.indexOf("ipcMain.on(GAME_WEBVIEW_INTERACTION_DIAGNOSTIC_IPC_CHANNEL", start);
     const handler = registerIpcSource.slice(start, end);
 
     expect(start).toBeGreaterThan(-1);
     expect(handler).toContain('trustedGameIpcPlatform(ipcEvent) !== "atlas"');
     expect(handler).toContain("const contents = ipcEvent.sender");
-    expect(handler).toContain("mainWindow.isFocused()");
-    expect(handler).toContain("contents.focus()");
+    expect(handler).toContain("focusHost: false, invalidatePresentation: true");
+    expect(handler.match(/focusCurrentTrustedGameGuest\("atlas", contents, focusOptions\)/g)?.length).toBe(2);
+  });
+
+  it("accepts interaction diagnostics only from the trusted Atlas guest and bypasses capture", () => {
+    const start = registerIpcSource.indexOf("ipcMain.on(GAME_WEBVIEW_INTERACTION_DIAGNOSTIC_IPC_CHANNEL");
+    const end = registerIpcSource.indexOf('ipcMain.on("capture:tcga-research-event"', start);
+    const handler = registerIpcSource.slice(start, end);
+
+    expect(start).toBeGreaterThan(-1);
+    expect(handler).toContain('trustedGameIpcPlatform(ipcEvent) !== "atlas"');
+    expect(handler).toContain("validatedAtlasGameInteractionDiagnostic(value)");
+    expect(handler).toContain("diagnostics.record({");
+    expect(handler).not.toContain("capture.handleEvent");
   });
 });

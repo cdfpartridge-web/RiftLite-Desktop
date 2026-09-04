@@ -629,13 +629,13 @@ const LAB_TRAINING_LEGEND_NAMES = new Set(LAB_TRAINING_LEGEND_NAME_BY_CANONICAL.
 const RELEASE_NOTES = {
   version: APP_VERSION_META,
   title: `RiftLite v${APP_VERSION_META}`,
-  intro: "This update makes deck and replay review more useful, easier to share, and clearer about the evidence it has.",
+  intro: "This hotfix improves RiftAtlas lobby interaction and keeps the Matches page stable while scrolling.",
   items: [
-    "Deck Insights is now the default Insights view, with focused Card Review, matchup context, filters, and honest evidence labels.",
-    "Enhanced Insights Beta can mark the exact moment of a decision and add the reason later in Match Review, while keeping that context local.",
-    "Replay timelines use player and opponent colours, conservative score badges, and a default-off automatic-events control.",
-    "Full Voiceover and coaching-note recording now show clear progress, with more reliable MP4 overlays and adjustable coaching-note volume.",
-    "Saved Scorepad records can be corrected, and deck summaries can be shared as ready-to-post images.",
+    "RiftLite can restore Atlas's existing Player name field when the lobby loads it at zero size, without reading or changing the name.",
+    "Trusted pointer, focus, and keyboard activity now reinforces native focus and presentation for the embedded Atlas guest.",
+    "The interaction recovery does not reload Atlas, clear site data, sign you out, change your Player name, or start a match.",
+    "Passive Atlas font cache misses immediately after a successful recovery no longer appear as the latest embedded failure.",
+    "The Matches page now stays the same width as more saved rows appear while scrolling, with Replay, Edit, and Delete kept accessible.",
     "Replay Coach remains Coming Soon while its coaching experience is refined."
   ]
 };
@@ -3268,6 +3268,7 @@ function App() {
   const mountedGamePlatformRef = useRef<GamePlatform | null>(mountedGamePlatform);
   const gameGuestAutoRecoveryRef = useRef(new Set<GamePlatform>());
   const reviewDraftRef = useRef<MatchDraft | null>(null);
+  const rulesSearchOpenRef = useRef(rulesSearchOpen);
   const queuedReviewDraftsRef = useRef<MatchDraft[]>([]);
   const gameHostInputWasBlockedRef = useRef(false);
   const gamePresentationPulseRef = useRef<{
@@ -3922,6 +3923,10 @@ function App() {
   }, [reviewDraft]);
 
   useEffect(() => {
+    rulesSearchOpenRef.current = rulesSearchOpen;
+  }, [rulesSearchOpen]);
+
+  useEffect(() => {
     decksRef.current = decks;
   }, [decks]);
 
@@ -4081,6 +4086,11 @@ function App() {
       if (failure.platform !== mountedGamePlatformRef.current) {
         return;
       }
+      if (failure.reason === "lobby-layout") {
+        // This bounded CSS repair must never trigger an auth reset or remount.
+        showCaptureNotice({ title: "Atlas player name needs attention", message: failure.message }, 12_000);
+        return;
+      }
       void (async () => {
         const forcedAtlasAuthRemount = failure.platform === "atlas" && failure.reason === "authentication-reset";
         const automaticRemountAllowed = failure.platform !== "atlas" || forcedAtlasAuthRemount;
@@ -4218,8 +4228,14 @@ function App() {
     }
     const platform = mountedGamePlatform;
     const presentGame = () => {
+      if (gameRef.current !== webview) {
+        return;
+      }
       applyGameZoom();
-      refreshGamePresentation(platform);
+      refreshGamePresentation(platform, webview);
+      if (platform === "atlas") {
+        focusGameWebviewInput("atlas");
+      }
       void primeReplayVideoTarget(platform);
     };
     return bindGameWebviewEvents(webview, {
@@ -4264,6 +4280,30 @@ function App() {
     }, delay));
     return () => timers.forEach((timer) => window.clearTimeout(timer));
   }, [activePlatform, activeView, mountedGamePlatform, preloadUrl, sidebarCollapsed]);
+
+  useEffect(() => {
+    if (
+      activePlatform !== "atlas" ||
+      mountedGamePlatform !== "atlas" ||
+      activeView !== "play" ||
+      !gameWebviewIsReady(activePlatform, mountedGamePlatform, preloadUrl) ||
+      (gameWebviewEpoch === 0 && atlasExplicitRepairToken === 0)
+    ) {
+      return;
+    }
+    const remountRecoveryTimers = [50, 280, 900].map((delay) => window.setTimeout(() => {
+      refreshGamePresentation("atlas");
+      focusGameWebviewInput("atlas");
+    }, delay));
+    return () => remountRecoveryTimers.forEach((timer) => window.clearTimeout(timer));
+  }, [
+    activePlatform,
+    activeView,
+    mountedGamePlatform,
+    preloadUrl,
+    gameWebviewEpoch,
+    atlasExplicitRepairToken
+  ]);
 
   useEffect(() => {
     const hostInputBlocked = Boolean(reviewDraft || rulesSearchOpen);
@@ -5721,9 +5761,12 @@ function App() {
     await recoverAtlasWebview("sign-in");
   }
 
-  function refreshGamePresentation(platform: GamePlatform) {
+  function refreshGamePresentation(
+    platform: GamePlatform,
+    expectedWebview: Electron.WebviewTag | null = gameRef.current
+  ) {
     const webview = gameRef.current;
-    if (!webview || platform !== mountedGamePlatform) {
+    if (!webview || webview !== expectedWebview || platform !== mountedGamePlatformRef.current) {
       return;
     }
     const bounds = webview.getBoundingClientRect();
@@ -5764,11 +5807,11 @@ function App() {
   function focusNativeGameWebview(platform: GamePlatform): void {
     if (
       document.visibilityState === "hidden" ||
-      reviewDraft ||
-      rulesSearchOpen ||
-      activeView !== "play" ||
-      platform !== activePlatform ||
-      platform !== mountedGamePlatform
+      reviewDraftRef.current ||
+      rulesSearchOpenRef.current ||
+      activeViewRef.current !== "play" ||
+      platform !== activePlatformRef.current ||
+      platform !== mountedGamePlatformRef.current
     ) {
       return;
     }
@@ -5780,11 +5823,11 @@ function App() {
     if (
       !webview ||
       document.visibilityState === "hidden" ||
-      reviewDraft ||
-      rulesSearchOpen ||
-      activeView !== "play" ||
-      platform !== activePlatform ||
-      platform !== mountedGamePlatform
+      reviewDraftRef.current ||
+      rulesSearchOpenRef.current ||
+      activeViewRef.current !== "play" ||
+      platform !== activePlatformRef.current ||
+      platform !== mountedGamePlatformRef.current
     ) {
       return;
     }

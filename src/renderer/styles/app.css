@@ -10140,6 +10140,19 @@ button.floating-resize-handle {
   gap: 14px;
 }
 
+/* Off-screen rows remember their intrinsic size. Keep both containing grids
+   bounded so those remembered widths cannot grow the page on every scroll. */
+.matches-page,
+.matches-page .local-match-table {
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+}
+
+.matches-page .match-row {
+  min-width: 0;
+  width: auto;
+}
+
 .matches-page .panel-header {
   margin-bottom: 0;
 }
@@ -19351,6 +19364,16 @@ button.replay-export-card:hover {
   padding: 12px;
 }
 
+/* Use compact Matches rows before their fixed desktop columns can clip the
+   actions inside a paint-contained row at the normal minimum window width. */
+@media (min-width: 901px) and (max-width: 1340px) {
+  .matches-page .match-row {
+    grid-template-columns: 30px 132px minmax(220px, 1fr) minmax(180px, 1fr);
+  }
+  /* Leave the checkbox column empty when the deck starts the second line. */
+  .matches-page .match-row > :nth-child(5) { grid-column: 2; }
+}
+
 @media (max-width: 1180px) {
   .app-shell { grid-template-columns: 78px minmax(0, 1fr); }
   .app-shell.sidebar-collapsed { grid-template-columns: minmax(0, 1fr); }
@@ -19506,6 +19529,8 @@ button.replay-export-card:hover {
   .overlay-profile-row { grid-template-columns: 1fr; }
   .match-row { grid-template-columns: 30px minmax(0, 1fr); }
   .match-row .row-actions { justify-content: flex-start; }
+  .matches-page .match-row > :nth-child(n + 3) { grid-column: 2; }
+  .matches-page .match-row .row-actions { grid-column: 1 / -1; }
   .overlay-url-grid { grid-template-columns: 1fr; }
   .landscape-preview {
     grid-template-columns: 1fr;
