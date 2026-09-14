@@ -10,6 +10,7 @@ CLEARER REVIEW AND ATLAS MATCH DECKS
 - Keep all local only clears eligible upload activity together while preserving local matches, replays and captures.
 - Move Mark decision to a comfortable position; it remembers your choice.
 - Fixes completed Atlas matches reopening unexpectedly and repeated focus recovery that could interrupt chat typing.
+- Updates the embedded Electron runtime to 39.8.10, including security fixes for browser popup handling.
 
 Your existing profile, matches, decks, replays, settings and media paths are preserved.
 Private or unavailable Atlas deck lists remain unavailable. Full imported lists are excluded from public/community/hub/team match uploads.

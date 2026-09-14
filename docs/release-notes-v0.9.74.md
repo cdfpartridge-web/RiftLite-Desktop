@@ -26,6 +26,7 @@ Prepare and Review have a fresh layout, completed Atlas opponents' decks are eas
 - **Move Mark decision.** Drag the in-game marker to a comfortable position; it remembers your choice and stays within the game frame.
 - Fixes completed Atlas matches reopening unexpectedly after early exits or joining another room.
 - Prevents repeated focus recovery from interrupting an already focused Atlas chat input.
+- Updates the embedded Electron runtime to 39.8.10, including security fixes for browser popup handling.
 
 ## Good to know
 
