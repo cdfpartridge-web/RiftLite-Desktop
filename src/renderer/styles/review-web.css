@@ -1,0 +1,389 @@
+/* Web Replays keeps playback primary; delivery controls stay in focused panels. */
+.review-web {
+  --review-web-line: rgb(78 116 155 / 30%);
+  --review-web-muted: #98adc4;
+  grid-template-rows: auto auto minmax(340px, 1fr);
+  gap: 16px;
+  min-width: 0;
+  overflow: auto;
+}
+
+.review-web [hidden] {
+  display: none !important;
+}
+
+.review-web :is(button, summary, input, select, a):focus-visible {
+  outline: 2px solid #59e5ff;
+  outline-offset: 3px;
+}
+
+.review-web :is(button, select, input) {
+  max-width: 100%;
+}
+
+.review-web .web-replay-toolbar {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+}
+
+.review-web .web-replay-toolbar h2 {
+  margin: 6px 0 7px;
+  font-size: clamp(23px, 2.4vw, 30px);
+  letter-spacing: -.035em;
+}
+
+.review-web .web-replay-toolbar p {
+  max-width: 670px;
+  color: var(--review-web-muted);
+  line-height: 1.6;
+}
+
+.review-web .web-replay-toolbar > div:first-child {
+  min-width: 0;
+}
+
+.review-web .web-replay-actions {
+  gap: 7px;
+}
+
+.review-web .web-replay-actions button {
+  min-height: 35px;
+  font-size: 11px;
+}
+
+.review-web .web-replay-control-centre,
+.review-web .web-replay-control-centre[data-expanded="false"] {
+  max-height: none;
+  padding: 14px 16px;
+  overflow: visible;
+  gap: 12px;
+  border: 1px solid var(--review-web-line);
+  border-radius: 14px;
+  background: linear-gradient(155deg, #0b192a, #06101b 85%);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 3%);
+}
+
+.review-web .web-replay-control-centre[data-tone="attention"] {
+  border-color: rgb(232 170 86 / 42%);
+}
+
+.review-web .web-replay-control-heading {
+  grid-template-columns: 36px minmax(180px, 1fr) auto;
+  gap: 12px;
+}
+
+.review-web .web-replay-control-status-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 11px;
+  color: #78ddea;
+}
+
+.review-web [data-tone="ready"] .web-replay-control-status-icon {
+  border-color: rgb(89 221 186 / 25%);
+  background: rgb(36 131 109 / 12%);
+  color: #79dec1;
+}
+
+.review-web .web-replay-control-heading h3 {
+  margin-top: 4px;
+  font-size: 14px;
+  letter-spacing: -.01em;
+}
+
+.review-web .web-replay-control-heading p {
+  max-width: 730px;
+  color: var(--review-web-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.review-web .review-web-health {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.review-web .review-web-health > :is(span, button) {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 25px;
+  padding: 4px 8px;
+  border: 1px solid rgb(94 128 162 / 20%);
+  border-radius: 6px;
+  background: rgb(7 18 30 / 55%);
+  color: #9eb4ca;
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1.3;
+}
+
+.review-web .review-web-health > button:hover {
+  border-color: rgb(89 229 255 / 55%);
+  color: #d8f5ff;
+}
+
+.review-web .review-web-health > [data-attention="true"] {
+  border-color: rgb(232 170 86 / 30%);
+  background: rgb(154 101 32 / 9%);
+  color: #e9c58c;
+}
+
+.review-web .review-web-health-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #697f95;
+}
+
+.review-web [data-enabled="true"] > .review-web-health-dot {
+  background: #75d5b8;
+}
+
+.review-web .web-replay-control-body {
+  max-height: min(42vh, 360px);
+  gap: 0;
+  overflow: auto;
+  border-top: 1px solid var(--review-web-line);
+  scrollbar-width: thin;
+  scrollbar-color: #35617b #07101f;
+}
+
+.review-web .review-web-control-tabs {
+  position: sticky;
+  z-index: 1;
+  top: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding: 10px 0;
+  background: #091624;
+}
+
+.review-web .review-web-control-tabs > button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 33px;
+  padding: 7px 11px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: #99afc5;
+  font-size: 11px;
+}
+
+.review-web .review-web-control-tabs > button[aria-pressed="true"] {
+  border-color: rgb(74 213 238 / 25%);
+  background: rgb(28 102 129 / 22%);
+  color: #b4f3ff;
+}
+
+.review-web .review-web-control-tabs > button > span {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgb(144 181 215 / 12%);
+  font-size: 10px;
+}
+
+.review-web .review-web-panel {
+  min-width: 0;
+  padding: 4px 0 2px;
+}
+
+.review-web .review-web-panel-heading {
+  margin-bottom: 13px;
+}
+
+.review-web .review-web-panel-heading strong {
+  font-size: 12px;
+}
+
+.review-web .review-web-panel-heading p,
+.review-web .review-web-panel-note {
+  margin: 5px 0 0;
+  color: var(--review-web-muted);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.review-web .review-web-panel-note {
+  margin-top: 11px;
+}
+
+.review-web :is(.web-replay-platform-card, .web-replay-visibility-card) {
+  padding: 12px;
+  border-color: var(--review-web-line);
+  border-radius: 9px;
+}
+
+.review-web .web-replay-platform-card[data-enabled="true"] {
+  border-color: rgb(75 170 146 / 30%);
+  background: rgb(31 114 94 / 8%);
+}
+
+.review-web :is(.web-replay-platform-card, .web-replay-visibility-card) strong {
+  font-size: 12px;
+}
+
+.review-web .web-replay-visibility-card select {
+  border-color: var(--review-web-line);
+  background: #071320;
+  font-size: 11px;
+}
+
+.review-web .web-replay-delivery-list {
+  gap: 9px;
+}
+
+.review-web .web-replay-delivery-item {
+  grid-template-columns: 28px minmax(180px, 1fr) auto;
+  padding: 11px;
+  border-color: var(--review-web-line);
+  border-radius: 9px;
+}
+
+.review-web .web-replay-delivery-item strong {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.review-web .web-replay-delivery-item[data-stage="failed"],
+.review-web .web-replay-delivery-item[data-stage="paused"] {
+  border-color: rgb(233 171 91 / 28%);
+  background: rgb(96 64 25 / 10%);
+}
+
+.review-web .web-replay-delivery-item:is([data-stage="failed"], [data-stage="paused"]) .web-replay-delivery-marker {
+  background: rgb(185 128 56 / 12%);
+  color: #e9c58c;
+}
+
+.review-web .web-replay-failure-actions {
+  justify-content: flex-end;
+  max-width: 330px;
+}
+
+.review-web .web-replay-failure-actions button {
+  min-height: 30px;
+  font-size: 10px;
+}
+
+.review-web .review-web-more-activity {
+  justify-self: start;
+}
+
+.review-web .review-web-activity-empty {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  padding: 15px 2px;
+  color: #79dec1;
+}
+
+.review-web .review-web-activity-empty strong {
+  color: #dfebf6;
+  font-size: 12px;
+}
+
+.review-web .review-web-activity-empty p {
+  margin: 5px 0 0;
+  color: var(--review-web-muted);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.review-web :is(.web-replay-sharing-details, .web-replay-technical-details) {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.review-web .web-replay-diagnostics-metrics {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.review-web .web-replay-frame-shell {
+  min-width: 0;
+  min-height: 340px;
+  border-color: var(--review-web-line);
+  border-radius: 14px;
+}
+
+.review-web[data-fullscreen="true"] {
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 8px;
+  overflow: hidden;
+}
+
+.review-web[data-fullscreen="true"] .web-replay-toolbar {
+  padding: 6px 10px;
+}
+
+.review-web[data-fullscreen="true"] .web-replay-toolbar :is(.review-kicker, p) {
+  display: none;
+}
+
+.review-web[data-fullscreen="true"] .web-replay-toolbar h2 {
+  margin: 0;
+  font-size: 17px;
+}
+
+.review-web[data-fullscreen="true"] .web-replay-frame-shell {
+  min-height: 0;
+}
+
+@media (max-width: 1200px) {
+  .review-web .web-replay-control-heading {
+    grid-template-columns: 36px minmax(0, 1fr);
+  }
+
+  .review-web .web-replay-control-heading > .web-replay-actions {
+    grid-column: 2;
+    justify-content: flex-start;
+  }
+
+  .review-web .web-replay-delivery-item {
+    grid-template-columns: 28px minmax(0, 1fr);
+  }
+
+  .review-web .web-replay-failure-actions {
+    grid-column: 2;
+    justify-content: flex-start;
+    max-width: none;
+  }
+}
+
+@media (max-width: 900px) {
+  .review-web .web-replay-toolbar {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 13px;
+  }
+
+  .review-web .web-replay-toolbar > .web-replay-actions {
+    justify-content: flex-start;
+  }
+
+  .review-web .web-replay-control-status-icon {
+    display: grid;
+  }
+
+  .review-web .web-replay-control-centre {
+    padding: 12px;
+  }
+
+  .review-web .web-replay-diagnostics-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .review-web[data-fullscreen="true"] .web-replay-toolbar {
+    flex-direction: row;
+    align-items: center;
+    gap: 10px;
+  }
+}

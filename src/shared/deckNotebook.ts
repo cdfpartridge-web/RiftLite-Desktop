@@ -4,6 +4,7 @@ import type {
   DeckGuideCardRef,
   DeckGuideNote,
   DeckGuideSection,
+  DeckGuideReviewBaseline,
   DeckCardWatchItem,
   DeckMatchupGuide,
   DeckNotebook,
@@ -230,7 +231,17 @@ export function deckNotebookBattlefieldCardOptions(deck: SavedDeck): DeckNoteboo
   return deckNotebookSectionCardOptions(deck, "battlefields");
 }
 
+/** Storage and exports retain authored plans, even after their cards leave the deck. */
+export function enrichDeckNotebookForDeck(notebook: DeckNotebook, deck: SavedDeck): DeckNotebook {
+  return projectDeckNotebookForDeck(notebook, deck, false);
+}
+
+/** Explicit filtered projection only; never use this to persist an author's notebook. */
 export function sanitizeDeckNotebookForDeck(notebook: DeckNotebook, deck: SavedDeck): DeckNotebook {
+  return projectDeckNotebookForDeck(notebook, deck, true);
+}
+
+function projectDeckNotebookForDeck(notebook: DeckNotebook, deck: SavedDeck, filterUnavailable: boolean): DeckNotebook {
   const allOptions = deckNotebookCardOptions(deck);
   const mainOptions = deckNotebookMainDeckCardOptions(deck);
   const mulliganOptions = deckNotebookMulliganCardOptions(deck);
@@ -249,19 +260,21 @@ export function sanitizeDeckNotebookForDeck(notebook: DeckNotebook, deck: SavedD
   return {
     ...notebook,
     watchlist: notebook.watchlist
-      .filter((item) => allowedAll.has(item.cardKey))
+      .filter((item) => !filterUnavailable || allowedAll.has(item.cardKey))
       .map((item) => enrichWatchItem(item, allByKey.get(item.cardKey))),
     defaultGuide: sanitizeGuideCards(notebook.defaultGuide, allowedMain, allowedMulligan, allowedSide, allowedBattlefields, {
       mainByKey,
       mulliganByKey,
       sideByKey,
-      battlefieldByKey
+      battlefieldByKey,
+      filterUnavailable
     }),
     matchupGuides: notebook.matchupGuides.map((guide) => sanitizeGuideCards(guide, allowedMain, allowedMulligan, allowedSide, allowedBattlefields, {
       mainByKey,
       mulliganByKey,
       sideByKey,
-      battlefieldByKey
+      battlefieldByKey,
+      filterUnavailable
     }))
   };
 }
@@ -452,11 +465,13 @@ function normalizeMatchupGuide(value: Partial<DeckMatchupGuide> | null | undefin
   const source = value ?? {};
   const normalizedLegend = normalizeLegendName(legend || source.legend);
   const base = emptyDeckMatchupGuide(normalizedLegend);
+  const reviewBaseline = normalizeDeckGuideReviewBaseline(source.reviewBaseline);
   return {
     id: text(source.id) || base.id,
     legend: normalizedLegend,
     legendKey: normalizedLegend ? normalizedText(normalizedLegend) : "default",
     updatedAt: text(source.updatedAt),
+    ...(reviewBaseline ? { reviewBaseline } : {}),
     mulligan: {
       keep: normalizeGuideSection(source.mulligan?.keep),
       consider: normalizeGuideSection(source.mulligan?.consider),
@@ -475,6 +490,20 @@ function normalizeMatchupGuide(value: Partial<DeckMatchupGuide> | null | undefin
     },
     notes: Array.isArray(source.notes) ? source.notes.map(normalizeGuideNote).filter(Boolean) as DeckGuideNote[] : []
   };
+}
+
+export function normalizeDeckGuideReviewBaseline(value: unknown): DeckGuideReviewBaseline | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const raw = value as Partial<DeckGuideReviewBaseline>;
+  if (raw.version !== 1 || typeof raw.snapshotHash !== "string" || !raw.snapshotHash ||
+    typeof raw.reviewedAt !== "string" || !Number.isFinite(Date.parse(raw.reviewedAt)) || !Array.isArray(raw.cards)) return undefined;
+  const cards: DeckGuideReviewBaseline["cards"] = [];
+  for (const card of raw.cards) {
+    if (!card || typeof card.key !== "string" || !card.key || typeof card.name !== "string" ||
+      ![card.mainDeck, card.sideboard, card.battlefields].every((qty) => Number.isInteger(qty) && qty >= 0)) return undefined;
+    cards.push({ key: card.key, name: card.name, mainDeck: card.mainDeck, sideboard: card.sideboard, battlefields: card.battlefields });
+  }
+  return { version: 1, snapshotHash: raw.snapshotHash, reviewedAt: raw.reviewedAt, cards };
 }
 
 function normalizeGuideSection(value: Partial<DeckGuideSection> | null | undefined): DeckGuideSection {
@@ -574,34 +603,35 @@ function sanitizeGuideCards(
     mulliganByKey: Map<string, DeckNotebookCardOption>;
     sideByKey: Map<string, DeckNotebookCardOption>;
     battlefieldByKey: Map<string, DeckNotebookCardOption>;
+    filterUnavailable: boolean;
   }
 ): DeckMatchupGuide {
   return {
     ...guide,
     mulligan: {
-      keep: filterGuideSection(guide.mulligan.keep, allowedMulligan, options.mulliganByKey),
-      consider: filterGuideSection(guide.mulligan.consider, allowedMulligan, options.mulliganByKey),
-      avoid: filterGuideSection(guide.mulligan.avoid, allowedMulligan, options.mulliganByKey)
+      keep: filterGuideSection(guide.mulligan.keep, allowedMulligan, options.mulliganByKey, options.filterUnavailable),
+      consider: filterGuideSection(guide.mulligan.consider, allowedMulligan, options.mulliganByKey, options.filterUnavailable),
+      avoid: filterGuideSection(guide.mulligan.avoid, allowedMulligan, options.mulliganByKey, options.filterUnavailable)
     },
     sideboard: {
       ...guide.sideboard,
-      out: filterGuideSection(guide.sideboard.out, allowedMain, options.mainByKey),
-      in: filterGuideSection(guide.sideboard.in, allowedSide, options.sideByKey)
+      out: filterGuideSection(guide.sideboard.out, allowedMain, options.mainByKey, options.filterUnavailable),
+      in: filterGuideSection(guide.sideboard.in, allowedSide, options.sideByKey, options.filterUnavailable)
     },
     battlefields: {
       ...guide.battlefields,
-      game1: filterGuideSection(guide.battlefields.game1, allowedBattlefields, options.battlefieldByKey),
-      game1First: filterGuideSection(guide.battlefields.game1First, allowedBattlefields, options.battlefieldByKey),
-      game1Second: filterGuideSection(guide.battlefields.game1Second, allowedBattlefields, options.battlefieldByKey)
+      game1: filterGuideSection(guide.battlefields.game1, allowedBattlefields, options.battlefieldByKey, options.filterUnavailable),
+      game1First: filterGuideSection(guide.battlefields.game1First, allowedBattlefields, options.battlefieldByKey, options.filterUnavailable),
+      game1Second: filterGuideSection(guide.battlefields.game1Second, allowedBattlefields, options.battlefieldByKey, options.filterUnavailable)
     }
   };
 }
 
-function filterGuideSection(section: DeckGuideSection, allowed: Set<string>, optionsByKey: Map<string, DeckNotebookCardOption>): DeckGuideSection {
+function filterGuideSection(section: DeckGuideSection, allowed: Set<string>, optionsByKey: Map<string, DeckNotebookCardOption>, filterUnavailable: boolean): DeckGuideSection {
   return {
     ...section,
     cards: section.cards
-      .filter((card) => allowed.has(card.cardKey))
+      .filter((card) => !filterUnavailable || allowed.has(card.cardKey))
       .map((card) => enrichGuideCard(card, optionsByKey.get(card.cardKey)))
   };
 }

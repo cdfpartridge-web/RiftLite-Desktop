@@ -1,0 +1,32 @@
+.prepare-page .deck-guide-review {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid rgb(78 157 181 / 30%);
+  border-radius: 12px;
+  background: linear-gradient(120deg, rgb(19 48 63 / 65%), rgb(8 20 33 / 85%));
+  color: #dcecf6;
+}
+.prepare-page .deck-guide-review[data-state="changed"] { border-color: rgb(224 175 84 / 38%); }
+.prepare-page .deck-guide-review header { display: flex; align-items: flex-start; gap: 10px; }
+.prepare-page .deck-guide-review header > svg { flex: 0 0 auto; color: #72d7ff; margin-top: 2px; }
+.prepare-page .deck-guide-review p { margin: 5px 0 0; color: #a7bacd; font-size: 12px; line-height: 1.5; }
+.prepare-page .deck-guide-review-links { display: flex; flex-wrap: wrap; gap: 8px; }
+.prepare-page .deck-guide-review-links button { white-space: normal; text-align: left; }
+.prepare-page .deck-guide-review-links button[data-active="true"] { border-color: #72d7ff; }
+.prepare-page .deck-guide-review-links button span { padding: 1px 6px; border-radius: 7px; background: rgb(255 255 255 / 8%); }
+.prepare-page .deck-guide-review-context { display: grid; gap: 5px; }
+.prepare-page .deck-guide-review-context span, .prepare-page .deck-guide-review-footer small { font-size: 11px; color: #a7bacd; line-height: 1.5; }
+.prepare-page .deck-guide-review-issues { display: grid; gap: 8px; padding: 0; margin: 0; list-style: none; }
+.prepare-page .deck-guide-review-issues li { display: flex; align-items: center; gap: 12px; padding: 10px; border-radius: 8px; background: rgb(2 12 22 / 40%); }
+.prepare-page .deck-guide-review-issues li > div { display: grid; gap: 4px; flex: 1; min-width: 0; }
+.prepare-page .deck-guide-review-issues small { font-size: 10px; color: #efc58b; }
+.prepare-page .deck-guide-review-issues span { font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.prepare-page .deck-guide-review-issues button { flex: 0 0 auto; }
+.prepare-page .deck-guide-review .deck-guide-review-clear { display: flex; gap: 7px; align-items: center; color: #acd9ce; }
+.prepare-page .deck-guide-review-footer { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.prepare-page .deck-guide-review button:focus-visible { outline: 2px solid #72d7ff; outline-offset: 3px; }
+@media (max-width: 900px) {
+  .prepare-page .deck-guide-review-issues li { align-items: flex-start; flex-direction: column; }
+  .prepare-page .deck-guide-review { padding: 12px; }
+}

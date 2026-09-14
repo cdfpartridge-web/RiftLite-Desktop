@@ -28,6 +28,7 @@ import type {
 import { canonicalLegendName } from "../../shared/legendNames.js";
 import { hasVerifiedRiftLiteAccount } from "../../shared/accountIdentity.js";
 import type { RiftLiteStore } from "./store.js";
+import { normalizeAtlasMatchHistory, type AtlasMatchHistory } from "../../shared/atlasHistory.js";
 
 const gzipAsync = promisify(gzip);
 const gunzipAsync = promisify(gunzip);
@@ -2029,6 +2030,20 @@ export class RawCaptureService {
     }
     const raw = await readFile(replay.rawCapture.localPath, "utf8");
     return JSON.parse(raw) as unknown;
+  }
+
+  async sendAtlasHistoryToReplay(localReplayId:string, input:AtlasMatchHistory):Promise<void> {
+    const history=normalizeAtlasMatchHistory(input);
+    const replay=(await this.store.getReplays()).find(r=>r.id===localReplayId);
+    const metadata=replay?.rawCapture;
+    const replayId=metadata?.uploadId;
+    if(!history?.games.length||!metadata||metadata.provider!=="riftlite-v2"||!replayId||!/^[A-Za-z0-9_-]{1,128}$/.test(replayId))throw new Error("Upload this match to RiftLite Web Replay before adding its decks.");
+    const auth=await this.canonicalReplayAuth(await this.store.getSettings(),metadata,false);
+    await this.assertRiftLiteReplayUploadAccountCurrent(auth.settings,metadata,false,"atlas");
+    const response=await fetchRiftLiteReplayV2WithRetry(`${RIFTLITE_REPLAY_ORIGIN}/api/v2/replays/${encodeURIComponent(replayId)}/decks`,{
+      method:"PUT",headers:{Authorization:`Bearer ${auth.idToken}`,"Content-Type":"application/json"},body:JSON.stringify({history,matchId:replay.matchId})
+    },()=>this.assertRiftLiteReplayUploadAccountCurrent(auth.settings,metadata,false,"atlas"));
+    if(!response.ok)throw new Error(response.status===404?"The Web Replay deck service is not available yet. Your match decks are saved locally.":"The Web Replay decks could not be saved. Your local match is unchanged.");
   }
 
   async uploadRawCaptureToRiftLite(

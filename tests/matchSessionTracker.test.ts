@@ -52,6 +52,18 @@ function event(kind: CaptureEvent["kind"], payload: Record<string, unknown>, at 
 }
 
 describe("MatchSessionTracker", () => {
+  it.each(["atlas", "tcga", "sim"] as const)("keeps %s diagnostics out of session state", (platform) => {
+    const tracker = new MatchSessionTracker();
+    const debug = event("debug", { active: true, opponentName: "Other Rival", score: { me: "0", opp: "0" } }, "2026-09-13T10:10:00.000Z", platform);
+    expect(tracker.ingest(debug)).toBeUndefined();
+    const start = event("match-start", { active: true, opponentName: "Rival", score: { me: "3", opp: "2" } }, "2026-09-13T10:00:00.000Z", platform);
+    const session = tracker.ingest(start)!;
+    const before = structuredClone(session);
+    expect(tracker.shouldFinalizeBeforeNewSession(debug)).toBe(false);
+    expect(tracker.ingest(debug)).toBe(session);
+    expect(session).toEqual(before);
+  });
+
   it("applies the privacy-safe TCGA peer seat update to the review draft", () => {
     const tracker = new MatchSessionTracker();
     tracker.ingest(event("match-start", {
@@ -916,6 +928,53 @@ describe("MatchSessionTracker", () => {
     });
     expect(draft.games[0].myBattlefieldImage).toContain("83dbc88d462da85be9398c790e88ff13da8637d4");
     expect(draft.games[0].myBattlefieldImage).not.toContain("fad09d6bd9bf38e376f430ecb0b400762420d061");
+  });
+
+  it.each(["direct image", "candidate image", "candidate code"] as const)("keeps the original battlefield when Ivern Brush arrives as a %s", (representation) => {
+    const tracker = new MatchSessionTracker();
+    const original = "https://cards.example/UNL-210.webp";
+    const opponent = "https://cards.example/OGN-291.webp";
+    const brush = "https://cdn.rgpub.io/public/live/map/riftbound/latest/UNL/cards/UNL-T03/full-desktop-2x.avif";
+    tracker.ingest(event("match-start", {
+      active: true,
+      opponentName: "Rival",
+      myChampion: "Ivern",
+      score: { me: "5", opp: "5", source: "tcga-counter-player" },
+      myBattlefieldImage: original,
+      opponentBattlefieldImage: opponent
+    }, "2026-09-07T16:10:00.000Z"));
+
+    tracker.ingest(event("match-snapshot", {
+      active: true,
+      score: { me: "7", opp: "5", source: "tcga-counter-player" },
+      opponentBattlefieldImage: opponent,
+      ...(representation === "direct image"
+        ? { myBattlefieldImage: brush }
+        : {
+            battlefieldCandidates: [{
+              side: "me",
+              text: "Tap ▲▼",
+              hidden: false,
+              ...(representation === "candidate image" ? { image: brush } : { code: "UNL-T03" })
+            }]
+          })
+    }, "2026-09-07T16:20:00.000Z"));
+
+    const draft = tracker.buildDraft("tcga", event("match-end", {
+      active: false,
+      reason: "inactive-debounce"
+    }, "2026-09-07T16:20:03.000Z"), settings);
+
+    expect(draft).toMatchObject({ format: "Bo1", score: "1-0", result: "Win" });
+    expect(draft.games).toHaveLength(1);
+    expect(draft.games[0]).toMatchObject({
+      gameNumber: 1,
+      myPoints: 7,
+      oppPoints: 5,
+      myBattlefieldImage: original,
+      oppBattlefieldImage: opponent
+    });
+    expect(draft.games[0].myBattlefieldCode).not.toBe("UNL-T03");
   });
 
   it("preserves per-game battlefield candidate images across BO3 score resets", () => {

@@ -6,8 +6,9 @@ import { randomUUID } from "node:crypto";
 import { basename, dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import initSqlJs, { type Database, type SqlJsStatic } from "sql.js";
-import { deckNotebookWithCurrentVersion, deckSnapshotHash, emptyDeckNotebook, normalizeDeckNotebook, sanitizeDeckNotebookForDeck } from "../../shared/deckNotebook.js";
+import { deckNotebookWithCurrentVersion, deckSnapshotHash, emptyDeckNotebook, normalizeDeckNotebook, enrichDeckNotebookForDeck } from "../../shared/deckNotebook.js";
 import { normalizeLegendName } from "../../shared/legendNames.js";
+import { atlasHistoryForMatch, normalizeAtlasMatchHistory, normalizeAtlasHistoryMarkers, type AtlasMatchHistory, type AtlasHistoryMarker } from "../../shared/atlasHistory.js";
 import { buildCombinedBo3Match, buildMatchCombinePreview, markOriginalAsCombined, restoreCombinedOriginal, type MatchCombinePreview, type MatchCombineSavePayload } from "../../shared/matchCombine.js";
 import { createDefaultSettings, DEFAULT_RAW_CAPTURE_ENDPOINT } from "../../shared/settingsDefaults.js";
 import { replayWithIntelligence } from "../../shared/replayIntelligence.js";
@@ -527,9 +528,10 @@ export class RiftLiteStore {
   async saveMatch(draft: MatchDraft): Promise<MatchDraft> {
     const now = new Date().toISOString();
     return this.enqueueAtomicDatabaseMutation("save-match", (db) => {
+      const current = this.parseStoredMatch(db.exec("SELECT data_json FROM matches WHERE id=?", [draft.id])[0]?.values[0]?.[0]);
       const next = compactMatchForStorage(applyEnhancedInsightsClearCutoffToMatch(
         db,
-        normalizeStoredMatch({ ...draft, updatedAt: now })
+        normalizeStoredMatch({ ...draft, atlasHistory: current?.atlasHistory ?? draft.atlasHistory, atlasHistoryMarkers: current?.atlasHistoryMarkers ?? draft.atlasHistoryMarkers, updatedAt: now })
       ));
       db.run(
         `INSERT OR REPLACE INTO matches
@@ -572,6 +574,22 @@ export class RiftLiteStore {
       }
       return combined;
     }, { invalidateMatches: true });
+  }
+
+  async attachAtlasHistory(id: string, input: AtlasMatchHistory, markers: AtlasHistoryMarker[]): Promise<MatchDraft> {
+    const history = normalizeAtlasMatchHistory(input);
+    if (!history?.games.length) throw new Error("Atlas returned an invalid deck history.");
+    return this.enqueueAtomicDatabaseMutation("attach-atlas-history", (db) => {
+      const current = this.parseStoredMatch(db.exec("SELECT data_json FROM matches WHERE id=?", [id])[0]?.values[0]?.[0]);
+      if (!current || current.deletedAt || current.platform !== "atlas") throw new Error("This match is no longer available.");
+      for (const h of history.games) {
+        const game=current.games.find(g=>g.gameNumber===h.gameNumber);
+        if (!game || current.myName.trim().toLowerCase()!==h.myName.toLowerCase() || current.opponentName.trim().toLowerCase()!==h.opponentName.toLowerCase() || game.myPoints!==h.myPoints || game.oppPoints!==h.opponentPoints) throw new Error("Match details changed during refresh. No decks were attached.");
+      }
+      const next = {...current, atlasHistory:history, atlasHistoryMarkers:normalizeAtlasHistoryMarkers(markers), updatedAt:new Date().toISOString()};
+      db.run("UPDATE matches SET updated_at=?, data_json=? WHERE id=?",[next.updatedAt,JSON.stringify(next),id]);
+      return next;
+    }, {invalidateMatches:true});
   }
 
   /**
@@ -952,7 +970,7 @@ export class RiftLiteStore {
       const deck = this.readSavedDeckFromDatabase(db, deckId);
       let next = normalizeDeckNotebook(deckId, notebook);
       if (deck) {
-        next = sanitizeDeckNotebookForDeck(deckNotebookWithCurrentVersion(next, deck), deck);
+        next = enrichDeckNotebookForDeck(deckNotebookWithCurrentVersion(next, deck), deck);
       }
       next = { ...next, updatedAt: new Date().toISOString() };
       this.writeDeckNotebook(db, deckId, next);
@@ -2688,6 +2706,8 @@ function normalizeStoredMatch(match: MatchDraft): MatchDraft {
   const deckSourceKey = match.deckSourceKey || match.deckSourceId || "";
   return {
     ...match,
+    atlasHistory: atlasHistoryForMatch(match.atlasHistory, match),
+    atlasHistoryMarkers: normalizeAtlasHistoryMarkers(match.atlasHistoryMarkers),
     source: match.source ?? "capture",
     myChampion: normalizeLegendName(match.myChampion),
     opponentChampion: normalizeLegendName(match.opponentChampion),

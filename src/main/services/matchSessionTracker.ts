@@ -1,5 +1,11 @@
 import type { CaptureEvent, GamePlatform, MatchDraft, MatchGame, ReplayStructuredEvent, RiftboundSimEvent, UserSettings } from "../../shared/types.js";
 import { riftboundCardCodeFromValue } from "../../shared/cardIdentity.js";
+import {
+  isGeneratedBattlefieldCandidate,
+  isGeneratedBattlefieldCode,
+  isGeneratedBattlefieldImage,
+  isGeneratedBattlefieldName
+} from "../../shared/generatedBattlefields.js";
 import { legendFromImageUrl } from "../../shared/legendImages.js";
 import { isCanonicalLegendName, normalizeLegendName } from "../../shared/legendNames.js";
 import {
@@ -10,6 +16,7 @@ import {
 import { privateHubSyncEnabled, publicCommunitySyncEnabled, teamSyncEnabled } from "../../shared/syncPolicy.js";
 import { readTcgaLocalPlayerName, readTcgaProfileName } from "../../shared/tcgaIdentity.js";
 import { parseReplayCardActionText } from "../../shared/replayCardText.js";
+import { atlasHistoryTimestamp, type AtlasHistoryMarker } from "../../shared/atlasHistory.js";
 
 export interface ResolvedSnapshot {
   myChampion?: string;
@@ -61,6 +68,7 @@ interface ReplayCardState {
 }
 
 interface SessionState {
+  atlasHistoryMarkers: AtlasHistoryMarker[];
   id: string;
   platform: GamePlatform;
   startedAt: string;
@@ -100,7 +108,7 @@ export class MatchSessionTracker {
   private readonly sessions = new Map<GamePlatform, SessionState>();
 
   ingest(event: CaptureEvent, options: { enhancedInsightsEnabled?: boolean } = {}): SessionState | undefined {
-    if (event.kind === "capture-ready") {
+    if (event.kind === "capture-ready" || event.kind === "debug") {
       return this.sessions.get(event.platform);
     }
     let session = this.sessions.get(event.platform);
@@ -120,6 +128,11 @@ export class MatchSessionTracker {
       this.sessions.set(event.platform, session);
     }
     session.updatedAt = event.capturedAt;
+    const historyStartedAt = atlasHistoryTimestamp(event.payload.atlasHistoryStartedAt);
+    const historyGameNumber = Number(event.payload.atlasHistoryGameNumber);
+    if (event.platform === "atlas" && historyStartedAt && [1,2,3].includes(historyGameNumber) && !session.atlasHistoryMarkers.some(m => m.startedAt === historyStartedAt)) {
+      session.atlasHistoryMarkers = [...session.atlasHistoryMarkers, { startedAt: historyStartedAt, gameNumber: historyGameNumber, roomCode: readString(event.payload.roomCode) }].slice(-6);
+    }
     session.evidence.push(retainedCaptureEvidence(event, session.enhancedInsightsEnabledAtStart));
     if (session.evidence.length > 160) {
       session.evidence = session.evidence.slice(-160);
@@ -193,6 +206,7 @@ export class MatchSessionTracker {
   }
 
   shouldFinalizeBeforeNewSession(event: CaptureEvent): boolean {
+    if (event.kind === "capture-ready" || event.kind === "debug") return false;
     const session = this.sessions.get(event.platform);
     return Boolean(
       session &&
@@ -354,6 +368,7 @@ export class MatchSessionTracker {
       flags: "",
       notes: "",
       games,
+      ...(session.atlasHistoryMarkers.length ? { atlasHistoryMarkers: [...session.atlasHistoryMarkers] } : {}),
       rawEvidence: [
         ...session.evidence,
         retainedCaptureEvidence(endEvent, session.enhancedInsightsEnabledAtStart)
@@ -375,6 +390,7 @@ function createSession(event: CaptureEvent, enhancedInsightsEnabledAtStart: bool
   const sticky: Record<string, unknown> = {};
   mergeSticky(sticky, event.payload);
   return {
+    atlasHistoryMarkers: [],
     id: event.id,
     platform: event.platform,
     startedAt: event.capturedAt,
@@ -3225,25 +3241,6 @@ function readBattlefieldImage(payload: Record<string, unknown>, side: "me" | "op
     }
   }
   return "";
-}
-
-function isGeneratedBattlefieldCandidate(candidate: Record<string, unknown>): boolean {
-  return isGeneratedBattlefieldName(readString(candidate.text) || readString(candidate.name) || readString(candidate.code)) ||
-    isGeneratedBattlefieldCode(readString(candidate.code)) ||
-    isGeneratedBattlefieldImage(readString(candidate.image));
-}
-
-function isGeneratedBattlefieldName(value: string): boolean {
-  return /\b(?:baron\s+pit|brush)\b/i.test(value);
-}
-
-function isGeneratedBattlefieldCode(value: string): boolean {
-  const code = riftboundCardCodeFromValue(value);
-  return code === "UNL-T01" || code === "UNL-T03";
-}
-
-function isGeneratedBattlefieldImage(value: string): boolean {
-  return /baron[-_\s]?pit|brush|e44f173629322a4e0c32d3f8902c294d4482ef42|fad09d6bd9bf38e376f430ecb0b400762420d061/i.test(value);
 }
 
 function isCardBackImage(value: string): boolean {

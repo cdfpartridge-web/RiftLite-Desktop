@@ -2686,6 +2686,80 @@ describe("CaptureCoordinator", () => {
     ]);
   });
 
+  it("emits one TCGA review with both original battlefields after a coded Ivern Brush replacement", async () => {
+    const { coordinator, saved, sent, resolver } = coordinatorHarness();
+    const battlefieldNames: Record<string, string> = {
+      "UNL-210": "Forbidding Waste",
+      "OGN-291": "The Candlelit Sanctum",
+      "UNL-T03": "Brush"
+    };
+    resolver.resolveBattlefield.mockImplementation(async (value: unknown) => {
+      const code = Object.keys(battlefieldNames).find((item) => String(value ?? "").includes(item));
+      return code ? battlefieldNames[code] : "";
+    });
+    const base = {
+      active: true,
+      myName: "BMU",
+      opponentName: "Ivern Rival",
+      myChampion: "Ivern",
+      opponentChampion: "Lillia"
+    };
+    const original = "https://cards.example/UNL-210.webp";
+    const opponent = "https://cards.example/OGN-291.webp";
+    const brush = "https://cdn.rgpub.io/public/live/map/riftbound/latest/UNL/cards/UNL-T03/full-desktop-2x.avif";
+
+    await coordinator.handleEvent(event("match-start", {
+      ...base,
+      score: { me: "0", opp: "0", source: "tcga-counter-player" }
+    }, "2026-09-07T16:04:52.000Z"));
+    await coordinator.handleEvent(event("match-snapshot", {
+      ...base,
+      score: { me: "3", opp: "3", source: "tcga-counter-player" },
+      battlefieldCandidates: [
+        { side: "me", text: "Tap", image: original, hidden: false },
+        { side: "opponent", text: "Ping", image: opponent, hidden: false }
+      ]
+    }, "2026-09-07T16:12:00.000Z"));
+    await coordinator.handleEvent(event("match-snapshot", {
+      ...base,
+      score: { me: "7", opp: "5", source: "tcga-counter-player" },
+      myBattlefieldImage: brush,
+      opponentBattlefieldImage: opponent,
+      battlefieldCandidates: [
+        { side: "me", text: "Tap ▲▼", image: brush, code: "UNL-T03", hidden: false },
+        { side: "me", text: "Tap", image: "https://cards.example/cardBack-black.png", hidden: true },
+        { side: "opponent", text: "Ping", image: opponent, hidden: false }
+      ]
+    }, "2026-09-07T16:20:44.000Z"));
+    await coordinator.handleEvent(event("match-end", {
+      active: false,
+      reason: "inactive-debounce"
+    }, "2026-09-07T16:20:47.000Z"));
+
+    expect(saved).toHaveLength(1);
+    const reviewEvents = sent.filter((item) => item.channel === "match:draft");
+    expect(reviewEvents).toHaveLength(1);
+    for (const draft of [saved[0], reviewEvents[0].payload as MatchDraft]) {
+      expect(draft).toMatchObject({
+        format: "Bo1",
+        result: "Win",
+        score: "1-0",
+        myBattlefield: "Forbidding Waste",
+        opponentBattlefield: "The Candlelit Sanctum"
+      });
+      expect(draft.games).toHaveLength(1);
+      expect(draft.games[0]).toMatchObject({
+        gameNumber: 1,
+        myPoints: 7,
+        oppPoints: 5,
+        myBattlefield: "Forbidding Waste",
+        oppBattlefield: "The Candlelit Sanctum",
+        myBattlefieldImage: original,
+        oppBattlefieldImage: opponent
+      });
+    }
+  });
+
   it.each(["tcga", "atlas"] as const)("resolves each code-only %s BO3 battlefield pair code-first", async (platform) => {
     const { coordinator, saved, resolver } = coordinatorHarness();
     const battlefieldNames: Record<string, string> = {

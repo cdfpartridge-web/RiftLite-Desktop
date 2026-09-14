@@ -2,6 +2,9 @@ import React, { useCallback, useDeferredValue, useEffect, useMemo, useRef, useSt
 import { createDefaultSettings } from "../shared/settingsDefaults";
 import { useReplayVoicePlayback } from "./useReplayVoicePlayback";
 import { useOwnedPointerGesture } from "./useOwnedPointerGesture";
+import { LiveDecisionMarker } from "./LiveDecisionMarker";
+import { AtlasMatchDeckDialog, AtlasMatchDeckPanel } from "./AtlasHistoryDecks";
+import { canImportAtlasHistory } from "../shared/atlasHistory";
 import { createRoot } from "react-dom/client";
 import QRCode from "qrcode";
 import {
@@ -16,6 +19,7 @@ import {
   Activity,
   AlertTriangle,
   ArrowLeftRight,
+  ArrowRightLeft,
   BarChart3,
   Bell,
   BookOpen,
@@ -46,6 +50,7 @@ import {
   Lightbulb,
   Link2,
   Mail,
+  MapPin,
   Maximize2,
   Minimize2,
   PanelLeftClose,
@@ -216,7 +221,9 @@ import { replayDeliveryErrorMessage, replayDeliveryStages, replayDeliverySummary
 import {
   WEB_REPLAY_WARNING_DISMISSALS_STORAGE_KEY,
   addWebReplayWarningDismissal,
+  keepWebReplayUploadsLocalOnly,
   parseWebReplayWarningDismissals,
+  webReplayKeepLocalCandidates,
   webReplayReadyWarningDismissalKey,
   webReplayReadyWarningIsDismissed
 } from "../shared/webReplayActivity";
@@ -259,6 +266,13 @@ import {
 } from "../shared/matchCombine";
 import { localMatchesEligibleForStats, upsertMatchPreservingOrder } from "../shared/matchList";
 import { matchReviewErrorMessage } from "../shared/matchReviewError";
+import { markDeckGuideReviewed, reviewDeckGuide, reviewDeckNotebook } from "../shared/deckGuideReview";
+import { DeckGuideReviewNotice } from "./DeckGuideReviewNotice";
+import {
+  isGeneratedBattlefieldCandidate,
+  isGeneratedBattlefieldImage,
+  isGeneratedBattlefieldName
+} from "../shared/generatedBattlefields";
 import { upsertReplayPreservingOrder } from "../shared/replayList";
 import { shouldBufferReplayVideoInMemory } from "../shared/replayExportPolicy";
 import { publicCommunitySyncEnabled, syncModePatch } from "../shared/syncPolicy";
@@ -447,6 +461,11 @@ import {
 } from "./homeCreatorVideos";
 import "./styles/app.css";
 import "./styles/ui-dev-modern.css";
+import "./styles/prepare.css";
+import "./styles/review.css";
+import "./styles/review-matches.css";
+import "./styles/review-web.css";
+import "./styles/review-replays.css";
 
 type DeckFocusTarget = "library" | "saved" | "prep" | "notebook" | "performance";
 type MatchFocusTarget = {
@@ -545,14 +564,15 @@ const LAB_TRAINING_LEGEND_NAMES = new Set(LAB_TRAINING_LEGEND_NAME_BY_CANONICAL.
 const RELEASE_NOTES = {
   version: APP_VERSION_META,
   title: `RiftLite v${APP_VERSION_META}`,
-  intro: "This update brings Atlas deck editing into RiftLite, improves Player name recovery, and fills the missing signed-card artwork.",
+  intro: "A clearer Prepare and Review experience, completed opponents' Atlas decks in match history, and more useful match data.",
   items: [
-    "Atlas Edit Deck and New Deck now open inside RiftLite, with a Back to Play button for returning to the lobby.",
-    "Atlas can warn you about unsaved deck changes before you leave the editor; save in Atlas before returning to play.",
-    "A dedicated recovery fixes the collapsed Atlas Player name field that could persist in v0.9.72, without reading or changing your name.",
-    "All nine signed Vendetta variants are now included, with more consistent alternate-art display and corrected Shadowblade Lurker artwork.",
-    "Replay playback, export, cloud backup handling, and embedded Atlas recovery have received reliability improvements.",
-    "The installer no longer includes accumulated obsolete build files, reducing its download size.",
+    "Prepare, Matches, match review, Replays and Web Replays have refreshed layouts with clearer navigation and less clutter.",
+    "Completed Atlas matches automatically pick up available opponent deck lists while signed in. Open Deck beside Replay and Edit to view each BO3 game's list and sideboard changes.",
+    "Results & data shows record completeness, BO3 opening-game performance, conversions and comebacks, with sample sizes and clearer handling of missing information.",
+    "Matchup prep warns when deck edits affect saved plans, keeping your notes until you review the changes.",
+    "Battlefield tracking recognizes TCGA's shared board slots and keeps Ivern's Brush from replacing the selected battlefield.",
+    "Keep all local only clears eligible upload activity in one action while preserving your local matches and captures. Mark decision can be moved and remembers its position.",
+    "Fixes completed Atlas matches reopening unexpectedly and repeated focus recovery that could interrupt chat typing.",
     "Replay Coach remains Coming Soon while we refine its review and practice flow."
   ]
 };
@@ -901,6 +921,7 @@ function formatBytes(value: number): string {
 }
 
 type AnalyticsMatch = {
+  atlasHistory?: MatchDraft["atlasHistory"];
   id: string;
   platform: GamePlatform | "community" | "hub" | "team";
   source: MatchDraft["source"] | "community" | "hub" | "team";
@@ -3974,6 +3995,11 @@ function App() {
       setReplays((current) => upsertReplayPreservingOrder(current, replay));
       void refreshWebReplayDiagnostics();
     });
+    const offMatchUpdated = window.riftlite.onMatchUpdated((match) => {
+      // Deck enrichment updates history quietly; it must never enter the
+      // draft/review path or interrupt the game currently being played.
+      setMatches((current) => current.map((row) => row.id === match.id ? match : row));
+    });
     const offScreenshot = window.riftlite.onScreenshotSaved((result) => {
       const message = result.ok ? result.message : `Screenshot failed: ${result.message}`;
       setScreenshotStatus(message);
@@ -4049,6 +4075,7 @@ function App() {
       offHealth();
       offDraft();
       offReplayUpdated();
+      offMatchUpdated();
       offScreenshot();
       offShadowClipHotkey();
       offQuickFlagHotkey();
@@ -7678,15 +7705,7 @@ function App() {
               />
             ) : null}
             {enhancedInsightSessionActive ? (
-              <button
-                type="button"
-                className="enhanced-insights-live-marker"
-                onClick={addReplayReviewFlagFromHotkey}
-                title={`Mark this decision for review${settings.replayQuickFlagHotkey ? ` (${settings.replayQuickFlagHotkey})` : ""}`}
-              >
-                <Flag size={15} aria-hidden="true" />
-                Mark decision
-              </button>
+              <LiveDecisionMarker onMark={addReplayReviewFlagFromHotkey} hotkey={settings.replayQuickFlagHotkey} />
             ) : null}
           </div>
           {DECK_TRACKER_FEATURE_ENABLED && settings.deckTrackerEnabled ? (
@@ -12720,6 +12739,12 @@ function WebReplayUploadCentre({
   });
   const status = webReplayCentreStatus(settings, diagnostics, diagnosticsError);
   const [controlsExpanded, setControlsExpanded] = useState(status.tone !== "ready");
+  const [controlPanel, setControlPanel] = useState<"activity" | "capture" | "sharing" | "diagnostics">(() =>
+    diagnostics?.queue.some((item) => item.stage !== "ready" || item.partialWarnings?.length) ? "activity" : "capture"
+  );
+  const [showAllActivity, setShowAllActivity] = useState(false);
+  const keepLocalBatchRunning = useRef(false);
+  const [keepLocalProgress, setKeepLocalProgress] = useState({ completed: 0, total: 0 });
   const totals = webReplayQueueTotals(diagnostics);
   const atlasEnabled = webReplayPlatformEnabled(settings, "atlas");
   const tcgaEnabled = webReplayPlatformEnabled(settings, "tcga");
@@ -12727,8 +12752,9 @@ function WebReplayUploadCentre({
   const accountVerified = diagnostics?.accountVerified ?? hasVerifiedRiftLiteAccount(settings);
   const queue = (diagnostics?.queue ?? [])
     .filter((item) => item.stage !== "ready" || Boolean(item.partialWarnings?.length))
-    .filter((item) => !webReplayReadyWarningIsDismissed(item, dismissedWarningKeys))
-    .slice(0, 6);
+    .filter((item) => !webReplayReadyWarningIsDismissed(item, dismissedWarningKeys));
+  const visibleQueue = showAllActivity ? queue : queue.slice(0, 6);
+  const keepLocalCandidates = webReplayKeepLocalCandidates(diagnostics?.queue ?? []);
   const partialReadyCount = queue.filter((item) => item.stage === "ready" && item.partialWarnings?.length).length;
   const hasRetryableQueueItem = queue.some((item) => item.recommendedAction === "retry");
   const selectedDiscordHubs = activeDiscordReplayHubIds(settings);
@@ -12844,6 +12870,39 @@ function WebReplayUploadCentre({
     }
   }
 
+  async function keepAllLocalOnly() {
+    if (busy || keepLocalBatchRunning.current || !keepLocalCandidates.length) return;
+    const selection = keepLocalCandidates;
+    if (!window.confirm(
+      `Keep all ${selection.length} eligible captures locally only?\n\nThis includes failed and waiting uploads throughout Upload activity, including rows not currently shown. Their matches, local replays, and captures stay on this device. These uploads will be removed from the queue and will no longer retry automatically.\n\nActive uploads and completed online replays are excluded.`
+    )) return;
+    keepLocalBatchRunning.current = true;
+    setBusyAction("keep-all-local");
+    setKeepLocalProgress({ completed: 0, total: selection.length });
+    setActionError("");
+    setNotice("");
+    try {
+      const result = await keepWebReplayUploadsLocalOnly(
+        selection,
+        (captureSessionId) => window.riftlite.removeWebReplayUploadFromQueue(captureSessionId),
+        (completed, total) => setKeepLocalProgress({ completed, total })
+      );
+      setNotice(result.keptCount
+        ? `${result.keptCount} upload${result.keptCount === 1 ? " was" : "s were"} removed from the queue. Local matches, replays, and captures were kept.`
+        : "No uploads were removed.");
+      if (result.failures.length) {
+        const first = result.failures[0];
+        setActionError(`${result.failures.length} upload${result.failures.length === 1 ? " could" : "s could"} not be cleared. ${first.title}: ${first.error}`);
+      }
+      await onRefreshDiagnostics();
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Upload activity could not be refreshed. Refresh to check the queue.");
+    } finally {
+      keepLocalBatchRunning.current = false;
+      setBusyAction("");
+    }
+  }
+
   function dismissCompletedWarning(item: WebReplayUploadQueueItem) {
     const key = webReplayReadyWarningDismissalKey(item);
     if (!key) return;
@@ -12887,7 +12946,7 @@ function WebReplayUploadCentre({
       <header className="web-replay-control-heading">
         <div className="web-replay-control-status-icon"><StatusIcon size={21} /></div>
         <div>
-          <span className="modern-kicker">Automatic delivery</span>
+          <span className="review-kicker">Automatic delivery</span>
           <h3>{status.title}</h3>
           <p>{status.detail}</p>
         </div>
@@ -12936,15 +12995,33 @@ function WebReplayUploadCentre({
         </div>
       </header>
 
+      <div className="review-web-health" aria-label="Replay delivery summary">
+        <span data-enabled={atlasEnabled}><span className="review-web-health-dot" />Atlas {atlasEnabled ? "on" : "off"}</span>
+        <span data-enabled={tcgaEnabled}><span className="review-web-health-dot" />TCGA {tcgaEnabled ? "on" : "off"}</span>
+        <span><Shield size={12} />New replays: {settings.rawCapture.visibility}</span>
+        {totals.pending ? <button type="button" onClick={() => { setControlPanel("activity"); setControlsExpanded(true); }}><Activity size={12} />{totals.pending} active or waiting</button> : null}
+        {totals.failed ? <button type="button" data-attention="true" onClick={() => { setControlPanel("activity"); setControlsExpanded(true); }}><AlertTriangle size={12} />{totals.failed} failed</button> : null}
+        {partialReadyCount ? <button type="button" data-attention="true" onClick={() => { setControlPanel("activity"); setControlsExpanded(true); }}><AlertTriangle size={12} />{partialReadyCount} completed with warnings</button> : null}
+        {selectedDiscordHubs.length ? <button type="button" onClick={() => { setControlPanel("sharing"); setControlsExpanded(true); }}>Sharing to {selectedDiscordHubs.length} hub{selectedDiscordHubs.length === 1 ? "" : "s"}</button> : null}
+      </div>
+
       {notice ? <div className="settings-note" role="status" aria-live="polite">{notice}</div> : null}
       {actionError || diagnosticsError ? <div className="settings-note warning" role="alert">{replayDeliveryErrorMessage(actionError || diagnosticsError)}</div> : null}
 
       <div className="web-replay-control-body" id="web-replay-upload-controls" hidden={!controlsExpanded}>
+        <nav className="review-tabs review-web-control-tabs" aria-label="Upload controls">
+          <button type="button" aria-pressed={controlPanel === "activity"} aria-controls="review-web-activity" aria-label={queue.length ? `Activity, ${queue.length} uploads` : "Activity"} onClick={() => setControlPanel("activity")}><Activity size={14} />Activity{queue.length ? <span aria-hidden="true">{queue.length}</span> : null}</button>
+          <button type="button" aria-pressed={controlPanel === "capture"} aria-controls="review-web-capture" onClick={() => setControlPanel("capture")}><SlidersHorizontal size={14} />Capture & privacy</button>
+          <button type="button" aria-pressed={controlPanel === "sharing"} aria-controls="review-web-sharing" onClick={() => setControlPanel("sharing")}><Link2 size={14} />Sharing</button>
+          <button type="button" aria-pressed={controlPanel === "diagnostics"} aria-controls="review-web-diagnostics" onClick={() => setControlPanel("diagnostics")}><Shield size={14} />Diagnostics</button>
+        </nav>
+        <div className="review-web-panel" id="review-web-capture" hidden={controlPanel !== "capture"}>
+          <div className="review-web-panel-heading"><strong>Save new replays automatically</strong><p>Choose your platforms and the visibility of future replays. Existing online replays keep their current visibility.</p></div>
           <div className="web-replay-platform-grid">
         <label className="web-replay-platform-card" data-enabled={atlasEnabled}>
           <span>
             <strong>Rift Atlas</strong>
-            <small>Atlas WebSocket match capture</small>
+            <small>Automatically save Atlas matches</small>
           </span>
           <input
             type="checkbox"
@@ -12956,7 +13033,7 @@ function WebReplayUploadCentre({
         <label className="web-replay-platform-card" data-enabled={tcgaEnabled}>
           <span>
             <strong>TCGA</strong>
-            <small>Bounded match game-channel capture</small>
+            <small>Automatically save TCGA matches</small>
           </span>
           <input
             type="checkbox"
@@ -12981,11 +13058,17 @@ function WebReplayUploadCentre({
           </select>
         </label>
           </div>
+          <p className="review-web-panel-note">{selectedDiscordHubs.length
+            ? "Discord sharing uses Unlisted visibility. Remove the selected destinations in Sharing to choose a different visibility."
+            : "Private replays are visible only to your linked account. Unlisted replays can be watched by anyone with their link. Public replays appear in the public library."}</p>
+        </div>
 
+        <div className="review-web-panel" id="review-web-activity" hidden={controlPanel !== "activity"}>
           {queue.length ? (
             <div className="web-replay-delivery-list">
           <div className="web-replay-delivery-list-heading">
             <strong>Upload activity</strong>
+            <div className="web-replay-delivery-list-tools">
             <span>{totals.pending
               ? `${totals.pending} active or waiting`
               : totals.failed
@@ -12993,8 +13076,16 @@ function WebReplayUploadCentre({
                 : partialReadyCount
                   ? `${partialReadyCount} completed with a warning`
                   : `${queue.length} recent`}</span>
+            {keepLocalCandidates.length > 1 || busyAction === "keep-all-local" ? (
+              <button type="button" className="secondary" disabled={busy} onClick={() => void keepAllLocalOnly()}>
+                {busyAction === "keep-all-local"
+                  ? `Keeping local... ${keepLocalProgress.completed}/${keepLocalProgress.total}`
+                  : `Keep all local only (${keepLocalCandidates.length})`}
+              </button>
+            ) : null}
+            </div>
           </div>
-          {queue.map((item) => {
+          {visibleQueue.map((item) => {
             const itemBusy = busyAction === item.captureSessionId;
             const friendlyError = item.error ? replayDeliveryErrorMessage(item.error, {
               code: item.errorCode,
@@ -13043,10 +13134,13 @@ function WebReplayUploadCentre({
               </article>
             );
           })}
+          {queue.length > 6 ? <button type="button" className="secondary review-web-more-activity" onClick={() => setShowAllActivity((value) => !value)}>{showAllActivity ? "Show recent activity" : `Show all ${queue.length} uploads`}</button> : null}
             </div>
-          ) : null}
+          ) : <div className="review-web-activity-empty"><Check size={22} /><div><strong>No uploads need attention</strong><p>Active uploads and anything needing a decision appear here. Completed replays are in your library below.</p></div></div>}
+        </div>
 
-          <details className="web-replay-sharing-details">
+        <div className="review-web-panel" id="review-web-sharing" hidden={controlPanel !== "sharing"}>
+          <details className="web-replay-sharing-details" open>
         <summary>Discord sharing</summary>
         <p>Optional: selected private hubs receive future replay links. Shared replays become Unlisted.</p>
         {settings.activeHubs.length ? settings.activeHubs.map((hub) => (
@@ -13061,8 +13155,10 @@ function WebReplayUploadCentre({
           </label>
         )) : <p>No joined private hubs are available.</p>}
           </details>
+        </div>
 
-          <details className="web-replay-technical-details">
+        <div className="review-web-panel" id="review-web-diagnostics" hidden={controlPanel !== "diagnostics"}>
+          <details className="web-replay-technical-details" open>
         <summary>Technical details</summary>
         <div className="drilldown-grid web-replay-diagnostics-metrics">
           <Metric label="Capture" value={diagnostics?.captureEnabled ? diagnostics.activeCapture ? "Game active" : "Ready" : "Off"} />
@@ -13087,6 +13183,7 @@ function WebReplayUploadCentre({
           );
         })}
           </details>
+        </div>
       </div>
     </section>
   );
@@ -13196,9 +13293,10 @@ function EmbeddedRiftReplayView({
   }, []);
 
   return (
-    <section className="web-replay-page" data-fullscreen={replayFullscreen}>
-      <div className="web-replay-toolbar">
+    <section className="web-replay-page review-workspace review-web" data-fullscreen={replayFullscreen}>
+      <div className="web-replay-toolbar review-page-heading">
         <div>
+          <span className="review-kicker">Review / Replay library</span>
           <h2>Web Replays</h2>
           <p>
             {embedState.loading
@@ -13206,7 +13304,7 @@ function EmbeddedRiftReplayView({
               : embedState.authenticated
                 ? "Signed in with your linked RiftLite account."
                 : embedState.error
-                  ? "We couldn't open your account library. Public replays are shown below. Reconnect your account, then retry."
+                  ? "We couldn't connect to your account library. Reconnect your account or refresh the library to try again."
                   : "Public replays are shown below. Link your account to open My replays."}
           </p>
         </div>
@@ -13217,7 +13315,7 @@ function EmbeddedRiftReplayView({
             </button>
           ) : null}
           <button type="button" className="secondary" onClick={() => setReloadKey((value) => value + 1)}>
-            <RefreshCw size={15} /> Replay library
+            <RefreshCw size={15} /> Refresh library
           </button>
           <button
             ref={fullscreenButtonRef}
@@ -13245,7 +13343,7 @@ function EmbeddedRiftReplayView({
         onOpenAccount={onOpenAccount}
         onLibraryChanged={() => setReloadKey((value) => value + 1)}
       />
-      <div className="web-replay-frame-shell">
+      <div className="web-replay-frame-shell review-surface" aria-label="Web replay library">
         {embedState.url ? (
           <RiftReplayWebview
             ref={replayWebviewRef}
@@ -13258,7 +13356,7 @@ function EmbeddedRiftReplayView({
           <div className="local-riftreplay-empty local-riftreplay-empty-inline">
             <Globe2 size={36} />
             <h3>{embedState.loading ? "Loading web replays" : "Web replay unavailable"}</h3>
-            <p>{embedState.loading ? "Connecting to RiftLite.com..." : "Use Replay library to try again, or open it in your browser."}</p>
+            <p>{embedState.loading ? "Connecting to RiftLite.com..." : "Use Refresh library to try again, or open it in your browser."}</p>
           </div>
         )}
       </div>
@@ -17115,8 +17213,10 @@ function MatchesView({
   const [filters, setFilters] = useState<MatchHistoryFilters>(DEFAULT_MATCH_HISTORY_FILTERS);
   const [selectedMatchId, setSelectedMatchId] = useState("");
   const [selectedSyncIds, setSelectedSyncIds] = useState<string[]>([]);
+  const [selectionToolsOpen, setSelectionToolsOpen] = useState(false);
   const [combineModalOpen, setCombineModalOpen] = useState(false);
   const [replayPickerMatchId, setReplayPickerMatchId] = useState("");
+  const [deckMatchId, setDeckMatchId] = useState("");
   const [targetHubId, setTargetHubId] = useState(ALL_ENABLED_HUBS_VALUE);
   const [targetTeamId, setTargetTeamId] = useState(ALL_ENABLED_HUBS_VALUE);
   const [syncStatus, setSyncStatus] = useState("");
@@ -17188,6 +17288,26 @@ function MatchesView({
   );
   const latestSession = useMemo(() => testingSessions[0] ?? null, [testingSessions]);
   const historyTotal = filters.combinedOriginals ? matches.length : activeMatches.length;
+  const activeFilterEntries = (Object.keys(filters) as Array<keyof MatchHistoryFilters>)
+    .filter((key) => filters[key] !== DEFAULT_MATCH_HISTORY_FILTERS[key]);
+  const additionalFilterCount = activeFilterEntries.filter((key) => !["search", "season", "range"].includes(key)).length;
+  const filterLabels: Record<keyof MatchHistoryFilters, string> = {
+    season: "Season", search: "Search", legend: "Legend", myLegend: "My legend", opponentLegend: "Opponent legend",
+    deck: "Deck", deckPresence: "Deck data", result: "Result", platform: "Platform", format: "Format", source: "Source",
+    seat: "Seat", range: "Date", sync: "Sync", notes: "Notes", testingSession: "Testing session", combinedOriginals: "Combined originals"
+  };
+
+  function filterValueLabel(key: keyof MatchHistoryFilters) {
+    const value = filters[key];
+    if (key === "season") return COMMUNITY_SEASONS.find((season) => season.id === value)?.label || "All seasons";
+    if (key === "testingSession") return testingSessions.find((session) => session.id === value)?.label || "No session";
+    if (key === "range") return ({ all: "All time", today: "Today", "7d": "Last 7 days", "30d": "Last 30 days" } as Record<string, string>)[value] || value;
+    if (key === "deckPresence") return value === "with" ? "Has deck" : "No deck";
+    if (key === "notes") return value === "with" ? "Has notes" : "No notes";
+    if (key === "combinedOriginals") return value === "only" ? "Originals only" : "Include originals";
+    if (key === "platform") return value === "tcga" ? "TCGA" : "Atlas";
+    return value;
+  }
 
   useEffect(() => {
     if (!focusTarget) {
@@ -17228,6 +17348,7 @@ function MatchesView({
   }
 
   function toggleSyncMatch(id: string, checked: boolean) {
+    if (checked) setSelectionToolsOpen(true);
     setSelectedSyncIds((current) => checked ? Array.from(new Set([...current, id])) : current.filter((item) => item !== id));
   }
 
@@ -17344,11 +17465,12 @@ function MatchesView({
   }, [selectedMatchId]);
 
   return (
-    <section className="dashboard-page matches-page" data-tour-target="review">
-      <div className="panel-header">
+    <section className="dashboard-page matches-page review-workspace review-matches" data-tour-target="review">
+      <div className="review-page-heading">
         <div>
-          <h2>Local match history</h2>
-          <span>{filteredMatches.length} of {historyTotal} match{historyTotal === 1 ? "" : "es"} shown</span>
+          <span className="review-kicker">Review / Matches</span>
+          <h2>Your match history</h2>
+          <p>See what happened, revisit a game, and take what you learn into the next match.</p>
         </div>
         <div className="row-actions">
           <button className="secondary" disabled={!filteredMatches.length} onClick={() => void exportFilteredMatches()}>
@@ -17357,11 +17479,23 @@ function MatchesView({
           {filtersActive ? <button className="secondary" onClick={() => setFilters(DEFAULT_MATCH_HISTORY_FILTERS)}>Clear filters</button> : null}
         </div>
       </div>
-      {exportStatus ? <p className="muted">{exportStatus}</p> : null}
-      <section className="rail-card testing-session-card">
+      {exportStatus ? <p className="muted review-inline-status" role="status">{exportStatus}</p> : null}
+      <section className="metric-grid review-match-metrics" aria-label="Filtered match statistics">
+        <Metric label="Shown" value={String(filteredMatches.length)} />
+        <Metric label="Win rate" value={stats.winRate} />
+        <Metric label="Record" value={stats.record} />
+        <Metric label="Streak" value={stats.streak} />
+        <Metric label="Most played" value={stats.mostPlayed || "Pending"} />
+      </section>
+      <details className="review-disclosure review-session">
+        <summary>
+          <Activity size={16} /> Testing session
+          {activeTestingSession ? <span className="review-live-badge">Active · {activeTestingSession.label}</span> : <small>Group your practice games</small>}
+        </summary>
+      <section className="testing-session-card review-disclosure-body">
         <div className="testing-session-header">
           <div>
-            <h2>Testing session</h2>
+            <h3>{activeTestingSession ? activeTestingSession.label : "Start a focused session"}</h3>
             <span>{activeTestingSession ? `Active: ${activeTestingSession.label}` : "Group practice games without syncing extra session data"}</span>
           </div>
           {activeTestingSession ? (
@@ -17404,23 +17538,27 @@ function MatchesView({
           </div>
         ) : null}
       </section>
-      <section className="metric-grid">
-        <Metric label="Shown" value={String(filteredMatches.length)} />
-        <Metric label="Win rate" value={stats.winRate} />
-        <Metric label="Record" value={stats.record} />
-        <Metric label="Streak" value={stats.streak} />
-        <Metric label="Most played" value={stats.mostPlayed || "Pending"} />
-      </section>
-      <section className="rail-card local-match-filters">
-        <div className="filters-title">
-          <h2>Filters</h2>
-          <span>{filtersActive ? "Filtered view" : "Showing Vendetta season"}</span>
+      </details>
+      <section className="review-surface local-match-filters">
+        <div className="review-history-title">
+          <div><h3>Browse matches</h3><span>{filteredMatches.length} of {historyTotal} match{historyTotal === 1 ? "" : "es"} · {COMMUNITY_SEASONS.find((season) => season.id === filters.season)?.label || "All seasons"}</span></div>
+          <span className="review-local-badge"><FolderOpen size={13} /> Saved on this device</span>
         </div>
-        <div className="local-filter-grid">
+        <div className="review-primary-filters">
+          <label>Search<input value={filters.search} onChange={(event) => setFilter("search", event.target.value)} placeholder="Find an opponent, deck or flag…" /></label>
           <label>Season<select value={filters.season} onChange={(event) => setFilter("season", event.target.value)}>
             {COMMUNITY_SEASONS.map((season) => <option value={season.id} key={season.id || "all"}>{season.label}</option>)}
           </select></label>
-          <label>Search<input value={filters.search} onChange={(event) => setFilter("search", event.target.value)} placeholder="Opponent, deck, flag..." /></label>
+          <label>Date<select value={filters.range} onChange={(event) => setFilter("range", event.target.value)}>
+            <option value="all">All time</option>
+            <option value="today">Today</option>
+            <option value="7d">Last 7 days</option>
+            <option value="30d">Last 30 days</option>
+          </select></label>
+        </div>
+        <details className="review-disclosure review-filter-disclosure">
+          <summary><SlidersHorizontal size={15} /> More filters {additionalFilterCount ? <span className="review-count-badge">{additionalFilterCount} active</span> : <small>Matchup, deck, result & more</small>}</summary>
+        <div className="local-filter-grid">
           <label>Legend<select value={filters.legend} onChange={(event) => setFilter("legend", event.target.value)}>
             <option value="">All legends</option>
             {legendOptions.map((legend) => <option value={legend} key={legend}>{legend}</option>)}
@@ -17472,12 +17610,6 @@ function MatchesView({
             <option value="undecided">Undecided / no seat</option>
             <option value="unknown">Unknown</option>
           </select></label>
-          <label>Date<select value={filters.range} onChange={(event) => setFilter("range", event.target.value)}>
-            <option value="all">All time</option>
-            <option value="today">Today</option>
-            <option value="7d">Last 7 days</option>
-            <option value="30d">Last 30 days</option>
-          </select></label>
           <label>Sync<select value={filters.sync} onChange={(event) => setFilter("sync", event.target.value)}>
             <option value="">Any sync</option>
             <option value="pending">Pending</option>
@@ -17501,11 +17633,21 @@ function MatchesView({
             <option value="only">Show only combined originals</option>
           </select></label>
         </div>
+        </details>
+        {activeFilterEntries.length ? (
+          <div className="review-filter-chips" aria-label="Active filters">
+            {activeFilterEntries.map((key) => <button key={key} className="review-filter-chip" onClick={() => setFilter(key, DEFAULT_MATCH_HISTORY_FILTERS[key])} aria-label={`Clear ${filterLabels[key]} filter`} title={`${filterLabels[key]}: ${filterValueLabel(key)}`}>
+              <span>{filterLabels[key]}: {filterValueLabel(key)}</span><X size={12} />
+            </button>)}
+          </div>
+        ) : null}
       </section>
-      <section className="rail-card local-bulk-sync-card">
+      <details className="review-disclosure review-selection" open={selectionToolsOpen} onToggle={(event) => setSelectionToolsOpen(event.currentTarget.open)}>
+        <summary><Layers size={15} /> Selection tools <small>{selectedSyncIds.length ? `${selectedSyncIds.length} selected` : "Sync to a hub or team · Combine split games into Bo3"}</small></summary>
+      <section className="local-bulk-sync-card review-disclosure-body">
         <div className="bulk-sync-title">
           <div>
-            <h2>Sync selected</h2>
+            <h3>Manage selected matches</h3>
             <span>{selectedSyncableCount} syncable selected. {selectedCombineMatches.length} selected for Bo3 repair.</span>
           </div>
           <label className="mini-checkbox">
@@ -17555,8 +17697,9 @@ function MatchesView({
         <p className="muted">
           This sends only the selected local matches to enabled private hub or team data. Public community data is not changed and the review popup is not reopened.
         </p>
-        {syncStatus ? <p className="muted">{syncStatus}</p> : null}
       </section>
+      </details>
+      {syncStatus ? <p className="muted review-inline-status" role="status">{syncStatus}</p> : null}
       <div className="match-table local-match-table">
         {filteredMatches.map((match) => {
           const myLegend = normalizeLegendName(match.myChampion);
@@ -17575,7 +17718,7 @@ function MatchesView({
             : "Replay";
           return (
           <div
-            className="match-row interactive-row"
+            className="match-row interactive-row review-match-row"
             data-active={selectedMatchId === match.id}
             data-selected={checked}
             key={match.id}
@@ -17583,7 +17726,7 @@ function MatchesView({
             role="button"
             onClick={() => setSelectedMatchId((current) => current === match.id ? "" : match.id)}
             onKeyDown={(event) => {
-              if (event.key === "Enter" || event.key === " ") {
+              if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) {
                 event.preventDefault();
                 setSelectedMatchId((current) => current === match.id ? "" : match.id);
               }
@@ -17617,11 +17760,11 @@ function MatchesView({
                 <span>vs {opponentLegend || "unknown"}</span>
               </div>
             </div>
-            <div>
+            <div className="review-match-opponent">
               <strong>{match.opponentName || "Unknown opponent"}</strong>
               <span>{matchSourceLabel(match)} - {match.format}</span>
             </div>
-            <div>
+            <div className="review-match-deck">
               <strong>{match.deckName || "Deck pending"}</strong>
               <span>{match.testingSessionLabel ? `Testing: ${match.testingSessionLabel}` : match.notes ? `Notes: ${match.notes}` : match.flags || "No flags"}</span>
             </div>
@@ -17633,7 +17776,18 @@ function MatchesView({
                 </button>
               ) : null}
               <button className="secondary" onClick={(event) => { event.stopPropagation(); onReview(match); }}>Edit</button>
-              <button className="secondary" onClick={(event) => { event.stopPropagation(); void onDelete(match.id); }}>Delete</button>
+              {canImportAtlasHistory(match) ? (
+                <button className="secondary" aria-haspopup="dialog" title="View opponent deck and sideboard changes" onClick={(event) => { event.stopPropagation(); setDeckMatchId(match.id); }}>
+                  <Layers size={14} /> Deck
+                </button>
+              ) : null}
+              <details className="review-row-more" onClick={(event) => event.stopPropagation()}>
+                <summary aria-label={`More actions for match against ${match.opponentName || "unknown opponent"}`}>More <ChevronDown size={12} /></summary>
+                <div className="review-row-more-menu">
+                  <button className="secondary" onClick={() => setSelectedMatchId(match.id)}><Eye size={14} /> Match details</button>
+                  <button className="secondary review-delete-action" onClick={() => void onDelete(match.id)}><Trash2 size={14} /> Delete match</button>
+                </div>
+              </details>
             </div>
           </div>
           );
@@ -17682,6 +17836,9 @@ function MatchesView({
             setSyncStatus(`Combined Bo3 saved as ${combined.result} ${displayMatchRecord(combined) || "record pending"}. Original split rows are hidden from normal stats.`);
           }}
         />
+      ) : null}
+      {deckMatchId && matchById.has(deckMatchId) ? (
+        <AtlasMatchDeckDialog match={matchById.get(deckMatchId)!} onClose={() => setDeckMatchId("")} />
       ) : null}
       {replayPickerMatch && replayPickerSegments.length > 1 ? (
         <ReplaySegmentPicker
@@ -18905,6 +19062,7 @@ function cloneGuideForLegend(guide: DeckMatchupGuide, legend: string): DeckMatch
   const normalized = normalizeLegendName(legend);
   return {
     ...deepClone(guide),
+    reviewBaseline: undefined,
     id: crypto.randomUUID(),
     legend: normalized,
     legendKey: normalized ? normalizedGuideKey(normalized) : "default",
@@ -19049,10 +19207,14 @@ function DecksView({
 }) {
   const [url, setUrl] = useState("");
   const [textDeck, setTextDeck] = useState("");
+  const [importOpen, setImportOpen] = useState(!decks.length);
+  const [importMode, setImportMode] = useState<"link" | "text">("link");
+  const [deckQuery, setDeckQuery] = useState("");
   const [selectedId, setSelectedId] = useState(selectionTarget || settings.activeDeckId || decks[0]?.id || "");
   const appliedSelectionTargetRef = useRef("");
   const [status, setStatus] = useState("");
   const selected = decks.find((deck) => deck.id === selectedId) ?? decks[0];
+  const filteredDecks = decks.filter((deck) => `${deck.title} ${deck.legend}`.toLowerCase().includes(deckQuery.trim().toLowerCase()));
 
   useEffect(() => {
     if (selectionTarget && selectionTarget !== appliedSelectionTargetRef.current && decks.some((deck) => deck.id === selectionTarget)) {
@@ -19071,33 +19233,17 @@ function DecksView({
     });
   }, [decks]);
 
-  useEffect(() => {
-    if (focusTarget === "library") {
-      const timeout = window.setTimeout(() => {
-        document.getElementById("deck-library-import")?.scrollIntoView({ block: "start", behavior: "smooth" });
-      }, 80);
-      return () => window.clearTimeout(timeout);
-    }
-    if (!selected?.id) {
-      return;
-    }
-    const targetId = focusTarget === "saved"
-      ? "deck-library-saved"
-      : focusTarget === "prep"
-      ? `matchup-prep-${selected.id}`
-      : focusTarget === "notebook"
-        ? `deck-notebook-${selected.id}`
-        : focusTarget === "performance"
-          ? `deck-performance-${selected.id}`
-          : "deck-library-import";
-    const timeout = window.setTimeout(() => {
-      document.getElementById(targetId)?.scrollIntoView({ block: "start", behavior: "smooth" });
-    }, 80);
-    return () => window.clearTimeout(timeout);
-  }, [focusTarget, selected?.id]);
-
   function focusDeckSection(target: DeckFocusTarget) {
     onFocusChange(target);
+  }
+
+  function openDeckImport() {
+    setImportOpen(true);
+    window.requestAnimationFrame(() => {
+      const panel = document.getElementById("deck-library-import");
+      panel?.scrollIntoView({ block: "nearest" });
+      panel?.querySelector<HTMLInputElement | HTMLTextAreaElement>(importMode === "link" ? "input" : "textarea")?.focus({ preventScroll: true });
+    });
   }
 
   async function importDeck() {
@@ -19111,6 +19257,8 @@ function DecksView({
       setUrl("");
       setSelectedId(saved.id);
       await onDecksChanged();
+      setImportOpen(false);
+      setDeckQuery("");
       setStatus(`Imported ${saved.title}.`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Deck import failed.");
@@ -19128,6 +19276,8 @@ function DecksView({
       setTextDeck("");
       setSelectedId(saved.id);
       await onDecksChanged();
+      setImportOpen(false);
+      setDeckQuery("");
       setStatus(`Imported ${saved.title}.`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Text deck import failed.");
@@ -19155,58 +19305,49 @@ function DecksView({
   }
 
   return (
-    <section className="dashboard-page decks-page">
-      <section className="deck-workspace-tabs" aria-label="Deck workspace sections" data-tour-target="prepare">
-        <button className="secondary" data-active={focusTarget === "library" || focusTarget === "saved"} onClick={() => focusDeckSection("library")}>Library</button>
-        <button className="secondary" data-active={focusTarget === "prep"} onClick={() => focusDeckSection("prep")}><BookOpen size={15} /> Prep Guides</button>
-        <button className="secondary" data-active={focusTarget === "notebook"} onClick={() => focusDeckSection("notebook")}><FileText size={15} /> Notebook</button>
-        <button className="secondary" data-active={focusTarget === "performance"} onClick={() => focusDeckSection("performance")}><BarChart3 size={15} /> Performance</button>
+    <section className="dashboard-page decks-page prepare-page" data-tour-target="prepare">
+      <header className="prepare-heading">
+        <div><span className="modern-kicker">PREPARE</span><h2>Ready for your next match.</h2><p>Your decks, matchup plans and testing notes, together.</p></div>
+        <button type="button" className="primary" aria-expanded={importOpen} aria-controls="deck-library-import" onClick={() => importOpen ? setImportOpen(false) : openDeckImport()}><Plus size={17} /> Import deck</button>
+      </header>
+      <section className="prepare-import modern-panel" id="deck-library-import" hidden={!importOpen}>
+        <header><div><h3>Add to your library</h3><p className="muted">Use a public Piltover Archive link or paste a deck list.</p></div><button type="button" className="icon-button" aria-label="Close deck import" onClick={() => setImportOpen(false)}><X size={17} /></button></header>
+        <div className="prepare-import-tabs" aria-label="Deck import method">
+          <button type="button" className="secondary" aria-pressed={importMode === "link"} data-active={importMode === "link"} onClick={() => setImportMode("link")}><Link2 size={15} /> Deck link</button>
+          <button type="button" className="secondary" aria-pressed={importMode === "text"} data-active={importMode === "text"} onClick={() => setImportMode("text")}><FileText size={15} /> Text list</button>
+        </div>
+        <div className="deck-import-row" hidden={importMode !== "link"}>
+          <input aria-label="Public Piltover deck link" value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://piltoverarchive.com/decks/view/..." />
+          <button className="primary" disabled={!url.trim()} onClick={() => void importDeck()}>Import link</button>
+        </div>
+        <div className="text-deck-import" hidden={importMode !== "text"}>
+          <textarea aria-label="Deck text list" value={textDeck} onChange={(event) => setTextDeck(event.target.value)} placeholder={"Vex v3\n\nLegend\n1 Vex, Gloomist\n\nRunes\n7 Calm Rune\n5 Chaos Rune\n\nMain Deck\n3 Falling Star\n\nSideboard\n1 Rebuke"} />
+          <button className="secondary" disabled={!textDeck.trim()} onClick={() => void importTextDeck()}>Import text list</button>
+        </div>
       </section>
-      <section className="rail-card deck-import-card" id="deck-library-import">
-        <div>
-          <h2>Deck library</h2>
-          <p className="muted">Import public Piltover Archive links. TCGA selected decks can also attach automatically during capture.</p>
-        </div>
-        <div className="deck-import-row">
-          <input value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://piltoverarchive.com/decks/view/..." />
-          <button className="primary" onClick={() => void importDeck()}>Import deck</button>
-        </div>
-        <div className="text-deck-import">
-          <div>
-            <strong>Import from text list</strong>
-            <span>Paste the same format RiftLite exports: title, Legend, Runes, Battlefields, Main Deck, and Sideboard.</span>
+      {status ? <p className="prepare-status" role="status">{status}</p> : null}
+      <section className="prepare-layout" id="deck-library-saved">
+        <aside className="prepare-library modern-panel" aria-label="Deck library">
+          <div className="prepare-library-title"><h3>Deck library</h3><span>{decks.length}</span></div>
+          <input className="prepare-search" aria-label="Search saved decks" value={deckQuery} onChange={(event) => setDeckQuery(event.target.value)} placeholder="Find a deck or legend..." />
+          <div className="prepare-deck-list">
+            {filteredDecks.map((deck) => (
+              <button type="button" className="prepare-deck-item" data-active={selected?.id === deck.id} aria-pressed={selected?.id === deck.id} key={deck.id} onClick={() => setSelectedId(deck.id)}>
+                <HomeOfficialArtStack sources={homeOfficialDeckArtSources(deck).slice(0, 1)} label={`${deck.legend || "Deck"} artwork`} />
+                <span className="prepare-deck-copy"><strong>{deck.title}</strong><span>{deck.legend || "Unknown legend"}</span><small>{settings.activeDeckId === deck.id ? <><i className="prepare-active-dot" /> Active deck</> : deck.lastRefreshStatus || "Saved deck"}</small></span>
+              </button>
+            ))}
           </div>
-          <textarea
-            value={textDeck}
-            onChange={(event) => setTextDeck(event.target.value)}
-            placeholder={"Vex v3\n\nLegend\n1 Vex, Gloomist\n\nRunes\n7 Calm Rune\n5 Chaos Rune\n\nBattlefields\n1 Grove of the God-Willow\n\nMain Deck\n3 Falling Star\n2 Watchful Sentry\n\nSideboard\n1 Rebuke"}
-          />
-          <button className="secondary" disabled={!textDeck.trim()} onClick={() => void importTextDeck()}>
-            Import text list
-          </button>
-        </div>
-        {status ? <p className="muted">{status}</p> : null}
-      </section>
-
-      <section className="deck-library-layout" id="deck-library-saved">
-        <div className="rail-card deck-list-card">
-          <h2>Saved decks</h2>
-          {decks.map((deck) => (
-            <button className="deck-list-item interactive-row" data-active={selected?.id === deck.id} key={deck.id} onClick={() => setSelectedId(deck.id)}>
-              <div>
-                <strong>{deck.title}</strong>
-                <span>{deck.legend || "Unknown legend"}{settings.activeDeckId === deck.id ? " - Active" : ""}</span>
-              </div>
-              <em>{deck.lastRefreshStatus || "Imported"}</em>
-            </button>
-          ))}
-          {!decks.length ? <p className="muted">Imported and auto-detected decks will appear here.</p> : null}
-        </div>
-
-        <div className="rail-card deck-detail-card">
+          {decks.length && !filteredDecks.length ? <div className="prepare-empty"><p>No decks match this search.</p><button className="secondary" onClick={() => setDeckQuery("")}>Clear search</button></div> : null}
+          {!decks.length ? <div className="prepare-empty"><Layers size={28} /><p>Your first deck starts here.</p><button className="secondary" onClick={openDeckImport}>Add a deck</button></div> : null}
+          <p className="prepare-library-footer">Imported and auto-detected decks live here. Select a deck to start preparing.</p>
+        </aside>
+        <div className="prepare-workspace modern-panel" id="prepare-workspace" data-focus={focusTarget}>
           {selected ? (
             <DeckDetail
               deck={selected}
+              focusTarget={focusTarget}
+              onFocusChange={focusDeckSection}
               matches={matches}
               active={settings.activeDeckId === selected.id}
               onSetActive={() => void setActiveDeck(selected.id)}
@@ -19219,7 +19360,7 @@ function DecksView({
               }}
             />
           ) : (
-            <p className="muted">Select a deck to view its snapshot.</p>
+            <div className="prepare-empty"><BookOpen size={38} /><h3>A place for your game plan</h3><p>Add a deck to organise your cards, prepare for matchups and track what you learn.</p><button className="primary" onClick={openDeckImport}><Plus size={16} /> Import your first deck</button></div>
           )}
         </div>
       </section>
@@ -19227,8 +19368,10 @@ function DecksView({
   );
 }
 
-function DeckDetail({ deck, matches, active, onSetActive, onRefresh, onDelete, onDecksChanged, onDeckImported }: {
+function DeckDetail({ deck, focusTarget, onFocusChange, matches, active, onSetActive, onRefresh, onDelete, onDecksChanged, onDeckImported }: {
   deck: SavedDeck;
+  focusTarget: DeckFocusTarget;
+  onFocusChange: (focus: DeckFocusTarget) => void;
   matches: MatchDraft[];
   active: boolean;
   onSetActive: () => void;
@@ -19242,24 +19385,30 @@ function DeckDetail({ deck, matches, active, onSetActive, onRefresh, onDelete, o
   const performance = useMemo(() => buildDeckPerformance(deck, matches), [deck, matches]);
   const [notebook, setNotebook] = useState<DeckNotebook>(() => emptyDeckNotebook(deck.id));
   const [notebookStatus, setNotebookStatus] = useState("");
+  const notebookPersistedRef = useRef(notebook);
+  const notebookSaveSequenceRef = useRef(0);
+  const affectedPrepPlans = useMemo(() => reviewDeckNotebook(deck, notebook).filter((report) => report.issues.length > 0).length, [deck, notebook]);
   const [titleDraft, setTitleDraft] = useState(deck.title);
   const [titleStatus, setTitleStatus] = useState("");
   const sections = [
-    ["Runes", deckEntries(snapshot, "runes")],
-    ["Battlefields", deckEntries(snapshot, "battlefields")],
     ["Main deck", deckEntries(snapshot, "main_deck", "mainDeck")],
-    ["Sideboard", deckEntries(snapshot, "sideboard")]
+    ["Sideboard", deckEntries(snapshot, "sideboard")],
+    ["Runes", deckEntries(snapshot, "runes")],
+    ["Battlefields", deckEntries(snapshot, "battlefields")]
   ] as const;
   const totalCards = deckEntries(snapshot, "main_deck", "mainDeck").reduce((total, entry) => total + entry.qty, 0);
 
   useEffect(() => {
     let cancelled = false;
     setNotebook(emptyDeckNotebook(deck.id));
+    notebookPersistedRef.current = emptyDeckNotebook(deck.id);
+    notebookSaveSequenceRef.current += 1;
     setNotebookStatus("Loading notebook...");
     void window.riftlite.getDeckNotebook(deck.id)
       .then((next) => {
         if (!cancelled) {
           setNotebook(next);
+          notebookPersistedRef.current = next;
           setNotebookStatus("");
         }
       })
@@ -19279,15 +19428,26 @@ function DeckDetail({ deck, matches, active, onSetActive, onRefresh, onDelete, o
   }, [deck.id, deck.title]);
 
   async function saveNotebook(next: DeckNotebook) {
+    const sequence = ++notebookSaveSequenceRef.current;
     setNotebook(next);
     setNotebookStatus("Saving...");
     try {
       const saved = await window.riftlite.saveDeckNotebook(deck.id, next);
-      setNotebook(saved);
-      setNotebookStatus("Saved");
-      window.setTimeout(() => setNotebookStatus(""), 1200);
+      if (notebookPersistedRef.current.deckId === saved.deckId) notebookPersistedRef.current = saved;
+      if (sequence === notebookSaveSequenceRef.current) {
+        setNotebook(saved);
+        setNotebookStatus("Saved");
+        window.setTimeout(() => {
+          if (sequence === notebookSaveSequenceRef.current) setNotebookStatus("");
+        }, 1200);
+      }
+      return true;
     } catch {
-      setNotebookStatus("Notebook could not be saved.");
+      if (sequence === notebookSaveSequenceRef.current) {
+        setNotebook(notebookPersistedRef.current);
+        setNotebookStatus("Notebook could not be saved. Your guide draft is still here; try again.");
+      }
+      return false;
     }
   }
 
@@ -19315,76 +19475,106 @@ function DeckDetail({ deck, matches, active, onSetActive, onRefresh, onDelete, o
 
   return (
     <>
-      <div className="deck-detail-header">
-        <div className="deck-title-editor">
-          <label>
-            <span>Deck name</span>
-            <input
-              value={titleDraft}
-              onChange={(event) => setTitleDraft(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  event.preventDefault();
-                  void saveDeckTitle();
-                }
-              }}
-            />
-          </label>
-          <span>{deck.legend || "Unknown legend"}{active ? " - Active fallback" : ""}</span>
-          {titleStatus ? <em>{titleStatus}</em> : null}
+      <header className="prepare-deck-hero">
+        <div className="prepare-hero-copy">
+          <div className="prepare-deck-badges"><span className="modern-kicker">YOUR DECK</span>{active ? <span><i className="prepare-active-dot" /> Active deck</span> : null}</div>
+          <h2>{deck.title}</h2>
+          <p>{deck.legend || "Unknown legend"}</p>
+          <div className="prepare-hero-stats">
+            <div className="prepare-stat"><strong>{totalCards}</strong><span>Main deck cards</span></div>
+            <div className="prepare-stat"><strong>{performance.overview.total}</strong><span>Completed matches</span></div>
+            <div className="prepare-stat"><strong>{performance.overview.winRateLabel}</strong><span>Win rate</span></div>
+          </div>
+          <div className="row-actions">
+            <button type="button" className="primary" onClick={() => onFocusChange("prep")}><BookOpen size={16} /> Matchup prep</button>
+            {affectedPrepPlans > 0 ? <button type="button" className="secondary" onClick={() => onFocusChange("prep")}><AlertTriangle size={15} />{affectedPrepPlans} prep {affectedPrepPlans === 1 ? "plan needs" : "plans need"} review</button> : null}
+            <button type="button" className="secondary" onClick={onSetActive}>{active ? "Clear active" : "Set active"}</button>
+          </div>
         </div>
-        <div className="row-actions">
-          <button className="secondary" disabled={!titleDraft.trim() || titleDraft.trim() === deck.title} onClick={() => void saveDeckTitle()}>
-            Save name
-          </button>
-          <button className="secondary" onClick={() => document.getElementById(`matchup-prep-${deck.id}`)?.scrollIntoView({ block: "start", behavior: "smooth" })}>
-            <BookOpen size={15} /> Matchup prep
-          </button>
-          <button className="secondary" onClick={onSetActive}>{active ? "Clear active" : "Set active"}</button>
-          <button className="secondary" onClick={onRefresh}>Refresh</button>
-          {deck.sourceUrl.startsWith("http") ? <button className="secondary" onClick={() => void window.riftlite.openExternalResource(deck.sourceUrl)}>Open source</button> : null}
-          <button className="secondary danger" onClick={onDelete}>Remove</button>
+        <HomeActiveDeckArtwork deck={deck} />
+      </header>
+      <details className="prepare-manage" hidden={focusTarget !== "library" && focusTarget !== "saved"}>
+        <summary>Manage deck <span>{deck.lastRefreshError || deck.lastRefreshStatus || "Imported"}</span></summary>
+        <div className="prepare-manage-content">
+          <div className="deck-title-editor">
+            <label>
+              <span>Deck name</span>
+              <input
+                value={titleDraft}
+                onChange={(event) => setTitleDraft(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    void saveDeckTitle();
+                  }
+                }}
+              />
+            </label>
+            <span>{active ? "Used as your active fallback when a match deck cannot be detected." : "Set active to use this deck as your capture fallback."}</span>
+            {titleStatus ? <em>{titleStatus}</em> : null}
+          </div>
+          <div className="row-actions">
+            <button className="secondary" disabled={!titleDraft.trim() || titleDraft.trim() === deck.title} onClick={() => void saveDeckTitle()}>
+              Save name
+            </button>
+            <button className="secondary" onClick={onRefresh}>Refresh</button>
+            {deck.sourceUrl.startsWith("http") ? <button className="secondary" onClick={() => void window.riftlite.openExternalResource(deck.sourceUrl)}>Open source</button> : null}
+            <button className="secondary danger" onClick={onDelete}>Remove</button>
+          </div>
         </div>
-      </div>
-      <div className="drilldown-grid">
-        <Metric label="Main deck" value={`${totalCards} cards`} />
-        <Metric label="Runes" value={String(deckEntries(snapshot, "runes").length)} />
-        <Metric label="Battlefields" value={String(deckEntries(snapshot, "battlefields").length)} />
-        <Metric label="Status" value={deck.lastRefreshError || deck.lastRefreshStatus || "Imported"} />
-      </div>
+      </details>
       {needsRefresh ? (
         <div className="deck-refresh-warning">
           This deck was imported by the older parser. Refresh it to rebuild the card names and Piltover images.
         </div>
       ) : null}
-      <DeckCodePanel
-        title={deck.title}
-        sourceUrl={deck.sourceUrl}
-        snapshotJson={deck.snapshotJson}
-      />
-      <div id={`deck-notebook-${deck.id}`}>
+      <nav className="prepare-workspace-tabs" aria-label="Selected deck workspace">
+        {([
+          ["library", "Deck list", Layers],
+          ["prep", "Matchup prep", BookOpen],
+          ["notebook", "Notebook", FileText],
+          ["performance", "Performance", BarChart3]
+        ] as const).map(([target, label, Icon]) => (
+          <button type="button" className="secondary" data-active={focusTarget === target || (target === "library" && focusTarget === "saved")} aria-pressed={focusTarget === target || (target === "library" && focusTarget === "saved")} key={target} onClick={() => onFocusChange(target)}>
+            <Icon size={16} /> {label}
+          </button>
+        ))}
+      </nav>
+      <div className="prepare-pane" hidden={focusTarget !== "library" && focusTarget !== "saved"}>
+        <details className="prepare-manage prepare-deck-code">
+          <summary>Deck code & source <span>Copy or view the imported list</span></summary>
+          <DeckCodePanel
+            title={deck.title}
+            sourceUrl={deck.sourceUrl}
+            snapshotJson={deck.snapshotJson}
+          />
+        </details>
+        <div className="deck-section-grid">
+          {sections.map(([title, entries]) => (
+            <section className="deck-section" data-section={title} key={title}>
+              <h3>{title} <span className="muted">{entries.reduce((total, entry) => total + entry.qty, 0)}</span></h3>
+              {entries.map((entry) => <DeckEntryRow entry={entry} key={`${title}:${entry.name}`} />)}
+              {!entries.length ? <p className="muted">No cards recorded.</p> : null}
+            </section>
+          ))}
+        </div>
+      </div>
+      {/* Keep the editor mounted so switching workspace panes preserves unsaved guide drafts. */}
+      <div className="prepare-pane" id={`deck-notebook-${deck.id}`} hidden={focusTarget !== "prep" && focusTarget !== "notebook"}>
         <DeckNotebookPanel
           deck={deck}
+          viewMode={focusTarget === "notebook" ? "notebook" : "prep"}
           notebook={notebook}
           matches={matches}
           linkedMatches={performance.matches}
           status={notebookStatus}
-          onSave={(next) => void saveNotebook(next)}
+          onSave={saveNotebook}
           onDecksChanged={onDecksChanged}
           onDeckImported={onDeckImported}
         />
       </div>
-      <div id={`deck-performance-${deck.id}`}>
+      <div className="prepare-pane" id={`deck-performance-${deck.id}`} hidden={focusTarget !== "performance"}>
         <DeckPerformancePanel performance={performance} />
-      </div>
-      <div className="deck-section-grid">
-        {sections.map(([title, entries]) => (
-          <section className="deck-section" key={title}>
-            <h3>{title}</h3>
-            {entries.map((entry) => <DeckEntryRow entry={entry} key={`${title}:${entry.name}`} />)}
-            {!entries.length ? <p className="muted">No cards recorded.</p> : null}
-          </section>
-        ))}
       </div>
     </>
   );
@@ -19475,6 +19665,7 @@ function DeckPerformancePanel({ performance }: { performance: DeckPerformanceSta
 
 function DeckNotebookPanel({
   deck,
+  viewMode,
   notebook,
   matches,
   linkedMatches,
@@ -19484,11 +19675,12 @@ function DeckNotebookPanel({
   onDeckImported
 }: {
   deck: SavedDeck;
+  viewMode: "prep" | "notebook";
   notebook: DeckNotebook;
   matches: MatchDraft[];
   linkedMatches: MatchDraft[];
   status: string;
-  onSave: (notebook: DeckNotebook) => void;
+  onSave: (notebook: DeckNotebook) => Promise<boolean>;
   onDecksChanged: () => Promise<void>;
   onDeckImported: (deckId: string, title: string) => void;
 }) {
@@ -19497,6 +19689,7 @@ function DeckNotebookPanel({
   const [watchStatus, setWatchStatus] = useState<DeckCardWatchStatus>("Testing");
   const [notesQuery, setNotesQuery] = useState("");
   const [prepLegend, setPrepLegend] = useState("default");
+  const [prepStage, setPrepStage] = useState<"mulligan" | "sideboard" | "battlefields" | "notes">("mulligan");
   const [prepCopyTarget, setPrepCopyTarget] = useState("");
   const [prepExportStatus, setPrepExportStatus] = useState("");
   const [packageTextOpen, setPackageTextOpen] = useState(false);
@@ -19508,9 +19701,18 @@ function DeckNotebookPanel({
   const sideboardOptions = useMemo(() => deckNotebookSideboardCardOptions(deck), [deck]);
   const battlefieldOptions = useMemo(() => deckNotebookBattlefieldCardOptions(deck), [deck]);
   const prepGuide = useMemo(() => editableGuideForLegend(notebook, prepLegend), [notebook, prepLegend]);
-  const [prepDraft, setPrepDraft] = useState<DeckMatchupGuide>(() => prepGuide);
+  const [prepDrafts, setPrepDrafts] = useState<Record<string, DeckMatchupGuide>>({});
+  const [prepSaveBusy, setPrepSaveBusy] = useState(false);
+  const prepSaveInFlightRef = useRef(false);
+  const prepDraftKey = `${deck.id}:${prepLegend}`;
+  const prepDraft = prepDrafts[prepDraftKey] ?? prepGuide;
+  function setPrepDraft(next: DeckMatchupGuide) {
+    setPrepDrafts((current) => ({ ...current, [prepDraftKey]: next }));
+  }
   const versionRows = useMemo(() => buildDeckVersionPerformance(deck, notebook, matches), [deck, matches, notebook]);
   const prepDirty = useMemo(() => JSON.stringify(prepDraft) !== JSON.stringify(prepGuide), [prepDraft, prepGuide]);
+  const prepReview = useMemo(() => reviewDeckGuide(deck, prepDraft), [deck, prepDraft]);
+  const prepReviews = useMemo(() => reviewDeckNotebook(deck, { ...notebook, ...notebookWithGuide(notebook, prepDraft) }), [deck, notebook, prepDraft]);
   const noteMatches = useMemo(() => {
     const query = notesQuery.trim().toLowerCase();
     return linkedMatches
@@ -19532,12 +19734,8 @@ function DeckNotebookPanel({
       .slice(0, 12);
   }, [linkedMatches, notesQuery]);
 
-  useEffect(() => {
-    setPrepDraft(deepClone(prepGuide));
-  }, [deck.id, prepLegend, prepGuide.id, prepGuide.updatedAt]);
-
   function patchNotebook(patch: Partial<DeckNotebook>) {
-    onSave({ ...notebook, ...patch, updatedAt: new Date().toISOString() });
+    return onSave({ ...notebook, ...patch, updatedAt: new Date().toISOString() });
   }
 
   function addGoal() {
@@ -19610,11 +19808,34 @@ function DeckNotebookPanel({
   }
 
   function savePrepGuide(nextGuide: DeckMatchupGuide) {
-    patchNotebook(notebookWithGuide(notebook, nextGuide));
+    return patchNotebook(notebookWithGuide(notebook, nextGuide));
   }
 
   function savePrepDraft() {
-    savePrepGuide({ ...prepDraft, updatedAt: new Date().toISOString() });
+    void persistPrepDraft(false);
+  }
+
+  async function persistPrepDraft(markReviewed: boolean, source = prepDraft, key = prepDraftKey) {
+    if (prepSaveInFlightRef.current) return;
+    prepSaveInFlightRef.current = true;
+    setPrepSaveBusy(true);
+    const draftBeforeSave = JSON.stringify(source);
+    try {
+      const next = markReviewed ? markDeckGuideReviewed(deck, source) : { ...source, updatedAt: new Date().toISOString() };
+      if (await savePrepGuide(next)) {
+        setPrepDrafts((current) => {
+          if (current[key] && JSON.stringify(current[key]) !== draftBeforeSave) return current;
+          const remaining = { ...current };
+          delete remaining[key];
+          return remaining;
+        });
+      }
+    } catch (error) {
+      setPrepExportStatus(error instanceof Error ? error.message : "The guide could not be saved.");
+    } finally {
+      prepSaveInFlightRef.current = false;
+      setPrepSaveBusy(false);
+    }
   }
 
   function notebookWithPrepDraft(): DeckNotebook {
@@ -19639,13 +19860,16 @@ function DeckNotebookPanel({
 
   function copyCurrentToTarget() {
     const targetLegend = normalizeLegendName(prepCopyTarget);
-    if (!targetLegend) {
+    if (!targetLegend || prepSaveInFlightRef.current) {
       return;
     }
-    savePrepGuide({
+    const next = {
       ...cloneGuideForLegend(prepDraft, targetLegend),
       updatedAt: new Date().toISOString()
-    });
+    };
+    const targetKey = `${deck.id}:${targetLegend}`;
+    setPrepDrafts((current) => ({ ...current, [targetKey]: next }));
+    void persistPrepDraft(false, next, targetKey);
     setPrepLegend(targetLegend);
     setPrepCopyTarget("");
   }
@@ -19731,42 +19955,15 @@ function DeckNotebookPanel({
   }
 
   return (
-    <section className="deck-notebook-panel">
-      <div className="deck-performance-heading">
+    <section className="deck-notebook-panel" data-view-mode={viewMode}>
+      <div className="deck-performance-heading" hidden={viewMode !== "notebook"}>
         <div>
           <h3>Testing notebook</h3>
-          <span>Local-only deck goals, versions, card notes, and match learnings.</span>
-        </div>
-        <div className="row-actions">
-          {status ? <span className="deck-notebook-status">{status}</span> : null}
-          <button type="button" className="secondary" onClick={() => void importDeckPackage()}>Import package</button>
-          <button type="button" className="secondary" onClick={() => void exportDeckPackage()}>Export package</button>
-          <button type="button" className="secondary" onClick={() => void copyDeckPackageText()}>Copy package text</button>
-          <button type="button" className="secondary" onClick={() => setPackageTextOpen((value) => !value)}>Import text</button>
-          <button type="button" className="secondary" onClick={() => void importNotebook()}>Import notebook</button>
-          <button type="button" className="secondary" onClick={() => void exportNotebook()}>Export notebook</button>
+          <span>Track what you’re testing and what your matches are teaching you.</span>
         </div>
       </div>
-      {packageTextOpen ? (
-        <section className="compact-panel deck-package-text-panel">
-          <h3>Import package text</h3>
-          <p className="muted">Paste a RiftLite package block from Discord, a blog post, or raw JSON. File imports still work exactly as before.</p>
-          <textarea
-            value={packageText}
-            onChange={(event) => setPackageText(event.target.value)}
-            placeholder="RIFTLITE_DECK_PACKAGE_V1:..."
-          />
-          <div className="row-actions">
-            {packageTextStatus ? <span className="deck-notebook-status">{packageTextStatus}</span> : null}
-            <button type="button" className="secondary" onClick={() => setPackageText("")}>Clear</button>
-            <button type="button" className="primary" disabled={!packageText.trim()} onClick={() => void importDeckPackageText()}>Import pasted package</button>
-          </div>
-        </section>
-      ) : packageTextStatus ? (
-        <span className="deck-notebook-status">{packageTextStatus}</span>
-      ) : null}
-
-      <section className="two-column deck-notebook-grid">
+      {status ? <span className="deck-notebook-status" role="status">{status}</span> : null}
+      <section className="two-column deck-notebook-grid" hidden={viewMode !== "notebook"}>
         <div className="compact-panel">
           <h3>Testing goals</h3>
           <div className="inline-form">
@@ -19826,40 +20023,49 @@ function DeckNotebookPanel({
         </div>
       </section>
 
-      <section className="compact-panel matchup-prep-panel" id={`matchup-prep-${deck.id}`}>
-        <div className="matchup-prep-header">
-          <div>
-            <h3>Matchup prep</h3>
-            <span>Visual mulligan, sideboard, and matchup notes for the in-game prep pill.</span>
+      <section className="compact-panel matchup-prep-panel" id={`matchup-prep-${deck.id}`} hidden={viewMode !== "prep"}>
+        <div className="prep-overview">
+          <div className="prep-opponent-context">
+            <div className="prep-opponent-art">{prepLegend === "default" ? <BookOpen size={25} /> : <LegendAvatar legend={prepLegend} />}</div>
+            <div><h3>{prepLegend === "default" ? "Your default game plan" : `Facing ${normalizeLegendName(prepLegend)}`}</h3><span>Keep your next decision close. These guides appear in Play.</span></div>
           </div>
-          <div className="matchup-prep-controls">
-            <select value={prepLegend} onChange={(event) => setPrepLegend(event.target.value)}>
-              <option value="default">All matchups default</option>
-              {CANONICAL_LEGEND_NAMES.map((legend) => <option value={legend} key={legend}>{legend}</option>)}
-            </select>
-            <button type="button" className="secondary" disabled={prepLegend === "default"} onClick={copyDefaultToCurrent}>Copy default</button>
+          <div className="prep-guide-actions">
             <button type="button" className="secondary" onClick={() => void exportPrepPdf()}>
               <FileText size={15} /> Export PDF
             </button>
-            <button type="button" className="primary" disabled={!prepDirty} onClick={savePrepDraft}>
+            <button type="button" className="primary" disabled={!prepDirty || prepSaveBusy} onClick={savePrepDraft}>
               <Save size={15} /> Save guide
             </button>
-            <button type="button" className="secondary danger" onClick={resetCurrentGuide}>Reset</button>
           </div>
         </div>
-        <div className="matchup-prep-copy-row">
-          <span>{prepDirty ? "Unsaved matchup prep changes." : prepLegend === "default" ? "Editing the guide used when no specific matchup exists." : `Editing ${normalizeLegendName(prepLegend)}. Blank sections use the default guide in play.`}</span>
-          {prepExportStatus ? <strong className="deck-notebook-status">{prepExportStatus}</strong> : null}
-          <select value={prepCopyTarget} onChange={(event) => setPrepCopyTarget(event.target.value)}>
-            <option value="">Copy this guide to...</option>
-            {CANONICAL_LEGEND_NAMES.filter((legend) => normalizeLegendName(legend) !== normalizeLegendName(prepLegend)).map((legend) => (
-              <option value={legend} key={legend}>{legend}</option>
-            ))}
+        <label className="prep-context-selector">
+          <span>Prepare against</span>
+          <select value={prepLegend} onChange={(event) => setPrepLegend(event.target.value)}>
+            <option value="default">All matchups · default guide</option>
+            {CANONICAL_LEGEND_NAMES.map((legend) => <option value={legend} key={legend}>{legend}</option>)}
           </select>
-          <button type="button" className="secondary" disabled={!prepCopyTarget} onClick={copyCurrentToTarget}>Copy</button>
+        </label>
+        <div className="prep-guide-status" data-dirty={prepDirty} role="status">
+          <span>{prepDirty ? "Unsaved changes · save your guide when ready." : prepLegend === "default" ? "Used when no specific matchup guide exists." : "Blank sections use your default guide in Play."}</span>
+          {prepExportStatus ? <strong className="deck-notebook-status">{prepExportStatus}</strong> : null}
         </div>
+        <DeckGuideReviewNotice reports={prepReviews} current={prepReview} busy={prepSaveBusy} dirty={prepDirty}
+          onOpen={(legend, stage) => { setPrepLegend(legend); if (stage) setPrepStage(stage); }}
+          onMarkReviewed={() => { void persistPrepDraft(true); }} />
+        <nav className="prep-stage-tabs" aria-label="Matchup guide sections">
+          {([
+            ["mulligan", "Mulligan", "Shape your opening hand", Layers],
+            ["sideboard", "Sideboard", "Plan your swaps", ArrowRightLeft],
+            ["battlefields", "Battlefields", "Choose your ground", MapPin],
+            ["notes", "Notes", "Remember what matters", FileText]
+          ] as const).map(([stage, label, hint, Icon]) => (
+            <button type="button" key={stage} data-active={prepStage === stage} aria-pressed={prepStage === stage} onClick={() => setPrepStage(stage)}>
+              <Icon size={18} /><span><strong>{label}</strong><small>{hint}</small></span>
+            </button>
+          ))}
+        </nav>
         <section className="matchup-prep-grid">
-          <div className="matchup-prep-column">
+          <div className="matchup-prep-column" data-stage="mulligan" hidden={prepStage !== "mulligan"}>
             <h4>Mulligan guide</h4>
             <GuideSectionEditor
               title="Keep"
@@ -19880,7 +20086,7 @@ function DeckNotebookPanel({
               onChange={(section) => setPrepDraft({ ...prepDraft, mulligan: { ...prepDraft.mulligan, avoid: section }, updatedAt: new Date().toISOString() })}
             />
           </div>
-          <div className="matchup-prep-column">
+          <div className="matchup-prep-column" data-stage="sideboard" hidden={prepStage !== "sideboard"}>
             <h4>Sideboard guide</h4>
             <GuideSectionEditor
               title="Bring in"
@@ -19903,7 +20109,7 @@ function DeckNotebookPanel({
               />
             </label>
           </div>
-          <div className="matchup-prep-column">
+          <div className="matchup-prep-column" data-stage="battlefields" hidden={prepStage !== "battlefields"}>
             <h4>Battlefield guide</h4>
             <GuideSectionEditor
               title="Game 1 Blind Pick"
@@ -19933,13 +20139,59 @@ function DeckNotebookPanel({
             </label>
           </div>
         </section>
-        <GuideNotesEditor
-          notes={prepDraft.notes}
-          onChange={(notes) => setPrepDraft({ ...prepDraft, notes, updatedAt: new Date().toISOString() })}
-        />
+        <div hidden={prepStage !== "notes"}>
+          <GuideNotesEditor
+            notes={prepDraft.notes}
+            onChange={(notes) => setPrepDraft({ ...prepDraft, notes, updatedAt: new Date().toISOString() })}
+          />
+        </div>
+        <details className="prep-guide-tools">
+          <summary>Copy or reset guide</summary>
+          <div className="matchup-prep-controls">
+            <button type="button" className="secondary" disabled={prepLegend === "default"} onClick={copyDefaultToCurrent}>Copy default</button>
+            <select aria-label="Copy guide to matchup" value={prepCopyTarget} onChange={(event) => setPrepCopyTarget(event.target.value)}>
+              <option value="">Copy this guide to...</option>
+              {CANONICAL_LEGEND_NAMES.filter((legend) => normalizeLegendName(legend) !== normalizeLegendName(prepLegend)).map((legend) => (
+                <option value={legend} key={legend}>{legend}</option>
+              ))}
+            </select>
+            <button type="button" className="secondary" disabled={!prepCopyTarget || prepSaveBusy} onClick={copyCurrentToTarget}>Copy</button>
+            <button type="button" className="secondary danger" onClick={resetCurrentGuide}>Reset</button>
+          </div>
+        </details>
       </section>
 
-      <section className="compact-panel">
+      <details className="prepare-transfer-tools">
+        <summary>Share & import <span>Deck packages and notebooks</span></summary>
+        <div className="row-actions">
+          <button type="button" className="secondary" onClick={() => void importDeckPackage()}>Import package</button>
+          <button type="button" className="secondary" onClick={() => void exportDeckPackage()}>Export package</button>
+          <button type="button" className="secondary" onClick={() => void copyDeckPackageText()}>Copy package text</button>
+          <button type="button" className="secondary" onClick={() => setPackageTextOpen((value) => !value)}>Import text</button>
+          <button type="button" className="secondary" onClick={() => void importNotebook()}>Import notebook</button>
+          <button type="button" className="secondary" onClick={() => void exportNotebook()}>Export notebook</button>
+        </div>
+      </details>
+      {packageTextOpen ? (
+        <section className="compact-panel deck-package-text-panel">
+          <h3>Import package text</h3>
+          <p className="muted">Paste a RiftLite package block from Discord, a blog post, or raw JSON. File imports still work exactly as before.</p>
+          <textarea
+            value={packageText}
+            onChange={(event) => setPackageText(event.target.value)}
+            placeholder="RIFTLITE_DECK_PACKAGE_V1:..."
+          />
+          <div className="row-actions">
+            {packageTextStatus ? <span className="deck-notebook-status">{packageTextStatus}</span> : null}
+            <button type="button" className="secondary" onClick={() => setPackageText("")}>Clear</button>
+            <button type="button" className="primary" disabled={!packageText.trim()} onClick={() => void importDeckPackageText()}>Import pasted package</button>
+          </div>
+        </section>
+      ) : packageTextStatus ? (
+        <span className="deck-notebook-status">{packageTextStatus}</span>
+      ) : null}
+
+      <section className="compact-panel" hidden={viewMode !== "notebook"}>
         <h3>Version history</h3>
         <div className="deck-version-table">
           <div className="deck-version-head">
@@ -19966,7 +20218,7 @@ function DeckNotebookPanel({
         </div>
       </section>
 
-      <section className="compact-panel">
+      <section className="compact-panel" hidden={viewMode !== "notebook"}>
         <h3>Linked match notes</h3>
         <input className="full-width-input" value={notesQuery} onChange={(event) => setNotesQuery(event.target.value)} placeholder="Search notes, opponent legend, battlefield, result, or format..." />
         <div className="deck-note-list">
@@ -20027,7 +20279,7 @@ function GuideSectionEditor({ title, options, section, onChange }: {
         <span>{section.cards.length} card{section.cards.length === 1 ? "" : "s"}</span>
       </div>
       <div className="inline-form guide-card-picker">
-        <select value={selected} onChange={(event) => setSelected(event.target.value)}>
+        <select aria-label={`${title} card`} value={selected} onChange={(event) => setSelected(event.target.value)}>
           <option value="">Choose a card</option>
           {options.map((card) => <option value={card.cardKey} key={card.cardKey}>{card.cardName}</option>)}
         </select>
@@ -20052,44 +20304,47 @@ function GuideSectionEditor({ title, options, section, onChange }: {
                   onChange={(event) => updateCard(card.id, { qty: Math.max(1, Math.trunc(Number(event.target.value) || 1)) })}
                 />
               </label>
-              <div className="guide-card-meta-grid">
-                <input
-                  value={card.groupName ?? ""}
-                  onChange={(event) => updateCard(card.id, { groupName: event.target.value })}
-                  placeholder="Mini-group e.g. Turn 1 play"
-                />
-                <input
-                  type="number"
-                  min={1}
-                  max={9}
-                  value={card.priority ?? ""}
-                  onChange={(event) => {
-                    const value = Number(event.target.value);
-                    updateCard(card.id, { priority: Number.isFinite(value) && value > 0 ? Math.trunc(value) : undefined });
-                  }}
-                  placeholder="Priority"
-                />
-              </div>
-              <div className="guide-card-meta-grid">
-                <input
-                  value={card.groupTarget ?? ""}
-                  onChange={(event) => updateCard(card.id, { groupTarget: event.target.value })}
-                  placeholder="Goal e.g. Look for 1x"
-                />
-                <input
-                  value={card.groupNote ?? ""}
-                  onChange={(event) => updateCard(card.id, { groupNote: event.target.value })}
-                  placeholder="Group note"
-                />
-              </div>
-              <input value={card.note ?? ""} onChange={(event) => updateCard(card.id, { note: event.target.value })} placeholder="Tiny note..." />
+              <details className="guide-card-advanced">
+                <summary>Notes & grouping</summary>
+                <div className="guide-card-meta-grid">
+                  <input
+                    value={card.groupName ?? ""}
+                    onChange={(event) => updateCard(card.id, { groupName: event.target.value })}
+                    placeholder="Mini-group e.g. Turn 1 play"
+                  />
+                  <input
+                    type="number"
+                    min={1}
+                    max={9}
+                    value={card.priority ?? ""}
+                    onChange={(event) => {
+                      const value = Number(event.target.value);
+                      updateCard(card.id, { priority: Number.isFinite(value) && value > 0 ? Math.trunc(value) : undefined });
+                    }}
+                    placeholder="Priority"
+                  />
+                </div>
+                <div className="guide-card-meta-grid">
+                  <input
+                    value={card.groupTarget ?? ""}
+                    onChange={(event) => updateCard(card.id, { groupTarget: event.target.value })}
+                    placeholder="Goal e.g. Look for 1x"
+                  />
+                  <input
+                    value={card.groupNote ?? ""}
+                    onChange={(event) => updateCard(card.id, { groupNote: event.target.value })}
+                    placeholder="Group note"
+                  />
+                </div>
+                <input value={card.note ?? ""} onChange={(event) => updateCard(card.id, { note: event.target.value })} placeholder="Tiny note..." />
+              </details>
             </div>
             <button type="button" className="icon-button" onClick={() => removeCard(card.id)} title="Remove card"><X size={14} /></button>
           </div>
         ))}
         {!section.cards.length ? <p className="muted">Add cards from this deck to make the guide visual.</p> : null}
       </div>
-      <textarea value={section.note} onChange={(event) => onChange({ ...section, note: event.target.value })} placeholder={`${title} notes...`} />
+      <textarea aria-label={`${title} notes`} value={section.note} onChange={(event) => onChange({ ...section, note: event.target.value })} placeholder={`${title} notes...`} />
     </div>
   );
 }
@@ -20977,6 +21232,8 @@ function ReplayView({
   const selectedReplayCount = selectedReplayIds.size;
   const allFilteredReplaysSelected = filteredItems.length > 0
     && filteredItems.every((item) => selectedReplayIds.has(item.replay.id));
+  const activeReplayFilterCount = [platformFilter, mediaFilter, rangeFilter, flagFilter, folderFilter]
+    .filter((filter) => filter !== "all").length;
 
   useEffect(() => {
     setVisibleReplayCount(REPLAY_LIST_PAGE_SIZE);
@@ -21235,8 +21492,8 @@ function ReplayView({
 
   if (!replays.length) {
     return (
-      <section className="dashboard-page replay-coming-soon">
-        <div className="rail-card replay-placeholder">
+      <section className="dashboard-page replay-coming-soon review-workspace review-replays">
+        <div className="rail-card replay-placeholder review-surface">
           <History size={34} />
           <h2>No replays captured yet</h2>
           <p>{settings.replayCaptureEnabled ? "Replay evidence will appear here after captured matches." : "Replay capture is currently off in Settings."}</p>
@@ -21251,8 +21508,16 @@ function ReplayView({
   }
 
   return (
-    <section className="dashboard-page replay-page">
-      <aside className="rail-card replay-browser">
+    <section className="dashboard-page replay-page review-workspace review-replays">
+      <header className="review-page-heading review-replays-heading">
+        <div>
+          <span className="review-kicker">Your replay library</span>
+          <h2>Revisit the moments that matter.</h2>
+          <p>Watch a match, mark a turning point, or build a review to share.</p>
+        </div>
+        <span className="review-replays-total"><History size={16} /> {replays.length} saved replay{replays.length === 1 ? "" : "s"}</span>
+      </header>
+      <aside className="rail-card replay-browser review-surface">
         {!settings.replayCaptureEnabled ? (
           <div className="replay-disabled-banner">
             <strong>Replay capture is off</strong>
@@ -21261,7 +21526,7 @@ function ReplayView({
         ) : null}
         <div className="replay-browser-header">
           <div>
-            <h2>Replays</h2>
+            <h2>Your library</h2>
             <span>{visibleReplayItems.length} of {filteredItems.length} shown</span>
           </div>
           <div className="replay-browser-actions">
@@ -21278,13 +21543,18 @@ function ReplayView({
             >
               <Check size={14} /> {bulkSelectMode ? "Cancel" : "Select"}
             </button>
-            <select value={platformFilter} onChange={(event) => setPlatformFilter(event.target.value as "all" | GamePlatform)}>
-              <option value="all">All</option>
-              <option value="atlas">Atlas</option>
-              <option value="tcga">TCGA</option>
-            </select>
           </div>
         </div>
+        <label className="review-replays-search">
+          Search replays
+          <input
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="Legend, player, battlefield, deck…"
+          />
+        </label>
+        <details className="review-disclosure review-replays-library-tools">
+          <summary><span>Filters & library tools</span><small>{activeReplayFilterCount ? `${activeReplayFilterCount} active` : "Folders, imports & filters"}</small><ChevronDown size={15} /></summary>
         <div className="replay-folder-panel">
           <div className="replay-folder-toolbar">
             <label>
@@ -21367,15 +21637,15 @@ function ReplayView({
           ) : null}
         </div>
         <div className="replay-search-panel">
-          <label>
-            Search replay data
-            <input
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="Legend, player, battlefield, deck..."
-            />
-          </label>
           <div className="replay-filter-grid">
+            <label>
+              Platform
+              <select value={platformFilter} onChange={(event) => setPlatformFilter(event.target.value as "all" | GamePlatform)}>
+                <option value="all">All platforms</option>
+                <option value="atlas">Atlas</option>
+                <option value="tcga">TCGA</option>
+              </select>
+            </label>
             <label>
               Media
               <select value={mediaFilter} onChange={(event) => setMediaFilter(event.target.value)}>
@@ -21409,11 +21679,15 @@ function ReplayView({
           </div>
           <div className="row-actions">
             <button className="secondary" onClick={() => void importReplay()}><FolderOpen size={14} /> Import</button>
-            <button className="secondary" onClick={() => void importReplayFolder()}><FolderOpen size={14} /> Folder</button>
-            <button className="secondary" onClick={() => void window.riftlite.openReplayFolder()}><FolderOpen size={14} /></button>
+            <button className="secondary" onClick={() => void importReplayFolder()}><FolderOpen size={14} /> Import folder</button>
+            <button className="secondary" title="Open replay storage folder" aria-label="Open replay storage folder" onClick={() => void window.riftlite.openReplayFolder()}><FolderOpen size={14} /></button>
+            {activeReplayFilterCount ? <button type="button" className="secondary" onClick={() => {
+              setPlatformFilter("all"); setMediaFilter("all"); setRangeFilter("all"); setFlagFilter("all"); setFolderFilter("all");
+            }}>Clear filters</button> : null}
           </div>
-          {status ? <span className="replay-status-text">{status}</span> : null}
         </div>
+        </details>
+        {status ? <span className="replay-status-text" role="status">{status}</span> : null}
         {bulkSelectMode ? (
           <div className="replay-bulk-actions">
             <strong>{selectedReplayCount} selected</strong>
@@ -21458,6 +21732,7 @@ function ReplayView({
                   className="replay-item"
                   data-active={!bulkSelectMode && selectedItem?.replay.id === item.replay.id}
                   aria-pressed={bulkSelectMode ? replaySelected : undefined}
+                  aria-current={!bulkSelectMode && selectedItem?.replay.id === item.replay.id ? "true" : undefined}
                   onClick={() => {
                     if (bulkSelectMode) {
                       toggleReplaySelection(item.replay.id);
@@ -22538,7 +22813,7 @@ function ReplayDetail({
   const [slideshowOpen, setSlideshowOpen] = useState(false);
   const [slideshowIndex, setSlideshowIndex] = useState(0);
   const [videoSeekMs, setVideoSeekMs] = useState<number | null>(null);
-  const [evidenceOpen, setEvidenceOpen] = useState(false);
+  const [replayDetailPane, setReplayDetailPane] = useState<"moments" | "evidence" | "match" | "share">("moments");
   const [focusedCorrectionEventId, setFocusedCorrectionEventId] = useState("");
   const [replayVideoCurrentMs, setReplayVideoCurrentMs] = useState(0);
   const [flagType, setFlagType] = useState<ReplayFlagType>("key-turn");
@@ -22582,7 +22857,7 @@ function ReplayDetail({
     if (!focusSeekRequest || focusSeekRequest.replayId !== model.replay.id) return;
     if (typeof focusSeekRequest.timeMs === "number") setVideoSeekMs(focusSeekRequest.timeMs);
     if (focusSeekRequest.correctionEventId) {
-      setEvidenceOpen(true);
+      setReplayDetailPane("evidence");
       setFocusedCorrectionEventId(focusSeekRequest.correctionEventId);
     }
     onFocusSeekConsumed();
@@ -22604,8 +22879,8 @@ function ReplayDetail({
     setSlideshowOpen(false);
     setSlideshowIndex(0);
     setReplayVideoCurrentMs(0);
-    setEvidenceOpen(false);
-    setFocusedCorrectionEventId("");
+    setReplayDetailPane(focusSeekRequest?.replayId === model.replay.id && focusSeekRequest.correctionEventId ? "evidence" : "moments");
+    setFocusedCorrectionEventId(focusSeekRequest?.replayId === model.replay.id ? focusSeekRequest.correctionEventId ?? "" : "");
     pendingLayerIdRef.current = null;
     setAddingLayer(false);
     setLayerStatus("");
@@ -23170,6 +23445,7 @@ function ReplayDetail({
               <input
                 autoFocus
                 value={replayTitleDraft}
+                aria-label="Replay title"
                 maxLength={160}
                 onChange={(event) => setReplayTitleDraft(event.target.value)}
                 onKeyDown={(event) => {
@@ -23192,13 +23468,6 @@ function ReplayDetail({
             </div>
           )}
           <p>{model.players.me || "Player"} vs {model.players.opponent || "Opponent"} - {new Date(model.capturedAt).toLocaleString()}</p>
-          <label className="replay-folder-assignment">
-            <FolderOpen size={13} /> Folder
-            <select value={model.replay.folderId ?? ""} onChange={(event) => void moveReplayToFolder(event.target.value)}>
-              <option value="">Unfiled</option>
-              {replayFolders.map((folder) => <option value={folder.id} key={folder.id}>{folder.name}</option>)}
-            </select>
-          </label>
           {fileRevealStatus ? <p className="replay-local-file-status" role="status">{fileRevealStatus}</p> : null}
         </div>
         <div className="replay-hero-actions">
@@ -23223,9 +23492,19 @@ function ReplayDetail({
           >
             <Images size={16} /> Visual replay
           </button>
-          <button type="button" className="secondary" onClick={() => onExport(replayVideoCurrentMs)}>
+          <button type="button" className="primary" onClick={() => onExport(replayVideoCurrentMs)}>
             <ExternalLink size={16} /> Export
           </button>
+          <details className="review-disclosure review-replays-hero-tools">
+            <summary>Replay tools <ChevronDown size={15} /></summary>
+            <div>
+          <label className="replay-folder-assignment">
+            <FolderOpen size={13} /> Folder
+            <select value={model.replay.folderId ?? ""} onChange={(event) => void moveReplayToFolder(event.target.value)}>
+              <option value="">Unfiled</option>
+              {replayFolders.map((folder) => <option value={folder.id} key={folder.id}>{folder.name}</option>)}
+            </select>
+          </label>
           <button
             type="button"
             className="secondary"
@@ -23240,6 +23519,8 @@ function ReplayDetail({
           <button type="button" className="secondary danger" onClick={onDeleteReplay}>
             Delete replay
           </button>
+            </div>
+          </details>
         </div>
       </section>
 
@@ -23281,8 +23562,22 @@ function ReplayDetail({
           onClip={(timeMs) => onExport(timeMs)}
           onExportPresentationMp4={onExportPresentationMp4}
         />
+      ) : screenshots.length ? (
+        <button type="button" className="review-replays-frame-preview" onClick={() => openSlideshow()}>
+          {screenshots[0].url ? <img key={screenshots[0].url} src={screenshots[0].url} alt="" onError={(event) => { event.currentTarget.style.visibility = "hidden"; }} /> : null}
+          <span className="review-replays-frame-play"><Play size={25} /></span>
+          <span className="review-replays-frame-copy"><strong>Open visual replay</strong><small>{screenshots.length} captured frame{screenshots.length === 1 ? "" : "s"} · Review, annotate and trim the timeline</small></span>
+        </button>
       ) : null}
 
+      <nav className="review-tabs review-replays-detail-nav" aria-label="Replay workspace">
+        <button type="button" aria-pressed={replayDetailPane === "moments"} data-active={replayDetailPane === "moments"} onClick={() => setReplayDetailPane("moments")}><Flag size={15} /> Moments & notes <small>{visibleFlags.length}</small></button>
+        <button type="button" aria-pressed={replayDetailPane === "evidence"} data-active={replayDetailPane === "evidence"} onClick={() => setReplayDetailPane("evidence")}><Activity size={15} /> Evidence</button>
+        <button type="button" aria-pressed={replayDetailPane === "match"} data-active={replayDetailPane === "match"} onClick={() => setReplayDetailPane("match")}><Layers size={15} /> Match details</button>
+        <button type="button" aria-pressed={replayDetailPane === "share"} data-active={replayDetailPane === "share"} onClick={() => setReplayDetailPane("share")}><ExternalLink size={15} /> Share & organise</button>
+      </nav>
+
+      <div className="review-replays-pane" hidden={replayDetailPane !== "evidence"} role="region" aria-label="Replay evidence">
       <div className="replay-metric-grid">
         <Metric label="Turns" value={String(model.turns.length)} />
         <Metric label="Events" value={String(model.events.length)} />
@@ -23292,8 +23587,6 @@ function ReplayDetail({
         <Metric label="Video" value={model.replay.video ? formatBytes(model.replay.video.sizeBytes) : "Off"} />
       </div>
 
-      <details className="replay-evidence-drawer" open={evidenceOpen} onToggle={(event) => setEvidenceOpen(event.currentTarget.open)}>
-        <summary><Activity size={16} /><span><strong>Evidence and corrections</strong><small>Inspect the event trail behind Insights or correct reconstructed data.</small></span><ChevronDown size={16} /></summary>
         <ReplayIntelligencePanel
           model={model}
           result={replayIntelligence}
@@ -23302,7 +23595,6 @@ function ReplayDetail({
           onSeek={(timeMs) => setVideoSeekMs(timeMs)}
           onSaveReplay={onSaveReplay}
         />
-      </details>
 
       <ReplayHealthPanel
         model={model}
@@ -23312,7 +23604,9 @@ function ReplayDetail({
         annotations={replayAnnotations}
         voiceNotes={replayVoiceNotes}
       />
+      </div>
 
+      <div className="review-replays-pane" hidden={replayDetailPane !== "share"} role="region" aria-label="Replay sharing and organisation">
       {RIFTLITE_WEB_REPLAY_FEATURE_VISIBLE ? (
         <ReplayRawCapturePanel
           replay={model.replay}
@@ -23353,7 +23647,13 @@ function ReplayDetail({
           </label>
         </div>
       </section>
+      </div>
 
+      <div className="review-replays-pane" hidden={replayDetailPane !== "moments"} role="region" aria-label="Replay moments and notes">
+      <div className="review-replays-pane-heading">
+        <div><h3>Make the next review count.</h3><p>Keep notes, revisit flags and choose which annotation layers to show.</p></div>
+        <span>{visibleVoiceNotes.length} audio note{visibleVoiceNotes.length === 1 ? "" : "s"} · {visibleAnnotations.length} drawing{visibleAnnotations.length === 1 ? "" : "s"}</span>
+      </div>
       <ReplayLayerPanel
         layers={layers}
         activeLayerId={activeLayerId}
@@ -23453,10 +23753,14 @@ function ReplayDetail({
         }}
         onRemoveFlag={removeReplayFlag}
       />
+      </div>
 
+      <div className="review-replays-pane" hidden={replayDetailPane !== "match"} role="region" aria-label="Replay match details">
       {DECK_TRACKER_FEATURE_ENABLED ? <ReplayDeckTrackerPanel replay={model.replay} currentTimeMs={replayVideoCurrentMs} /> : null}
       <ReplayBattlefields model={model} />
       {analyticsMatch ? <MatchDetailPanel match={analyticsMatch} showFlags={false} /> : null}
+      {!analyticsMatch && !model.battlefields.length ? <section className="rail-card review-replays-empty-detail"><h3>No linked match details</h3><p>This replay has no linked match record. Its captured evidence, notes and exports are still available.</p></section> : null}
+      </div>
       {slideshowOpen ? (
         <ReplaySlideshow
           title={model.title}
@@ -25924,6 +26228,9 @@ function ReplayVideoPlayer({
         </div>
         <div className="replay-video-action-stack">
           <div className="row-actions">
+          <details className="review-disclosure review-replays-recording-tools">
+            <summary><Mic size={14} /> Voiceover & notes <ChevronDown size={14} /></summary>
+            <div className="review-replays-recording-actions">
           <button
             type="button"
             className={presentationRecording ? "danger" : pendingPresentationExport ? "primary" : "secondary"}
@@ -26025,6 +26332,8 @@ function ReplayVideoPlayer({
               {voicePlaybackPaused ? <Play size={14} /> : <Pause size={14} />} {voicePlaybackPaused ? "Resume voice" : "Pause voice"}
             </button>
           ) : null}
+            </div>
+          </details>
           <label className="replay-voice-volume" title="Replay and coaching audio volume">
             <button
               type="button"
@@ -26094,6 +26403,8 @@ function ReplayVideoPlayer({
           ) : null}
         </div>
       </header>
+      <details className="review-disclosure review-replays-quick-flag">
+        <summary><Flag size={14} /><span>Add a timestamp flag</span><small>{formatDuration(currentMs)}{flagNote.trim() ? " · Note drafted" : ""}</small><ChevronDown size={14} /></summary>
       <div className="replay-video-quick-flag">
         <label>
           Type
@@ -26124,6 +26435,7 @@ function ReplayVideoPlayer({
           </button>
         </div>
       </div>
+      </details>
       {recordingVoice ? (
         <div className="replay-coaching-status" data-state="recording">
           <Mic size={15} />
@@ -30408,6 +30720,7 @@ function MatchDetailPanel({ match, showFlags = true, matchTimerLabel = "" }: { m
           snapshotJson={match.deckSnapshotJson}
         />
       ) : null}
+      {match.platform === "atlas" && match.source !== "community" && match.source !== "hub" && match.source !== "team" ? <AtlasMatchDeckPanel key={match.id} matchId={match.id} initialHistory={match.atlasHistory}/> : null}
     </section>
   );
 }
@@ -30677,6 +30990,7 @@ function localToAnalytics(match: MatchDraft): AnalyticsMatch {
   const primaryGame = match.games[0];
   const games = match.games.map((game, index) => ({ ...normalizeReviewGame(game), gameNumber: game.gameNumber || index + 1 }));
   return {
+    atlasHistory: match.atlasHistory,
     id: match.id,
     platform: match.platform,
     source: matchSource(match),
@@ -31454,8 +31768,8 @@ function reviewGamesFromEvidence(draft: MatchDraft): MatchGame[] {
     const rawOppBattlefieldImage = readUnknownString(event.payload.opponentBattlefieldImage);
     const myBattlefield = isGeneratedBattlefieldName(rawMyBattlefield) ? "" : rawMyBattlefield;
     const oppBattlefield = isGeneratedBattlefieldName(rawOppBattlefield) ? "" : rawOppBattlefield;
-    const myBattlefieldImage = isGeneratedBattlefieldImage(rawMyBattlefieldImage) ? "" : rawMyBattlefieldImage || battlefieldImageFromEvidencePayload(event.payload, "me");
-    const oppBattlefieldImage = isGeneratedBattlefieldImage(rawOppBattlefieldImage) ? "" : rawOppBattlefieldImage || battlefieldImageFromEvidencePayload(event.payload, "opponent");
+    const myBattlefieldImage = (isGeneratedBattlefieldImage(rawMyBattlefieldImage) ? "" : rawMyBattlefieldImage) || battlefieldImageFromEvidencePayload(event.payload, "me");
+    const oppBattlefieldImage = (isGeneratedBattlefieldImage(rawOppBattlefieldImage) ? "" : rawOppBattlefieldImage) || battlefieldImageFromEvidencePayload(event.payload, "opponent");
     if (shouldStartEvidenceGame(current, score, myBattlefield, oppBattlefield, myBattlefieldImage, oppBattlefieldImage)) {
       games.push(normalizeReviewGame(current));
       current = createEmptyReviewGame(games.length + 1);
@@ -31649,19 +31963,6 @@ function battlefieldImageFromEvidencePayload(payload: Record<string, unknown>, s
     }
   }
   return "";
-}
-
-function isGeneratedBattlefieldCandidate(candidate: Record<string, unknown>): boolean {
-  return isGeneratedBattlefieldName(readUnknownString(candidate.text) || readUnknownString(candidate.name) || readUnknownString(candidate.code)) ||
-    isGeneratedBattlefieldImage(readUnknownString(candidate.image));
-}
-
-function isGeneratedBattlefieldName(value: string): boolean {
-  return /\bbaron\s+pit\b/i.test(value);
-}
-
-function isGeneratedBattlefieldImage(value: string): boolean {
-  return /baron[-_\s]?pit|e44f173629322a4e0c32d3f8902c294d4482ef42/i.test(value);
 }
 
 function isCardBackImage(value: string): boolean {
@@ -32615,13 +32916,14 @@ function MatchReviewModal({ draft, decks, battlefields, previousFlags, enhancedI
 
   return (
     <div className="modal-backdrop">
-      <section className="review-modal">
+      <section className="review-modal review-workspace review-modal-modern" role="dialog" aria-modal="true" aria-labelledby="match-review-title">
         <header>
           <div>
-            <h2>{isScorepadDraft ? "Review Scorepad match" : "Review captured match"}</h2>
+            <span className="review-kicker">Review / {isSavedDraft ? "Edit match" : "Save match"}</span>
+            <h2 id="match-review-title">{isScorepadDraft ? "Review Scorepad match" : "Review captured match"}</h2>
             <p>{isScorepadDraft ? "Scorepad matches save locally and stay out of public community stats." : "RiftLite captured this automatically. Make corrections before syncing."}</p>
           </div>
-          <button className="icon-button" disabled={isSaving || isDeleting || isDeferring} onClick={() => void reviewLater()} aria-label={isSavedDraft ? "Cancel editing" : "Review later"}>x</button>
+          <button className="icon-button" disabled={isSaving || isDeleting || isDeferring} onClick={() => void reviewLater()} aria-label={isSavedDraft ? "Cancel editing" : "Review later"}><X size={18} /></button>
         </header>
         <section className={`capture-confidence ${confidence.tone}`} aria-live="polite">
           <div>
@@ -32673,11 +32975,12 @@ function MatchReviewModal({ draft, decks, battlefields, previousFlags, enhancedI
           </section>
         ) : null}
         <div className="review-grid">
+          <div className="wide review-form-section-heading"><span>01</span><div><h3>Match & players</h3><p>Check the result and captured game details.</p></div></div>
           <label>Result<select value={draft.result} onChange={(event) => patchMatchResult(event.target.value as MatchDraft["result"])}><option>Win</option><option>Loss</option><option>Draw</option><option>Incomplete</option></select></label>
           <label>Format<select value={draft.format} onChange={(event) => patchFormat(event.target.value as MatchDraft["format"])}><option>Bo1</option><option>Bo3</option><option>Auto</option></select></label>
           {!isMultiGameReview ? <label className={`review-field ${bo1SeatInvalid ? "field-invalid" : ""}`}>Seat<select value={primaryGame.wentFirst ?? ""} onChange={(event) => patchPrimaryGame({ wentFirst: normalizeWentFirst(event.target.value) })}><option value="">Unknown</option><option value="1st">Went 1st</option><option value="2nd">Went 2nd</option><option value="undecided">Undecided / no seat</option></select>{bo1SeatInvalid ? <small>Seat is required</small> : null}</label> : null}
           <label>Opponent<input value={draft.opponentName} onChange={(event) => patch({ opponentName: event.target.value })} /></label>
-          {!isMultiGameReview ? <div className="score-input-group">
+          {!isMultiGameReview ? <div className="score-input-group wide">
             <label>My score<input type="number" min="0" step="1" value={scoreValues.me} onChange={(event) => patchScore("me", event.target.value)} /></label>
             <label>Opponent score<input type="number" min="0" step="1" value={scoreValues.opp} onChange={(event) => patchScore("opp", event.target.value)} /></label>
           </div> : null}
@@ -32729,12 +33032,14 @@ function MatchReviewModal({ draft, decks, battlefields, previousFlags, enhancedI
               </div>
             </section>
           ) : null}
+          <div className="wide review-form-section-heading"><span>02</span><div><h3>Your deck</h3><p>Attach the deck you played to keep your results useful.</p></div></div>
           <label>Deck<select value={deckSelectValue} onChange={(event) => { void patchDeckSelection(event.target.value); }}>
             <option value="">No deck logged</option>
             {deckSelectValue === "__current" ? <option value="__current">{draft.deckName}</option> : null}
             {decks.map((deck) => <option value={deck.id} key={deck.id}>{deck.title}</option>)}
           </select>{isDeckNotebookLoading ? <small role="status">Refreshing Testing goals...</small> : null}</label>
           <label>Deck name<input value={draft.deckName} onChange={(event) => patch({ deckName: event.target.value })} placeholder="No deck logged" /></label>
+          <div className="wide review-form-section-heading"><span>03</span><div><h3>Notes & context</h3><p>Keep the details you want to return to later.</p></div></div>
           <label className="wide">Flags<input value={draft.flags} onChange={(event) => patch({ flags: event.target.value })} placeholder="ladder, tournament, testing" /></label>
           <label className="wide review-previous-flags">
             Previous flags
@@ -32750,6 +33055,7 @@ function MatchReviewModal({ draft, decks, battlefields, previousFlags, enhancedI
               <span>Pick one or more, then type anything custom above.</span>
             </div>
           </label>
+          <label className="wide">Notes<textarea value={draft.notes} onChange={(event) => patch({ notes: event.target.value })} placeholder="What worked? What would you try differently next time?" /></label>
           {!isScorepadDraft ? (
             <>
               <label className="toggle-row wide review-replay-toggle">
@@ -32974,7 +33280,6 @@ function MatchReviewModal({ draft, decks, battlefields, previousFlags, enhancedI
               <footer><Activity size={14} /> Coach will show an evidence receipt and keep unsupported details labelled unknown.</footer>
             </section>
           ) : null}
-          <label className="wide">Notes<textarea value={draft.notes} onChange={(event) => patch({ notes: event.target.value })} /></label>
         </div>
         <footer data-delete-confirmation={deleteConfirmationOpen ? "true" : undefined}>
           {deleteConfirmationOpen ? <>

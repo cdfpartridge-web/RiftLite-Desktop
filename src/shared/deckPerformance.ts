@@ -269,9 +269,16 @@ function matchGameRecords(match: MatchDraft): GameRecord[] {
   return games.map((game) => ({
     result: game.result || match.result,
     wentFirst: game.wentFirst ?? "",
-    myBattlefield: game.myBattlefield || match.myBattlefield,
-    opponentBattlefield: game.oppBattlefield || match.opponentBattlefield
+    ...matchGameBattlefields(match, game)
   }));
+}
+
+/** Match-level battlefield fields describe game one; they cannot fill later games. */
+export function matchGameBattlefields(match: MatchDraft, game: MatchGame): { myBattlefield: string; opponentBattlefield: string } {
+  return {
+    myBattlefield: game.myBattlefield?.trim() || (game.gameNumber === 1 ? match.myBattlefield?.trim() || "" : ""),
+    opponentBattlefield: game.oppBattlefield?.trim() || (game.gameNumber === 1 ? match.opponentBattlefield?.trim() || "" : "")
+  };
 }
 
 function fallbackGame(match: MatchDraft): MatchGame {

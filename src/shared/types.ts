@@ -190,6 +190,9 @@ export interface MatchDraft {
   testingSessionId?: string;
   testingSessionLabel?: string;
   insightContext?: MatchInsightContext;
+  /** Account-private post-game decks, excluded from public/community match projections. */
+  atlasHistory?: import("./atlasHistory.js").AtlasMatchHistory;
+  atlasHistoryMarkers?: import("./atlasHistory.js").AtlasHistoryMarker[];
   status: "pending-review" | "saved" | "incomplete";
   capturedAt: string;
   updatedAt: string;
@@ -326,11 +329,25 @@ export interface DeckGuideNote {
   source?: "deck" | "play";
 }
 
+export interface DeckGuideReviewBaseline {
+  version: 1;
+  snapshotHash: string;
+  reviewedAt: string;
+  cards: Array<{
+    key: string;
+    name: string;
+    mainDeck: number;
+    sideboard: number;
+    battlefields: number;
+  }>;
+}
+
 export interface DeckMatchupGuide {
   id: string;
   legend: string;
   legendKey: string;
   updatedAt: string;
+  reviewBaseline?: DeckGuideReviewBaseline;
   mulligan: {
     keep: DeckGuideSection;
     consider: DeckGuideSection;
@@ -2419,6 +2436,8 @@ export interface RiftLiteApi {
   forceCaptureReview(platform: GamePlatform): Promise<MatchDraft | null>;
   dismissMatchReview(): Promise<void>;
   getMatches(): Promise<MatchDraft[]>;
+  refreshAtlasHistoryDecks(matchId: string): Promise<MatchDraft>;
+  sendAtlasHistoryToReplay(matchId: string): Promise<void>;
   getDeletedMatches(): Promise<MatchDraft[]>;
   saveMatchDraft(draft: MatchDraft): Promise<MatchDraft>;
   deferMatchReview(draft: MatchDraft): Promise<MatchDraft>;
@@ -2615,6 +2634,7 @@ export interface RiftLiteApi {
   onCaptureHealth(callback: (health: CaptureHealth) => void): () => void;
   onGameWebviewFailure(callback: (failure: GameWebviewFailure) => void): () => void;
   onMatchDraft(callback: (draft: MatchDraft) => void): () => void;
+  onMatchUpdated(callback: (match: MatchDraft) => void): () => void;
   onReplayUpdated(callback: (replay: ReplayRecord) => void): () => void;
   onScreenshotSaved(callback: (result: ScreenshotResult) => void): () => void;
   onReplayShadowClipHotkey(callback: () => void): () => void;

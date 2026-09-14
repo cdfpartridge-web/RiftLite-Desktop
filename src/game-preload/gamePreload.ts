@@ -1,4 +1,6 @@
 import { ipcRenderer } from "electron";
+import { battlefieldCodeFor, battlefieldImageFor, collectTcgaBattlefieldCandidates } from "./tcgaBattlefields.js";
+import { isGeneratedBattlefieldName } from "../shared/generatedBattlefields.js";
 import {
   atlasBattlefieldCardsByOwner,
   atlasBattlefieldZonesForSeat,
@@ -932,85 +934,8 @@ function normalizeNameKey(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/g, " ");
 }
 
-function collectTcgaBattlefieldCandidates(): BattlefieldCandidate[] {
-  return Array.from(document.querySelectorAll(".game-card.Battlefields"))
-    .map((element, listIndex) => {
-      const img = element.querySelector("img.card-front, img") as HTMLImageElement | null;
-      const image = img?.currentSrc || img?.src || attr(img, "data-src") || attr(img, "alt");
-      const classes = attr(element, "class");
-      const code = attr(element, "data-card-id") || attr(img, "data-card-id") || cardCodeFromImage(image);
-      const side: BattlefieldCandidate["side"] = classes.includes("opponent-card") ? "opponent" : "me";
-      const rect = element.getBoundingClientRect();
-      const index = classNumber(classes, "index");
-      const reversedIndex = classNumber(classes, "reversed-index");
-      const hidden = /card-hidden-yes|ExileHidden/i.test(classes) || isCardBackImage(image);
-      return {
-        side,
-        image,
-        code,
-        text: textOf(element).slice(0, 180),
-        classes,
-        hidden,
-        capturedAt: now(),
-        listIndex,
-        index,
-        reversedIndex,
-        rect: {
-          top: Math.round(rect.top),
-          left: Math.round(rect.left),
-          width: Math.round(rect.width),
-          height: Math.round(rect.height)
-        }
-      };
-    })
-    .filter((candidate) => candidate.image || candidate.code || candidate.text);
-}
-
-function battlefieldImageFor(candidates: BattlefieldCandidate[], side: BattlefieldCandidate["side"], requireUnique = false): string {
-  const usable = candidates.filter((candidate) =>
-    candidate.side === side &&
-    !candidate.hidden &&
-    candidate.image &&
-    !isCardBackImage(candidate.image) &&
-    !isGeneratedBattlefieldCandidate(candidate)
-  );
-  const uniqueImages = Array.from(new Map(usable.map((candidate) => [normalizeAssetKey(candidate.image), candidate.image])).values());
-  if (requireUnique && uniqueImages.length !== 1) {
-    return "";
-  }
-  return uniqueImages[0] ?? "";
-}
-
-function battlefieldCodeFor(candidates: BattlefieldCandidate[], side: BattlefieldCandidate["side"], requireUnique = false): string {
-  const usable = candidates.filter((candidate) =>
-    candidate.side === side &&
-    !candidate.hidden &&
-    candidate.code &&
-    !isGeneratedBattlefieldCandidate(candidate)
-  );
-  const uniqueCodes = Array.from(new Set(usable.map((candidate) => riftboundCardCodeFromValue(candidate.code)).filter(Boolean)));
-  if (requireUnique && uniqueCodes.length !== 1) {
-    return "";
-  }
-  return uniqueCodes[0] ?? "";
-}
-
-function isGeneratedBattlefieldCandidate(candidate: BattlefieldCandidate): boolean {
-  return /\bbaron\s+pit\b/i.test(`${candidate.text} ${candidate.code}`) ||
-    /baron[-_\s]?pit|e44f173629322a4e0c32d3f8902c294d4482ef42/i.test(candidate.image);
-}
-
-function classNumber(classes: string, name: string): number | undefined {
-  const match = classes.match(new RegExp(`(?:^|\\s)${name}-(\\d+)(?:\\s|$)`));
-  return match?.[1] ? Number.parseInt(match[1], 10) : undefined;
-}
-
 function isCardBackImage(value: string): boolean {
   return /cardback|card-back|back-black|back\.png/i.test(value);
-}
-
-function normalizeAssetKey(value: string): string {
-  return value.trim().toLowerCase().replace(/[?#].*$/, "");
 }
 
 function readTcgaBattlefieldText(bodyText: string, localPlayerName: string, opponentName: string): { me: string; opponent: string; evidence: string[] } {
@@ -1029,7 +954,7 @@ function readTcgaBattlefieldText(bodyText: string, localPlayerName: string, oppo
       continue;
     }
     const battlefield = matchBattlefieldName(line);
-    if (!battlefield || /\brevealed\s+a\s+card\b/i.test(line)) {
+    if (!battlefield || isGeneratedBattlefieldName(battlefield) || /\brevealed\s+a\s+card\b/i.test(line)) {
       continue;
     }
     const explicitPlayer = playerFromBattlefieldAction(line);
@@ -1087,17 +1012,11 @@ function readTcgaSnapshot(): Record<string, unknown> {
   const localCounter = localKey ? counterPlayers.find((player) => normalizeNameKey(player.name) === localKey) : undefined;
   const opponentCounter = localKey ? counterPlayers.find((player) => normalizeNameKey(player.name) !== localKey && player.name) : undefined;
   const opponentName = opponentCounter?.name || counterPlayers.find((player) => player.name && player.name !== (localCounter?.name ?? ""))?.name || "";
-  const battlefieldCandidates = collectTcgaBattlefieldCandidates();
+  const battlefieldCandidates = collectTcgaBattlefieldCandidates(document, now());
   const battlefieldText = readTcgaBattlefieldText(bodyText, localCounter?.name || localPlayerName, opponentName);
   const myBattlefieldImage = battlefieldText.me ? "" : battlefieldImageFor(battlefieldCandidates, "me", true);
   const myBattlefieldCode = battlefieldCodeFor(battlefieldCandidates, "me", true);
-  const opponentFallbackImage = imageIdentity(
-    ".game-card.Battlefields.opponent-card.card-hidden-no img.card-front",
-    ".game-card.Battlefields.opponent-card.card-hidden-no img"
-  );
-  const opponentBattlefieldImage = battlefieldText.opponent
-    ? ""
-    : battlefieldImageFor(battlefieldCandidates, "opponent") || (isCardBackImage(opponentFallbackImage) ? "" : opponentFallbackImage);
+  const opponentBattlefieldImage = battlefieldText.opponent ? "" : battlefieldImageFor(battlefieldCandidates, "opponent");
   const opponentBattlefieldCode = battlefieldCodeFor(battlefieldCandidates, "opponent");
   const endText = findTcgaEndText();
   const tcgaPhase = readTcgaPhase(bodyText);
@@ -1420,6 +1339,8 @@ function readAtlasSnapshot(): Record<string, unknown> {
     roomCode,
     format: authoritativeMatch?.format || readAtlasFormat(bodyText),
     atlasGameInstanceId: authoritativeMatch?.gameInstanceId ?? "",
+    atlasHistoryStartedAt: authoritativeMatch?.gameHistoryStartedAt,
+    atlasHistoryGameNumber: authoritativeMatch?.gameNumber,
     atlasIdentitySource: authoritativeMatch?.opponentName ? "atlas-authoritative-packet" : "",
     atlasFormatSource: authoritativeMatch?.format ? "atlas-authoritative-packet" : "",
     atlasSideboarding: sideboarding,

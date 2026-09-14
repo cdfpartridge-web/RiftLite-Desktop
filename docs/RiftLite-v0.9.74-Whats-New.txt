@@ -1,0 +1,19 @@
+RIFTLITE BETA v0.9.74
+CLEARER REVIEW AND ATLAS MATCH DECKS
+
+- Refreshed Prepare, Matches, match review, Replays and Web Replays, with clearer navigation and less clutter.
+- Completed Atlas matches automatically pick up available opponent deck lists while you're signed in to Atlas.
+- Open Deck beside Replay and Edit to view each BO3 game's list, compare sideboard changes, copy a deck or add lists to your own Web Replay's private Match decks panel.
+- Results & data shows record completeness and BO3 opening-game performance, conversions and comebacks, with sample sizes and clearer handling of missing information.
+- Matchup prep warns when deck changes affect saved plans, preserving your notes until you review them.
+- Improved TCGA battlefield tracking, including shared board slots and Ivern's Brush.
+- Keep all local only clears eligible upload activity together while preserving local matches, replays and captures.
+- Move Mark decision to a comfortable position; it remembers your choice.
+- Fixes completed Atlas matches reopening unexpectedly and repeated focus recovery that could interrupt chat typing.
+
+Your existing profile, matches, decks, replays, settings and media paths are preserved.
+Private or unavailable Atlas deck lists remain unavailable. Full imported lists are excluded from public/community/hub/team match uploads.
+Replay Coach remains Coming Soon. Your Move and the Android prototype are separate from this desktop release.
+
+macOS installers are ad-hoc signed and not Apple-notarized; the standard first-open warning may appear.
+Signed-in gameplay, Atlas chat and automatic deck-import acceptance remain pending beyond automated release checks.

@@ -48,6 +48,50 @@ function match(patch: Partial<MatchDraft>): MatchDraft {
 }
 
 describe("deck performance", () => {
+  it("does not assign game one's battlefields to unknown later Bo3 games", () => {
+    const performance = buildDeckPerformance(deck, [match({
+      deckSourceKey: "piltover:abc",
+      format: "Bo3",
+      score: "2-1",
+      myBattlefield: "The Papertree",
+      opponentBattlefield: "Sunken Temple",
+      games: [
+        { gameNumber: 1, result: "Win" },
+        { gameNumber: 2, result: "Loss", myBattlefield: "", oppBattlefield: "" },
+        { gameNumber: 3, result: "Win", myBattlefield: "Void Gate" }
+      ]
+    })]);
+
+    expect(performance.myBattlefields.map((row) => [row.name, row.record])).toEqual([["The Papertree", "1-0"], ["Void Gate", "1-0"]]);
+    expect(performance.opponentBattlefields).toHaveLength(1);
+    expect(performance.opponentBattlefields[0]).toMatchObject({ name: "Sunken Temple", record: "1-0", total: 1 });
+    expect(performance.battlefieldPairs).toHaveLength(1);
+    expect(performance.battlefieldPairs[0].total).toBe(1);
+    expect(performance.seatStats[0].total).toBe(3);
+  });
+
+  it("keeps legitimate legacy match-level fields when no game rows were stored", () => {
+    const performance = buildDeckPerformance(deck, [match({
+      deckSourceKey: "piltover:abc",
+      myBattlefield: "The Papertree",
+      opponentBattlefield: "Sunken Temple",
+      games: []
+    })]);
+    expect(performance.battlefieldPairs[0]).toMatchObject({ myBattlefield: "The Papertree", opponentBattlefield: "Sunken Temple", total: 1 });
+  });
+
+  it("uses an explicit later game number rather than its position for legacy fallback", () => {
+    const performance = buildDeckPerformance(deck, [match({
+      deckSourceKey: "piltover:abc",
+      format: "Bo3",
+      myBattlefield: "The Papertree",
+      opponentBattlefield: "Sunken Temple",
+      games: [{ gameNumber: 2, result: "Win" }]
+    })]);
+    expect(performance.myBattlefields).toEqual([]);
+    expect(performance.opponentBattlefields).toEqual([]);
+  });
+
   it("matches a deck by source key or saved deck id before using names", () => {
     const exact = match({ id: "exact", deckSourceKey: "piltover:abc", deckName: "Completely renamed", myChampion: "Ahri" });
     const byId = match({ id: "by-id", deckSourceId: "deck-id", deckName: "Other name" });

@@ -59,7 +59,7 @@ describe("Matches scroll layout", () => {
   });
 
   it("keeps the width guard scoped to the existing Matches page and local table", () => {
-    expect(appSource).toContain('className="dashboard-page matches-page"');
+    expect(appSource).toMatch(/className="dashboard-page matches-page(?:\s[^"]*)?"/);
     expect(appSource).toContain('className="match-table local-match-table"');
     expect(declarationsForSelector(baseStyles, ".match-table"))
       .not.toMatch(/grid-template-columns\s*:/);
@@ -78,7 +78,7 @@ describe("Matches scroll layout", () => {
         && attribute.name.getText(source) === "className"
         && attribute.initializer !== undefined
         && ts.isStringLiteral(attribute.initializer)
-        && attribute.initializer.text === "match-row interactive-row"
+        && ["match-row", "interactive-row"].every((name) => attribute.initializer && ts.isStringLiteral(attribute.initializer) && attribute.initializer.text.split(/\s+/).includes(name))
       ))) rows.push(node);
       ts.forEachChild(node, visit);
     }

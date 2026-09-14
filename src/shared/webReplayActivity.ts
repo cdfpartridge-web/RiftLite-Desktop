@@ -1,4 +1,47 @@
 import type { WebReplayUploadQueueItem } from "./types.js";
+import { webReplayQueueItemCanBeKeptLocalOnly } from "./replayDelivery.js";
+
+export interface WebReplayKeepLocalCandidate {
+  captureSessionId: string;
+  title: string;
+}
+
+export function webReplayKeepLocalCandidates(queue: readonly WebReplayUploadQueueItem[]): WebReplayKeepLocalCandidate[] {
+  const candidates = new Map<string, WebReplayKeepLocalCandidate>();
+  const excluded = new Set<string>();
+  for (const item of queue) {
+    if (!["captured", "queued", "failed", "paused"].includes(item.stage)
+      || !webReplayQueueItemCanBeKeptLocalOnly(item)) {
+      excluded.add(item.captureSessionId);
+      continue;
+    }
+    candidates.set(item.captureSessionId, { captureSessionId: item.captureSessionId, title: item.title });
+  }
+  // The queue API addresses captures by ID, including any duplicate aliases.
+  return [...candidates.values()].filter((item) => !excluded.has(item.captureSessionId));
+}
+
+export async function keepWebReplayUploadsLocalOnly(
+  candidates: readonly WebReplayKeepLocalCandidate[],
+  removeFromQueue: (captureSessionId: string) => Promise<void>,
+  onProgress?: (completed: number, total: number) => void
+): Promise<{ keptCount: number; failures: Array<WebReplayKeepLocalCandidate & { error: string }> }> {
+  // Freeze the confirmed selection before awaiting; later captures are not included.
+  const snapshot = [...new Map(candidates.map((item) => [item.captureSessionId, { ...item }])).values()];
+  const failures: Array<WebReplayKeepLocalCandidate & { error: string }> = [];
+  let keptCount = 0;
+  for (const item of snapshot) {
+    try {
+      // Keep the existing service's capture lock and online-replay protection.
+      await removeFromQueue(item.captureSessionId);
+      keptCount += 1;
+    } catch (error) {
+      failures.push({ ...item, error: error instanceof Error ? error.message : "The upload could not be removed from the queue." });
+    }
+    onProgress?.(keptCount + failures.length, snapshot.length);
+  }
+  return { keptCount, failures };
+}
 
 export const WEB_REPLAY_WARNING_DISMISSALS_STORAGE_KEY = "riftlite-web-replay-warning-dismissals-v1";
 const MAX_WEB_REPLAY_WARNING_DISMISSALS = 200;

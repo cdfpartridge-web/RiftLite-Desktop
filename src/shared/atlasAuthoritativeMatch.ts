@@ -3,6 +3,7 @@ import {
   atlasRoomCodeFromUrl
 } from "./atlasSeatTracker.js";
 import type { RawCaptureAppendFramePayload } from "./types.js";
+import { atlasHistoryTimestamp } from "./atlasHistory.js";
 
 export type AtlasAuthoritativeMatchFrameType =
   | "room_shell_sync"
@@ -15,6 +16,8 @@ export interface AtlasAuthoritativeMatchScore {
 }
 
 export interface AtlasAuthoritativeMatchState {
+  gameHistoryStartedAt?: number;
+  gameNumber?: number;
   frameType: AtlasAuthoritativeMatchFrameType;
   roomCode: string;
   gameInstanceId: string;
@@ -27,6 +30,8 @@ export interface AtlasAuthoritativeMatchState {
 }
 
 export interface AtlasAuthoritativeMatchPatch {
+  gameHistoryStartedAt?: number;
+  gameNumber?: number;
   frameType: AtlasAuthoritativeMatchFrameType;
   roomCode: string;
   gameInstanceId?: string;
@@ -39,6 +44,8 @@ export interface AtlasAuthoritativeMatchPatch {
 }
 
 export interface AtlasAuthoritativeMatchSignal {
+  gameHistoryStartedAt?: number;
+  gameNumber?: number;
   frameType: AtlasAuthoritativeMatchFrameType;
   roomCode: string;
   gameInstanceId: string;
@@ -153,6 +160,8 @@ export function parseAtlasAuthoritativeMatchFrame(
       roomCode,
     localPlayerId,
     opponentPlayerId,
+    ...historyFields(snapshot),
+    ...historyFields(sessionDoc),
     ...(local.name ? { myName: local.name } : {}),
     ...(opponent.name ? { opponentName: opponent.name } : {}),
     ...(format ? { format } : {}),
@@ -174,6 +183,8 @@ export function mergeAtlasAuthoritativeMatchState(
     : current;
   return {
     frameType: patch.frameType,
+    ...historyFields(base as unknown as Record<string, unknown>),
+    ...historyFields(patch as unknown as Record<string, unknown>),
     roomCode: patch.roomCode || base.roomCode,
     gameInstanceId: nonEmpty(patch.gameInstanceId, base.gameInstanceId),
     localPlayerId: patch.localPlayerId || base.localPlayerId,
@@ -193,6 +204,7 @@ export function atlasAuthoritativeMatchSignalFromState(
 ): AtlasAuthoritativeMatchSignal {
   return {
     frameType: state.frameType,
+    ...historyFields(state as unknown as Record<string, unknown>),
     roomCode: state.roomCode,
     gameInstanceId: state.gameInstanceId,
     myName: state.myName,
@@ -233,6 +245,7 @@ export function validatedAtlasAuthoritativeMatchSignal(value: unknown): AtlasAut
     gameInstanceId,
     myName,
     opponentName,
+    ...historyFields(record),
     format: format as AtlasAuthoritativeMatchState["format"],
     score: { me, opp }
   };
@@ -260,8 +273,12 @@ function parseScorePatch(
   const patch = readRecord(packet.patch);
   const operations = Array.isArray(patch?.operations) ? patch.operations : [];
   const score: Partial<AtlasAuthoritativeMatchScore> = {};
+  let history: {gameNumber?:number;gameHistoryStartedAt?:number} = {};
   for (const candidate of operations) {
     const operation = readRecord(candidate);
+    if (readString(operation?.op) === "set_room_fields") {
+      history = { ...history, ...historyFields(readRecord(operation?.fields)) };
+    }
     if (readString(operation?.op) !== "set_board_fields") {
       continue;
     }
@@ -277,7 +294,7 @@ function parseScorePatch(
       score.opp = String(nextScore);
     }
   }
-  if (!Object.keys(score).length) {
+  if (!Object.keys(score).length && !Object.keys(history).length) {
     return null;
   }
   return {
@@ -285,7 +302,8 @@ function parseScorePatch(
     roomCode,
     gameInstanceId: gameInstanceId || current.gameInstanceId,
     localPlayerId,
-    score
+    score,
+    ...history
   };
 }
 
@@ -403,6 +421,15 @@ function boundedName(value: unknown): string | null {
   if (typeof value !== "string") return value === undefined ? "" : null;
   const name = value.trim();
   return name.length <= 120 ? name : null;
+}
+
+function historyFields(value: Record<string, unknown> | undefined | null): {gameNumber?:number;gameHistoryStartedAt?:number} {
+  const startedAt = atlasHistoryTimestamp(value?.gameHistoryStartedAt);
+  const gameNumber = Number(value?.gameNumber);
+  return {
+    ...(startedAt ? { gameHistoryStartedAt: startedAt } : {}),
+    ...([1,2,3].includes(gameNumber) ? { gameNumber } : {})
+  };
 }
 
 function nonEmpty(value: string | undefined, fallback: string): string {

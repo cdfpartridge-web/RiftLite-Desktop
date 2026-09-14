@@ -27,7 +27,7 @@ describe("Enhanced Insights product integration", () => {
   });
 
   it("supports a visible live marker without requiring an active video recorder", () => {
-    expect(app).toContain('className="enhanced-insights-live-marker"');
+    expect(app).toContain('<LiveDecisionMarker onMark={addReplayReviewFlagFromHotkey}');
     expect(app).toContain("{enhancedInsightSessionActive ? (");
     expect(app).not.toContain("settings.enhancedInsightsEnabled && enhancedInsightSessionActive");
     expect(app).toContain("pendingEnhancedInsightMarkersRef");

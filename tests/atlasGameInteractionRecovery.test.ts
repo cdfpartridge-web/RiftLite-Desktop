@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import ts from "typescript";
 
 const preloadSource = readFileSync(new URL("../src/game-preload/gamePreload.ts", import.meta.url), "utf8");
 const mainSource = readFileSync(new URL("../src/main/main.ts", import.meta.url), "utf8");
@@ -15,7 +16,64 @@ function sourceBetween(source: string, startMarker: string, endMarker: string): 
   return source.slice(start, end);
 }
 
+// Exercise the production focus boundary without booting main.ts or touching
+// the installed app. TypeScript's AST keeps this independent of its formatting.
+function focusHarness(initiallyFocused = true) {
+  const ast = ts.createSourceFile("main.ts", mainSource, ts.ScriptTarget.Latest, true);
+  const declaration = ast.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === "focusCurrentTrustedGameGuest")!;
+  const js = ts.transpileModule(declaration.getText(ast), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+  let focused = initiallyFocused;
+  const guest = {
+    isFocused: () => focused,
+    focus: vi.fn(() => { focused = true; }),
+    invalidate: vi.fn()
+  };
+  const host = {
+    isDestroyed: () => false,
+    focus: vi.fn(() => { focused = false; }),
+    invalidate: vi.fn()
+  };
+  const foreground = vi.fn(() => true);
+  const trusted = vi.fn(() => true);
+  const environment = {
+    mainWindow: { isDestroyed: () => false, isFocused: foreground, webContents: host },
+    isCurrentTrustedGameWebContents: trusted,
+    shouldInvalidateGameGuestPresentation: () => true,
+    atlasPresentationInvalidatedAtByGuest: new WeakMap(),
+    ATLAS_PRESENTATION_INVALIDATE_MIN_INTERVAL_MS: 500
+  };
+  const focus = new Function(...Object.keys(environment), `${js}; return focusCurrentTrustedGameGuest;`)(...Object.values(environment));
+  return { guest, host, foreground, trusted, recover: () => focus("atlas", guest, { focusHost: true, invalidatePresentation: true }) };
+}
+
 describe("Atlas game interaction recovery", () => {
+  it("does not blur an already focused chat input when host recovery or its retry arrives", () => {
+    const h = focusHarness();
+    for (let i = 0; i < 10; i++) expect(h.recover()).toBe(true);
+    expect(h.host.focus).not.toHaveBeenCalled();
+    expect(h.guest.focus).not.toHaveBeenCalled();
+    // Paint recovery remains available even when keyboard focus is healthy.
+    expect(h.guest.invalidate).toHaveBeenCalledOnce();
+  });
+
+  it("restores a blurred guest once without restarting the host/guest focus cycle", () => {
+    const h = focusHarness(false);
+    for (let i = 0; i < 10; i++) expect(h.recover()).toBe(true);
+    expect(h.host.focus).toHaveBeenCalledOnce();
+    expect(h.guest.focus).toHaveBeenCalledOnce();
+  });
+
+  it("does not recover a background window or an obsolete guest", () => {
+    const h = focusHarness(false);
+    h.foreground.mockReturnValue(false);
+    expect(h.recover()).toBe(false);
+    h.foreground.mockReturnValue(true);
+    h.trusted.mockReturnValue(false);
+    expect(h.recover()).toBe(false);
+    expect(h.host.focus).not.toHaveBeenCalled();
+    expect(h.guest.focus).not.toHaveBeenCalled();
+  });
+
   it("requests native focus only for trusted editable or interactive user events", () => {
     const bridge = sourceBetween(
       preloadSource,

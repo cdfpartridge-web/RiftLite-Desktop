@@ -104,6 +104,7 @@ interface RecentAtlasDraftPublication {
   opponentChampion: string;
   score: string;
   gameCount: number;
+  terminalResult: boolean;
 }
 
 const CAPTURE_COORDINATOR_GUARD_MARKER = "atlas-bo3-final-guard-v2-2026-06-07";
@@ -251,6 +252,16 @@ export class CaptureCoordinator {
   }
 
   private async handleEventNow(event: CaptureEvent): Promise<void> {
+    // Diagnostic snapshots can contain active/identity/score fields, but they
+    // are not game events. Letting them enter the lifecycle can recreate a
+    // finished session (and open another review when the next opponent joins).
+    if (event.kind === "debug") {
+      void this.diagnostics.record(compactCaptureDiagnosticEvent(
+        event,
+        this.tracker.get(event.platform)?.enhancedInsightsEnabledAtStart === true
+      )).catch(() => undefined);
+      return;
+    }
     const settings = await this.store.getSettings().catch(() => null);
     const trackedEvent = withConfiguredCaptureContext(event, settings?.username ?? "");
     if (this.shouldIgnoreAtlasNonGameEvent(trackedEvent)) {
@@ -708,7 +719,9 @@ export class CaptureCoordinator {
     if (draft.platform !== "atlas" && event.platform !== "atlas") {
       return;
     }
-    if (draft.format !== "Bo3") {
+    const terminalResult = readPayloadString(event.payload.atlasResultKind) === "match-terminal" ||
+      /match complete/i.test(readPayloadString(event.payload.endText));
+    if (draft.format !== "Bo3" && !terminalResult) {
       return;
     }
     const gameCount = draft.games?.length ?? 0;
@@ -723,7 +736,8 @@ export class CaptureCoordinator {
       myChampion: normalizeCaptureNameKey(draft.myChampion),
       opponentChampion: normalizeCaptureNameKey(draft.opponentChampion),
       score: draft.score,
-      gameCount
+      gameCount,
+      terminalResult
     });
   }
 
@@ -753,7 +767,10 @@ export class CaptureCoordinator {
       return false;
     }
     const recent = this.recentAtlasDraftPublications.get("atlas");
-    if (!recent || recent.gameCount < 2) {
+    // An opponent can end a BO3 after its first game. Atlas still emits active
+    // snapshots of that terminal screen; they must not recreate the cleared
+    // session and trigger another review when the next opponent joins.
+    if (!recent || (recent.gameCount < 2 && !recent.terminalResult)) {
       return false;
     }
     const eventAtMs = Date.parse(event.capturedAt);
@@ -771,7 +788,18 @@ export class CaptureCoordinator {
     const sameOpponent = !recent.opponentName || !opponentName || recent.opponentName === opponentName;
     const sameMyChampion = !recent.myChampion || !myChampion || recent.myChampion === myChampion;
     const sameOpponentChampion = !recent.opponentChampion || !opponentChampion || recent.opponentChampion === opponentChampion;
-    return sameOpponent && sameMyChampion && sameOpponentChampion;
+    const matchesPublishedResult = sameOpponent && sameMyChampion && sameOpponentChampion;
+    if (
+      matchesPublishedResult && recent.terminalResult &&
+      recent.roomCode && roomCode === recent.roomCode &&
+      (resultKind === "match-terminal" || /match complete/i.test(endText))
+    ) {
+      // A result screen can remain open for minutes. Refresh only from a
+      // matching terminal screen with a known room, never an anonymous echo.
+      // A real result-free match-start still clears this marker above.
+      recent.publishedAtMs = Math.max(recent.publishedAtMs, currentAtMs);
+    }
+    return matchesPublishedResult;
   }
 
   private evaluateAtlasBo3PreDraftFinalGuard(

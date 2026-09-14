@@ -10,6 +10,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { promisify } from "node:util";
 import { deflateRawSync, inflateRawSync } from "node:zlib";
 import ffmpegStaticPath from "ffmpeg-static";
+import { AtlasHistoryService } from "./services/atlasHistoryService.js";
+import { AtlasHistoryAutoImport } from "./services/atlasHistoryAutoImport.js";
 import type {
   ActiveDeckPrep,
   AtlasConnectionDiagnostics,
@@ -69,7 +71,7 @@ import type {
   UserSettings,
   VisionDeckTrackerStatus
 } from "../shared/types.js";
-import { emptyDeckMatchupGuide, resolveDeckMatchupGuide, sanitizeDeckNotebookForDeck } from "../shared/deckNotebook.js";
+import { emptyDeckMatchupGuide, resolveDeckMatchupGuide, enrichDeckNotebookForDeck, normalizeDeckGuideReviewBaseline } from "../shared/deckNotebook.js";
 import {
   ATLAS_BATTLEFIELD_SEAT_IPC_CHANNEL,
   AtlasBattlefieldSeatSocketTracker,
@@ -1076,6 +1078,7 @@ type CompactDeckShareSection = {
 
 type CompactDeckShareGuide = {
   l?: string;
+  r?: DeckMatchupGuide["reviewBaseline"];
   m?: {
     k?: CompactDeckShareSection;
     c?: CompactDeckShareSection;
@@ -1835,13 +1838,6 @@ function focusCurrentTrustedGameGuest(
   ) {
     return false;
   }
-  if (options.focusHost) {
-    try {
-      window.webContents.focus();
-    } catch {
-      // The trusted guest focus below is still the primary recovery action.
-    }
-  }
   if (shouldInvalidateGameGuestPresentation(platform, options.invalidatePresentation)) {
     const invalidatedAt = Date.now();
     const previousInvalidatedAt = atlasPresentationInvalidatedAtByGuest.get(contents) ?? Number.NEGATIVE_INFINITY;
@@ -1863,6 +1859,17 @@ function focusCurrentTrustedGameGuest(
     }
   }
   try {
+    // Host focus events and delayed recovery retries can arrive after Atlas
+    // has already focused chat. A host -> guest handoff here blurs that input
+    // again and can recursively trigger the renderer's onFocus recovery.
+    if (contents.isFocused()) return true;
+    if (options.focusHost) {
+      try {
+        window.webContents.focus();
+      } catch {
+        // The trusted guest focus below is still the primary recovery action.
+      }
+    }
     contents.focus();
     return true;
   } catch {
@@ -6056,7 +6063,7 @@ async function deckPackagePayload(deckId: string, notebookOverride?: DeckNoteboo
   if (!deck) {
     throw new Error("Deck not found.");
   }
-  const notebook = sanitizeDeckNotebookForDeck(
+  const notebook = enrichDeckNotebookForDeck(
     notebookOverride?.deckId === deck.id ? notebookOverride : await store.getDeckNotebook(deckId),
     deck
   );
@@ -6120,6 +6127,7 @@ function compactDeckNotebook(notebook: DeckNotebook): CompactDeckSharePayload["n
 function compactDeckGuide(guide: DeckMatchupGuide): CompactDeckShareGuide {
   return {
     ...(guide.legend ? { l: guide.legend } : {}),
+    ...(guide.reviewBaseline ? { r: guide.reviewBaseline } : {}),
     m: {
       k: compactDeckGuideSection(guide.mulligan.keep),
       c: compactDeckGuideSection(guide.mulligan.consider),
@@ -6167,7 +6175,7 @@ async function exportDeckPrepPdf(deckId: string, notebookOverride?: DeckNotebook
   if (!deck) {
     throw new Error("Deck not found.");
   }
-  const notebook = sanitizeDeckNotebookForDeck(
+  const notebook = enrichDeckNotebookForDeck(
     notebookOverride?.deckId === deck.id ? notebookOverride : await store.getDeckNotebook(deck.id),
     deck
   );
@@ -6938,9 +6946,11 @@ function expandCompactDeckNotebook(value: CompactDeckSharePayload["n"], deckId: 
 function expandCompactDeckGuide(value: CompactDeckShareGuide | undefined, legend: string): DeckMatchupGuide {
   const base = emptyDeckMatchupGuide(legend);
   const now = new Date().toISOString();
+  const reviewBaseline = normalizeDeckGuideReviewBaseline(value?.r);
   return {
     ...base,
     updatedAt: now,
+    ...(reviewBaseline ? { reviewBaseline } : {}),
     mulligan: {
       keep: expandCompactDeckSection(value?.m?.k),
       consider: expandCompactDeckSection(value?.m?.c),
@@ -8512,7 +8522,64 @@ function registerIpc(): void {
   handleTrustedAppIpc("capture:platform-switch-status", () => capture.getGamePlatformSwitchStatus());
   handleTrustedAppIpc("capture:force-review", (_event, platform: GamePlatform) => capture.forceReview(platform));
   handleTrustedAppIpc("capture:dismiss-review", () => capture.dismissMatchReview());
-  handleTrustedAppIpc("matches:get", () => store.getMatches());
+  const atlasHistoryService = new AtlasHistoryService({
+    getMatch: async (id) => (await store.getMatches()).find(m=>m.id===id),
+    readRawForMatch: async (id) => {
+      const replay=(await store.getReplays()).find(r=>r.matchId===id);
+      return replay ? rawCaptureService.getRawCapturePayload(replay.id) : null;
+    },
+    query: async (script) => {
+      const guest = gameWebContentsByPlatform.get("atlas");
+      if (!guest || !isCurrentTrustedGameWebContents("atlas", guest) ||
+        guest.isLoadingMainFrame() || new URL(guest.getURL()).origin !== "https://play.riftatlas.com") {
+        throw new Error("Open Atlas Play and sign in before refreshing decks.");
+      }
+      const result = await guest.executeJavaScript(script);
+      if (!isCurrentTrustedGameWebContents("atlas", guest)) throw new Error("Atlas changed during deck import. Please retry.");
+      return result;
+    },
+    save: async (id,history,markers) => {
+      const saved=await store.attachAtlasHistory(id,history,markers);
+      mainWindow?.webContents.send("match:updated", saved);
+      queueAccountCloudSync("Atlas history decks updated");
+      return saved;
+    }
+  });
+  const atlasHistoryAutoImport = new AtlasHistoryAutoImport({
+    refresh: (id) => atlasHistoryService.refresh(id),
+    ready: () => {
+      const guest = gameWebContentsByPlatform.get("atlas");
+      return Boolean(guest && isCurrentTrustedGameWebContents("atlas", guest) &&
+        !guest.isLoadingMainFrame() && new URL(guest.getURL()).origin === "https://play.riftatlas.com");
+    },
+    report: (matchId, state) => {
+      void diagnostics.record({
+        id: randomUUID(), platform: "atlas", kind: "debug", capturedAt: new Date().toISOString(),
+        url: "https://play.riftatlas.com/", payload: { reason: "atlas-history-auto-import", matchId, state }
+      }).catch(() => undefined);
+    }
+  });
+  const catchUpAtlasHistory = () => {
+    void store.getMatches().then((matches) => atlasHistoryAutoImport.run(matches)).catch(() => undefined);
+  };
+  // Covers automatic saves, delayed Atlas history, signing in later and app restarts.
+  // A pass imports at most three matches, with per-match backoff up to five minutes.
+  const atlasHistoryTimer = setInterval(catchUpAtlasHistory, 30_000);
+  atlasHistoryTimer.unref();
+  app.once("before-quit", () => clearInterval(atlasHistoryTimer));
+  handleTrustedAppIpc("matches:get", async () => {
+    const matches = await store.getMatches();
+    void atlasHistoryAutoImport.run(matches).catch(() => undefined);
+    return matches;
+  });
+  handleTrustedAppIpc("matches:atlas-history", (_event,id:string) => atlasHistoryService.refresh(id));
+  handleTrustedAppIpc("matches:atlas-history:replay", async (_event,id:string) => {
+    const match=(await store.getMatches()).find(m=>m.id===id);
+    if(!match?.atlasHistory)throw new Error("Refresh the match's Atlas decks first.");
+    const replay=(await store.getReplays()).find(r=>r.matchId===id);
+    if(!replay)throw new Error("This match has no linked Web Replay.");
+    await rawCaptureService.sendAtlasHistoryToReplay(replay.id,match.atlasHistory);
+  });
   handleTrustedAppIpc("matches:deleted", () => store.getDeletedMatches());
   handleTrustedAppIpc("matches:save-draft", async (_event, draft: MatchDraft) => {
     return enqueueEnhancedInsightsDataMutation(async () => {
@@ -8549,7 +8616,7 @@ function registerIpc(): void {
   handleTrustedAppIpc("matches:confirm", async (_event, draft: MatchDraft) => {
     return enqueueEnhancedInsightsDataMutation(async () => {
       try {
-        return await confirmMatchLocalFirst(draft, {
+        const confirmed = await confirmMatchLocalFirst(draft, {
           saveLocally: async (candidate) => {
             const saved = await capture.confirmMatch(candidate, {
               deferReplayFinalization: confirmedMatchSupportsBackgroundDelivery(candidate)
@@ -8568,6 +8635,12 @@ function registerIpc(): void {
             return synced;
           }
         });
+        if (confirmed.platform === "atlas" && !confirmed.combinedFromMatchIds?.length) {
+          // History identifiers are already on the match; local video/raw
+          // replay finalization must not block a post-game deck lookup.
+          catchUpAtlasHistory();
+        }
+        return confirmed;
       } catch (error) {
         await logStartupIssue(
           `Match confirmation failed (${draft.platform}, ${draft.id})`,

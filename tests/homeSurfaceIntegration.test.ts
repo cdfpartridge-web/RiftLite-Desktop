@@ -33,11 +33,15 @@ describe("Home launchpad", () => {
     const releaseNotesEnd = appSource.indexOf("const RIOT_LEGAL_NOTICE", releaseNotesStart);
     const releaseNotesSource = appSource.slice(releaseNotesStart, releaseNotesEnd);
 
-    expect(releaseNotesSource).toContain("Atlas Edit Deck and New Deck now open inside RiftLite");
-    expect(releaseNotesSource).toContain("Back to Play");
-    expect(releaseNotesSource).toContain("unsaved deck changes");
-    expect(releaseNotesSource).toContain("collapsed Atlas Player name field that could persist in v0.9.72");
-    expect(releaseNotesSource).toContain("All nine signed Vendetta variants");
+    expect(releaseNotesSource).toContain("Prepare, Matches, match review, Replays and Web Replays have refreshed layouts");
+    expect(releaseNotesSource).toContain("available opponent deck lists while signed in");
+    expect(releaseNotesSource).toContain("each BO3 game's list and sideboard changes");
+    expect(releaseNotesSource).toContain("Results & data shows record completeness");
+    expect(releaseNotesSource).toContain("Matchup prep warns when deck edits affect saved plans");
+    expect(releaseNotesSource).toContain("Ivern's Brush");
+    expect(releaseNotesSource).toContain("Keep all local only");
+    expect(releaseNotesSource).toContain("Mark decision can be moved");
+    expect(releaseNotesSource).toContain("interrupt chat typing");
     expect(releaseNotesSource).toContain("Replay Coach remains Coming Soon while we refine its review and practice flow.");
     expect(releaseNotesSource).not.toContain("Search Rules");
     expect(releaseNotesSource).not.toContain("Deck Insights is now the default Insights view");

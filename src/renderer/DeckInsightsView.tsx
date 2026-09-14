@@ -65,6 +65,7 @@ import {
   replayNeedsRawInsightEnrichment
 } from "./insightAnalysisCache";
 import { INSIGHT_CARD_CATALOG } from "./insightCardCatalog";
+import { DeckResultsReport } from "./DeckResultsReport";
 
 const DECK_INSIGHT_CATALOG = INSIGHT_CARD_CATALOG;
 const DECK_RAW_ANALYSIS_CONCURRENCY = 2;
@@ -89,7 +90,7 @@ export async function copyDeckInsightSummary(
 type DeckCardSort = "review" | "reach" | "curve" | "copies" | "name";
 type DeckPeriod = "all" | "preseason" | "current-season";
 type DeckVersionScope = "all" | "current";
-type DeckInsightsSection = "overview" | "cards" | "matchups";
+type DeckInsightsSection = "overview" | "cards" | "matchups" | "results";
 
 export function effectiveDeckInsightGameStage(
   section: DeckInsightsSection,
@@ -430,7 +431,10 @@ export function DeckInsightsView({
         <button type="button" data-active={section === "overview" || undefined} aria-pressed={section === "overview"} onClick={() => selectSection("overview")}><BarChart3 size={16} /><span><strong>Overview</strong><small>Shape, curve and recent form</small></span></button>
         <button type="button" data-active={section === "cards" || undefined} aria-pressed={section === "cards"} onClick={() => selectSection("cards")}><Eye size={16} /><span><strong>Card review</strong><small>Reach, hand conversion and mulligans</small></span></button>
         <button type="button" data-active={section === "matchups" || undefined} aria-pressed={section === "matchups"} onClick={() => selectSection("matchups")}><Swords size={16} /><span><strong>Matchups</strong><small>Opponents, splits and battlefields</small></span></button>
+        <button type="button" data-active={section === "results" || undefined} aria-pressed={section === "results"} onClick={() => selectSection("results")}><ShieldCheck size={16} /><span><strong>Results & data</strong><small>Series outcomes and record completeness</small></span></button>
       </nav>
+
+      {section === "results" ? <DeckResultsReport key={`${deck.id}:${scopeLabel}`} matches={scopedMatches} replays={scopedReplays} onOpenReplay={onOpenReplay} /> : null}
 
       {section === "overview" ? <>
       <section className="deck-insights-metric-strip" aria-label="Deck overview">

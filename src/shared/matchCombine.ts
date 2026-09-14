@@ -104,6 +104,12 @@ export function buildCombinedBo3Match(matches: MatchDraft[], id: string, now: st
     capturedAt: earliestCapturedAt(ordered) || base.capturedAt,
     updatedAt: now,
     games,
+    atlasHistory: ordered.some(m=>m.atlasHistory?.games.length) ? {
+      version: 1,
+      updatedAt: now,
+      games: ordered.flatMap((m,index)=>m.atlasHistory?.games.slice(0,1).map(g=>({...g,gameNumber:index+1})) ?? [])
+    } : undefined,
+    atlasHistoryMarkers: ordered.flatMap((m,index)=>m.atlasHistoryMarkers?.slice(0,1).map(g=>({...g,gameNumber:index+1})) ?? []),
     myBattlefield: games[0]?.myBattlefield ?? base.myBattlefield,
     opponentBattlefield: games[0]?.oppBattlefield ?? base.opponentBattlefield,
     flags: combineUniqueText(ordered.map((match) => match.flags)),

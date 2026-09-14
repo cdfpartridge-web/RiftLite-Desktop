@@ -218,7 +218,8 @@ describe("learner-first Insights surface", () => {
       '<table className="insights-outcome-table">',
       'scope="col"'
     ]) expect(legacyExploreSource).toContain(legacyContract);
-    expect(appSource).toContain('<details className="replay-evidence-drawer"');
+    expect(appSource).toContain('hidden={replayDetailPane !== "evidence"} role="region" aria-label="Replay evidence"');
+    expect(appSource).toContain("<ReplayIntelligencePanel");
   });
 
   it("ships a visual, scoped and locally computed Deck Insights report", () => {

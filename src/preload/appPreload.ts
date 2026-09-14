@@ -44,6 +44,8 @@ const api: RiftLiteApi = {
   forceCaptureReview: (platform) => ipcRenderer.invoke("capture:force-review", platform) as Promise<MatchDraft | null>,
   dismissMatchReview: () => ipcRenderer.invoke("capture:dismiss-review") as Promise<void>,
   getMatches: () => ipcRenderer.invoke("matches:get") as Promise<MatchDraft[]>,
+  refreshAtlasHistoryDecks: (matchId) => ipcRenderer.invoke("matches:atlas-history", matchId),
+  sendAtlasHistoryToReplay: (matchId) => ipcRenderer.invoke("matches:atlas-history:replay", matchId),
   getDeletedMatches: () => ipcRenderer.invoke("matches:deleted") as Promise<MatchDraft[]>,
   saveMatchDraft: (draft) => ipcRenderer.invoke("matches:save-draft", draft) as Promise<MatchDraft>,
   deferMatchReview: (draft) => ipcRenderer.invoke("matches:defer-review", draft) as Promise<MatchDraft>,
@@ -252,6 +254,11 @@ const api: RiftLiteApi = {
     const listener = (_event: Electron.IpcRendererEvent, payload: MatchDraft) => callback(payload);
     ipcRenderer.on("match:draft", listener);
     return () => ipcRenderer.removeListener("match:draft", listener);
+  },
+  onMatchUpdated: (callback) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: MatchDraft) => callback(payload);
+    ipcRenderer.on("match:updated", listener);
+    return () => ipcRenderer.removeListener("match:updated", listener);
   },
   onGameWebviewFailure: (callback) => {
     const listener = (_event: Electron.IpcRendererEvent, payload: GameWebviewFailure) => callback(payload);

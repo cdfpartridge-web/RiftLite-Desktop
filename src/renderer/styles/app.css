@@ -6632,7 +6632,7 @@ textarea {
 
 .enhanced-insights-live-marker {
   position: absolute;
-  z-index: 11;
+  z-index: 13;
   top: 12px;
   right: 12px;
   display: inline-flex;
@@ -6646,13 +6646,20 @@ textarea {
   color: #dff8ff;
   box-shadow: 0 9px 28px rgb(0 0 0 / 38%);
   backdrop-filter: blur(10px);
+  touch-action: none;
+  user-select: none;
+  max-width: 100%;
+  cursor: grab;
 }
+
+.enhanced-insights-marker-grip { opacity: .65; flex-shrink: 0; }
+.enhanced-insights-live-marker[data-dragging="true"] { cursor: grabbing; }
+.enhanced-insights-marker-drag-shield { position: absolute; inset: 0; z-index: 12; cursor: grabbing; touch-action: none; }
 
 .enhanced-insights-live-marker:hover,
 .enhanced-insights-live-marker:focus-visible {
   border-color: #8deaff;
   background: rgb(12 37 53 / 94%);
-  transform: translateY(-1px);
 }
 
 .enhanced-insights-settings-card {
@@ -11431,6 +11438,7 @@ button.floating-resize-handle {
 
 .web-replay-delivery-list-heading {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
@@ -11441,6 +11449,15 @@ button.floating-resize-handle {
 .web-replay-delivery-list-heading strong {
   color: var(--text);
   font-size: 13px;
+}
+
+.web-replay-delivery-list-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-left: auto;
 }
 
 .web-replay-delivery-item {
