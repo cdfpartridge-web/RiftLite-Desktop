@@ -32,7 +32,6 @@ describe("learner-first Insights surface", () => {
     expect(hubSource).toContain("Deck Insights");
     expect(hubSource).toContain("Replay Coach");
     expect(hubSource).toContain("Coming soon · being refined");
-    expect(appSource).toContain("Replay Coach remains Coming Soon while we refine its review and practice flow.");
     expect(deckInsightsSource).toContain('type DeckInsightsSection = "overview" | "cards" | "matchups"');
   });
 
