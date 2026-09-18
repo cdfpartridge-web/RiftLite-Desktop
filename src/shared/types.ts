@@ -2628,6 +2628,8 @@ export interface RiftLiteApi {
   openReplayDirectory(): Promise<void>;
   openExternalResource(url: string): Promise<void>;
   setWindowFullscreen(enabled: boolean): Promise<boolean>;
+  getWindowFullscreen(): Promise<boolean>;
+  onWindowFullscreenChanged(callback: (fullscreen: boolean) => void): () => void;
   trackSpotlightClick(payload: SpotlightClickPayload): Promise<void>;
   trackLiveTakeover(payload: LiveTakeoverTelemetryPayload): Promise<void>;
   onCaptureEvent(callback: (event: CaptureEvent) => void): () => void;

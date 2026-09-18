@@ -18,13 +18,13 @@ function styleFixture() {
 afterEach(() => { vi.useRealTimers(); });
 
 describe("Atlas card rendering", () => {
-  it("sharpens only card artwork on low-DPI Atlas boards", () => {
+  it("preserves Atlas's native artwork sampling, card poses, and responsive sizing", () => {
     const css = atlasCardRenderingCssForUrl("https://play.riftatlas.com/game/example");
 
-    expect(css).toContain("@media (max-resolution: 1.05dppx)");
-    expect(css).toContain(".gb-board [data-card-id] img");
-    expect(css).toContain("image-rendering: -webkit-optimize-contrast");
-    expect(css).not.toMatch(/(?:transform|zoom)\s*:/);
+    expect(css).not.toContain("image-rendering");
+    expect(css).not.toContain("[data-card-id]");
+    expect(css).not.toContain(".gb-card-face");
+    expect(css).not.toMatch(/(?:transform|transform-style|scale|rotate|translate|zoom|filter)\s*:/);
   });
 
   it("moves Atlas's named lobby query container above the flex column", () => {

@@ -6703,6 +6703,27 @@ textarea {
   border: 0;
 }
 
+/* Native fullscreen gives Play the entire viewport without remounting its
+   guest or changing the user's normal navigation/zoom preferences. F11 exits. */
+.app-shell.ui-dev-modern[data-play-fullscreen="true"] {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.app-shell.ui-dev-modern[data-play-fullscreen="true"] > .sidebar,
+.app-shell.ui-dev-modern[data-play-fullscreen="true"] > .sidebar-float-toggle,
+.app-shell.ui-dev-modern[data-play-fullscreen="true"] > .workspace > .topbar {
+  display: none;
+}
+
+.app-shell.ui-dev-modern[data-play-fullscreen="true"] > .workspace > .play-grid {
+  padding: 0;
+}
+
+.app-shell.ui-dev-modern[data-play-fullscreen="true"] .game-frame {
+  border: 0;
+  border-radius: 0;
+}
+
 .game-placeholder {
   display: grid;
   height: 100%;

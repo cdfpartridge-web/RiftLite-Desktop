@@ -2,6 +2,7 @@ import React, { useCallback, useDeferredValue, useEffect, useMemo, useRef, useSt
 import { createDefaultSettings } from "../shared/settingsDefaults";
 import { useReplayVoicePlayback } from "./useReplayVoicePlayback";
 import { useOwnedPointerGesture } from "./useOwnedPointerGesture";
+import { useWindowFullscreen } from "./useWindowFullscreen";
 import { LiveDecisionMarker } from "./LiveDecisionMarker";
 import { AtlasMatchDeckDialog, AtlasMatchDeckPanel } from "./AtlasHistoryDecks";
 import { canImportAtlasHistory } from "../shared/atlasHistory";
@@ -564,16 +565,11 @@ const LAB_TRAINING_LEGEND_NAMES = new Set(LAB_TRAINING_LEGEND_NAME_BY_CANONICAL.
 const RELEASE_NOTES = {
   version: APP_VERSION_META,
   title: `RiftLite v${APP_VERSION_META}`,
-  intro: "A clearer Prepare and Review experience, completed opponents' Atlas decks in match history, and more useful match data.",
+  intro: "More room for your game in fullscreen, with smoother Atlas card artwork.",
   items: [
-    "Prepare, Matches, match review, Replays and Web Replays have refreshed layouts with clearer navigation and less clutter.",
-    "Completed Atlas matches automatically pick up available opponent deck lists while signed in. Open Deck beside Replay and Edit to view each BO3 game's list and sideboard changes.",
-    "Results & data shows record completeness, BO3 opening-game performance, conversions and comebacks, with sample sizes and clearer handling of missing information.",
-    "Matchup prep warns when deck edits affect saved plans, keeping your notes until you review the changes.",
-    "Battlefield tracking recognizes TCGA's shared board slots and keeps Ivern's Brush from replacing the selected battlefield.",
-    "Keep all local only clears eligible upload activity in one action while preserving your local matches and captures. Mark decision can be moved and remembers its position.",
-    "Fixes completed Atlas matches reopening unexpectedly and repeated focus recovery that could interrupt chat typing.",
-    "Replay Coach remains Coming Soon while we refine its review and practice flow."
+    "Fullscreen Play hides RiftLite's toolbar and navigation so the game fills the screen. Press F11 to restore the normal layout.",
+    "Your open game, zoom and normal navigation preference are preserved when entering or leaving fullscreen. Holding F11 no longer repeatedly switches modes.",
+    "Atlas card artwork uses its native image rendering for smoother text and edges, including alternate artwork. Card images, positions, rotations and controls are preserved."
   ]
 };
 const RIOT_LEGAL_NOTICE = `RiftLite was created under Riot Games' "Legal Jibber Jabber" policy using assets owned by Riot Games. Riot Games does not endorse or sponsor this project.`;
@@ -3179,6 +3175,7 @@ function App() {
   const [expandedNavGroup, setExpandedNavGroup] = useState<NavigationDisclosureId | null>(null);
   const [rulesSearchOpen, setRulesSearchOpen] = useState(false);
   const [activeView, setActiveView] = useState<ActiveView>("home");
+  const windowFullscreen = useWindowFullscreen();
   const [activeCommunityTab, setActiveCommunityTab] = useState<CommunityTab>("community-decks");
   const [communityDeckLegendTarget, setCommunityDeckLegendTarget] = useState("");
   const [spotlightTargetId, setSpotlightTargetId] = useState("");
@@ -7404,6 +7401,7 @@ function App() {
   return (
     <main
       className={`app-shell ui-dev-modern ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}
+      data-play-fullscreen={windowFullscreen && activeView === "play"}
       data-home-deck-theme={activeHomeDeckTheme?.id}
       style={homeDeckThemeStyle}
       onPointerDownCapture={() => {

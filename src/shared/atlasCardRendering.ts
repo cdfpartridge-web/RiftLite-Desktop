@@ -1,12 +1,6 @@
 const ATLAS_ORIGIN = "https://play.riftatlas.com";
 
 const ATLAS_EMBEDDED_COMPATIBILITY_CSS = `
-@media (max-resolution: 1.05dppx) {
-  .gb-board [data-card-id] img {
-    image-rendering: -webkit-optimize-contrast;
-  }
-}
-
 /*
  * Atlas places a named inline-size query container below a display:contents
  * wrapper. Chromium 142 (Electron 39) can collapse that flex column's header
@@ -30,6 +24,10 @@ const ATLAS_EMBEDDED_COMPATIBILITY_CSS = `
 }
 `.trim();
 
+// Atlas now provides pre-sized board/hand artwork and animates it inside nested
+// rotation and flip shells. Leave image sampling and card geometry to Chromium:
+// the previous low-DPI optimize-contrast override aliases fine text and artwork
+// when the responsive card size or hand rotation lands between device pixels.
 export function atlasCardRenderingCssForUrl(rawUrl: string): string {
   try {
     return new URL(rawUrl).origin === ATLAS_ORIGIN ? ATLAS_EMBEDDED_COMPATIBILITY_CSS : "";

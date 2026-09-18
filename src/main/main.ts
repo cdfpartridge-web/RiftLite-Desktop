@@ -7573,6 +7573,21 @@ async function importReplayFolder(): Promise<ReplayRecord[]> {
   return imported;
 }
 
+function installFullscreenState(window: BrowserWindow): void {
+  const publish = (fullscreen: boolean) => {
+    if (!window.isDestroyed() && !window.webContents.isDestroyed()) {
+      window.webContents.send("window:fullscreen-changed", fullscreen);
+    }
+  };
+  // On Windows, isFullScreen() can still report the old value inside the
+  // transition event. The event itself is authoritative.
+  window.on("enter-full-screen", () => publish(true));
+  window.on("leave-full-screen", () => publish(false));
+  window.webContents.on("did-finish-load", () => {
+    if (!window.isDestroyed()) publish(window.isFullScreen());
+  });
+}
+
 function toggleTrueFullscreen(): boolean {
   if (!mainWindow) {
     return false;
@@ -7588,7 +7603,7 @@ function installFullscreenShortcut(webContents: WebContents): void {
     const unmodifiedKeyDown = input.type === "keyDown" && !input.alt && !input.control && !input.meta && !input.shift;
     if (unmodifiedKeyDown && input.key === "F11") {
       event.preventDefault();
-      toggleTrueFullscreen();
+      if (!input.isAutoRepeat) toggleTrueFullscreen();
       return;
     }
     if (
@@ -7930,6 +7945,7 @@ async function createWindow(): Promise<void> {
   mainWindow.setMenu(null);
   mainWindow.setMenuBarVisibility(false);
   installFullscreenShortcut(mainWindow.webContents);
+  installFullscreenState(mainWindow);
   configureDisplayMediaCapture();
 
   const showMainWindow = () => {
@@ -9235,6 +9251,7 @@ function registerIpc(): void {
     }
     return openExternalResource(url);
   });
+  handleTrustedAppIpc("window:fullscreen:get", () => mainWindow?.isFullScreen() ?? false);
   handleTrustedAppIpc("window:fullscreen", (_event, enabled: boolean) => {
     if (!mainWindow) {
       return false;
