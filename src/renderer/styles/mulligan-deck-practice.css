@@ -1,0 +1,66 @@
+.mulligan-deck-practice { display: grid; grid-template-columns: minmax(0, 1fr) 235px; gap: 14px; align-items: start; }
+.mulligan-deck-practice-table, .mulligan-deck-practice-rail > section, .mulligan-deck-practice-empty, .mulligan-deck-practice-setup { min-width: 0; border: 1px solid rgb(59 97 137 / 43%); border-radius: 13px; background: linear-gradient(155deg, #0a1829, #050f1b); box-shadow: inset 0 1px 0 rgb(255 255 255 / 3%); }
+.mulligan-deck-practice-table { overflow: hidden; }
+.mulligan-deck-practice-ribbon { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 20px; padding: 11px 20px; border-bottom: 1px solid rgb(60 196 218 / 20%); background: rgb(21 100 120 / 12%); color: #8be1eb; font-size: 11px; font-weight: 800; }
+.mulligan-deck-practice-ribbon > span { display: inline-flex; align-items: center; gap: 6px; }
+.mulligan-deck-practice-ribbon > span:last-child { margin-left: auto; color: #91a7bd; }
+.mulligan-deck-practice-heading { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 15px; padding: 20px; border-bottom: 1px solid rgb(68 101 139 / 28%); }
+.mulligan-deck-practice-heading h3, .mulligan-deck-practice-empty h3, .mulligan-deck-practice-setup h3 { margin: 5px 0; color: #f2f7fc; font-size: 23px; letter-spacing: -.02em; }
+.mulligan-deck-practice-heading p, .mulligan-deck-practice-empty p, .mulligan-deck-practice-setup p { margin: 5px 0; color: #9cadbf; font-size: 12px; line-height: 1.5; }
+.mulligan-deck-practice-context { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 4px 9px; padding: 8px 11px; border: 1px solid rgb(54 178 205 / 24%); border-radius: 9px; background: #06121f; }
+.mulligan-deck-practice-context img { width: 33px; height: 46px; object-fit: cover; border-radius: 4px; grid-row: span 2; }
+.mulligan-deck-practice-context > span { display: grid; gap: 2px; }
+.mulligan-deck-practice-context strong { color: #edf7ff; font-size: 12px; }
+.mulligan-deck-practice-context small { color: #8fa7ba; font-size: 10px; }
+.mulligan-deck-practice-context .mulligan-deck-practice-initiative { color: #7cdbeb; font-size: 10px; grid-column: -2 / -1; }
+.mulligan-deck-practice-hand { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); align-items: start; gap: 12px; padding: 22px 20px; background: radial-gradient(ellipse at center bottom, rgb(32 139 174 / 10%), transparent 65%), rgb(3 12 22 / 38%); }
+.mulligan-deck-practice-card { display: grid; align-content: start; gap: 8px; min-width: 0; }
+.mulligan-deck-practice-card > strong { color: #dbeaf7; text-align: center; font-size: 12px; line-height: 1.35; }
+.mulligan-deck-practice .mulligan-deck-practice-pick { position: relative; display: block; width: 100%; padding: 0; overflow: hidden; border: 2px solid #344d67; border-radius: 10px; background: #07111e; box-shadow: 0 10px 22px rgb(0 0 0 / 28%); transition: transform 140ms ease, border-color 140ms ease; }
+.mulligan-deck-practice-pick > img, .mulligan-deck-practice-champions img { display: block; width: 100%; aspect-ratio: 744 / 1039; object-fit: cover; }
+.mulligan-deck-practice .mulligan-deck-practice-pick:not(:disabled):hover { border-color: #52d4e8; transform: translateY(-3px); }
+.mulligan-deck-practice .mulligan-deck-practice-pick:disabled { opacity: 1; cursor: default; }
+.mulligan-deck-practice-card[data-selected="true"] .mulligan-deck-practice-pick { border-color: #dba657; box-shadow: 0 0 20px rgb(219 166 87 / 17%); }
+.mulligan-deck-practice-card[data-replaced="true"] .mulligan-deck-practice-pick { border-color: #58c4de; }
+.mulligan-deck-practice-number { position: absolute; top: 7px; left: 7px; display: grid; place-items: center; width: 25px; height: 25px; border: 1px solid #57738c; border-radius: 50%; background: rgb(2 10 18 / 90%); color: #e9f7ff; font-size: 11px; font-weight: 900; }
+.mulligan-deck-practice-choice { position: absolute; inset: auto 0 0; padding: 8px 5px; background: rgb(3 14 24 / 93%); color: #bdebf4; font-size: 10px; font-weight: 900; letter-spacing: .07em; text-transform: uppercase; }
+.mulligan-deck-practice-card[data-selected="true"] .mulligan-deck-practice-choice { background: rgb(88 62 24 / 95%); color: #ffe3b3; }
+.mulligan-deck-practice .mulligan-deck-practice-read { display: inline-flex; justify-content: center; align-items: center; gap: 5px; padding: 5px; border: 0; background: transparent; color: #8cb9cf; font-size: 10px; }
+.mulligan-deck-practice-replaced { color: #88a6ba; font-size: 10px; text-align: center; line-height: 1.4; }
+.mulligan-deck-practice-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 10px; padding: 17px 20px; border-top: 1px solid rgb(68 101 139 / 28%); }
+.mulligan-deck-practice-actions > div { display: grid; gap: 4px; margin-right: auto; flex: 1 1 200px; }
+.mulligan-deck-practice-actions strong { color: #e1effb; font-size: 13px; }
+.mulligan-deck-practice-actions span { color: #94aabd; font-size: 11px; line-height: 1.4; }
+.mulligan-deck-practice-actions .mulligan-deck-practice-notice { color: #efc889; }
+.mulligan-deck-practice-rail { display: grid; gap: 12px; }
+.mulligan-deck-practice-rail > section { padding: 17px; }
+.mulligan-deck-practice-rail h4 { margin: 8px 0 5px; color: #f0f7fd; font-size: 16px; }
+.mulligan-deck-practice-rail p { margin: 9px 0; color: #9dafc0; font-size: 11px; line-height: 1.6; }
+.mulligan-deck-practice-rail small, .mulligan-deck-practice-empty small { color: #829bad; font-size: 10px; line-height: 1.5; }
+.mulligan-deck-practice-rail .mulligan-deck-practice-champion { display: flex; width: 100%; align-items: center; gap: 9px; padding: 10px 0 0; border: 0; background: transparent; color: #d4eaf7; text-align: left; }
+.mulligan-deck-practice-champion > img { width: 45px; height: 63px; flex: 0 0 45px; border-radius: 5px; }
+.mulligan-deck-practice-champion > span { display: grid; gap: 4px; }
+.mulligan-deck-practice-champion strong { font-size: 12px; }
+.mulligan-deck-practice-champion > svg { flex: 0 0 13px; }
+.mulligan-deck-practice-rail .mulligan-deck-practice-ungraded { padding-top: 9px; border-top: 1px solid rgb(86 123 159 / 24%); color: #c1d6e5; }
+.mulligan-deck-practice-art-fallback { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; width: 100%; aspect-ratio: 744 / 1039; padding: 15px; box-sizing: border-box; background: radial-gradient(ellipse at center, #183951, #081725); color: #d7edf9; text-align: center; }
+.mulligan-deck-practice-art-fallback > small, .mulligan-deck-practice-art-fallback > span { color: #8ca6ba; font-size: 11px; }
+.mulligan-deck-practice-champion > .mulligan-deck-practice-art-fallback { width: 45px; min-width: 45px; padding: 3px; font-size: 7px; }
+.mulligan-deck-practice-champion > .mulligan-deck-practice-art-fallback > small, .mulligan-deck-practice-champion > .mulligan-deck-practice-art-fallback > span { display: none; }
+.mulligan-deck-practice-empty { display: flex; align-items: center; flex-wrap: wrap; gap: 18px; min-height: 190px; padding: 28px; }
+.mulligan-deck-practice-empty > svg { color: #83d3e5; }
+.mulligan-deck-practice-empty > div { flex: 1 1 300px; }
+.mulligan-deck-practice-setup { padding: 24px; }
+.mulligan-deck-practice-champions { display: flex; flex-wrap: wrap; gap: 18px; margin-top: 20px; }
+.mulligan-deck-practice-champions > button { display: grid; gap: 8px; width: 165px; padding: 10px; border: 1px solid #355879; border-radius: 10px; background: #061521; color: #dceef9; text-align: center; }
+.mulligan-deck-practice-champions small { color: #8aa7b9; font-size: 10px; }
+.mulligan-deck-practice-zoom { width: min(470px, calc(100vw - 32px)); max-height: calc(100vh - 32px); box-sizing: border-box; padding: 18px; border: 1px solid #426784; border-radius: 14px; background: #071420; color: #e8f4fc; box-shadow: 0 20px 80px #0009; }
+.mulligan-deck-practice-zoom::backdrop { background: rgb(0 5 12 / 85%); }
+.mulligan-deck-practice-zoom > button { display: flex; margin: 0 0 12px auto; }
+.mulligan-deck-practice-zoom > img { display: block; width: auto; height: auto; max-height: calc(100vh - 190px); max-width: 100%; margin: auto; object-fit: contain; border-radius: 9px; }
+.mulligan-deck-practice-zoom h3 { margin: 12px 0 4px; font-size: 18px; }
+.mulligan-deck-practice-zoom p { margin: 0; color: #92aabc; font-size: 11px; }
+.mulligan-deck-practice button:focus-visible, .mulligan-deck-practice-setup button:focus-visible { outline: 2px solid #78e7fa; outline-offset: 3px; }
+@media (max-width: 1200px) { .mulligan-deck-practice { grid-template-columns: minmax(0, 1fr); } .mulligan-deck-practice-rail { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 650px) { .mulligan-deck-practice-hand { grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 16px; gap: 15px; } .mulligan-deck-practice-rail { grid-template-columns: minmax(0, 1fr); } .mulligan-deck-practice-heading, .mulligan-deck-practice-actions { padding: 16px; } .mulligan-deck-practice-heading h3 { font-size: 20px; } }
+@media (prefers-reduced-motion: reduce) { .mulligan-deck-practice .mulligan-deck-practice-pick { transition: none; } }

@@ -38,6 +38,7 @@ import {
   type DeckInsightRecordSlice
 } from "../shared/deckInsights";
 import { deckMatchesFor } from "../shared/deckPerformance";
+import { DEFAULT_DATE_FILTER, dateFilterLabel, isInDateFilter, type DateFilterValue } from "../shared/dateFilter";
 import { deckSnapshotHash } from "../shared/deckNotebook";
 import { chanceAtLeastOne } from "../shared/deckTracker";
 import { legendImageUrl } from "../shared/legendImages";
@@ -66,6 +67,7 @@ import {
 } from "./insightAnalysisCache";
 import { INSIGHT_CARD_CATALOG } from "./insightCardCatalog";
 import { DeckResultsReport } from "./DeckResultsReport";
+import { DateFilter } from "./DateFilter";
 
 const DECK_INSIGHT_CATALOG = INSIGHT_CARD_CATALOG;
 const DECK_RAW_ANALYSIS_CONCURRENCY = 2;
@@ -129,7 +131,7 @@ export function DeckInsightsView({
   onOpenReplay
 }: DeckInsightsViewProps) {
   const [deckId, setDeckId] = useState(() => activeDeckId || decks[0]?.id || "");
-  const [rangeDays, setRangeDays] = useState(0);
+  const [dateFilter, setDateFilter] = useState<DateFilterValue>(DEFAULT_DATE_FILTER);
   const [period, setPeriod] = useState<DeckPeriod>("all");
   const [versionScope, setVersionScope] = useState<DeckVersionScope>("all");
   const [section, setSection] = useState<DeckInsightsSection>("overview");
@@ -161,8 +163,8 @@ export function DeckInsightsView({
     [allDeckMatches, currentSnapshotHash, versionScope]
   );
   const timeScopedMatches = useMemo(
-    () => filterDeckInsightMatches(versionScopedMatches, rangeDays, period),
-    [period, rangeDays, versionScopedMatches]
+    () => filterDeckInsightMatches(versionScopedMatches, dateFilter, period),
+    [dateFilter, period, versionScopedMatches]
   );
   const matchupOptions = useMemo(() => uniqueValues(timeScopedMatches.map((match) => normalizeLegendName(match.opponentChampion))), [timeScopedMatches]);
   const scopedMatches = useMemo(
@@ -350,7 +352,7 @@ export function DeckInsightsView({
     : null;
   const scopeLabel = [
     period === "current-season" ? "Current season" : period === "preseason" ? "Pre-season" : "All seasons",
-    rangeDays ? `Last ${rangeDays} days` : "All history",
+    dateFilterLabel(dateFilter),
     opponentLegend || "All matchups",
     versionScope === "current" ? "Current list version" : `All linked versions${linkedVersionHashes.length ? ` (${linkedVersionHashes.length})` : ""}`,
     section === "cards" ? deckInsightStageScopeLabel(effectiveGameStage, hasCombinedEvidence) : "All game stages"
@@ -422,7 +424,7 @@ export function DeckInsightsView({
       <section className="deck-insights-scope" aria-label="Deck insight filters">
         <div><Filter size={15} /><span><strong>Evidence scope</strong><small>{scopeLabel}</small></span></div>
         <label><span>Season</span><select value={period} onChange={(event) => setPeriod(event.target.value as DeckPeriod)}><option value="all">Pre-season + current</option><option value="current-season">Current season</option><option value="preseason">Pre-season</option></select></label>
-        <label><span>Range</span><select value={rangeDays} onChange={(event) => setRangeDays(Number(event.target.value))}><option value={0}>All history</option><option value={30}>30 days</option><option value={90}>90 days</option><option value={180}>180 days</option></select></label>
+        <DateFilter value={dateFilter} onChange={setDateFilter} label="Match dates" presets={["all", "today", "7d", "30d", "90d", "180d", "date", "custom"]} />
         <label><span>Matchup</span><select value={opponentLegend} onChange={(event) => setOpponentLegend(event.target.value)}><option value="">All opponents</option>{matchupOptions.map((legend) => <option value={legend} key={legend}>{legend}</option>)}</select></label>
         <label><span>Deck version</span><select value={versionScope} onChange={(event) => setVersionScope(event.target.value as DeckVersionScope)}><option value="all">All linked versions</option><option value="current">Current list only</option></select></label>
       </section>
@@ -856,13 +858,12 @@ function eligibleMatchups(rows: ReturnType<typeof buildDeckInsightPerformance>["
   return [...rows].filter((row) => row.decisive >= 2).sort((left, right) => (mode === "best" ? right.winRate - left.winRate : left.winRate - right.winRate) || right.total - left.total);
 }
 
-function filterDeckInsightMatches(matches: MatchDraft[], rangeDays: number, period: DeckPeriod): MatchDraft[] {
-  const now = Date.now();
+export function filterDeckInsightMatches(matches: MatchDraft[], dateFilter: DateFilterValue, period: DeckPeriod, now = new Date()): MatchDraft[] {
   const currentSeason = Date.parse(`${MULLIGAN_LAB_CURRENT_SEASON_STARTED_ON}T00:00:00.000Z`);
   return matches.filter((match) => {
     const captured = Date.parse(match.capturedAt);
     if (!Number.isFinite(captured)) return false;
-    if (rangeDays && captured < now - rangeDays * 86_400_000) return false;
+    if (!isInDateFilter(match.capturedAt, dateFilter, now)) return false;
     if (period === "current-season" && captured < currentSeason) return false;
     if (period === "preseason" && captured >= currentSeason) return false;
     return true;

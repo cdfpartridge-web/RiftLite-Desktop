@@ -34,9 +34,9 @@ describe("Home launchpad", () => {
     const releaseNotesSource = appSource.slice(releaseNotesStart, releaseNotesEnd);
 
     expect(releaseNotesSource).toContain("version: APP_VERSION_META");
-    expect(releaseNotesSource).toContain("Fullscreen Play hides RiftLite's toolbar and navigation");
-    expect(releaseNotesSource).toContain("open game, zoom and normal navigation preference are preserved");
-    expect(releaseNotesSource).toContain("Atlas card artwork uses its native image rendering");
+    expect(releaseNotesSource).toContain("My active deck in Mulligan Lab now deals unlimited practice hands from your saved deck");
+    expect(releaseNotesSource).toContain("Game log in match history lets you read, search and copy");
+    expect(releaseNotesSource).toContain("specific date or date range");
     expect(releaseNotesSource).not.toContain("Search Rules");
     expect(releaseNotesSource).not.toContain("Deck Insights is now the default Insights view");
   });

@@ -659,10 +659,6 @@ describe("Mulligan Lab real-observation validation", () => {
     delete missingRegistryTime.source.cardRegistryGeneratedAt;
     expect(parseMulliganLabTargetPackResponse(missingRegistryTime, registry).status).toBe("invalid");
 
-    const wrongRegistrySize = structuredClone(apiTargetResponse()) as any;
-    wrongRegistrySize.source.cardRegistryPrints += 1;
-    expect(parseMulliganLabTargetPackResponse(wrongRegistrySize, registry).status).toBe("invalid");
-
     const invalidRegistryTime = structuredClone(apiTargetResponse()) as any;
     invalidRegistryTime.source.cardRegistryGeneratedAt = "2026-08-13";
     expect(parseMulliganLabTargetPackResponse(invalidRegistryTime, registry).status).toBe("invalid");
@@ -689,6 +685,45 @@ describe("Mulligan Lab real-observation validation", () => {
     const unexpectedSeasonField = structuredClone(apiTargetResponse()) as any;
     unexpectedSeasonField.source.seasonCoverage.userCount = 100;
     expect(parseMulliganLabTargetPackResponse(unexpectedSeasonField, registry).status).toBe("invalid");
+  });
+
+  it.each([-1, 1])("accepts known targeted cards when the server catalog has %i more prints", (difference) => {
+    const response = apiTargetResponse();
+    response.source.cardRegistryPrints = registry.byCode.size + difference;
+    expect(parseMulliganLabTargetPackResponse(response, registry)).toMatchObject({
+      status: "ready", accepted: 1, rejected: 0, issues: []
+    });
+  });
+
+  it.each([undefined, null, 0, -1, 1.5, "1180", true, NaN, Infinity])("rejects malformed targeted catalog count %s", (count) => {
+    const response = structuredClone(apiTargetResponse()) as any;
+    response.source.cardRegistryPrints = count;
+    const parsed = parseMulliganLabTargetPackResponse(response, registry);
+    expect(parsed.status).toBe("invalid");
+    expect(parsed.issues).toContainEqual({
+      path: "source.cardRegistryPrints", message: "Targeted registry size must be a positive integer."
+    });
+  });
+
+  it("rejects the entire targeted pack when a newer catalog includes an unknown returned card", () => {
+    const response = apiTargetResponse();
+    response.source.cardRegistryPrints = registry.byCode.size + 1;
+    const unknownDrill = structuredClone(response.drills[0]);
+    unknownDrill.id = `ml2_${"6".repeat(32)}`;
+    unknownDrill.hand[0] = { cardCode: "OGN-999", name: "Unknown card" };
+    response.drills.push(unknownDrill);
+    const parsed = parseMulliganLabTargetPackResponse(response, registry);
+    expect(parsed).toMatchObject({ status: "invalid", accepted: 0, rejected: 1, drills: [] });
+    expect(parsed.issues.some((issue) => issue.path === "drills[1].hand[0].cardCode")).toBe(true);
+  });
+
+  it("still checks returned card names when the catalog totals differ", () => {
+    const response = apiTargetResponse();
+    response.source.cardRegistryPrints = registry.byCode.size - 1;
+    response.drills[0].hand[0].name = "Incorrect card name";
+    const parsed = parseMulliganLabTargetPackResponse(response, registry);
+    expect(parsed).toMatchObject({ status: "invalid", accepted: 0, drills: [] });
+    expect(parsed.issues.some((issue) => issue.path === "drills[0].hand[0].name")).toBe(true);
   });
 
   it("rejects internally contradictory ready target resolutions", () => {

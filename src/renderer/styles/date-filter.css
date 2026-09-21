@@ -1,0 +1,87 @@
+.rl-date-filter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 8px 12px;
+  min-width: 0;
+  color-scheme: dark;
+}
+
+.rl-date-filter .rl-date-filter-field {
+  display: grid;
+  flex: 1 1 140px;
+  gap: 7px;
+  min-width: 0;
+  margin: 0;
+  color: #9db3c9;
+  font-size: 11px;
+}
+
+.rl-date-filter .rl-date-filter-field :is(select, input) {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  min-height: 38px;
+  padding: 8px 11px;
+  border: 1px solid #29485e;
+  border-radius: 8px;
+  background: #091724;
+  color: #d9ecf8;
+  font: inherit;
+}
+
+.rl-date-filter .rl-date-filter-field :is(select, input):focus-visible {
+  outline: 2px solid #65d4e5;
+  outline-offset: 2px;
+}
+
+.rl-date-filter .rl-date-filter-field input[aria-invalid="true"] {
+  border-color: #e9a2ad;
+}
+
+.rl-date-filter .rl-date-filter-error {
+  flex: 1 1 100%;
+  margin: 0;
+  color: #f3acb7;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.data-date-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 12px;
+  margin-bottom: 14px;
+  padding: 12px;
+  border: 1px solid #29485e;
+  border-radius: 10px;
+  background: #091724;
+}
+
+.data-date-toolbar > .rl-date-filter { flex: 1 1 220px; }
+.data-date-toolbar > .muted { margin: 0; font-size: 12px; }
+
+.review-primary-filters > .rl-date-filter,
+.matrix-filters > .rl-date-filter {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.review-matches .review-primary-filters:has(> .rl-date-filter input) {
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  align-items: start;
+}
+
+.review-primary-filters > .rl-date-filter:has(input),
+.matrix-filters > .rl-date-filter:has(input),
+.replay-filter-grid > .rl-date-filter:has(input) {
+  grid-column: 1 / -1;
+}
+
+.deck-insights-scope > .rl-date-filter {
+  display: flex;
+  grid-template-columns: none;
+  grid-column: 1 / -1;
+  order: 1;
+}

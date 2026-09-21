@@ -3598,6 +3598,36 @@ describe("RawCaptureService", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("keeps a stale unnumbered room separate when Atlas returns to a new Game 1 lobby", async () => {
+    const replayDirectory = await tempReplayDirectory();
+    const service = new RawCaptureService(fakeStore(settings({ enabled: true }, replayDirectory)));
+    await service.appendFrame(atlasFrame(JSON.stringify({
+      type: "authoritative_snapshot", gameInstanceId: "PREVIOUS", sequence: 456,
+      snapshot: { roomCode: "PREVIOUS", phase: "in_game", players: [] }
+    })));
+    await service.appendFrame(atlasFrame(JSON.stringify({ type: "join_shell", gameInstanceId: "NEW" })));
+    await service.appendFrame(atlasFrame(JSON.stringify({
+      type: "room_shell_sync", gameInstanceId: "NEW", sessionDoc: {
+        roomCode: "NEW", previousRoomCode: "PREVIOUS", seriesId: "series-new",
+        gameNumber: 1, phase: "lobby", matchFormat: "bo3"
+      }
+    })));
+    await service.appendFrame(atlasFrame(JSON.stringify({
+      type: "authoritative_snapshot", gameInstanceId: "NEW", sequence: 0,
+      snapshot: { roomCode: "NEW", phase: "battlefield_pick", players: [] }
+    })));
+
+    const saved = await service.finishForReplay(replay("new-series", "NEW"), { seriesId: "series-new" });
+    const payload = JSON.parse(await readFile(saved.rawCapture!.localPath!, "utf8"));
+    expect(payload.capture.identity.roomCodes).toEqual(["NEW"]);
+    expect(payload.messages.map((message: { raw: string }) => JSON.parse(message.raw).gameInstanceId)).toEqual([
+      "NEW", "NEW", "NEW"
+    ]);
+    const prior = await service.finishForReplay(replay("previous-room", "PREVIOUS"));
+    expect(prior.rawCapture?.roomCodes).toEqual(["PREVIOUS"]);
+    expect(prior.rawCapture?.messageCount).toBe(1);
+  });
+
   it("keeps one Atlas BO3 raw session across per-game room code changes", async () => {
     const replayDirectory = await tempReplayDirectory();
     const store = fakeStore(settings({ enabled: true }, replayDirectory));

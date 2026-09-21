@@ -150,7 +150,7 @@ describe("match review lifecycle integration", () => {
   });
 
   it("keeps durable pending reviews out of local aggregate statistics", () => {
-    expect(appSource).toContain("for (const match of localMatchesEligibleForStats(matches))");
+    expect(appSource).toContain("for (const match of localMatchesEligibleForStats(datedMatches))");
     expect(appSource).toContain("validAnalytics(localMatchesEligibleForStats(matches).map(localToAnalytics))");
     expect(overlaySource).toContain("const statsMatches = localMatchesEligibleForStats(matches)");
     expect(overlaySource).toContain("const latest = statsMatches[0]");

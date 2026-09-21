@@ -35,7 +35,7 @@ describe("post-match lab training bridge", () => {
 
   it("consumes matchup and deck context once when Mulligan Lab mounts", () => {
     expect(mulliganSource).toContain('consumeLabTrainingHandoff(window.localStorage, "mulligan")');
-    expect(mulliganSource).toContain('handoffDeck && activeDeckFingerprint ? "active-deck" : "matchup"');
+    expect(mulliganSource).toContain('handoffDeck ? "active-deck" : "matchup"');
     expect(mulliganSource).toContain("LAB_TRAINING_LEGEND_NAME_BY_CANONICAL.get(normalizeLegendName(trainingHandoff?.playerLegend");
     expect(mulliganSource).toContain("LAB_TRAINING_LEGEND_NAME_BY_CANONICAL.get(normalizeLegendName(trainingHandoff?.opponentLegend");
     expect(mulliganSource).toContain('trainingHandoff?.wentFirst ?? "all"');

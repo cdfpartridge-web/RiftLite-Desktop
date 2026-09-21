@@ -1,3 +1,5 @@
+import { DateFilter } from "./DateFilter";
+import { DEFAULT_DATE_FILTER, dateFilterLabel, isInDateFilter, type DateFilterValue } from "../shared/dateFilter";
 import React, { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { createDefaultSettings } from "../shared/settingsDefaults";
 import { useReplayVoicePlayback } from "./useReplayVoicePlayback";
@@ -5,6 +7,8 @@ import { useOwnedPointerGesture } from "./useOwnedPointerGesture";
 import { useWindowFullscreen } from "./useWindowFullscreen";
 import { LiveDecisionMarker } from "./LiveDecisionMarker";
 import { AtlasMatchDeckDialog, AtlasMatchDeckPanel } from "./AtlasHistoryDecks";
+import { AtlasGameLogDialog } from "./AtlasGameLogDialog";
+import { canReadAtlasMatchGameLog } from "../shared/atlasMatchGameLog";
 import { canImportAtlasHistory } from "../shared/atlasHistory";
 import { createRoot } from "react-dom/client";
 import QRCode from "qrcode";
@@ -357,12 +361,10 @@ import {
   MULLIGAN_LAB_TRAINING_STORAGE_KEY,
   completeMulliganLabTrainingSession,
   initialMulliganLabTrainingState,
-  mulliganLabApiDeckFingerprintFromSnapshot,
   mulliganLabChoiceEvidence,
   mulliganLabCurveCheck,
   mulliganLabDeckCurveProfile,
   mulliganLabIdentityDecisions,
-  mulliganLabLegendCodeFromSnapshot,
   mulliganLabLegendOptions,
   mulliganLabMasterySummary,
   mulliganLabReplacementOddsForDrill,
@@ -430,6 +432,7 @@ import {
   type HomeLiveTakeoverPlayerHandle,
 } from "./HomeLiveTakeoverPlayer";
 import { MulliganLabIntro } from "./MulliganLabIntro";
+import { MulliganDeckPractice } from "./MulliganDeckPractice";
 import { RULES_SEARCH_DRAWER_ID, RulesSearchDrawer } from "./RulesSearchDrawer";
 import { SideboardLabView } from "./SideboardLabView";
 import { TrainingLabsIntro } from "./TrainingLabsIntro";
@@ -565,11 +568,12 @@ const LAB_TRAINING_LEGEND_NAMES = new Set(LAB_TRAINING_LEGEND_NAME_BY_CANONICAL.
 const RELEASE_NOTES = {
   version: APP_VERSION_META,
   title: `RiftLite v${APP_VERSION_META}`,
-  intro: "More room for your game in fullscreen, with smoother Atlas card artwork.",
+  intro: "Practise with your exact deck and read your captured Atlas game logs.",
   items: [
-    "Fullscreen Play hides RiftLite's toolbar and navigation so the game fills the screen. Press F11 to restore the normal layout.",
-    "Your open game, zoom and normal navigation preference are preserved when entering or leaving fullscreen. Holding F11 no longer repeatedly switches modes.",
-    "Atlas card artwork uses its native image rendering for smoother text and edges, including alternate artwork. Card images, positions, rotations and controls are preserved."
+    "My active deck in Mulligan Lab now deals unlimited practice hands from your saved deck, with Chosen Champion setup, redraws and no grading or other-deck fallback.",
+    "Game log in match history lets you read, search and copy retained Atlas text logs, including separate games in a best-of-three match.",
+    "Filter matches, replays and reports by a specific date or date range.",
+    "Fixed valid Mulligan training packs being rejected after card catalog updates, and kept new Atlas matches separate from stale room captures."
   ]
 };
 const RIOT_LEGAL_NOTICE = `RiftLite was created under Riot Games' "Legal Jibber Jabber" policy using assets owned by Riot Games. Riot Games does not endorse or sponsor this project.`;
@@ -974,6 +978,7 @@ type MatrixFilters = {
   deckPresence: string;
   battlefield: string;
   flags: string;
+  date: DateFilterValue;
 };
 
 type MatchHistoryFilters = {
@@ -988,7 +993,7 @@ type MatchHistoryFilters = {
   opponentLegend: string;
   deck: string;
   deckPresence: string;
-  range: string;
+  range: DateFilterValue;
   sync: string;
   notes: string;
   testingSession: string;
@@ -1004,7 +1009,7 @@ type LeaderboardFilters = {
   search: string;
   legend: string;
   format: string;
-  range: string;
+  range: DateFilterValue;
   minGames: string;
   sort: LeaderboardSort;
 };
@@ -1040,7 +1045,7 @@ const DEFAULT_MATCH_HISTORY_FILTERS: MatchHistoryFilters = {
   opponentLegend: "",
   deck: "",
   deckPresence: "",
-  range: "all",
+  range: DEFAULT_DATE_FILTER,
   sync: "",
   notes: "",
   testingSession: "",
@@ -1059,7 +1064,8 @@ const DEFAULT_MATRIX_FILTERS: MatrixFilters = {
   seat: "",
   deckPresence: "",
   battlefield: "",
-  flags: ""
+  flags: "",
+  date: DEFAULT_DATE_FILTER
 };
 
 const DEFAULT_PERSONAL_MATRIX_FILTERS: MatrixFilters = {
@@ -1168,7 +1174,7 @@ const DEFAULT_LEADERBOARD_FILTERS: LeaderboardFilters = {
   search: "",
   legend: "",
   format: "",
-  range: "all",
+  range: DEFAULT_DATE_FILTER,
   minGames: "0",
   sort: "score"
 };
@@ -9660,15 +9666,18 @@ function HomeView({
   onSetDefaultGamePlatform: (platform: GameProvider) => Promise<void>;
   onOpenReplayForMatch: (matchId: string) => void;
 }) {
+  const [dateFilter, setDateFilter] = useState<DateFilterValue>(DEFAULT_DATE_FILTER);
+  const datedMatches = useMemo(() => matches.filter((match) => isInDateFilter(match.capturedAt, dateFilter)), [matches, dateFilter]);
+  const datedCommunityMatches = useMemo(() => communityMatches.filter((match) => isInDateFilter(communityMatchDate(match), dateFilter)), [communityMatches, dateFilter]);
   const activeDeck = settings.activeDeckId ? decks.find((deck) => deck.id === settings.activeDeckId) ?? null : null;
   const recentMatches = useMemo(
-    () => [...matches].sort((a, b) => b.capturedAt.localeCompare(a.capturedAt)).slice(0, 3),
-    [matches]
+    () => [...datedMatches].sort((a, b) => b.capturedAt.localeCompare(a.capturedAt)).slice(0, 3),
+    [datedMatches]
   );
   const replayByMatch = useMemo(() => new Map(replays.map((replay) => [replay.matchId, replay])), [replays]);
   const deckPerformances = useMemo(
-    () => decks.map((deck) => buildDeckPerformance(deck, matches)),
-    [decks, matches]
+    () => decks.map((deck) => buildDeckPerformance(deck, datedMatches)),
+    [decks, datedMatches]
   );
   const mostRecentlyPlayedPerformance = useMemo(
     () => [...deckPerformances]
@@ -9682,7 +9691,7 @@ function HomeView({
   );
   const featuredDeck = activeDeck ?? mostRecentlyPlayedPerformance?.deck ?? mostRecentlyImportedDeck;
   const featuredDeckPerformance = featuredDeck
-    ? deckPerformances.find((performance) => performance.deck.id === featuredDeck.id) ?? buildDeckPerformance(featuredDeck, matches)
+    ? deckPerformances.find((performance) => performance.deck.id === featuredDeck.id) ?? buildDeckPerformance(featuredDeck, datedMatches)
     : null;
   const featuredDeckSource = activeDeck?.id === featuredDeck?.id
     ? "Active deck"
@@ -9705,7 +9714,7 @@ function HomeView({
     ? {
         deckTitle: featuredDeck.title || `${featuredDeckLegend} deck`,
         legend: featuredDeckLegend,
-        sourceLabel: featuredDeckSource,
+        sourceLabel: dateFilter.preset === "all" ? featuredDeckSource : `${featuredDeckSource} · ${dateFilterLabel(dateFilter)}`,
         totalGames: featuredDeckPerformance.overview.total,
         decisiveGames: featuredDeckPerformance.overview.decisive,
         winRateLabel: featuredDeckPerformance.overview.winRateLabel,
@@ -9762,9 +9771,9 @@ function HomeView({
   const featuredTheme = communitySpotlightTheme(featuredCreator.id);
   const featuredPartner = featuredPartners[featuredPartnerIndex % Math.max(1, featuredPartners.length)] ?? null;
   const communityDeckSummary = useMemo(() => {
-    const deckRows = filterCommunityDeckMatches(communityMatches, "", "", "with", true);
+    const deckRows = filterCommunityDeckMatches(datedCommunityMatches, "", "", "with", true);
     const meta = buildCommunityDeckMeta(deckRows);
-    const hasCommunityRows = communityMatches.length > 0;
+    const hasCommunityRows = datedCommunityMatches.length > 0;
     const deckCount = meta.totalDecks;
     const legendCount = meta.legends.length;
     return {
@@ -9775,7 +9784,7 @@ function HomeView({
           : "Community deck meta",
       legends: meta.legends.slice(0, 8).map((row) => row.legend)
     };
-  }, [communityMatches]);
+  }, [datedCommunityMatches]);
   const communityDeckVisualLegends = communityDeckSummary.legends.length
     ? communityDeckSummary.legends
     : ["Diana", "Vex", "Irelia", "Annie", "Pyke", "LeBlanc", "Kai'Sa", "Ahri"];
@@ -10113,6 +10122,7 @@ function HomeView({
         </button>
       </section>
 
+      <div className="data-date-toolbar"><DateFilter label="Stats dates" value={dateFilter} onChange={setDateFilter} /><span className="muted">Deck performance, recent matches and community deck data.</span></div>
       <section className="modern-home-layout" data-live-takeover={Boolean(activeLiveTakeover)}>
         <div className="modern-home-main">
           <section className="modern-home-feature-row" aria-label="Deck tools">
@@ -10524,18 +10534,8 @@ function MulliganLabView({ decks, settings, onNavigate }: {
   const handoffDeck = trainingHandoff?.deckId ? decks.find((deck) => deck.id === trainingHandoff.deckId) ?? null : null;
   const activeDeck = handoffDeck ?? (settings.activeDeckId ? decks.find((deck) => deck.id === settings.activeDeckId) ?? null : null);
   const activeLegend = normalizeLegendName(activeDeck?.legend ?? "");
-  const activeDeckFingerprint = useMemo(
-    () => activeDeck?.snapshotJson
-      ? mulliganLabApiDeckFingerprintFromSnapshot(activeDeck.snapshotJson, MULLIGAN_LAB_REGISTRY)
-      : "",
-    [activeDeck?.snapshotJson]
-  );
   const activeDeckHasSideboard = useMemo(
     () => Boolean(activeDeck?.snapshotJson && parseCommunityDeckSnapshot(activeDeck.snapshotJson)?.sideboard.length),
-    [activeDeck?.snapshotJson]
-  );
-  const activeLegendCodeFromSnapshot = useMemo(
-    () => activeDeck?.snapshotJson ? mulliganLabLegendCodeFromSnapshot(activeDeck.snapshotJson, MULLIGAN_LAB_REGISTRY) : "",
     [activeDeck?.snapshotJson]
   );
   const [loadState, setLoadState] = useState<MulliganLabLoadState>("loading");
@@ -10547,7 +10547,7 @@ function MulliganLabView({ decks, settings, onNavigate }: {
   const [targetLoadMessage, setTargetLoadMessage] = useState("");
   const [targetLoadNonce, setTargetLoadNonce] = useState(0);
   const [mode, setMode] = useState<MulliganLabMode>(() => trainingHandoff
-    ? handoffDeck && activeDeckFingerprint ? "active-deck" : "matchup"
+    ? handoffDeck ? "active-deck" : "matchup"
     : "daily");
   const [playerLegend, setPlayerLegend] = useState(() => LAB_TRAINING_LEGEND_NAME_BY_CANONICAL.get(normalizeLegendName(trainingHandoff?.playerLegend ?? "")) ?? "");
   const [opponentLegend, setOpponentLegend] = useState(() => LAB_TRAINING_LEGEND_NAME_BY_CANONICAL.get(normalizeLegendName(trainingHandoff?.opponentLegend ?? "")) ?? "");
@@ -10643,9 +10643,9 @@ function MulliganLabView({ decks, settings, onNavigate }: {
     : opponentLegendOptions[0] ?? "";
   const selectedPlayerLegendCard = registryLegendOptions.find((card) => card.name === effectivePlayerLegend) ?? null;
   const selectedOpponentLegendCard = registryLegendOptions.find((card) => card.name === effectiveOpponentLegend) ?? null;
-  const activeDeckLegendCode = activeLegendCodeFromSnapshot || activeLegendOption?.code || "";
-  const targetedMode = mode === "active-deck" || mode === "matchup";
-  const targetPlayerLegendCode = mode === "active-deck" ? activeDeckLegendCode : selectedPlayerLegendCard?.code ?? "";
+  const deckPracticeMode = mode === "active-deck";
+  const targetedMode = mode === "matchup";
+  const targetPlayerLegendCode = selectedPlayerLegendCard?.code ?? "";
   const targetOpponentLegendCode = selectedOpponentLegendCard?.code ?? "";
 
   useEffect(() => {
@@ -10656,7 +10656,7 @@ function MulliganLabView({ decks, settings, onNavigate }: {
     }
     if (!targetPlayerLegendCode) {
       setTargetPack(null);
-      setTargetLoadMessage(mode === "active-deck" ? "Choose an active deck with a registry-confirmed Legend first." : "Choose a registry-confirmed Legend first.");
+      setTargetLoadMessage("Choose a registry-confirmed Legend first.");
       setTargetLoadState("unavailable");
       return;
     }
@@ -10666,7 +10666,6 @@ function MulliganLabView({ decks, settings, onNavigate }: {
     const url = new URL(MULLIGAN_LAB_TARGET_URL);
     url.searchParams.set("playerLegend", targetPlayerLegendCode);
     if (targetOpponentLegendCode) url.searchParams.set("opponentLegend", targetOpponentLegendCode);
-    if (mode === "active-deck" && activeDeckFingerprint) url.searchParams.set("deckFingerprint", activeDeckFingerprint);
     if (seat !== "all") url.searchParams.set("initiative", seat === "1st" ? "first" : "second");
     url.searchParams.set("limit", "12");
     setTargetLoadState("loading");
@@ -10701,12 +10700,13 @@ function MulliganLabView({ decks, settings, onNavigate }: {
       window.clearTimeout(timeout);
       controller.abort();
     };
-  }, [activeDeckFingerprint, mode, seat, targetLoadNonce, targetOpponentLegendCode, targetPlayerLegendCode, targetedMode]);
+  }, [seat, targetLoadNonce, targetOpponentLegendCode, targetPlayerLegendCode, targetedMode]);
 
   const effectivePack = targetedMode ? targetPack : pack;
   const effectiveLoadState = targetedMode ? targetLoadState : loadState;
   const effectiveLoadMessage = targetedMode ? targetLoadMessage : loadMessage;
-  const readyPack = effectivePack?.status === "ready" ? effectivePack : null;
+  // Local deck practice never consumes a community drill or contributes to its grades/history.
+  const readyPack = !deckPracticeMode && effectivePack?.status === "ready" ? effectivePack : null;
   const registryConfirmedDrills = readyPack?.drills ?? [];
   const reviewDrillIds = useMemo(() => new Set(mulliganLabReviewDrillIds(trainingState)), [trainingState]);
 
@@ -10715,9 +10715,8 @@ function MulliganLabView({ decks, settings, onNavigate }: {
     if (seat !== "all") drills = drills.filter((drill) => drill.wentFirst === seat);
     if (mode === "daily") {
       drills = rankMulliganLabDailyDrills(drills, 5);
-    } else if (mode === "active-deck" || mode === "matchup") {
-      // The targeted endpoint already resolves exact-deck -> matchup ->
-      // player-Legend fallback against the full indexed corpus.
+    } else if (mode === "matchup") {
+      // Community matchup practice can use the endpoint's disclosed broader cohort.
       drills = drills.slice(0, 12);
     } else if (mode === "review") {
       // Freeze this run's queue. Correcting an answer updates future Review
@@ -10915,6 +10914,7 @@ function MulliganLabView({ decks, settings, onNavigate }: {
 
   useEffect(() => {
     function handleTrainerKeyDown(event: KeyboardEvent) {
+      if (deckPracticeMode) return;
       const target = event.target instanceof HTMLElement ? event.target : null;
       const editing = target && (target.isContentEditable || ["INPUT", "SELECT", "TEXTAREA"].includes(target.tagName));
       const interactive = target?.closest('button, a[href], input, select, textarea, summary, [role="button"], [role="link"], [contenteditable="true"], [tabindex]:not([tabindex="-1"])');
@@ -10971,12 +10971,14 @@ function MulliganLabView({ decks, settings, onNavigate }: {
         <div>
           <span className="eyebrow">RiftLite training</span>
           <h2>Mulligan Lab</h2>
-          <p>Train the decision before turn one with matchup-wide patterns from anonymous community Web Replays across the available pre-season and current-season history.</p>
+          <p>{deckPracticeMode
+            ? "Practise opening hands and mulligans with your saved deck. Deal new hands as often as you like."
+            : "Train the decision before turn one with matchup-wide patterns from anonymous community Web Replays across the available pre-season and current-season history."}</p>
         </div>
         <div className="mulligan-lab-hero-actions">
-          <div className="mulligan-lab-freshness" data-state={effectiveLoadState}>
+          <div className="mulligan-lab-freshness" data-state={deckPracticeMode ? "ready" : effectiveLoadState}>
             <RefreshCw size={17} />
-          <span><small>{targetedMode ? "Full-corpus query" : "Rotating daily pack"}</small><strong>{effectiveLoadState === "loading" ? "Checking…" : dataDateLabel}</strong></span>
+          <span><small>{deckPracticeMode ? "Your deck practice" : targetedMode ? "Full-corpus query" : "Rotating daily pack"}</small><strong>{deckPracticeMode ? "No community data needed" : effectiveLoadState === "loading" ? "Checking…" : dataDateLabel}</strong></span>
           </div>
           <button
             type="button"
@@ -11008,19 +11010,20 @@ function MulliganLabView({ decks, settings, onNavigate }: {
 
       <section className="mulligan-lab-filter-bar">
         <label>
-          My legend ({targetedMode ? "full corpus" : "today’s pack"})
+          My legend ({deckPracticeMode ? "your deck" : targetedMode ? "full corpus" : "today’s pack"})
           <select
             value={mode === "daily" || mode === "review" ? "" : mode === "active-deck" ? activeLegendOption?.name ?? "" : effectivePlayerLegend}
             disabled={mode === "daily" || mode === "review" || mode === "active-deck" || !playerLegendOptions.length}
             onChange={(event) => { setPlayerLegend(event.target.value); setOpponentLegend(""); }}
           >
             {mode === "daily" ? <option value="">Daily mix</option> : mode === "review" ? <option value="">Review mix</option> : null}
+            {deckPracticeMode && !activeLegendOption ? <option value="">Choose an active deck</option> : null}
             {!playerLegendOptions.length ? <option value="">No qualifying legends</option> : null}
             {playerLegendOptions.map((legend) => <option value={legend} key={legend}>{legend}</option>)}
           </select>
         </label>
         <label>
-          Opponent ({targetedMode ? "full corpus" : "today’s pack"})
+          Opponent ({deckPracticeMode ? "practice context" : targetedMode ? "full corpus" : "today’s pack"})
           <select
             value={mode === "daily" || mode === "review" ? "" : effectiveOpponentLegend}
             disabled={mode === "daily" || mode === "review" || !opponentLegendOptions.length}
@@ -11040,11 +11043,20 @@ function MulliganLabView({ decks, settings, onNavigate }: {
           </select>
         </label>
         <div className="mulligan-lab-source-note">
-          <Shield size={15} /> Real observed hand · {hasAllHistoryPolicy ? "pre-season + current-season corpus" : "verified replay corpus"} · {readyPack?.targetQuery?.resolved.scope === "exact-deck" ? "exact-deck hand filter · card guidance scope shown separately" : readyPack?.targetQuery?.resolved.scope === "matchup" ? "full-corpus matchup hand filter" : readyPack?.targetQuery ? "legend-wide hand fallback · not graded" : "daily hand rotation · card guidance scope shown per card"}
+          <Shield size={15} /> {deckPracticeMode ? "Generated practice hands · your saved deck only · ungraded" : <>Real observed hand · {hasAllHistoryPolicy ? "pre-season + current-season corpus" : "verified replay corpus"} · {readyPack?.targetQuery?.resolved.scope === "exact-deck" ? "exact-deck hand filter · card guidance scope shown separately" : readyPack?.targetQuery?.resolved.scope === "matchup" ? "full-corpus matchup hand filter" : readyPack?.targetQuery ? "legend-wide hand fallback · not graded" : "daily hand rotation · card guidance scope shown per card"}</>}
         </div>
       </section>
 
-      {effectiveLoadState !== "ready" ? (
+      {deckPracticeMode ? (
+        <MulliganDeckPractice
+          deck={activeDeck}
+          registry={MULLIGAN_LAB_REGISTRY}
+          opponent={selectedOpponentLegendCard}
+          initiative={seat}
+          keyboardEnabled={!introOpen}
+          onChooseDeck={() => onNavigate("decks", { deckFocus: "saved" })}
+        />
+      ) : effectiveLoadState !== "ready" ? (
         <MulliganLabUnavailableState
           state={effectiveLoadState}
           message={effectiveLoadMessage}
@@ -11082,9 +11094,7 @@ function MulliganLabView({ decks, settings, onNavigate }: {
               ? "Reliable matchup differences become review items on this device. Train a few hands first; items return here when their drill is present in the rotating pack."
               : `RiftLite only includes exact observed four-card openings with registry-confirmed artwork. Eligible matchup cohorts rotate through successive daily packs; early cohorts stay clearly labelled until they reach ${MULLIGAN_LAB_MIN_ELIGIBLE_HANDS} hands from ${MULLIGAN_LAB_MIN_UNIQUE_PLAYERS} players.`}</p>
           </div>
-          {mode === "active-deck" && !activeDeck ? (
-            <button type="button" className="secondary" onClick={() => onNavigate("decks", { deckFocus: "saved" })}>Choose an active deck</button>
-          ) : <button type="button" className="secondary" onClick={() => { setMode("daily"); setSeat("all"); }}>Try Daily 5</button>}
+          <button type="button" className="secondary" onClick={() => { setMode("daily"); setSeat("all"); }}>Try Daily 5</button>
         </section>
       ) : (
         <section className="mulligan-lab-workspace">
@@ -11606,6 +11616,9 @@ function MatchupLabView({
   onNavigate: (view: ActiveView, options?: NavigationOptions) => void;
   onRefreshCommunity: () => Promise<void>;
 }) {
+  const [dateFilter, setDateFilter] = useState<DateFilterValue>(DEFAULT_DATE_FILTER);
+  const datedMatches = useMemo(() => matches.filter((match) => isInDateFilter(match.capturedAt, dateFilter)), [matches, dateFilter]);
+  const datedCommunityMatches = useMemo(() => communityMatches.filter((match) => isInDateFilter(communityMatchDate(match), dateFilter)), [communityMatches, dateFilter]);
   const activeDeck = settings.activeDeckId ? decks.find((deck) => deck.id === settings.activeDeckId) ?? null : null;
   const [comparisonLeftKey, setComparisonLeftKey] = useState("");
   const [comparisonRightKey, setComparisonRightKey] = useState("");
@@ -11634,7 +11647,7 @@ function MatchupLabView({
       battlefields: Map<string, number>;
       decks: Map<string, number>;
     }>();
-    for (const match of localMatchesEligibleForStats(matches)) {
+    for (const match of localMatchesEligibleForStats(datedMatches)) {
       const mine = cleanLegend(match.myChampion);
       const opponent = cleanLegend(match.opponentChampion);
       if (!mine || !opponent || match.hiddenFromStats) {
@@ -11670,7 +11683,7 @@ function MatchupLabView({
       rows.set(key, current);
     }
     return [...rows.values()].sort((a, b) => b.matches - a.matches || b.latestAt - a.latestAt);
-  }, [matches, replayMatchIds]);
+  }, [datedMatches, replayMatchIds]);
 
   const personalLegendOptions = useMemo(() => {
     const totals = new Map<string, number>();
@@ -11690,7 +11703,7 @@ function MatchupLabView({
 
   const communityRows = useMemo(() => {
     const rows = new Map<string, { mine: string; opponent: string; matches: number; wins: number; losses: number; deckRows: number }>();
-    for (const match of communityMatches) {
+    for (const match of datedCommunityMatches) {
       if (match.scope !== "community" || match.superseded) {
         continue;
       }
@@ -11710,7 +11723,7 @@ function MatchupLabView({
       rows.set(key, current);
     }
     return [...rows.values()].sort((a, b) => b.matches - a.matches || b.wins - a.wins).slice(0, 6);
-  }, [communityMatches]);
+  }, [datedCommunityMatches]);
 
   const activeDeckPreview = useMemo(() => {
     if (!activeDeck?.snapshotJson) {
@@ -11728,8 +11741,8 @@ function MatchupLabView({
   }, [activeDeck]);
 
   const communityDeckMeta = useMemo(
-    () => buildCommunityDeckMeta(filterCommunityDeckMatches(communityMatches, "", "", "with", true)),
-    [communityMatches]
+    () => buildCommunityDeckMeta(filterCommunityDeckMatches(datedCommunityMatches, "", "", "with", true)),
+    [datedCommunityMatches]
   );
 
   const savedDeckSources = useMemo(
@@ -11806,16 +11819,16 @@ function MatchupLabView({
   ], [comparisonRows]);
 
   const recentReplayMatches = useMemo(() => {
-    return matches
+    return datedMatches
       .filter((match) => replayMatchIds.has(match.id))
       .sort((a, b) => (Date.parse(b.capturedAt) || 0) - (Date.parse(a.capturedAt) || 0))
       .slice(0, 3);
-  }, [matches, replayMatchIds]);
+  }, [datedMatches, replayMatchIds]);
 
   const totalKnownLocalMatches = personalRows.reduce((sum, row) => sum + row.matches, 0);
   const totalCommunityMatches = communityRows.reduce((sum, row) => sum + row.matches, 0);
   const deckContextRows = communityRows.reduce((sum, row) => sum + row.deckRows, 0);
-  const replayEvidenceCount = matches.filter((match) => replayMatchIds.has(match.id)).length;
+  const replayEvidenceCount = datedMatches.filter((match) => replayMatchIds.has(match.id)).length;
   const heroRow = personalRows[0] ?? communityRows[0] ?? null;
   const personalTopMatchup = personalRows[0] ?? null;
   const personalWinRate = personalTopMatchup ? winRate(personalTopMatchup.wins, personalTopMatchup.wins + personalTopMatchup.losses + personalTopMatchup.draws) : 0;
@@ -11832,6 +11845,7 @@ function MatchupLabView({
 
   return (
     <section className="dashboard-page home-page matchup-lab-page">
+      <div className="data-date-toolbar"><DateFilter value={dateFilter} onChange={setDateFilter} /><span className="muted">Applies to personal and community matchup data.</span></div>
       <section className="home-hero matchup-lab-hero">
         <div>
           <span className="eyebrow">RiftLite lab</span>
@@ -14851,7 +14865,7 @@ function TeamsPanel({
             {canManage && teamRows.length ? (
               <div className="rail-card stack">
                 <h2>Team match controls</h2>
-                {teamRows.slice(0, 12).map((match) => (
+                {teamRows.filter((match) => isInDateFilter(communityMatchDate(match), teamFilters.date)).slice(0, 12).map((match) => (
                   <div className="social-row" key={match.id}>
                     <span>{match.myChampion || "Unknown"} vs {match.opponentChampion || "Unknown"} - {match.result} {match.score}</span>
                     <button type="button" className="danger-lite" onClick={() => void removeTeamSyncedMatch(match.id)} disabled={busy}>
@@ -17215,6 +17229,7 @@ function MatchesView({
   const [combineModalOpen, setCombineModalOpen] = useState(false);
   const [replayPickerMatchId, setReplayPickerMatchId] = useState("");
   const [deckMatchId, setDeckMatchId] = useState("");
+  const [gameLogMatchId, setGameLogMatchId] = useState("");
   const [targetHubId, setTargetHubId] = useState(ALL_ENABLED_HUBS_VALUE);
   const [targetTeamId, setTargetTeamId] = useState(ALL_ENABLED_HUBS_VALUE);
   const [syncStatus, setSyncStatus] = useState("");
@@ -17250,13 +17265,18 @@ function MatchesView({
     [replayByMatch, selectedMatch]
   );
   const replayPickerMatch = replayPickerMatchId ? matchById.get(replayPickerMatchId) : undefined;
+  const gameLogMatch = gameLogMatchId ? matchById.get(gameLogMatchId) : undefined;
+  const gameLogSegments = useMemo(
+    () => gameLogMatch ? replaySegmentsForMatch(gameLogMatch, replayByMatch) : [],
+    [gameLogMatch, replayByMatch]
+  );
   const replayPickerSegments = useMemo(
     () => replayPickerMatch ? replaySegmentsForMatch(replayPickerMatch, replayByMatch) : [],
     [replayByMatch, replayPickerMatch]
   );
   const stats = useMemo(() => localMatchStats(filteredMatches), [filteredMatches]);
   const filtersActive = (Object.keys(filters) as Array<keyof MatchHistoryFilters>)
-    .some((key) => filters[key] !== DEFAULT_MATCH_HISTORY_FILTERS[key]);
+    .some((key) => (key === "range" ? filters.range.preset !== "all" : filters[key] !== DEFAULT_MATCH_HISTORY_FILTERS[key]));
   const enabledHubs = useMemo(() => settings.activeHubs.filter((hub) => hub.sync), [settings.activeHubs]);
   const enabledTeams = useMemo(() => (settings.activeTeams ?? []).filter((team) => team.sync && team.role), [settings.activeTeams]);
   const syncableMatches = useMemo(() => filteredMatches.filter(isPrivateHubSyncableMatch), [filteredMatches]);
@@ -17287,7 +17307,7 @@ function MatchesView({
   const latestSession = useMemo(() => testingSessions[0] ?? null, [testingSessions]);
   const historyTotal = filters.combinedOriginals ? matches.length : activeMatches.length;
   const activeFilterEntries = (Object.keys(filters) as Array<keyof MatchHistoryFilters>)
-    .filter((key) => filters[key] !== DEFAULT_MATCH_HISTORY_FILTERS[key]);
+    .filter((key) => (key === "range" ? filters.range.preset !== "all" : filters[key] !== DEFAULT_MATCH_HISTORY_FILTERS[key]));
   const additionalFilterCount = activeFilterEntries.filter((key) => !["search", "season", "range"].includes(key)).length;
   const filterLabels: Record<keyof MatchHistoryFilters, string> = {
     season: "Season", search: "Search", legend: "Legend", myLegend: "My legend", opponentLegend: "Opponent legend",
@@ -17296,10 +17316,10 @@ function MatchesView({
   };
 
   function filterValueLabel(key: keyof MatchHistoryFilters) {
-    const value = filters[key];
+    if (key === "range") return dateFilterLabel(filters.range);
+    const value = String(filters[key]);
     if (key === "season") return COMMUNITY_SEASONS.find((season) => season.id === value)?.label || "All seasons";
     if (key === "testingSession") return testingSessions.find((session) => session.id === value)?.label || "No session";
-    if (key === "range") return ({ all: "All time", today: "Today", "7d": "Last 7 days", "30d": "Last 30 days" } as Record<string, string>)[value] || value;
     if (key === "deckPresence") return value === "with" ? "Has deck" : "No deck";
     if (key === "notes") return value === "with" ? "Has notes" : "No notes";
     if (key === "combinedOriginals") return value === "only" ? "Originals only" : "Include originals";
@@ -17320,7 +17340,7 @@ function MatchesView({
     setSelectedMatchId("");
   }, [focusTarget?.nonce]);
 
-  function setFilter(key: keyof MatchHistoryFilters, value: string) {
+  function setFilter(key: keyof MatchHistoryFilters, value: string | DateFilterValue) {
     setFilters((current) => ({ ...current, [key]: value }));
     setSelectedMatchId("");
   }
@@ -17547,12 +17567,7 @@ function MatchesView({
           <label>Season<select value={filters.season} onChange={(event) => setFilter("season", event.target.value)}>
             {COMMUNITY_SEASONS.map((season) => <option value={season.id} key={season.id || "all"}>{season.label}</option>)}
           </select></label>
-          <label>Date<select value={filters.range} onChange={(event) => setFilter("range", event.target.value)}>
-            <option value="all">All time</option>
-            <option value="today">Today</option>
-            <option value="7d">Last 7 days</option>
-            <option value="30d">Last 30 days</option>
-          </select></label>
+          <DateFilter value={filters.range} onChange={(value) => setFilter("range", value)} />
         </div>
         <details className="review-disclosure review-filter-disclosure">
           <summary><SlidersHorizontal size={15} /> More filters {additionalFilterCount ? <span className="review-count-badge">{additionalFilterCount} active</span> : <small>Matchup, deck, result & more</small>}</summary>
@@ -17774,6 +17789,11 @@ function MatchesView({
                 </button>
               ) : null}
               <button className="secondary" onClick={(event) => { event.stopPropagation(); onReview(match); }}>Edit</button>
+              {match.platform === "atlas" ? (
+                <button type="button" className="secondary" aria-haspopup="dialog" disabled={!canReadAtlasMatchGameLog(match, replaySegments)} title={canReadAtlasMatchGameLog(match, replaySegments) ? "Read the captured Atlas game log" : "Replay evidence was not kept for this match"} onClick={(event) => { event.stopPropagation(); setGameLogMatchId(match.id); }}>
+                  <FileText size={14} /> Game log
+                </button>
+              ) : null}
               {canImportAtlasHistory(match) ? (
                 <button className="secondary" aria-haspopup="dialog" title="View opponent deck and sideboard changes" onClick={(event) => { event.stopPropagation(); setDeckMatchId(match.id); }}>
                   <Layers size={14} /> Deck
@@ -17837,6 +17857,9 @@ function MatchesView({
       ) : null}
       {deckMatchId && matchById.has(deckMatchId) ? (
         <AtlasMatchDeckDialog match={matchById.get(deckMatchId)!} onClose={() => setDeckMatchId("")} />
+      ) : null}
+      {gameLogMatch ? (
+        <AtlasGameLogDialog key={gameLogMatch.id} match={gameLogMatch} segments={gameLogSegments} onClose={() => setGameLogMatchId("")} />
       ) : null}
       {replayPickerMatch && replayPickerSegments.length > 1 ? (
         <ReplaySegmentPicker
@@ -18264,6 +18287,12 @@ function matchInCommunitySeason(match: { capturedAt?: string; date?: string; cre
   return true;
 }
 
+function communityMatchDate(match: CommunityMatch): string | number | undefined {
+  if (match.date) return match.date;
+  const timestamp = communitySeasonTimestamp(match);
+  return timestamp > 0 && Number.isFinite(new Date(timestamp).getTime()) ? timestamp : undefined;
+}
+
 function communitySeasonTimestamp(match: { capturedAt?: string; date?: string; createdAt?: number | string }): number {
   const dated = match.capturedAt || match.date || "";
   if (dated) {
@@ -18392,21 +18421,8 @@ function currentMatchStreak(matches: MatchDraft[]): string {
   return `${latest === "Win" ? "W" : "L"}${count}`;
 }
 
-function matchInDateRange(match: MatchDraft, range: string): boolean {
-  return dateInRange(match.capturedAt, range);
-}
-
-function dateInRange(capturedAt: string, range: string): boolean {
-  if (range === "all") return true;
-  const captured = new Date(capturedAt);
-  if (Number.isNaN(captured.getTime())) return true;
-  const now = new Date();
-  if (range === "today") {
-    return captured.toDateString() === now.toDateString();
-  }
-  const days = range === "7d" ? 7 : range === "30d" ? 30 : 0;
-  if (!days) return true;
-  return now.getTime() - captured.getTime() <= days * 24 * 60 * 60 * 1000;
+function matchInDateRange(match: MatchDraft, range: DateFilterValue): boolean {
+  return isInDateFilter(match.capturedAt, range);
 }
 
 function filterLeaderboardMatches(matches: AnalyticsMatch[], filters: LeaderboardFilters): AnalyticsMatch[] {
@@ -18415,7 +18431,7 @@ function filterLeaderboardMatches(matches: AnalyticsMatch[], filters: Leaderboar
   return matches.filter((match) => {
     if (match.result !== "Win" && match.result !== "Loss" && match.result !== "Draw") return false;
     if (filters.format && match.format !== filters.format) return false;
-    if (!dateInRange(match.capturedAt, filters.range)) return false;
+    if (!isInDateFilter(match.capturedAt, filters.range)) return false;
     if (selectedLegend && match.myChampion !== selectedLegend && match.opponentChampion !== selectedLegend) return false;
     if (search) {
       const haystack = [
@@ -18461,7 +18477,7 @@ function StatsView({ matches }: { matches: MatchDraft[] }) {
   const mostPlayed = useMemo(() => topValue(personalAnalytics.map((match) => match.myChampion).filter(Boolean)), [personalAnalytics]);
   const mostPlayedMatches = useMemo(() => mostPlayed ? personalAnalytics.filter((match) => match.myChampion === mostPlayed) : [], [personalAnalytics, mostPlayed]);
 
-  function setPersonalFilter(key: keyof MatrixFilters, value: string) {
+  function setPersonalFilter(key: keyof MatrixFilters, value: string | DateFilterValue) {
     setPersonalFilters((current) => ({ ...current, [key]: value }));
     setSelectedStat(null);
   }
@@ -19380,7 +19396,9 @@ function DeckDetail({ deck, focusTarget, onFocusChange, matches, active, onSetAc
 }) {
   const snapshot = parseDeckSnapshot(deck.snapshotJson);
   const needsRefresh = deckNeedsRefresh(snapshot);
-  const performance = useMemo(() => buildDeckPerformance(deck, matches), [deck, matches]);
+  const [dateFilter, setDateFilter] = useState<DateFilterValue>(DEFAULT_DATE_FILTER);
+  const datedMatches = useMemo(() => matches.filter((match) => isInDateFilter(match.capturedAt, dateFilter)), [matches, dateFilter]);
+  const performance = useMemo(() => buildDeckPerformance(deck, datedMatches), [deck, datedMatches]);
   const [notebook, setNotebook] = useState<DeckNotebook>(() => emptyDeckNotebook(deck.id));
   const [notebookStatus, setNotebookStatus] = useState("");
   const notebookPersistedRef = useRef(notebook);
@@ -19538,6 +19556,7 @@ function DeckDetail({ deck, focusTarget, onFocusChange, matches, active, onSetAc
           </button>
         ))}
       </nav>
+      <div className="data-date-toolbar"><DateFilter label="Match data dates" value={dateFilter} onChange={setDateFilter} /><span className="muted">Filters performance, version results and match notes.</span></div>
       <div className="prepare-pane" hidden={focusTarget !== "library" && focusTarget !== "saved"}>
         <details className="prepare-manage prepare-deck-code">
           <summary>Deck code & source <span>Copy or view the imported list</span></summary>
@@ -19563,7 +19582,7 @@ function DeckDetail({ deck, focusTarget, onFocusChange, matches, active, onSetAc
           deck={deck}
           viewMode={focusTarget === "notebook" ? "notebook" : "prep"}
           notebook={notebook}
-          matches={matches}
+          matches={datedMatches}
           linkedMatches={performance.matches}
           status={notebookStatus}
           onSave={saveNotebook}
@@ -19572,7 +19591,7 @@ function DeckDetail({ deck, focusTarget, onFocusChange, matches, active, onSetAc
         />
       </div>
       <div className="prepare-pane" id={`deck-performance-${deck.id}`} hidden={focusTarget !== "performance"}>
-        <DeckPerformancePanel performance={performance} />
+        <DeckPerformancePanel key={JSON.stringify(dateFilter)} performance={performance} />
       </div>
     </>
   );
@@ -19656,7 +19675,7 @@ function DeckPerformancePanel({ performance }: { performance: DeckPerformanceSta
         {selectedMatch ? <MatchDetailPanel match={selectedMatch} /> : null}
       </section>
 
-      <MatchupMatrixPanel matches={analytics} emptyText="Deck matchups appear after this deck has completed matches with both legends recorded." showFlags={false} showSeason />
+      <MatchupMatrixPanel showDate={false} matches={analytics} emptyText="Deck matchups appear after this deck has completed matches with both legends recorded." showFlags={false} showSeason />
     </section>
   );
 }
@@ -21156,7 +21175,7 @@ function ReplayView({
 }) {
   const [platformFilter, setPlatformFilter] = useState<"all" | GamePlatform>("all");
   const [mediaFilter, setMediaFilter] = useState("all");
-  const [rangeFilter, setRangeFilter] = useState("all");
+  const [rangeFilter, setRangeFilter] = useState<DateFilterValue>(DEFAULT_DATE_FILTER);
   const [flagFilter, setFlagFilter] = useState("all");
   const [folderFilter, setFolderFilter] = useState("all");
   const [creatingFolder, setCreatingFolder] = useState(false);
@@ -21192,7 +21211,7 @@ function ReplayView({
         ) {
           return false;
         }
-        if (rangeFilter !== "all" && !dateInRange(item.capturedAt, rangeFilter)) {
+        if (!isInDateFilter(item.capturedAt, rangeFilter)) {
           return false;
         }
         if (flagFilter === "flagged" && !(item.replay.flags?.length)) {
@@ -21230,11 +21249,12 @@ function ReplayView({
   const selectedReplayCount = selectedReplayIds.size;
   const allFilteredReplaysSelected = filteredItems.length > 0
     && filteredItems.every((item) => selectedReplayIds.has(item.replay.id));
-  const activeReplayFilterCount = [platformFilter, mediaFilter, rangeFilter, flagFilter, folderFilter]
+  const activeReplayFilterCount = [platformFilter, mediaFilter, rangeFilter.preset, flagFilter, folderFilter]
     .filter((filter) => filter !== "all").length;
 
   useEffect(() => {
     setVisibleReplayCount(REPLAY_LIST_PAGE_SIZE);
+    setSelectedReplayIds(new Set());
   }, [deferredSearch, flagFilter, folderFilter, mediaFilter, platformFilter, rangeFilter]);
 
   useEffect(() => {
@@ -21244,7 +21264,7 @@ function ReplayView({
     setSearch("");
     setPlatformFilter("all");
     setMediaFilter("all");
-    setRangeFilter("all");
+    setRangeFilter(DEFAULT_DATE_FILTER);
     setFlagFilter("all");
     setFolderFilter("all");
     setSelectedReplayId(focusReplayId);
@@ -21665,22 +21685,14 @@ function ReplayView({
                 <option value="favourite">Favourites</option>
               </select>
             </label>
-            <label>
-              Date
-              <select value={rangeFilter} onChange={(event) => setRangeFilter(event.target.value)}>
-                <option value="all">All time</option>
-                <option value="today">Today</option>
-                <option value="7d">Last 7 days</option>
-                <option value="30d">Last 30 days</option>
-              </select>
-            </label>
+            <DateFilter value={rangeFilter} onChange={setRangeFilter} />
           </div>
           <div className="row-actions">
             <button className="secondary" onClick={() => void importReplay()}><FolderOpen size={14} /> Import</button>
             <button className="secondary" onClick={() => void importReplayFolder()}><FolderOpen size={14} /> Import folder</button>
             <button className="secondary" title="Open replay storage folder" aria-label="Open replay storage folder" onClick={() => void window.riftlite.openReplayFolder()}><FolderOpen size={14} /></button>
             {activeReplayFilterCount ? <button type="button" className="secondary" onClick={() => {
-              setPlatformFilter("all"); setMediaFilter("all"); setRangeFilter("all"); setFlagFilter("all"); setFolderFilter("all");
+              setPlatformFilter("all"); setMediaFilter("all"); setRangeFilter(DEFAULT_DATE_FILTER); setFlagFilter("all"); setFolderFilter("all");
             }}>Clear filters</button> : null}
           </div>
         </div>
@@ -21740,7 +21752,7 @@ function ReplayView({
                   }}
                 >
                   <strong>{item.title}</strong>
-                  <span>{item.platformLabel} - {new Date(item.capturedAt).toLocaleString()}</span>
+                  <span>{item.platformLabel} - {item.capturedAt ? new Date(item.capturedAt).toLocaleString() : "Date unknown"}</span>
                   <em>{item.players.me || "Player"} vs {item.players.opponent || "Opponent"}</em>
                   {item.replay.folderId && replayFolderById.has(item.replay.folderId) ? (
                     <span className="replay-folder-chip"><FolderOpen size={11} /> {replayFolderById.get(item.replay.folderId)?.name}</span>
@@ -22621,7 +22633,7 @@ function replayListItem(replay: ReplayRecord, match?: MatchDraft): ReplayListIte
     match,
     title,
     platformLabel: replay.platform === "tcga" ? "TCGA" : replay.platform === "sim" ? "Riftbound Sim" : "RiftAtlas",
-    capturedAt: replay.capturedAt || match?.capturedAt || new Date().toISOString(),
+    capturedAt: replay.capturedAt || match?.capturedAt || "",
     players,
     chips,
     searchText: searchValues.filter(Boolean).join(" ").toLowerCase()
@@ -28422,6 +28434,7 @@ function HubsView({ settings, matches, replays, hubMatches, onSave, onHubResult,
   const [hubClaimPassword, setHubClaimPassword] = useState("");
   const [hubClaimBusy, setHubClaimBusy] = useState(false);
   const [hubClaimError, setHubClaimError] = useState("");
+  const [dateFilter, setDateFilter] = useState<DateFilterValue>(DEFAULT_DATE_FILTER);
   const [currentHubReplays, setCurrentHubReplays] = useState(replays);
   const activeHubsRef = useRef(settings.activeHubs);
   const localWebReplayIds = useMemo(() => webReplayIdsByLocalMatch(currentHubReplays), [currentHubReplays]);
@@ -28430,15 +28443,15 @@ function HubsView({ settings, matches, replays, hubMatches, onSave, onHubResult,
     [selectedHubId, settings.activeHubs]
   );
   const hubAnalytics = useMemo(
-    () => validAnalytics(filteredHubs.flatMap((hub) => (hubMatches[hub.id] ?? []).map((match) => communityToAnalytics({
+    () => validAnalytics(filteredHubs.flatMap((hub) => (hubMatches[hub.id] ?? []).filter((match) => isInDateFilter(communityMatchDate(match), dateFilter)).map((match) => communityToAnalytics({
       ...match,
       webReplayId: match.webReplayId || localWebReplayIds.get(match.id)
     })))),
-    [filteredHubs, hubMatches, localWebReplayIds]
+    [filteredHubs, hubMatches, localWebReplayIds, dateFilter]
   );
   const hubFeedRows = useMemo(
-    () => filteredHubs.flatMap((hub) => (hubMatches[hub.id] ?? []).slice(0, 12).map((match) => ({ hub, match }))),
-    [filteredHubs, hubMatches]
+    () => filteredHubs.flatMap((hub) => (hubMatches[hub.id] ?? []).filter((match) => isInDateFilter(communityMatchDate(match), dateFilter)).slice(0, 12).map((match) => ({ hub, match }))),
+    [filteredHubs, hubMatches, dateFilter]
   );
   const savedMatchCount = useMemo(() => matches.filter((match) => match.status === "saved" && match.result !== "Incomplete").length, [matches]);
   const enabledHubCount = useMemo(() => settings.activeHubs.filter((hub) => hub.sync).length, [settings.activeHubs]);
@@ -28842,7 +28855,7 @@ function HubsView({ settings, matches, replays, hubMatches, onSave, onHubResult,
   const selectedHub = selectedHubId ? settings.activeHubs.find((hub) => hub.id === selectedHubId) ?? null : null;
   const pendingHubInvites = hubInbox.filter((item) => item.status === "open");
   const visibleHubInvites = pendingHubInvites.length ? pendingHubInvites : hubInbox.slice(0, 5);
-  const selectedHubRows = useMemo(() => selectedHub ? hubMatches[selectedHub.id] ?? [] : [], [hubMatches, selectedHub]);
+  const selectedHubRows = useMemo(() => selectedHub ? (hubMatches[selectedHub.id] ?? []).filter((match) => isInDateFilter(communityMatchDate(match), dateFilter)) : [], [hubMatches, selectedHub, dateFilter]);
   const selectedHubAnalytics = useMemo(
     () => selectedHub ? validAnalytics(selectedHubRows.map((match) => communityToAnalytics({
       ...match,
@@ -29100,6 +29113,7 @@ function HubsView({ settings, matches, replays, hubMatches, onSave, onHubResult,
           <p>{hubRoleLabel(selectedHub)} - {(hubMatches[selectedHub.id] ?? []).length} private hub match{(hubMatches[selectedHub.id] ?? []).length === 1 ? "" : "es"}</p>
         </div>
       </div>
+      <div className="wide-panel data-date-toolbar"><DateFilter label="Hub data dates" value={dateFilter} onChange={setDateFilter} /></div>
       <section className="wide-panel metric-grid hub-detail-metrics">
         <Metric label="Hub matches" value={String(selectedHubRows.length)} />
         <Metric label="Record" value={`${selectedHubWins}-${selectedHubLosses}${selectedHubDraws ? `-${selectedHubDraws}` : ""}`} />
@@ -29340,6 +29354,7 @@ function CommunityView({ matches, communityMatches, hubMatches, settings, status
   onTabChange: (tab: CommunityTab) => void;
   onRefresh: () => Promise<void>;
 }) {
+  const [dateFilter, setDateFilter] = useState<DateFilterValue>(DEFAULT_DATE_FILTER);
   const [seasonFilter, setSeasonFilter] = useState<CommunitySeasonId>(CURRENT_COMMUNITY_SEASON);
   const [formatFilter, setFormatFilter] = useState("");
   const [deckPresenceFilter, setDeckPresenceFilter] = useState("");
@@ -29357,12 +29372,12 @@ function CommunityView({ matches, communityMatches, hubMatches, settings, status
     [analytics, seasonFilter]
   );
   const filteredAnalytics = useMemo(
-    () => filterAnalyticsByDeckPresence(filterAnalyticsByFormat(seasonAnalytics, formatFilter), deckPresenceFilter),
-    [seasonAnalytics, formatFilter, deckPresenceFilter]
+    () => filterAnalyticsByDeckPresence(filterAnalyticsByFormat(seasonAnalytics, formatFilter), deckPresenceFilter).filter((match) => isInDateFilter(match.capturedAt, dateFilter)),
+    [seasonAnalytics, formatFilter, deckPresenceFilter, dateFilter]
   );
   const communityDeckMatches = useMemo(
-    () => filterCommunityDeckMatches(communityMatches, seasonFilter, formatFilter, deckPresenceFilter),
-    [communityMatches, seasonFilter, formatFilter, deckPresenceFilter]
+    () => filterCommunityDeckMatches(communityMatches, seasonFilter, formatFilter, deckPresenceFilter).filter((match) => isInDateFilter(communityMatchDate(match), dateFilter)),
+    [communityMatches, seasonFilter, formatFilter, deckPresenceFilter, dateFilter]
   );
   const tabs: Array<{ id: CommunityTab; label: string }> = [
     { id: "legend-meta", label: "Legend Meta" },
@@ -29386,6 +29401,7 @@ function CommunityView({ matches, communityMatches, hubMatches, settings, status
           <span>{status}. User-submitted records only; no public leaderboard or meta alerts.</span>
         </div>
         <div className="community-toolbar-actions">
+          <DateFilter value={dateFilter} onChange={setDateFilter} />
           <label>Season<select value={seasonFilter} onChange={(event) => setSeasonFilter(event.target.value as CommunitySeasonId)}>
             {COMMUNITY_SEASONS.map((season) => (
               <option key={season.id || "all"} value={season.id}>{season.label}</option>
@@ -29412,9 +29428,9 @@ function CommunityView({ matches, communityMatches, hubMatches, settings, status
         ))}
       </nav>
       {activeTab === "legend-meta" ? <LegendMetaPanel matches={filteredAnalytics} expanded showFlags={false} /> : null}
-      {activeTab === "match-matrix" ? <MatchupMatrixPanel matches={filteredAnalytics} emptyText="Community match data will appear here after Firebase sync returns rows." showFlags={false} symmetric /> : null}
-      {activeTab === "recent-matches" ? <RecentMatchesPanel matches={filteredAnalytics} showFlags={false} /> : null}
-      {activeTab === "community-decks" ? <CommunityDecksPanel matches={communityDeckMatches} focusLegend={deckLegendTarget} /> : null}
+      {activeTab === "match-matrix" ? <MatchupMatrixPanel showDate={false} matches={filteredAnalytics} emptyText="Community match data will appear here after Firebase sync returns rows." showFlags={false} symmetric /> : null}
+      {activeTab === "recent-matches" ? <RecentMatchesPanel key={JSON.stringify(dateFilter)} matches={filteredAnalytics} showFlags={false} /> : null}
+      {activeTab === "community-decks" ? <CommunityDecksPanel key={JSON.stringify(dateFilter)} matches={communityDeckMatches} focusLegend={deckLegendTarget} /> : null}
     </section>
   );
 }
@@ -29474,14 +29490,14 @@ function HubStatsPanel({ matches }: { matches: AnalyticsMatch[] }) {
           <option value="without">No deck attached</option>
         </select></label>
       </div>
-      <LeaderboardPanel matches={filteredMatches} showFlags={false} />
+      <LeaderboardPanel showDate={false} matches={filteredMatches} showFlags={false} />
       <LegendMetaPanel matches={filteredMatches} expanded showFlags={false} />
-      <MatchupMatrixPanel matches={filteredMatches} emptyText="Private hub match data appears here after joined hubs sync." showFlags={false} showSeason />
+      <MatchupMatrixPanel showDate={false} matches={filteredMatches} emptyText="Private hub match data appears here after joined hubs sync." showFlags={false} showSeason />
     </section>
   );
 }
 
-function LeaderboardPanel({ matches, showFlags = false }: { matches: AnalyticsMatch[]; showFlags?: boolean }) {
+function LeaderboardPanel({ matches, showFlags = false, showDate = true }: { matches: AnalyticsMatch[]; showFlags?: boolean; showDate?: boolean }) {
   const [filters, setFilters] = useState<LeaderboardFilters>(DEFAULT_LEADERBOARD_FILTERS);
   const [selectedPlayer, setSelectedPlayer] = useState("");
   const legends = useMemo(() => matrixLegendOptions(matches), [matches]);
@@ -29496,7 +29512,7 @@ function LeaderboardPanel({ matches, showFlags = false }: { matches: AnalyticsMa
     [filteredMatches, selectedPlayer]
   );
 
-  function setFilter(key: keyof LeaderboardFilters, value: string) {
+  function setFilter(key: keyof LeaderboardFilters, value: string | DateFilterValue) {
     setFilters((current) => ({ ...current, [key]: key === "sort" ? value as LeaderboardSort : value }));
   }
 
@@ -29524,12 +29540,7 @@ function LeaderboardPanel({ matches, showFlags = false }: { matches: AnalyticsMa
           <option value="Bo1">Bo1</option>
           <option value="Bo3">Bo3</option>
         </select></label>
-        <label>Date<select value={filters.range} onChange={(event) => setFilter("range", event.target.value)}>
-          <option value="all">All time</option>
-          <option value="today">Today</option>
-          <option value="7d">Last 7 days</option>
-          <option value="30d">Last 30 days</option>
-        </select></label>
+        {showDate ? <DateFilter value={filters.range} onChange={(value) => setFilter("range", value)} /> : null}
         <label>Min games<input type="number" min="0" step="1" value={filters.minGames} onChange={(event) => setFilter("minGames", event.target.value)} /></label>
         <label>Sort<select value={filters.sort} onChange={(event) => setFilter("sort", event.target.value)}>
           <option value="score">Wilson score</option>
@@ -29609,10 +29620,11 @@ function AnalyticsSuite({
   emptyText: string;
   showFlags?: boolean;
   showSeason?: boolean;
-  onFilterChange: (key: keyof MatrixFilters, value: string) => void;
+  onFilterChange: (key: keyof MatrixFilters, value: string | DateFilterValue) => void;
   onResetFilters: () => void;
 }) {
   const [selectedDrilldown, setSelectedDrilldown] = useState<StatsDrilldownSelection | null>(null);
+  useEffect(() => setSelectedDrilldown(null), [filteredMatches]);
   const flags = topValueList(filteredMatches.flatMap((match) => splitFlags(match.flags)));
   return (
     <section className="analytics-suite">
@@ -30185,6 +30197,7 @@ function MatchupMatrixPanel({
   emptyText,
   showFlags = true,
   showSeason = false,
+  showDate = true,
   symmetric = false,
   onFilterChange,
   onResetFilters
@@ -30195,8 +30208,9 @@ function MatchupMatrixPanel({
   emptyText: string;
   showFlags?: boolean;
   showSeason?: boolean;
+  showDate?: boolean;
   symmetric?: boolean;
-  onFilterChange?: (key: keyof MatrixFilters, value: string) => void;
+  onFilterChange?: (key: keyof MatrixFilters, value: string | DateFilterValue) => void;
   onResetFilters?: () => void;
 }) {
   const [selectedKey, setSelectedKey] = useState("");
@@ -30221,7 +30235,7 @@ function MatchupMatrixPanel({
     scrollTop: 0
   });
 
-  function setFilter(key: keyof MatrixFilters, value: string) {
+  function setFilter(key: keyof MatrixFilters, value: string | DateFilterValue) {
     if (onFilterChange) {
       onFilterChange(key, value);
     } else {
@@ -30311,7 +30325,7 @@ function MatchupMatrixPanel({
     return (
       <section className="rail-card matrix-card">
         <MatrixHeader total={matches.length} filtered={visibleMatches.length} symmetric={symmetric} onReset={resetFilters} />
-        <MatrixFiltersBar filters={activeFilters} legends={legends} showFlags={showFlags} showSource={showSourceFilter} showSeason={showSeason} onChange={setFilter} />
+        <MatrixFiltersBar filters={activeFilters} legends={legends} showFlags={showFlags} showSource={showSourceFilter} showSeason={showSeason} showDate={showDate} onChange={setFilter} />
         <p className="muted">{emptyText}</p>
       </section>
     );
@@ -30320,7 +30334,7 @@ function MatchupMatrixPanel({
     <>
       <section className="rail-card matrix-card">
         <MatrixHeader total={matches.length} filtered={visibleMatches.length} symmetric={symmetric} onReset={resetFilters} />
-        <MatrixFiltersBar filters={activeFilters} legends={legends} showFlags={showFlags} showSource={showSourceFilter} showSeason={showSeason} onChange={setFilter} />
+        <MatrixFiltersBar filters={activeFilters} legends={legends} showFlags={showFlags} showSource={showSourceFilter} showSeason={showSeason} showDate={showDate} onChange={setFilter} />
         <div
           className="matrix-scroll"
           onPointerDown={startMatrixDrag}
@@ -30418,16 +30432,18 @@ function MatrixHeader({ total, filtered, symmetric = false, onReset }: { total: 
   );
 }
 
-function MatrixFiltersBar({ filters, legends, showFlags = true, showSource = true, showSeason = false, onChange }: {
+function MatrixFiltersBar({ filters, legends, showFlags = true, showSource = true, showSeason = false, showDate = true, onChange }: {
   filters: MatrixFilters;
   legends: string[];
   showFlags?: boolean;
   showSource?: boolean;
   showSeason?: boolean;
-  onChange: (key: keyof MatrixFilters, value: string) => void;
+  showDate?: boolean;
+  onChange: (key: keyof MatrixFilters, value: string | DateFilterValue) => void;
 }) {
   return (
     <div className="matrix-filters">
+      {showDate ? <DateFilter value={filters.date} onChange={(value) => onChange("date", value)} /> : null}
       {showSeason ? <label>Season<select value={filters.season} onChange={(event) => onChange("season", event.target.value)}>
         {COMMUNITY_SEASONS.map((season) => <option value={season.id} key={season.id || "all"}>{season.label}</option>)}
       </select></label> : null}
@@ -31017,6 +31033,7 @@ function localToAnalytics(match: MatchDraft): AnalyticsMatch {
 function communityToAnalytics(match: CommunityMatch): AnalyticsMatch {
   const games = applyCommunityGameFallbacks(parseCommunityGames(match.gamesJson), match);
   const primaryGame = games[0];
+  const capturedAt = communityMatchDate(match);
   return {
     id: match.id,
     platform: match.scope,
@@ -31034,7 +31051,7 @@ function communityToAnalytics(match: CommunityMatch): AnalyticsMatch {
     deckSnapshotJson: match.deckSnapshotJson,
     flags: match.flags,
     notes: "",
-    capturedAt: match.date || new Date(match.createdAt * 1000).toISOString(),
+    capturedAt: typeof capturedAt === "string" ? capturedAt : capturedAt ? new Date(capturedAt).toISOString() : "",
     wentFirst: match.wentFirst || primaryGame?.wentFirst || "",
     myBattlefield: match.myBattlefield || primaryGame?.myBattlefield || "",
     opponentBattlefield: match.opponentBattlefield || primaryGame?.oppBattlefield || "",
@@ -31237,6 +31254,7 @@ function filterMatrixMatches(matches: AnalyticsMatch[], filters: MatrixFilters, 
   const flags = showFlags ? filters.flags.trim().toLowerCase() : "";
   return matches.filter((match) => {
     if (match.result === "Incomplete") return false;
+    if (!isInDateFilter(match.capturedAt, filters.date)) return false;
     if (!matchInCommunitySeason(match, filters.season)) return false;
     if (filters.legend && match.myChampion !== filters.legend && match.opponentChampion !== filters.legend) return false;
     if (filters.result && match.result !== filters.result) return false;

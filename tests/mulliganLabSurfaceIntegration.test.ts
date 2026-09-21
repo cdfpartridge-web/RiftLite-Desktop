@@ -52,8 +52,8 @@ describe("Mulligan Lab desktop surface", () => {
   it("describes matchup selectors as a bounded daily rotation", () => {
     expect(labSource).toContain("matchup-wide patterns");
     expect(labSource).toContain("Rotating daily pack");
-    expect(labSource).toContain('My legend ({targetedMode ? "full corpus" : "today’s pack"})');
-    expect(labSource).toContain('Opponent ({targetedMode ? "full corpus" : "today’s pack"})');
+    expect(labSource).toContain('My legend ({deckPracticeMode ? "your deck" : targetedMode ? "full corpus" : "today’s pack"})');
+    expect(labSource).toContain('Opponent ({deckPracticeMode ? "practice context" : targetedMode ? "full corpus" : "today’s pack"})');
     expect(labSource).toContain("Eligible matchup cohorts rotate through successive daily packs");
   });
 
@@ -70,12 +70,17 @@ describe("Mulligan Lab desktop surface", () => {
     expect(labSource).toContain("keep adding older eligible replays automatically");
   });
 
-  it("queries the full corpus for active-deck and chosen-matchup modes with explicit fallbacks", () => {
-    expect(appSource).toContain("mulliganLabApiDeckFingerprintFromSnapshot");
+  it("keeps active-deck practice local and reserves community fallbacks for chosen matchups", () => {
     expect(appSource).toContain('new URL("/api/app/mulligan-lab/v2", HOME_CONFIG_URL)');
     expect(labSource).toContain('url.searchParams.set("playerLegend", targetPlayerLegendCode)');
     expect(labSource).toContain('url.searchParams.set("opponentLegend", targetOpponentLegendCode)');
-    expect(labSource).toContain('url.searchParams.set("deckFingerprint", activeDeckFingerprint)');
+    expect(labSource).not.toContain('url.searchParams.set("deckFingerprint"');
+    expect(labSource).toContain('const targetedMode = mode === "matchup"');
+    expect(labSource).toContain('<MulliganDeckPractice');
+    expect(labSource).toContain('deck={activeDeck}');
+    expect(labSource).toContain('const readyPack = !deckPracticeMode &&');
+    expect(labSource).toContain('if (deckPracticeMode) return;');
+    expect(labSource).toContain('Generated practice hands · your saved deck only · ungraded');
     expect(labSource).toContain("parseMulliganLabTargetPackResponse");
     expect(labSource).toContain("exact-deck hand filter · card guidance scope shown separately");
     expect(labSource).toContain("Hand filter · matchup fallback (deck cohort too small)");

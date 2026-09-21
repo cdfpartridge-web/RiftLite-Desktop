@@ -22,6 +22,8 @@ export interface MulliganLabRegistryCard {
   name: string;
   type: string;
   supertype: string | null;
+  /** Official Champion tag, used to choose a legal face-up Champion for deck practice. */
+  champion?: string | null;
   imageUrl: string;
   costEnergy: number | null;
   costPower: number | null;
@@ -853,6 +855,7 @@ export function buildMulliganLabRegistry(raw: unknown): MulliganLabRegistry {
       name,
       type,
       supertype: nonEmptyString(card.supertype) || null,
+      ...(nonEmptyString(card.champion) ? { champion: nonEmptyString(card.champion) } : {}),
       imageUrl,
       costEnergy: registryCost(card.costEnergy),
       costPower: registryCost(card.costPower)
@@ -1424,7 +1427,7 @@ export function parseMulliganLabTargetPackResponse(raw: unknown, registry: Mulli
     if (!["snapshot_not_configured", "snapshot_invalid", "snapshot_expired", "data_unavailable", "matchup_not_observed"].includes(reason)) issue(issues, "reason", "Unknown targeted-pack unavailable reason.");
     if (root.generatedAt !== null || root.expiresAt !== null || rawDrills?.length) issue(issues, "$", "Unavailable targeted packs cannot claim generated drills.");
     if (!targetQuery) issue(issues, "query", "A valid resolved target query is required.");
-    if (root.source !== null) validateMulliganLabTargetSource(root.source, registry, issues);
+    if (root.source !== null) validateMulliganLabTargetSource(root.source, issues);
     if (issues.length) return invalidApiParseResult("Targeted Mulligan Lab response failed validation.", issues, rawDrills?.length ?? 0);
     return {
       status: "unavailable",
@@ -1447,7 +1450,7 @@ export function parseMulliganLabTargetPackResponse(raw: unknown, registry: Mulli
     };
   }
   if (root.status !== "ready") issue(issues, "status", "Status must be ready or unavailable.");
-  validateMulliganLabTargetSource(root.source, registry, issues);
+  validateMulliganLabTargetSource(root.source, issues);
   if (targetQuery) validateMulliganLabReadyTargetQuery(targetQuery, issues);
   if (issues.length || !targetQuery) return invalidApiParseResult("Targeted Mulligan Lab response failed validation.", issues, rawDrills?.length ?? 0);
   const adapted = { ...root, schema: "riftlite-mulligan-lab", version: MULLIGAN_LAB_API_SCHEMA_VERSION };
@@ -1602,7 +1605,6 @@ function validateMulliganLabTargetDrill(
 
 function validateMulliganLabTargetSource(
   raw: unknown,
-  registry: MulliganLabRegistry,
   issues: MulliganLabValidationIssue[]
 ): void {
   const value = record(raw);
@@ -1659,9 +1661,10 @@ function validateMulliganLabTargetSource(
   const registryPrints = integer(value.cardRegistryPrints);
   if (registryPrints === null || registryPrints < 1) {
     issue(issues, "source.cardRegistryPrints", "Targeted registry size must be a positive integer.");
-  } else if (registryPrints !== registry.byCode.size) {
-    issue(issues, "source.cardRegistryPrints", "Targeted pack registry size does not match RiftLite's packaged card catalog.");
   }
+  // Catalogs update independently. Their total size is provenance, not a
+  // compatibility check; every returned card and its context is still checked
+  // against the packaged registry before any targeted drill is accepted.
 }
 
 function targetLegendIdentityCode(

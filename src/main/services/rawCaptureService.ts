@@ -5388,6 +5388,7 @@ function canMergeProvisionalRawCaptureSession(
   if (!provisional.provisional || provisional.captureSessionId === target.captureSessionId) {
     return false;
   }
+  if (startsNewAtlasRawCaptureSeries(target, details)) return false;
   if (
     normalizeRiftLiteAccountUid(target.webReplayAutoUploadAccountUid) !==
     normalizeRiftLiteAccountUid(provisional.webReplayAutoUploadAccountUid)
@@ -5486,10 +5487,24 @@ function isSameAtlasRawCaptureSession(session: ActiveRawCaptureSession, details:
   );
 }
 
+function startsNewAtlasRawCaptureSeries(
+  session: ActiveRawCaptureSession,
+  details: RawCaptureFrameDetails
+): boolean {
+  // previousRoomCode can be a return-to-lobby link, not a BO3 continuation.
+  // A fresh Game 1 in a different room must not adopt an unnumbered old snapshot.
+  return details.type === "room_shell_sync" && details.gameNumber === 1 &&
+    Boolean(details.seriesId && details.roomCode && session.roomCode) &&
+    !identityEquals(details.seriesId, session.seriesId) &&
+    !identityEquals(details.roomCode, session.roomCode) &&
+    !session.roomCodes.some((roomCode) => identityEquals(roomCode, details.roomCode));
+}
+
 function hasRawCaptureIdentityConflict(
   session: ActiveRawCaptureSession,
   details: RawCaptureFrameDetails
 ): boolean {
+  if (startsNewAtlasRawCaptureSeries(session, details)) return true;
   if (details.seriesId && session.seriesId && !identityEquals(details.seriesId, session.seriesId)) {
     return true;
   }

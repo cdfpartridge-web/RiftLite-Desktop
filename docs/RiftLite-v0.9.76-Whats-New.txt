@@ -1,0 +1,11 @@
+RiftLite v0.9.76 - Deck practice and game logs
+
+Practise unlimited mulligan hands with your actual saved deck. Your Chosen Champion is set aside, redraws use your real card quantities, and practice never substitutes another deck or gives invented grades.
+
+Read retained Atlas text logs from the Game log button in match history. Search, copy, and switch between games in a best-of-three match.
+
+Filter matches, replays and reports by a specific date or date range.
+
+Fixed valid Mulligan training packs being rejected after card catalog updates, and prevented stale Atlas room captures from merging into a new Game 1.
+
+Existing profiles and data are retained. Available for Windows, Mac Intel and Mac Apple Silicon. Mac installers remain ad-hoc signed and are not Apple-notarized.

@@ -1,0 +1,48 @@
+.atlas-game-log-dialog {
+  width: min(900px, calc(100vw - 40px));
+  max-height: calc(100vh - 40px);
+  padding: 0;
+  color: #dce7f2;
+  background: #101b2b;
+  border: 1px solid #35485e;
+  border-radius: 16px;
+  box-shadow: 0 28px 100px #0009;
+  overflow: hidden;
+}
+.atlas-game-log-dialog::backdrop { background: #020813b8; }
+.atlas-game-log-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; padding: 24px; border-bottom: 1px solid #2b3c51; }
+.atlas-game-log-heading > div { min-width: 0; }
+.atlas-game-log-heading span { font-size: 10px; letter-spacing: .14em; font-weight: 700; color: #7bdacb; }
+.atlas-game-log-heading h2 { margin: 6px 0 8px; font-size: 24px; color: #f0f5fb; }
+.atlas-game-log-heading p { margin: 0; color: #9cb0c8; font-size: 13px; overflow-wrap: anywhere; }
+.atlas-game-log-heading > button { flex: 0 0 auto; }
+.atlas-game-log-content { display: flex; flex-direction: column; min-height: 0; max-height: calc(100vh - 178px); padding: 18px 24px 22px; gap: 12px; }
+.atlas-game-log-games { display: flex; flex-wrap: wrap; gap: 7px; flex-shrink: 0; }
+.atlas-game-log-games button { padding: 7px 14px; border: 1px solid #35485e; border-radius: 7px; color: #acbed2; background: #152338; font-size: 12px; }
+.atlas-game-log-games button[aria-pressed="true"] { color: #bcfff2; background: #184139; border-color: #397466; }
+.atlas-game-log-tools { display: flex; gap: 12px; align-items: center; flex-shrink: 0; }
+.atlas-game-log-search { display: flex; align-items: center; gap: 9px; flex: 1; min-width: 0; padding: 0 12px; color: #8fa6bc; background: #0a1422; border: 1px solid #34485e; border-radius: 8px; }
+.atlas-game-log-search:focus-within { outline: 2px solid #75d6c7; outline-offset: 2px; }
+.atlas-game-log-dialog .atlas-game-log-tools .atlas-game-log-search input { width: 100%; min-width: 0; padding: 10px 0; color: #e4edf7; background: transparent; border: 0 !important; box-shadow: none; outline: none; font-size: 13px; font-weight: 400; }
+.atlas-game-log-tools > button { white-space: nowrap; }
+.atlas-game-log-note { margin: 0; color: #dfc68c; font-size: 12px; line-height: 1.5; flex-shrink: 0; }
+.atlas-game-log-summary { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 5px; color: #96abc2; font-size: 11px; flex-shrink: 0; }
+.atlas-game-log-summary [role="status"] { color: #8de1cc; }
+.atlas-game-log-entries { list-style: none; margin: 0; padding: 0; overflow: auto; min-height: 100px; border: 1px solid #283b50; border-radius: 10px; background: #0b1523; scrollbar-gutter: stable; }
+.atlas-game-log-line { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 12px; padding: 12px 15px; border-bottom: 1px solid #23354a80; font-size: 13px; line-height: 1.6; }
+.atlas-game-log-entries li:nth-child(even) .atlas-game-log-line { background: #17263a55; }
+.atlas-game-log-line time { color: #829ab4; font-variant-numeric: tabular-nums; font-size: 11px; padding-top: 2px; }
+.atlas-game-log-line p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+.atlas-game-log-line strong { color: #a9c4e2; font-weight: 600; }
+.atlas-game-log-entries [data-turn="true"] .atlas-game-log-line { color: #8fe1d1; background: #183a354d; font-weight: 600; }
+.atlas-game-log-divider { padding: 10px 15px; color: #8ee4d2; background: #193630; border-bottom: 1px solid #2b5147; text-transform: uppercase; letter-spacing: .09em; font-size: 10px; font-weight: 700; }
+.atlas-game-log-pages { display: flex; justify-content: space-between; align-items: center; gap: 12px; color: #96abc2; font-size: 12px; flex-shrink: 0; }
+.atlas-game-log-empty { padding: 28px 24px; margin: 0; color: #a7bad0; line-height: 1.7; }
+@media (max-width: 600px) {
+  .atlas-game-log-dialog { width: calc(100vw - 20px); max-height: calc(100dvh - 20px); }
+  .atlas-game-log-heading { padding: 16px; gap: 10px; }
+  .atlas-game-log-content { padding: 14px 16px; max-height: calc(100dvh - 170px); }
+  .atlas-game-log-tools { flex-wrap: wrap; }
+  .atlas-game-log-search { flex-basis: 100%; }
+  .atlas-game-log-line { grid-template-columns: 49px minmax(0, 1fr); gap: 9px; padding: 10px; }
+}

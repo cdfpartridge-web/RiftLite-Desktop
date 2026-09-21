@@ -99,13 +99,13 @@ export function MulliganLabIntro({ onStart, onDismiss }: MulliganLabIntroProps) 
         </header>
 
         <p id="mulligan-lab-intro-description" className="mulligan-lab-intro-lead">
-           Practise real opening hands, make your own redraw choice, then compare it with anonymised community Web Replays from indexed pre-season and current-season history.
+           My active deck deals practice hands from your saved deck, with no community data needed. Other modes let you compare real opening-hand choices with anonymised community Web Replays from indexed pre-season and current-season history.
         </p>
 
         <div className="mulligan-lab-intro-steps">
           <article>
             <span aria-hidden="true"><Layers size={19} /></span>
-            <div><strong>1. Choose your practice</strong><p>Play the Daily 5, follow your active deck, choose an exact matchup, or mix the available hands.</p></div>
+            <div><strong>1. Choose your practice</strong><p>My active deck always uses your own card list. Play the Daily 5, choose a matchup, or mix available hands for community training.</p></div>
           </article>
           <article>
             <span aria-hidden="true"><MousePointer2 size={19} /></span>
@@ -113,7 +113,7 @@ export function MulliganLabIntro({ onStart, onDismiss }: MulliganLabIntroProps) 
           </article>
           <article>
             <span aria-hidden="true"><BarChart3 size={19} /></span>
-            <div><strong>3. Compare real patterns</strong><p>Reveal card-by-card evidence plus whole-hand redraw-count patterns. When setup data is proven, the Curve check also shows exact one-versus-two redraw odds.</p></div>
+            <div><strong>3. See the result</strong><p>Deck practice draws replacements and shows your final hand, without a grade. Community modes reveal card-by-card evidence and whole-hand redraw-count patterns. When setup data is proven, the Curve check also shows exact one-versus-two redraw odds.</p></div>
           </article>
           <article>
             <span aria-hidden="true"><Shield size={19} /></span>
