@@ -1,0 +1,9 @@
+RiftLite Beta v0.9.77 — Replay recovery fixes
+
+- Fewer replay upload errors. Recovered Atlas connection and lobby fragments now stay local instead of being queued as games. On startup, RiftLite also checks eligible older recovered captures and removes confirmed non-game fragments from the upload queue while keeping their files.
+- Better troubleshooting. Keep local preserves the previous upload error details. Real interrupted games remain available for review, and existing local-only choices are respected.
+- Opening Turns Lab — Coming soon. Training now shows a preview of the upcoming interactive opening practice board. Mulligan Lab remains available for practice with your saved deck.
+
+Existing profiles, matches, decks, replays and settings are retained. Available for Windows, Mac Intel and Mac Apple Silicon.
+
+macOS installers remain ad-hoc signed and are not Apple-notarized.

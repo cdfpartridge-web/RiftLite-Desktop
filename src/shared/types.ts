@@ -1568,6 +1568,22 @@ export interface RawCaptureAppendFramePayload {
   frame: RawCaptureFrame;
 }
 
+export interface WebReplayQueueRemovalReceipt {
+  removedAt: string;
+  reason: "user-kept-local" | "connection-or-lobby-only";
+  uploadStatus: RawCaptureUploadStatus;
+  processingStatus?: RawCaptureProcessingStatus;
+  attemptCount?: number;
+  lastUploadAttemptAt?: string;
+  lastHttpStatus?: number;
+  lastErrorCode?: string;
+  lastErrorClass?: WebReplayDeliveryErrorClass;
+  error?: string;
+  uploadId?: string;
+  uploadUrl?: string;
+  partialWarnings?: string[];
+}
+
 export interface RawCaptureReplayMetadata {
   provider: "riftlite-v2" | "riftreplay";
   captureSessionId: string;
@@ -1612,6 +1628,8 @@ export interface RawCaptureReplayMetadata {
   lastErrorClass?: WebReplayDeliveryErrorClass;
   remoteStatusCheckedAt?: string;
   partialWarnings?: string[];
+  /** Local diagnostic receipt; never used to reactivate delivery or sharing. */
+  uploadQueueRemoval?: WebReplayQueueRemovalReceipt;
 }
 
 export interface RawCaptureStatus {

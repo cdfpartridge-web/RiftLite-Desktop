@@ -435,6 +435,7 @@ import { MulliganLabIntro } from "./MulliganLabIntro";
 import { MulliganDeckPractice } from "./MulliganDeckPractice";
 import { RULES_SEARCH_DRAWER_ID, RulesSearchDrawer } from "./RulesSearchDrawer";
 import { SideboardLabView } from "./SideboardLabView";
+import { OpeningLabComingSoon } from "./OpeningLabComingSoon";
 import { TrainingLabsIntro } from "./TrainingLabsIntro";
 import { resolveBundledReplayCardImage, RiftLiteReplayViewer } from "./RiftLiteReplayViewer";
 import { resolveDeckCardArtwork } from "./cardArtwork";
@@ -568,12 +569,12 @@ const LAB_TRAINING_LEGEND_NAMES = new Set(LAB_TRAINING_LEGEND_NAME_BY_CANONICAL.
 const RELEASE_NOTES = {
   version: APP_VERSION_META,
   title: `RiftLite v${APP_VERSION_META}`,
-  intro: "Practise with your exact deck and read your captured Atlas game logs.",
+  intro: "A quieter Web Replay upload queue, with better handling of recovered Atlas captures.",
   items: [
-    "My active deck in Mulligan Lab now deals unlimited practice hands from your saved deck, with Chosen Champion setup, redraws and no grading or other-deck fallback.",
-    "Game log in match history lets you read, search and copy retained Atlas text logs, including separate games in a best-of-three match.",
-    "Filter matches, replays and reports by a specific date or date range.",
-    "Fixed valid Mulligan training packs being rejected after card catalog updates, and kept new Atlas matches separate from stale room captures."
+    "Recovered Atlas connection and lobby fragments now stay local instead of creating replay upload errors.",
+    "Existing eligible recovered fragments are checked on startup and removed from the upload queue while their files are kept.",
+    "Keep local now retains the previous error details for troubleshooting. Real interrupted games remain available for review.",
+    "Opening Turns Lab is marked Coming soon while the interactive practice board is being prepared."
   ]
 };
 const RIOT_LEGAL_NOTICE = `RiftLite was created under Riot Games' "Legal Jibber Jabber" policy using assets owned by Riot Games. Riot Games does not endorse or sponsor this project.`;
@@ -7301,6 +7302,7 @@ function App() {
     stats: "Stats",
     "mulligan-lab": "Mulligan Lab",
     "sideboard-lab": "Sideboard Lab",
+    "opening-lab": "Opening Turns Lab",
     "matchup-lab": "Matchup Lab",
     spotlight: "Spotlight",
     community: activeCommunityTab === "community-decks" ? "Community Decks" : activeCommunityTab === "recent-matches" ? "Community Matches" : "Meta & Matrix",
@@ -7323,6 +7325,7 @@ function App() {
     stats: "Personal performance from local RiftLite history.",
     "mulligan-lab": "Practise opening-hand choices against exact, anonymised RiftLite capture data.",
     "sideboard-lab": "Practise balanced Game 2 swaps against finalized, anonymous community sideboard patterns.",
+    "opening-lab": "Coming soon · Practise your opening decisions on an interactive game board.",
     "matchup-lab": "Study your toughest pairings with personal stats, community context, prep notes, and replay evidence.",
     spotlight: "Featured Riftbound creators, teams, and community projects.",
     community: activeCommunityTab === "community-decks" ? "Visual deck meta from public community-submitted deck data." : "Community data remains compatible with the existing RiftLite website.",
@@ -8236,6 +8239,7 @@ function navigationIcon(id: string): React.ReactNode {
     case "deck-library": return <Layers size={19} />;
     case "mulligan-lab": return <RotateCcw size={19} />;
     case "sideboard-lab": return <ArrowLeftRight size={19} />;
+    case "opening-lab": return <Play size={19} />;
     case "matchup-lab":
     case "meta-matrix": return <Activity size={19} />;
     case "community":
@@ -12469,6 +12473,9 @@ function DashboardView({
   }
   if (view === "sideboard-lab") {
     return <SideboardLabView decks={decks} activeDeckId={settings.activeDeckId} endpoint={SIDEBOARD_LAB_URL} registry={MULLIGAN_LAB_REGISTRY} onNavigate={onNavigate} />;
+  }
+  if (view === "opening-lab") {
+    return <OpeningLabComingSoon />;
   }
   if (view === "matchup-lab") {
     return <MatchupLabView matches={visibleMatches} communityMatches={communityMatches} decks={decks} replays={replays} settings={settings} onNavigate={onNavigate} onRefreshCommunity={onRefreshCommunity} />;

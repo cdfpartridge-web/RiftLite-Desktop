@@ -7,6 +7,7 @@ export const ACTIVE_VIEWS = [
   "stats",
   "mulligan-lab",
   "sideboard-lab",
+  "opening-lab",
   "matchup-lab",
   "spotlight",
   "community",
@@ -61,6 +62,7 @@ export const PREPARE_NAVIGATION_ITEMS = [
   { id: "matchup-prep", label: "Matchup Prep", target: { view: "decks", deckFocus: "prep" } },
   { id: "mulligan-lab", label: "Mulligan Lab", target: { view: "mulligan-lab" } },
   { id: "sideboard-lab", label: "Sideboard Lab", target: { view: "sideboard-lab" } },
+  { id: "opening-lab", label: "Opening Turns Lab", target: { view: "opening-lab" } },
   { id: "matchup-lab", label: "Matchup Lab", target: { view: "matchup-lab" } }
 ] as const satisfies readonly NavigationItem[];
 
@@ -145,6 +147,8 @@ export function navigationOwner(context: NavigationContext): NavigationOwner {
       return disclosureOwner("prepare", "mulligan-lab");
     case "sideboard-lab":
       return disclosureOwner("prepare", "sideboard-lab");
+    case "opening-lab":
+      return disclosureOwner("prepare", "opening-lab");
     case "matchup-lab":
       return disclosureOwner("prepare", "matchup-lab");
     case "community":

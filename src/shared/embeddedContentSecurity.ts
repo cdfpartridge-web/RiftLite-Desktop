@@ -6,11 +6,21 @@ export type EmbeddedWebviewPolicy =
   | { kind: "game"; platform: GamePlatform }
   | { kind: "replay" }
   | { kind: "rules" }
+  | { kind: "training"; origin: string }
   | { kind: "home-video"; provider: "youtube"; mediaId: string }
   | { kind: "home-video"; provider: "twitch"; mediaId: string };
 
 export const RIFTLITE_REPLAY_WEBVIEW_PARTITION = "persist:riftlite-replay";
 export const RIFTLITE_RULES_WEBVIEW_PARTITION = "riftlite-riftjudge";
+export const RIFTLITE_TRAINING_WEBVIEW_PARTITION = "riftlite-opening-lab";
+export const RIFTLITE_OPENING_LAB_URL = "https://www.riftlite.com/app/opening-lab";
+
+export function isAllowedOpeningLabUrl(value: string, allowLocal = false): boolean {
+  const url = parsedUrl(value);
+  return Boolean(url && !url.username && !url.password && url.pathname === "/app/opening-lab" && (
+    url.origin === "https://www.riftlite.com" || (allowLocal && ["http://127.0.0.1:4201", "http://localhost:4201"].includes(url.origin))
+  ));
+}
 const RIFTJUDGE_RULES_ORIGIN = "https://app.riftjudge.com";
 const YOUTUBE_PARTITION_PREFIX = "persist:riftlite-home-video-";
 const TWITCH_PARTITION_PREFIX = "riftlite-home-live-twitch-";
@@ -154,6 +164,9 @@ export function embeddedWebviewPolicy(
   partition: string,
   allowSimulator = false
 ): EmbeddedWebviewPolicy | null {
+  if (partition === RIFTLITE_TRAINING_WEBVIEW_PARTITION) {
+    return isAllowedOpeningLabUrl(src, allowSimulator) ? { kind: "training", origin: new URL(src).origin } : null;
+  }
   if (partition === RIFTLITE_REPLAY_WEBVIEW_PARTITION) {
     return isAllowedReplayWebviewNavigation(src) ? { kind: "replay" } : null;
   }
@@ -168,6 +181,9 @@ export function embeddedWebviewPolicy(
 }
 
 export function isAllowedEmbeddedNavigation(policy: EmbeddedWebviewPolicy, value: string): boolean {
+  if (policy.kind === "training") {
+    return isAllowedOpeningLabUrl(value, policy.origin !== "https://www.riftlite.com") && parsedUrl(value)?.origin === policy.origin;
+  }
   if (policy.kind === "replay") {
     return isAllowedReplayWebviewNavigation(value);
   }
@@ -201,6 +217,7 @@ export function isAllowedEmbeddedPermission(
   permission: string,
   allowedPermissions: ReadonlySet<string>
 ): boolean {
+  if (policy.kind === "training") return false;
   return allowedPermissions.has(permission) && (
     isAllowedEmbeddedNavigation(policy, value) ||
     (policy.kind === "game" && policy.platform === "atlas" &&

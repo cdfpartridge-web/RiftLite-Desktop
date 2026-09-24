@@ -112,6 +112,7 @@ import {
   isAllowedGameMainFrameNavigation,
   isAllowedGamePopupNavigation,
   RIFTLITE_RULES_WEBVIEW_PARTITION,
+  RIFTLITE_TRAINING_WEBVIEW_PARTITION,
   sameWebFrameIdentity,
   type EmbeddedWebviewPolicy
 } from "../shared/embeddedContentSecurity.js";
@@ -443,6 +444,7 @@ function installSmokeNetworkIsolation(): void {
     electronSession.defaultSession,
     electronSession.fromPartition(RIFTLITE_REPLAY_PARTITION),
     electronSession.fromPartition(RIFTLITE_RULES_WEBVIEW_PARTITION),
+    electronSession.fromPartition(RIFTLITE_TRAINING_WEBVIEW_PARTITION),
     ...Object.values(GAME_WEBVIEW_PARTITIONS).map((partition) => electronSession.fromPartition(partition))
   ]);
   for (const targetSession of smokeSessions) {
@@ -8034,6 +8036,17 @@ async function createWindow(): Promise<void> {
     }
     if (policy.kind === "rules") {
       secureRulesWebContents(webContents, policy);
+      return;
+    }
+    if (policy.kind === "training") {
+      webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+      webContents.on("will-navigate", (event, url) => {
+        if (!isAllowedEmbeddedNavigation(policy, url)) event.preventDefault();
+      });
+      webContents.on("will-redirect", (event, url) => {
+        if (!isAllowedEmbeddedNavigation(policy, url)) event.preventDefault();
+      });
+      installFullscreenShortcut(webContents);
       return;
     }
     if (policy.kind !== "game") {

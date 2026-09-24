@@ -356,6 +356,43 @@ async function failedMulliganUploadHarness() {
   };
 }
 
+async function recoveredManifestHarness(
+  packets: unknown[] = [{ type: "auth" }, { type: "ready" }],
+  metadataPatch: Partial<RawCaptureReplayMetadata> = {},
+  manifestPatch: Record<string, unknown> = {}
+) {
+  const replayDirectory = await tempReplayDirectory();
+  const store = fakeStore({
+    ...settings({ enabled: true, webReplayAutoUploadEnabled: true, webReplayAutoUploadAccountUid: "owner" }, replayDirectory),
+    accountUid: "owner", firebaseRefreshToken: "test-refresh"
+  });
+  const directory = join(replayDirectory, "Raw Capture");
+  await mkdir(directory, { recursive: true });
+  const captureSessionId = "older-recovery";
+  const localPath = join(directory, `${captureSessionId}.json`);
+  const indexPath = `${localPath}.riftlite-index.json`;
+  const source = JSON.stringify({
+    schema: "riftreplay-raw-capture", version: 1,
+    capture: { captureSessionId, lifecycle: { lastPhase: null, phases: [], games: [] } },
+    messages: packets.map((packet) => ({ raw: JSON.stringify(packet) }))
+  });
+  await writeFile(localPath, source, "utf8");
+  const manifest = {
+    schema: "riftlite-raw-capture-index", version: 1, platform: "atlas", artifactEncoding: "json",
+    updatedAt: "2026-09-20T12:00:00.000Z", recoveredFromJournalAt: "2026-09-20T12:00:00.000Z",
+    requiresLocalReplayParent: false, title: "Recovered Atlas capture", localPath, indexPath,
+    identity: { platform: "atlas", captureSessionId },
+    metadata: {
+      provider: "riftlite-v2", captureSessionId, localPath, messageCount: packets.length,
+      uploadStatus: "not-uploaded", processingStatus: "pending", deliveryStage: "queued",
+      webReplayAutoUploadEligible: true, webReplayAutoUploadAccountUid: "owner", ...metadataPatch
+    },
+    ...manifestPatch
+  };
+  await writeFile(indexPath, JSON.stringify(manifest), "utf8");
+  return { store, service: new RawCaptureService(store), manifest, source, localPath, indexPath };
+}
+
 describe("RawCaptureService", () => {
   it("offers Upload anyway only for the exact missing-opening-mulligan failure", () => {
     expect(webReplayIncompleteOverrideAllowed(MISSING_MULLIGAN_ERROR)).toBe(true);
@@ -378,6 +415,14 @@ describe("RawCaptureService", () => {
       webReplayDiscordShareEligible: false
     });
     expect(saved?.rawCapture?.error).toBeUndefined();
+    expect(saved?.rawCapture?.uploadQueueRemoval).toMatchObject({
+      reason: "user-kept-local",
+      removedAt: expect.any(String),
+      uploadStatus: "failed",
+      processingStatus: "failed",
+      lastUploadAttemptAt: "2026-08-02T11:01:58.000Z",
+      error: MISSING_MULLIGAN_ERROR
+    });
     await expect(readFile(harness.rawPath, "utf8")).resolves.toContain("riftreplay-raw-capture");
     const manifest = JSON.parse(await readFile(harness.indexPath, "utf8")) as {
       metadata: RawCaptureReplayMetadata;
@@ -391,6 +436,9 @@ describe("RawCaptureService", () => {
     const diagnostics = await harness.service.getWebReplayUploadDiagnostics();
     expect(diagnostics.lanes.atlas).toMatchObject({ captured: 1, eligible: 0, failed: 0 });
     expect(diagnostics.recentFailures).toEqual([]);
+    expect(manifest.metadata.uploadQueueRemoval).toEqual(saved?.rawCapture?.uploadQueueRemoval);
+    await harness.service.removeWebReplayUploadFromQueue(harness.captureSessionId);
+    expect((await harness.store.getReplays())[0].rawCapture?.uploadQueueRemoval).toEqual(saved?.rawCapture?.uploadQueueRemoval);
   });
 
   it("removes same-file replay aliases from the upload queue while preserving every local record", async () => {
@@ -426,6 +474,20 @@ describe("RawCaptureService", () => {
       webReplayAutoUploadEligible: false
     });
     expect((await harness.service.getWebReplayUploadDiagnostics()).queue).toEqual([]);
+  });
+
+  it("can dismiss a disabled legacy failure while retaining its error receipt", async () => {
+    const harness = await failedMulliganUploadHarness();
+    const metadata = { ...harness.replay.rawCapture!, uploadStatus: "disabled" as const, webReplayAutoUploadEligible: false };
+    await harness.store.saveReplay({ ...harness.replay, rawCapture: metadata });
+    const manifest = JSON.parse(await readFile(harness.indexPath, "utf8"));
+    await writeFile(harness.indexPath, JSON.stringify({ ...manifest, metadata }), "utf8");
+    await harness.service.removeWebReplayUploadFromQueue(harness.captureSessionId);
+    const saved = (await harness.store.getReplays())[0].rawCapture!;
+    expect(saved.processingStatus).toBe("pending");
+    expect(saved.error).toBeUndefined();
+    expect(saved.uploadQueueRemoval?.error).toBe(MISSING_MULLIGAN_ERROR);
+    expect((await harness.service.getWebReplayUploadDiagnostics()).recentFailures).toEqual([]);
   });
 
   it("refuses queue alias removal when one capture identifier points at separate local artifacts", async () => {
@@ -1530,6 +1592,121 @@ describe("RawCaptureService", () => {
       locallyAvailable: true,
       partialWarnings: expect.arrayContaining([expect.stringContaining("unexpected desktop shutdown")])
     }));
+  });
+
+  it.each([
+    [{ type: "auth" }, { type: "ready" }],
+    [{ type: "presence_event" }, { type: "presence_update" }],
+    [{ type: "room_shell_sync", sessionDoc: { roomCode: "LOBBY", phase: "lobby", gameNumber: 1 } }, { type: "setup_log_sync" }]
+  ])("keeps connection/lobby journal recovery locally without upload or attention", async (...packets) => {
+    const replayDirectory = await tempReplayDirectory();
+    const store = fakeStore({
+      ...settings({ enabled: true, webReplayAutoUploadEnabled: true, webReplayAutoUploadAccountUid: "owner" }, replayDirectory),
+      accountUid: "owner", firebaseRefreshToken: "test-refresh"
+    });
+    const service = new RawCaptureService(store);
+    for (const packet of packets) await service.appendFrame(atlasFrame(JSON.stringify(packet)));
+    const captureId = (await service.getStatus()).captureSessionId!;
+    await (service as unknown as { closeSessionJournalHandle(id: string): Promise<void> }).closeSessionJournalHandle(captureId);
+    const restarted = new RawCaptureService(store);
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Unexpected network request"));
+    const diagnostics = await restarted.getWebReplayUploadDiagnostics();
+    expect(diagnostics.queue).toEqual([]);
+    expect(diagnostics.recentFailures).toEqual([]);
+    expect(diagnostics.lanes.atlas).toMatchObject({ eligible: 0, pending: 0, failed: 0 });
+    expect(await restarted.uploadPendingRawCaptures(5, true)).toBe(0);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    const folder = join(replayDirectory, "Raw Capture");
+    const files = await readdir(folder);
+    expect(files.some((file) => file.endsWith(".riftlite-active.jsonl"))).toBe(false);
+    const manifest = JSON.parse(await readFile(join(folder, files.find((file) => file.endsWith(".riftlite-index.json"))!), "utf8"));
+    expect(manifest).toMatchObject({ recoveryDisposition: "local-diagnostic", metadata: {
+      uploadStatus: "disabled", deliveryStage: "captured", webReplayAutoUploadEligible: false,
+      uploadQueueRemoval: { reason: "connection-or-lobby-only" }
+    } });
+    const retained = JSON.parse(await readFile(manifest.localPath, "utf8"));
+    expect(retained.messages.map((frame: { raw: string }) => JSON.parse(frame.raw))).toEqual(packets);
+  });
+
+  it("quietly retains a previously queued non-game recovery before a forced retry", async () => {
+    const harness = await recoveredManifestHarness();
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Unexpected upload"));
+    expect(await harness.service.uploadPendingRawCaptures(5, true)).toBe(0);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect((await harness.service.getWebReplayUploadDiagnostics()).queue).toEqual([]);
+    const persisted = JSON.parse(await readFile(harness.indexPath, "utf8"));
+    expect(persisted).toMatchObject({ recoveryDisposition: "local-diagnostic", metadata: {
+      uploadStatus: "disabled", webReplayAutoUploadEligible: false,
+      uploadQueueRemoval: { reason: "connection-or-lobby-only", uploadStatus: "not-uploaded" }
+    } });
+    expect(await readFile(harness.localPath, "utf8")).toBe(harness.source);
+    const firstReview = await readFile(harness.indexPath, "utf8");
+    await new RawCaptureService(harness.store).getStatus();
+    expect(await readFile(harness.indexPath, "utf8")).toBe(firstReview);
+  });
+
+  it.each(["failed", "uploaded"] as const)("archives an old %s fragment's failure without keeping an attention alert", async (uploadStatus) => {
+    const harness = await recoveredManifestHarness(undefined, {
+      uploadStatus, processingStatus: "failed", deliveryStage: "failed", attemptCount: 3,
+      lastUploadAttemptAt: "2026-09-20T12:01:00.000Z", lastHttpStatus: 422,
+      lastErrorCode: "replay_capture_incomplete", lastErrorClass: "capture",
+      error: "Replay capture is incomplete: The replay ended before gameplay was captured.",
+      uploadId: "rl2_fragment", uploadUrl: "https://www.riftlite.com/replays/rl2_fragment"
+    });
+    const diagnostics = await harness.service.getWebReplayUploadDiagnostics();
+    expect(diagnostics.queue).toEqual([]);
+    expect(diagnostics.recentFailures).toEqual([]);
+    expect(diagnostics.lanes.atlas.failed).toBe(0);
+    const persisted = JSON.parse(await readFile(harness.indexPath, "utf8"));
+    expect(persisted.metadata.uploadQueueRemoval).toMatchObject({
+      reason: "connection-or-lobby-only", uploadStatus, processingStatus: "failed", attemptCount: 3,
+      lastHttpStatus: 422, lastErrorCode: "replay_capture_incomplete", lastErrorClass: "capture",
+      error: harness.manifest.metadata.error, uploadId: "rl2_fragment", uploadUrl: harness.manifest.metadata.uploadUrl
+    });
+    expect(persisted.metadata.error).toBeUndefined();
+    expect(await readFile(harness.localPath, "utf8")).toBe(harness.source);
+  });
+
+  it.each(["authoritative_snapshot", "new_game_protocol_packet"])("leaves a queued %s recovery eligible", async (type) => {
+    const harness = await recoveredManifestHarness([{ type, body: { turn: 2 } }]);
+    const diagnostics = await harness.service.getWebReplayUploadDiagnostics();
+    expect(diagnostics.queue).toContainEqual(expect.objectContaining({ captureSessionId: "older-recovery", stage: "queued" }));
+    const persisted = JSON.parse(await readFile(harness.indexPath, "utf8"));
+    expect(persisted.recoveryDisposition).toBe("replay");
+    expect(persisted.metadata).toEqual(harness.manifest.metadata);
+    expect(await readFile(harness.localPath, "utf8")).toBe(harness.source);
+  });
+
+  it.each([
+    { metadata: { uploadStatus: "disabled", webReplayAutoUploadEligible: false }, manifest: {} },
+    { metadata: { uploadStatus: "uploaded", processingStatus: "ready" }, manifest: {} },
+    { metadata: {}, manifest: { localMatchId: "real-match", requiresLocalReplayParent: true } },
+    { metadata: {}, manifest: { identity: { platform: "atlas", captureSessionId: "older-recovery", localReplayId: "real-replay" } } },
+    { metadata: {}, manifest: { platform: "tcga" } },
+    { metadata: {}, manifest: { artifactEncoding: "gzip" } }
+  ])("preserves explicit local choices, ready replays, match-owned captures and other formats: %j", async ({ metadata, manifest }) => {
+    const harness = await recoveredManifestHarness(undefined, metadata as Partial<RawCaptureReplayMetadata>, manifest);
+    const before = await readFile(harness.indexPath, "utf8");
+    await harness.service.getStatus();
+    expect(await readFile(harness.indexPath, "utf8")).toBe(before);
+    expect(await readFile(harness.localPath, "utf8")).toBe(harness.source);
+  });
+
+  it("leaves an unreadable recovery source available for diagnostics", async () => {
+    const harness = await recoveredManifestHarness();
+    await writeFile(harness.localPath, "{incomplete", "utf8");
+    const before = await readFile(harness.indexPath, "utf8");
+    await harness.service.getStatus();
+    expect(await readFile(harness.indexPath, "utf8")).toBe(before);
+    expect(await readFile(harness.localPath, "utf8")).toBe("{incomplete");
+  });
+
+  it("preserves a recovered source already attached to a replay even if its sidecar has not caught up", async () => {
+    const harness = await recoveredManifestHarness();
+    await harness.store.saveReplay({ ...replay(), rawCapture: harness.manifest.metadata as RawCaptureReplayMetadata });
+    const before = await readFile(harness.indexPath, "utf8");
+    await harness.service.getStatus();
+    expect(await readFile(harness.indexPath, "utf8")).toBe(before);
   });
 
   it("promotes a stale Atlas journal to a durable source before releasing its session", async () => {

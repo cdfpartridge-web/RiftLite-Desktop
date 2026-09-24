@@ -27,6 +27,7 @@ import type {
 } from "../../shared/types.js";
 import { canonicalLegendName } from "../../shared/legendNames.js";
 import { hasVerifiedRiftLiteAccount } from "../../shared/accountIdentity.js";
+import { isAtlasConnectionOrLobbyCapture } from "../../shared/atlasCaptureRecovery.js";
 import type { RiftLiteStore } from "./store.js";
 import { normalizeAtlasMatchHistory, type AtlasMatchHistory } from "../../shared/atlasHistory.js";
 
@@ -124,7 +125,8 @@ const RAW_CAPTURE_UPLOAD_LANE_FIELDS = [
   "lastErrorCode",
   "lastErrorClass",
   "remoteStatusCheckedAt",
-  "partialWarnings"
+  "partialWarnings",
+  "uploadQueueRemoval"
 ] as const satisfies ReadonlyArray<keyof RawCaptureReplayMetadata>;
 
 const RAW_CAPTURE_DISCORD_LANE_FIELDS = [
@@ -523,6 +525,7 @@ type PersistedRawCaptureManifest = {
   requiresLocalReplayParent?: boolean;
   /** Present when an active JSONL journal was promoted without a local replay parent. */
   recoveredFromJournalAt?: string;
+  recoveryDisposition?: "replay" | "local-diagnostic";
   localReplayId?: string;
   localMatchId?: string;
   title?: string;
@@ -1825,8 +1828,9 @@ export class RawCaptureService {
         throw new Error("This Web Replay already exists online and cannot be removed through the local upload queue.");
       }
 
+      const removedAt = new Date().toISOString();
       for (const manifest of persistedManifests) {
-        const removedMetadata = rawCaptureMetadataRemovedFromUploadQueue(manifest.metadata);
+        const removedMetadata = rawCaptureMetadataRemovedFromUploadQueue(manifest.metadata, "user-kept-local", removedAt);
         await writeRawCaptureManifest({
           ...manifest,
           updatedAt: removedMetadata.processingUpdatedAt!,
@@ -1836,7 +1840,7 @@ export class RawCaptureService {
       for (const replay of matchingReplays) {
         await this.saveReplayRawCapture(
           replay,
-          rawCaptureMetadataRemovedFromUploadQueue(replay.rawCapture!)
+          rawCaptureMetadataRemovedFromUploadQueue(replay.rawCapture!, "user-kept-local", removedAt)
         );
       }
     });
@@ -2211,6 +2215,7 @@ export class RawCaptureService {
     const match = explicitIdentity.match ?? rawCaptureMatchSummaryFromDraft(replay?.matchSnapshot);
     const persistedAt = new Date().toISOString();
     const payload = this.buildPayload(session, match);
+    const localDiagnostic = Boolean(options.recoveredFromJournalAt) && isAtlasConnectionOrLobbyCapture(payload);
     const directory = await rawCaptureDirectory(settings);
     const title = explicitIdentity.title || replay?.title || explicitIdentity.localMatchId || session.captureSessionId;
     const localPath = join(directory, `${safeFileComponent(title)}-${payload.capture.captureSessionId}.json`);
@@ -2280,6 +2285,7 @@ export class RawCaptureService {
       indexPath,
       requiresLocalReplayParent: Boolean(replay),
       recoveredFromJournalAt: options.recoveredFromJournalAt,
+      recoveryDisposition: options.recoveredFromJournalAt ? localDiagnostic ? "local-diagnostic" : "replay" : undefined,
       localReplayId: replay?.id || explicitIdentity.localReplayId,
       localMatchId: replay?.matchId || explicitIdentity.localMatchId,
       title,
@@ -2299,7 +2305,9 @@ export class RawCaptureService {
         localMatchId: replay?.matchId || explicitIdentity.localMatchId,
         title
       },
-      metadata
+      metadata: localDiagnostic
+        ? rawCaptureMetadataRemovedFromUploadQueue(metadata, "connection-or-lobby-only")
+        : metadata
     };
     await writeRawCaptureManifest(manifest);
     return manifest;
@@ -3589,6 +3597,7 @@ export class RawCaptureService {
   }
 
   private async recoverInterruptedCaptureJournals(settings: UserSettings): Promise<void> {
+    await this.classifyPreviouslyRecoveredCaptures(settings);
     const directory = await rawCaptureDirectory(settings);
     const entries = await readdir(directory, { withFileTypes: true }).catch(() => []);
     const journalPaths = entries
@@ -3660,6 +3669,46 @@ export class RawCaptureService {
     }
     if (transientRecoveryFailure) {
       throw transientRecoveryFailure;
+    }
+  }
+
+  private async classifyPreviouslyRecoveredCaptures(settings: UserSettings): Promise<void> {
+    const attachedCaptureIds = new Set((await this.store.getReplays())
+      .map((replay) => replay.rawCapture?.captureSessionId).filter(Boolean));
+    const needsReview = (manifest: PersistedRawCaptureManifest) => (
+      manifest.platform === "atlas" &&
+      manifest.artifactEncoding === "json" &&
+      Boolean(manifest.recoveredFromJournalAt) &&
+      !manifest.recoveryDisposition &&
+      manifest.requiresLocalReplayParent === false &&
+      !manifest.localReplayId && !manifest.localMatchId &&
+      !manifest.identity.localReplayId && !manifest.identity.localMatchId &&
+      !attachedCaptureIds.has(manifest.metadata.captureSessionId) &&
+      manifest.metadata.processingStatus !== "ready" &&
+      !(manifest.metadata.uploadStatus === "disabled" && manifest.metadata.webReplayAutoUploadEligible !== true) &&
+      (manifest.metadata.uploadStatus === "not-uploaded" || manifest.metadata.processingStatus === "failed")
+    );
+    for (const candidate of (await readRawCaptureManifests(settings)).filter(needsReview)) {
+      await this.withCaptureTask(candidate.metadata.captureSessionId, async () => {
+        const manifest = await readRawCaptureManifest(candidate.indexPath);
+        if (!manifest || !needsReview(manifest) || manifest.localPath !== candidate.localPath) return;
+        // A missing/unreadable source keeps its existing recovery actions. Only
+        // a complete, recognized source may be removed from automatic delivery.
+        const fileStat = await stat(manifest.localPath).catch(() => null);
+        if (!fileStat?.isFile() || fileStat.size > RAW_CAPTURE_MAX_BYTES) return;
+        const contents = await readFile(manifest.localPath, "utf8").catch(() => "");
+        const payload = parseJsonObject(contents);
+        if (readObject(payload?.capture)?.captureSessionId !== manifest.metadata.captureSessionId) return;
+        const localDiagnostic = isAtlasConnectionOrLobbyCapture(payload);
+        await writeRawCaptureManifest({
+          ...manifest,
+          updatedAt: new Date().toISOString(),
+          recoveryDisposition: localDiagnostic ? "local-diagnostic" : "replay",
+          metadata: localDiagnostic
+            ? rawCaptureMetadataRemovedFromUploadQueue(manifest.metadata, "connection-or-lobby-only")
+            : manifest.metadata
+        });
+      });
     }
   }
 
@@ -6111,11 +6160,32 @@ function normalizeDiagnosticCaptureSessionId(value: string): string {
 }
 
 function rawCaptureMetadataRemovedFromUploadQueue(
-  metadata: RawCaptureReplayMetadata
+  metadata: RawCaptureReplayMetadata,
+  reason: NonNullable<RawCaptureReplayMetadata["uploadQueueRemoval"]>["reason"] = "user-kept-local",
+  updatedAt = new Date().toISOString()
 ): RawCaptureReplayMetadata {
-  const updatedAt = new Date().toISOString();
+  if (
+    metadata.uploadStatus === "disabled" && metadata.webReplayAutoUploadEligible !== true &&
+    metadata.webReplayDiscordShareEligible !== true && metadata.processingStatus === "pending" &&
+    !metadata.error && metadata.uploadQueueRemoval
+  ) return metadata;
   return {
     ...metadata,
+    uploadQueueRemoval: {
+      removedAt: updatedAt,
+      reason,
+      uploadStatus: metadata.uploadStatus,
+      processingStatus: metadata.processingStatus,
+      attemptCount: metadata.attemptCount,
+      lastUploadAttemptAt: metadata.lastUploadAttemptAt,
+      lastHttpStatus: metadata.lastHttpStatus,
+      lastErrorCode: metadata.lastErrorCode,
+      lastErrorClass: metadata.lastErrorClass,
+      error: metadata.error,
+      uploadId: metadata.uploadId,
+      uploadUrl: metadata.uploadUrl,
+      partialWarnings: metadata.partialWarnings?.slice()
+    },
     uploadStatus: "disabled",
     uploadUrl: undefined,
     uploadId: undefined,
