@@ -1,6 +1,6 @@
 # Atlas history request reduction — 28 September 2026
 
-Status: local desktop source fix, pending release. Public desktop remains v0.9.77.
+Status: published in v0.9.78 for Windows, Mac Intel and Mac Apple Silicon on 28 September 2026. See the [release and verification receipt](./RELEASE-2026-09-28.md).
 
 Atlas's developer reported roughly 400,000 RiftLite history calls daily. The code confirmed that each automatic match refresh independently traversed up to five 20-game pages, that the timer ran every 30 seconds, and that unresolved matches retried indefinitely with a maximum five-minute backoff. The reported daily total was not independently measured.
 
@@ -19,7 +19,7 @@ Exact provider timestamp, game number, both player names and both scores are sti
 
 ## Delivery and evidence
 
-This code runs inside the desktop app and calls Atlas directly through the embedded signed-in game. A RiftLite website deployment cannot reduce requests made by older installed desktop versions. No Atlas API calls, account mutations, installer builds, version changes or publication were performed for this fix.
+This code runs inside the desktop app and calls Atlas directly through the embedded signed-in game. A RiftLite website deployment cannot reduce requests made by older installed desktop versions. The initial implementation phase made no Atlas API calls or account mutations and did not build or publish installers. The subsequent, user-authorized v0.9.78 release is documented separately above.
 
 Validation uses synthetic fixtures and mocked Atlas responses. All **234 test files / 2,619 tests** passed, including batching, date boundaries, ambiguous entries, private results, BO3 partial results, session switching, retry exhaustion, restarts and shared-export privacy. Both TypeScript projects passed (`npm run lint` and `npx tsc -p tsconfig.electron.json --noEmit`); changed-code whitespace checks passed. No authenticated live Atlas import was performed.
 
