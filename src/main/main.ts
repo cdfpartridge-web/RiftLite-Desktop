@@ -8575,7 +8575,7 @@ function registerIpc(): void {
     }
   });
   const atlasHistoryAutoImport = new AtlasHistoryAutoImport({
-    refresh: (id) => atlasHistoryService.refresh(id),
+    refreshMany: (ids) => atlasHistoryService.refreshMany(ids),
     ready: () => {
       const guest = gameWebContentsByPlatform.get("atlas");
       return Boolean(guest && isCurrentTrustedGameWebContents("atlas", guest) &&
@@ -8592,8 +8592,8 @@ function registerIpc(): void {
     void store.getMatches().then((matches) => atlasHistoryAutoImport.run(matches)).catch(() => undefined);
   };
   // Covers automatic saves, delayed Atlas history, signing in later and app restarts.
-  // A pass imports at most three matches, with per-match backoff up to five minutes.
-  const atlasHistoryTimer = setInterval(catchUpAtlasHistory, 30_000);
+  // Passes share one history scan, with finite retries/backoff and a 24-hour age limit.
+  const atlasHistoryTimer = setInterval(catchUpAtlasHistory, 60_000);
   atlasHistoryTimer.unref();
   app.once("before-quit", () => clearInterval(atlasHistoryTimer));
   handleTrustedAppIpc("matches:get", async () => {

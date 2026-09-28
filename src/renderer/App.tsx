@@ -569,12 +569,12 @@ const LAB_TRAINING_LEGEND_NAMES = new Set(LAB_TRAINING_LEGEND_NAME_BY_CANONICAL.
 const RELEASE_NOTES = {
   version: APP_VERSION_META,
   title: `RiftLite v${APP_VERSION_META}`,
-  intro: "A quieter Web Replay upload queue, with better handling of recovered Atlas captures.",
+  intro: "Atlas deck history now uses fewer background requests and stops retrying unavailable games.",
   items: [
-    "Recovered Atlas connection and lobby fragments now stay local instead of creating replay upload errors.",
-    "Existing eligible recovered fragments are checked on startup and removed from the upload queue while their files are kept.",
-    "Keep local now retains the previous error details for troubleshooting. Real interrupted games remain available for review.",
-    "Opening Turns Lab is marked Coming soon while the interactive practice board is being prepared."
+    "Atlas history checks are shared across matches and stop once they pass the relevant game date.",
+    "Completed and private deck results are retained without repeated lookups, including between best-of-three games.",
+    "Games that Atlas has not recorded stop retrying automatically after a limited number of attempts or 24 hours.",
+    "Use Get Atlas decks or Refresh in match details to check a missing or older deck list yourself."
   ]
 };
 const RIOT_LEGAL_NOTICE = `RiftLite was created under Riot Games' "Legal Jibber Jabber" policy using assets owned by Riot Games. Riot Games does not endorse or sponsor this project.`;

@@ -5,6 +5,7 @@ import {
   atlasHistoryRowMatches,
   atlasSideboardChanges,
   historyDeckForPlayer,
+  needsAtlasHistoryImport,
   normalizeAtlasHistoryRows,
   normalizeAtlasMatchHistory,
   parseAtlasHistoryDeck,
@@ -96,6 +97,52 @@ describe("post-game Atlas deck contract", () => {
     const value = history();
     value.games[0].opponent.availability = "private";
     expect(normalizeAtlasMatchHistory(value)?.games[0].opponent.cards).toEqual([]);
+  });
+  it.each([
+    ["available", "available"],
+    ["available", "private"],
+    ["private", "available"],
+    ["private", "private"],
+  ] as const)("completes an import with %s own and %s opponent decks", (me, opponent) => {
+    const imported = history();
+    for (const [side, availability] of [["me", me], ["opponent", opponent]] as const) {
+      imported.games[0][side].availability = availability;
+      if (availability === "private") imported.games[0][side].cards = [];
+    }
+    expect(needsAtlasHistoryImport({ ...savedMatch(), atlasHistory: imported })).toBe(false);
+  });
+  it.each([
+    ["unavailable", "available"],
+    ["unavailable", "private"],
+    ["available", "unavailable"],
+    ["private", "unavailable"],
+    ["unavailable", "unavailable"],
+  ] as const)("retains incomplete evidence with %s own and %s opponent decks", (me, opponent) => {
+    const imported = history();
+    for (const [side, availability] of [["me", me], ["opponent", opponent]] as const) {
+      imported.games[0][side].availability = availability;
+      if (availability !== "available") imported.games[0][side].cards = [];
+    }
+    expect(needsAtlasHistoryImport({ ...savedMatch(), atlasHistory: imported })).toBe(true);
+  });
+  it("requires every exact BO3 game marker even when already imported games have private decks", () => {
+    const imported = history();
+    imported.games[0].opponent = { availability: "private", cards: [] };
+    const second = { ...marker, gameNumber: 2, startedAt: startedAt + 600_000 };
+    const third = { ...marker, gameNumber: 3, startedAt: startedAt + 1_200_000 };
+    const match = {
+      ...savedMatch(),
+      format: "Bo3" as const,
+      atlasHistoryMarkers: [marker, second, third],
+      atlasHistory: imported,
+    };
+    expect(needsAtlasHistoryImport(match)).toBe(true);
+    imported.games.push({ ...structuredClone(imported.games[0]), ...second, historyId: "history-2" });
+    expect(needsAtlasHistoryImport(match)).toBe(true);
+    imported.games.push({ ...structuredClone(imported.games[0]), ...third, historyId: "history-3" });
+    expect(needsAtlasHistoryImport(match)).toBe(false);
+    imported.games[2].startedAt++;
+    expect(needsAtlasHistoryImport(match)).toBe(true);
   });
   it("requires ended games, an exact timestamp, the same players, game and scores", () => {
     expect(

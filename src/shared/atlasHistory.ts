@@ -51,6 +51,8 @@ export function needsAtlasHistoryImport(match: MatchDraft): boolean {
   return markers.length > 0 && markers.some((marker) => {
     const game = match.atlasHistory?.games.find((g) =>
       g.gameNumber === marker.gameNumber && g.startedAt === marker.startedAt);
+    // Atlas's explicit private result is final; only missing evidence needs another attempt.
+    // Check every game so a private deck in one BO3 game cannot hide a missing later game.
     return !game || game.me.availability === "unavailable" || game.opponent.availability === "unavailable";
   });
 }

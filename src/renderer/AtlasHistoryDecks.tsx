@@ -160,18 +160,6 @@ export function AtlasMatchDeckPanel({
     setHistory(initialHistory);
     setMessage("");
   }, [matchId, initialHistory]);
-  const hasInitialHistory = Boolean(initialHistory?.games.length);
-  useEffect(() => {
-    if (hasInitialHistory) { setBusy(false); return; }
-    let current = true;
-    setBusy(true);
-    void window.riftlite.refreshAtlasHistoryDecks(matchId).then((match) => {
-      if (current) setHistory(match.atlasHistory);
-    }).catch((error) => {
-      if (current) setMessage(error instanceof Error ? error.message : "Deck import will retry when Atlas is available.");
-    }).finally(() => { if (current) setBusy(false); });
-    return () => { current = false; };
-  }, [matchId, hasInitialHistory]);
   async function run(action: () => Promise<void>) {
     setBusy(true);
     setMessage("");
@@ -201,7 +189,7 @@ export function AtlasMatchDeckPanel({
             })
           }
         >
-          {busy ? "Checking Atlas…" : history ? "Refresh" : "Try again"}
+          {busy ? "Checking Atlas…" : history?.games.length ? "Refresh" : "Get Atlas decks"}
         </button>
       </header>
       {history?.games.length ? (
@@ -209,7 +197,7 @@ export function AtlasMatchDeckPanel({
       ) : (
         <p className="atlas-history-empty">
           {busy ? "Looking for this completed match’s deck lists…" :
-            "Deck lists are saved automatically after your match while you’re signed in to Atlas. Atlas may take a moment to make them available. Private lists stay unavailable."}
+            "Recent matches import automatically while you’re signed in to Atlas. For older matches or missing lists, choose Get Atlas decks to check Atlas. Private decks remain private."}
         </p>
       )}
       {history?.games.length ? (
