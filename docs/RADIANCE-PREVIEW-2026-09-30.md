@@ -20,7 +20,7 @@ Preview records are in the validated desktop registry overlay, with provider ide
 
 Capture resolves known preview image URLs as well as collector IDs and Riot hashes; ambiguous URLs fail closed. The desktop legend picker, artwork, domain themes, battlefield catalog and TCGA text matcher include the new setup cards. Captured Ahri promotional art stays distinct.
 
-The web replay renderer includes an audited Radiance image fallback, preserves trusted captured preview art, recognises the new battlefields and renders name-only Bomb tokens. Signed codes accept star, encoded star and -star URL spellings. The legacy replay view, website legend choices/images and compact training registry are updated too. Replay layout and rules execution are unchanged.
+The web replay renderer includes an audited Radiance image fallback, preserves trusted captured preview art, recognises the new battlefields and renders name-only Bomb tokens. Signed codes accept star, encoded star and -star URL spellings. Battlefield images use their loaded dimensions to keep native landscape art upright in the board, hover preview and inspector while retaining rotation for older portrait scans. The legacy replay view, website legend choices/images and compact training registry are updated too. Replay layout and rules execution are unchanged.
 
 ## Verification
 

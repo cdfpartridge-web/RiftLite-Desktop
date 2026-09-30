@@ -1,6 +1,6 @@
 # Private Team invitations — local implementation
 
-Implemented 29 September 2026; not released. Version remains v0.9.78 and public installers are unchanged.
+Published in desktop v0.9.79 and the supporting website on 30 September 2026. Both invitation indexes are ready. See [the release receipt](./RELEASE-2026-09-30.md). The original local validation below describes the 29 September checkpoint.
 
 Owners/admins open Community → Teams → their team → **Invite member**. The Members panel accepts a RiftLite handle or creates a single-use link, with Copy link and pending-invite revocation. Targeted invitations appear on the recipient's Teams landing page with Join/Decline. Joining refreshes memberships and opens the team. Private and invite-only teams no longer show ordinary application forms.
 
