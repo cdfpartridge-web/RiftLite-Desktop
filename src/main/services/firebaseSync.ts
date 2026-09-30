@@ -44,6 +44,8 @@ import type {
   RiftLiteBackupFile,
   SocialTeamApplication,
   SocialTeamApplicationDraft,
+  SocialTeamInvite,
+  SocialTeamInviteAcceptance,
   SocialTeamDetail,
   SocialTeamDraft,
   SocialTeamMember,
@@ -2963,6 +2965,44 @@ export class FirebaseSyncService {
     return Array.isArray(payload.applications) ? payload.applications.filter(isRecord).map(normalizeSocialTeamApplication) : [];
   }
 
+  async createSocialTeamInvite(teamId: string, targetHandle = ""): Promise<{ invite: SocialTeamInvite; inviteUrl: string }> {
+    const payload = await this.authenticatedWebsiteRequest(`/api/teams/${encodeURIComponent(teamId)}/invites`, {
+      method: "POST",
+      body: { targetHandle: targetHandle.trim().replace(/^@+/, "") }
+    });
+    const invite = normalizeSocialTeamInvite(payload.invite);
+    if (!invite || invite.teamId !== teamId) throw new Error("The invitation response did not match this team. Refresh invitations before trying again.");
+    // Construct the copyable public URL from the validated ID, never from a remote redirect.
+    return { invite, inviteUrl: `${COMMUNITY_API_BASE}/teams/invite/${encodeURIComponent(invite.inviteId)}` };
+  }
+
+  async getSocialTeamInvites(teamId: string): Promise<SocialTeamInvite[]> {
+    const payload = await this.authenticatedWebsiteRequest(`/api/teams/${encodeURIComponent(teamId)}/invites`, { method: "GET" });
+    return normalizeSocialTeamInvites(payload.invites).filter((invite) => invite.teamId === teamId);
+  }
+
+  async revokeSocialTeamInvite(teamId: string, inviteId: string): Promise<void> {
+    await this.authenticatedWebsiteRequest(`/api/teams/${encodeURIComponent(teamId)}/invites/${encodeURIComponent(inviteId)}`, { method: "DELETE" });
+  }
+
+  async getMySocialTeamInvites(): Promise<SocialTeamInvite[]> {
+    const payload = await this.authenticatedWebsiteRequest("/api/teams/invites", { method: "GET" });
+    return normalizeSocialTeamInvites(payload.invites);
+  }
+
+  async acceptSocialTeamInvite(inviteId: string): Promise<SocialTeamInviteAcceptance> {
+    const payload = await this.authenticatedWebsiteRequest("/api/teams/invites/accept", { method: "POST", body: { inviteId } });
+    const team = isRecord(payload.team) ? payload.team : {};
+    const id = readString(team.id);
+    const role = readTeamRole(team.role);
+    if (!id || !role) throw new Error("Your invitation was processed, but the team response was incomplete. Refresh your teams.");
+    return { alreadyMember: payload.alreadyMember === true, team: { id, name: readString(team.name), slug: readString(team.slug), role } };
+  }
+
+  async declineSocialTeamInvite(inviteId: string): Promise<void> {
+    await this.authenticatedWebsiteRequest("/api/teams/invites/decline", { method: "POST", body: { inviteId } });
+  }
+
   async reviewSocialTeamApplication(teamId: string, applicationId: string, status: "accepted" | "declined"): Promise<SocialTeamApplication> {
     const payload = await this.authenticatedWebsiteRequest(`/api/teams/${encodeURIComponent(teamId)}/applications/${encodeURIComponent(applicationId)}`, {
       method: "PATCH",
@@ -4899,6 +4939,23 @@ function normalizeSocialTeamMember(value: Record<string, unknown>): SocialTeamMe
     joinedAt: readNumber(value.joinedAt),
     updatedAt: readNumber(value.updatedAt)
   };
+}
+
+function normalizeSocialTeamInvite(value: unknown): SocialTeamInvite | null {
+  if (!isRecord(value)) return null;
+  const inviteId = readString(value.inviteId);
+  const teamId = readString(value.teamId);
+  const status = readString(value.status);
+  if (!/^[a-zA-Z0-9_-]{8,128}$/.test(inviteId) || !teamId || !["open", "accepted", "declined", "revoked", "expired"].includes(status)) return null;
+  return {
+    inviteId, teamId, status: status as SocialTeamInvite["status"],
+    teamName: readString(value.teamName), senderName: readString(value.senderName),
+    targetHandle: readString(value.targetHandle), expiresAt: readNumber(value.expiresAt), createdAt: readNumber(value.createdAt)
+  };
+}
+
+function normalizeSocialTeamInvites(value: unknown): SocialTeamInvite[] {
+  return Array.isArray(value) ? value.slice(0, 200).map(normalizeSocialTeamInvite).filter((invite): invite is SocialTeamInvite => invite !== null) : [];
 }
 
 function normalizeSocialTeamApplication(value: Record<string, unknown>): SocialTeamApplication {

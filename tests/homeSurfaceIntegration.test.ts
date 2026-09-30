@@ -34,9 +34,9 @@ describe("Home launchpad", () => {
     const releaseNotesSource = appSource.slice(releaseNotesStart, releaseNotesEnd);
 
     expect(releaseNotesSource).toContain("version: APP_VERSION_META");
-    expect(releaseNotesSource).toContain("Atlas history checks are shared across matches");
-    expect(releaseNotesSource).toContain("Completed and private deck results are retained");
-    expect(releaseNotesSource).toContain("Get Atlas decks or Refresh");
+    expect(releaseNotesSource).toContain("Added 88 revealed Radiance prints");
+    expect(releaseNotesSource).toContain("Invite teammates by @handle");
+    expect(releaseNotesSource).toContain("Hub invitations now ask you to join explicitly");
     expect(releaseNotesSource).not.toContain("Search Rules");
     expect(releaseNotesSource).not.toContain("Deck Insights is now the default Insights view");
   });

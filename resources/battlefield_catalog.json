@@ -1,4 +1,9 @@
 [
+  {"name":"Cosmic Vista","aliases":[],"is_active":true,"image_name":"Cosmic Vista"},
+  {"name":"Durand Memorial","aliases":[],"is_active":true,"image_name":"Durand Memorial"},
+  {"name":"Packed Amphitheater","aliases":[],"is_active":true,"image_name":"Packed Amphitheater"},
+  {"name":"Rakelstake","aliases":[],"is_active":true,"image_name":"Rakelstake"},
+  {"name":"Ruined Monastery","aliases":[],"is_active":true,"image_name":"Ruined Monastery"},
   {"name": "Aspirant's Climb", "aliases": [], "is_active": true, "image_name": "Aspirant's Climb"},
   {"name": "Altar to Unity", "aliases": [], "is_active": true, "image_name": "Altar to Unity"},
   {"name": "Back-Alley Bar", "aliases": [], "is_active": true, "image_name": "Back-Alley Bar"},

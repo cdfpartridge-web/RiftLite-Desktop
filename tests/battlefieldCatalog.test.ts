@@ -13,6 +13,11 @@ const catalog = JSON.parse(
 const gamePreloadSource = readFileSync(new URL("../src/game-preload/gamePreload.ts", import.meta.url), "utf8");
 
 const newlySupportedBattlefields = [
+  "Cosmic Vista",
+  "Durand Memorial",
+  "Packed Amphitheater",
+  "Rakelstake",
+  "Ruined Monastery",
   "Trapping Grounds",
   "Valley of Idols",
   "Dragon Roost",
@@ -28,7 +33,7 @@ const newlySupportedBattlefields = [
 ] as const;
 
 describe("battlefield catalog", () => {
-  it("contains each released Unleashed and previewed Vendetta battlefield exactly once", () => {
+  it("contains each supported battlefield exactly once", () => {
     for (const name of newlySupportedBattlefields) {
       const matches = catalog.filter((entry) => entry.name === name);
       expect(matches, name).toHaveLength(1);

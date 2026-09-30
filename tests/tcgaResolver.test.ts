@@ -6,6 +6,16 @@ import { TcgaResolver } from "../src/main/services/tcgaResolver";
 import { canonicalLegendName, normalizeLegendName } from "../src/shared/legendNames";
 
 describe("TcgaResolver", () => {
+  it("fails closed when a preview image URL names two different cards", async () => {
+    const imageUrl = "https://cdn.piltoverarchive.com/temporary/preview.png";
+    await withRegistry([
+      registryCard("RAD-139", "Ekko", "Legend", { champion: "Ekko", imageUrl }),
+      registryCard("RAD-141", "Ziggs", "Legend", { champion: "Ziggs", imageUrl }),
+    ], async resolver => {
+      await expect(resolver.resolveLegend(`${imageUrl}?width=400`)).resolves.toBe("");
+      await expect(resolver.resolveLegend("RAD-139")).resolves.toBe("Ekko");
+    });
+  });
   it("resolves Vendetta legends from TCGA Riot image hashes", async () => {
     const resolver = new TcgaResolver(resolve(process.cwd(), "resources/tcga_card_lookup.json"));
 

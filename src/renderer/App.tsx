@@ -1,4 +1,5 @@
 import { DateFilter } from "./DateFilter";
+import { TeamInvitationInbox, TeamInvitationManager } from "./TeamInvitations";
 import { DEFAULT_DATE_FILTER, dateFilterLabel, isInDateFilter, type DateFilterValue } from "../shared/dateFilter";
 import React, { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { createDefaultSettings } from "../shared/settingsDefaults";
@@ -569,12 +570,12 @@ const LAB_TRAINING_LEGEND_NAMES = new Set(LAB_TRAINING_LEGEND_NAME_BY_CANONICAL.
 const RELEASE_NOTES = {
   version: APP_VERSION_META,
   title: `RiftLite v${APP_VERSION_META}`,
-  intro: "Atlas deck history now uses fewer background requests and stops retrying unavailable games.",
+  intro: "Radiance preview cards are here, with easier private team invitations and clearer Discord hub joining.",
   items: [
-    "Atlas history checks are shared across matches and stop once they pass the relevant game date.",
-    "Completed and private deck results are retained without repeated lookups, including between best-of-three games.",
-    "Games that Atlas has not recorded stop retrying automatically after a limited number of attempts or 24 hours.",
-    "Use Get Atlas decks or Refresh in match details to check a missing or older deck list yourself."
+    "Added 88 revealed Radiance prints, including six new legends, five battlefields and Bomb tokens.",
+    "Replays recognise new preview cards and retain alternate and signed artwork.",
+    "Invite teammates by @handle or a private invite link; accept invitations from Teams.",
+    "Hub invitations now ask you to join explicitly, preserve admin roles and explain Discord membership requirements."
   ]
 };
 const RIOT_LEGAL_NOTICE = `RiftLite was created under Riot Games' "Legal Jibber Jabber" policy using assets owned by Riot Games. Riot Games does not endorse or sponsor this project.`;
@@ -13803,6 +13804,7 @@ function SocialHubView({
       {tab === "lfg" ? <FindMatchPanel settings={settings} /> : null}
       {tab === "teams" ? (
         <TeamsPanel
+          key={`${settings.accountUid}:${settings.firebaseCredentialGeneration}`}
           settings={settings}
           matches={matches}
           teamMatches={teamMatches}
@@ -14357,6 +14359,8 @@ function TeamsPanel({
   const [mine, setMine] = useState<SocialTeamProfile[]>([]);
   const [selectedId, setSelectedId] = useState("");
   const [detail, setDetail] = useState<SocialTeamDetail | null>(null);
+  const teamLoadRevision = useRef(0);
+  const teamPanelMounted = useRef(true);
   const [teamTab, setTeamTab] = useState<"overview" | "stats" | "feed" | "members" | "applications" | "tools">("overview");
   const [messages, setMessages] = useState<SocialTeamMessage[]>([]);
   const [applications, setApplications] = useState<SocialTeamApplication[]>([]);
@@ -14400,6 +14404,7 @@ function TeamsPanel({
         window.riftlite.getSocialTeams(),
         window.riftlite.getSocialTeams({ mine: true })
       ]);
+      if (!teamPanelMounted.current) return;
       const allTeams = allResult.status === "fulfilled" ? allResult.value : [];
       const myTeams = mineResult.status === "fulfilled" ? mineResult.value : [];
       setTeams(allTeams);
@@ -14411,17 +14416,21 @@ function TeamsPanel({
         setStatus(errors.length ? errors.join(" ") : "Teams refreshed.");
       }
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Could not refresh teams.");
+      if (teamPanelMounted.current) setStatus(error instanceof Error ? error.message : "Could not refresh teams.");
     } finally {
-      setBusy(false);
+      if (teamPanelMounted.current) setBusy(false);
     }
   }
 
   async function loadTeam(teamId: string) {
+    const revision = ++teamLoadRevision.current;
+    const current = () => teamPanelMounted.current && revision === teamLoadRevision.current;
     setSelectedId(teamId);
+    setDetail(null);
     setBusy(true);
     try {
       const next = await window.riftlite.getSocialTeam(teamId);
+      if (!current()) return;
       setDetail(next);
       setTeamTab("overview");
       setEditDraft(teamToEditDraft(next.team));
@@ -14430,19 +14439,25 @@ function TeamsPanel({
         window.riftlite.getSocialTeamMessages(teamId).catch(() => []),
         window.riftlite.getSocialTeamApplications(teamId).catch(() => [])
       ]);
+      if (!current()) return;
       setMessages(nextMessages);
       setApplications(nextApplications);
       setStatus("");
       void onRefreshTeamMatches(next.team.id, false).catch(() => undefined);
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Could not open team.");
+      if (current()) {
+        setSelectedId("");
+        setStatus(error instanceof Error ? error.message : "Could not open team.");
+      }
     } finally {
-      setBusy(false);
+      if (current()) setBusy(false);
     }
   }
 
   useEffect(() => {
+    teamPanelMounted.current = true;
     void refreshTeams(false);
+    return () => { teamPanelMounted.current = false; teamLoadRevision.current += 1; };
   }, []);
 
   async function createTeam() {
@@ -14724,7 +14739,9 @@ function TeamsPanel({
               type="button"
               className="secondary"
               onClick={() => {
+                teamLoadRevision.current += 1;
                 setDetail(null);
+                setBusy(false);
                 setSelectedId("");
                 setManageOpen(false);
               }}
@@ -14738,6 +14755,7 @@ function TeamsPanel({
               <span className="status-pill">{detail.team.visibility === "private" ? "Private" : "Public"}</span>
               <span className="status-pill">{detail.team.memberCount} members</span>
               <span className="status-pill">{detail.team.recruitmentStatus || "open"}</span>
+              {canManage ? <button type="button" className="primary" onClick={() => setTeamTab("members")}><Mail size={15} /> Invite member</button> : null}
             </div>
           </div>
         </div>
@@ -14766,6 +14784,10 @@ function TeamsPanel({
                 <h2>Your access</h2>
                 {detail.myRole ? (
                   <p className="muted">You are a {detail.myRole} of this team.</p>
+                ) : detail.team.visibility === "private" || detail.team.recruitmentStatus === "invite-only" ? (
+                  <p className="muted">This team requires an invitation. Ask a team owner or admin to invite your RiftLite handle.</p>
+                ) : detail.team.recruitmentStatus === "closed" ? (
+                  <p className="muted">This team is not currently accepting applications.</p>
                 ) : (
                   <>
                     <p className="muted">Send a short application to join this team and access its member board.</p>
@@ -14912,6 +14934,7 @@ function TeamsPanel({
         ) : null}
         {teamTab === "members" ? (
           <section className="team-hub-section">
+            {canManage ? <TeamInvitationManager key={`${settings.accountUid}:${detail.team.id}`} teamId={detail.team.id} teamName={detail.team.name} /> : null}
             <div className="rail-card stack">
               <h2>Members</h2>
               {detail.members.map((member) => (
@@ -15022,6 +15045,11 @@ function TeamsPanel({
           </div>
           <button type="button" className="secondary" disabled={busy} onClick={() => void refreshTeams()}><RefreshCw size={15} /> Refresh</button>
         </div>
+        {!selectedId ? <TeamInvitationInbox key={settings.accountUid} onJoined={async (result) => {
+          const revision = teamLoadRevision.current;
+          await refreshTeams(false);
+          if (teamPanelMounted.current && revision === teamLoadRevision.current) await loadTeam(result.team.id);
+        }} /> : null}
         <button type="button" className="primary" onClick={() => setCreateOpen((open) => !open)}><Plus size={16} /> Create team</button>
         {createOpen ? (
           <div className="social-create-form">

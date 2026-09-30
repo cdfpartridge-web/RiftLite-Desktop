@@ -14,6 +14,9 @@ describe("IPC registration boundary", () => {
     expect(guardedChannels).toContain("matches:get");
     expect(guardedChannels).toContain("hubs:create");
     expect(guardedChannels).toContain("hubs:member:remove");
+    for (const channel of ["teams:invite:create", "teams:invites", "teams:invite:revoke", "teams:invites:mine", "teams:invite:accept", "teams:invite:decline"]) {
+      expect(guardedChannels).toContain(channel);
+    }
     expect(guardedChannels).toContain("account:cloud-sync:restore");
     expect(guardedChannels).toContain("backup:restore");
     expect(guardedChannels).toContain("diagnostics:bundle");

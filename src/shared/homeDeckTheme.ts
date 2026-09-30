@@ -48,19 +48,19 @@ export const HOME_DECK_DOMAIN_COLORS: Record<HomeDeckDomain, HomeDeckDomainColor
 // These pairs mirror classification.domain on the upstream card records used to
 // build RiftLite's packaged registry. Variants share their champion's pairing.
 const HOME_DECK_LEGENDS_BY_THEME: Record<HomeDeckThemeId, readonly string[]> = {
-  "calm-mind": ["Ahri", "Lillia", "Nasus", "Ornn"],
+  "calm-mind": ["Orianna", "Ahri", "Lillia", "Nasus", "Ornn"],
   "fury-calm": ["Akali"],
-  "body-order": ["Ambessa", "Fiora", "Garen", "Poppy", "Sett"],
-  "fury-chaos": ["Annie", "Draven", "Jinx", "Pyke", "Zed"],
+  "body-order": ["Jarvan IV", "Ambessa", "Fiora", "Garen", "Poppy", "Sett"],
+  "fury-chaos": ["Ziggs", "Annie", "Draven", "Jinx", "Pyke", "Zed"],
   "calm-order": ["Azir", "Ivern", "Leona", "Shen"],
   "fury-order": ["Darius", "Rek'Sai", "Vi"],
   "mind-chaos": ["Diana", "Ezreal", "Mel", "Teemo"],
   "calm-chaos": ["Irelia", "Vex", "Yasuo"],
-  "body-calm": ["Jax", "Lee Sin", "Master Yi", "Master Yi, Wuju Master", "Master Yi, Wuju Bladesman"],
+  "body-calm": ["K'Sante", "Jax", "Lee Sin", "Master Yi", "Master Yi, Wuju Master", "Master Yi, Wuju Bladesman"],
   "body-mind": ["Jayce"],
-  "fury-mind": ["Jhin", "Kai'Sa", "Rumble"],
+  "fury-mind": ["Ekko", "Jhin", "Kai'Sa", "Rumble"],
   "order-chaos": ["Kennen"],
-  "mind-order": ["LeBlanc", "Lux", "Renata Glasc", "Viktor"],
+  "mind-order": ["Seraphine", "LeBlanc", "Lux", "Renata Glasc", "Viktor"],
   "fury-body": ["Lucian", "Renekton", "Rengar", "Volibear"],
   "body-chaos": ["Kha'Zix", "Miss Fortune", "Sivir"]
 };

@@ -343,6 +343,9 @@ function normalizeOverlayCard(rawCard) {
     champion: readNullableString(rawCard.champion),
     imageUrl,
     imageHash: readNullableString(rawCard.imageHash) || extractRiotImageHash(imageUrl),
+    ...(rawCard.imageUrlAliases ? {
+      imageUrlAliases: uniqueStrings(rawCard.imageUrlAliases).map(url => readRequiredHttpUrl(url, `${parsed.printId} imageUrlAlias`)),
+    } : {}),
     artist: readNullableString(rawCard.artist),
     updatedAt: normalizeOptionalIsoDate(rawCard.updatedAt, parsed.printId),
     variants: {
@@ -610,6 +613,7 @@ export async function buildRegistry({
       endpoint,
       sets: normalizedSetCodes,
       pageSize,
+      overlays: overlay.sources || [],
     },
     stats: {
       rawRecords: rawCards.length,
@@ -617,8 +621,8 @@ export async function buildRegistry({
       uniquePrints: merged.cards.length,
       uniqueImageHashes: validation.uniqueImageHashes,
       localOverlayCards: overlayCardCount,
-      bySet: Object.fromEntries(normalizedSetCodes.map((setCode) => [setCode, {
-        rawRecords: rawBySet[setCode],
+      bySet: Object.fromEntries(Object.keys(validation.bySet).sort().map((setCode) => [setCode, {
+        rawRecords: rawBySet[setCode] || 0,
         uniquePrints: validation.bySet[setCode] || 0,
       }])),
     },

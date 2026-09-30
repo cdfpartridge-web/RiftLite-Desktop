@@ -9077,6 +9077,12 @@ function registerIpc(): void {
   handleTrustedAppIpc("teams:update", (_event, teamId: string, patch) => syncService.updateSocialTeam(teamId, patch));
   handleTrustedAppIpc("teams:apply", (_event, teamId: string, draft) => syncService.applyToSocialTeam(teamId, draft));
   handleTrustedAppIpc("teams:applications", (_event, teamId: string) => syncService.getSocialTeamApplications(teamId));
+  handleTrustedAppIpc("teams:invite:create", (_event, teamId: string, targetHandle?: string) => syncService.createSocialTeamInvite(teamId, targetHandle));
+  handleTrustedAppIpc("teams:invites", (_event, teamId: string) => syncService.getSocialTeamInvites(teamId));
+  handleTrustedAppIpc("teams:invite:revoke", (_event, teamId: string, inviteId: string) => syncService.revokeSocialTeamInvite(teamId, inviteId));
+  handleTrustedAppIpc("teams:invites:mine", () => syncService.getMySocialTeamInvites());
+  handleTrustedAppIpc("teams:invite:accept", (_event, inviteId: string) => syncService.acceptSocialTeamInvite(inviteId));
+  handleTrustedAppIpc("teams:invite:decline", (_event, inviteId: string) => syncService.declineSocialTeamInvite(inviteId));
   handleTrustedAppIpc("teams:application:review", (_event, teamId: string, applicationId: string, status: "accepted" | "declined") => syncService.reviewSocialTeamApplication(teamId, applicationId, status));
   handleTrustedAppIpc("teams:messages", (_event, teamId: string) => syncService.getSocialTeamMessages(teamId));
   handleTrustedAppIpc("teams:message:post", (_event, teamId: string, text: string) => syncService.postSocialTeamMessage(teamId, text));

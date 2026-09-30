@@ -5,6 +5,12 @@ function riftAtlasCardImageUrl(cardCode: string): string {
 }
 
 const LEGEND_IMAGE_URLS: Record<string, string> = {
+  "Ekko": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/8ca3ef446631784ce1d261e30f6a163843ffcb2b-744x1039.png?accountingTag=RB",
+  "Ziggs": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/69899f4d5e05ff0a060b9f38894cd77f9e17d195-744x1039.png?accountingTag=RB",
+  "Orianna": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/d1f940425d4d913d8f56c017254343bc898f4892-744x1039.png?accountingTag=RB",
+  "K'Sante": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/190a27bf844fa21105824efc19de4e71c3137df6-744x1039.png?accountingTag=RB",
+  "Seraphine": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/399262205b15aa3b6306eb1d80a308791dcbe2ca-744x1039.png?accountingTag=RB",
+  "Jarvan IV": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/e85c005f938e44655f926bb406a47359ae51ecc1-744x1039.png?accountingTag=RB",
   "Ahri": "https://cdn.rgpub.io/public/live/map/riftbound/latest/OGN/cards/OGN-255/full-desktop-2x.avif",
   "Akali": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/0d53b477ed43fb9bbed84858443a606b2b51a2b5-744x1039.png?accountingTag=RB&auto=format&fit=fill&q=80&w=444",
   "Ambessa": riftAtlasCardImageUrl("VEN-153"),
@@ -58,6 +64,20 @@ const LEGEND_IMAGE_URLS: Record<string, string> = {
 };
 
 const LEGEND_CARD_CODE_MAP: Record<string, string> = {
+  "RAD-139": "Ekko",
+  "RAD-141": "Ziggs",
+  "RAD-145": "Orianna",
+  "RAD-147": "K'Sante",
+  "RAD-151": "Seraphine",
+  "RAD-155": "Jarvan IV",
+  "RAD-169": "Ziggs",
+  "RAD-169*": "Ziggs",
+  "RAD-171": "Orianna",
+  "RAD-171*": "Orianna",
+  "RAD-172": "K'Sante",
+  "RAD-174": "Seraphine",
+  "RAD-174*": "Seraphine",
+  "RAD-176": "Jarvan IV",
   "SFD-181": "Rumble",
   "SFD-240": "Rumble",
   "VEN-139": "Akali",

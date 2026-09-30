@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-09-05T08:11:06.897Z",
+  "generatedAt": "2026-09-30T07:29:48.381Z",
   "source": {
     "provider": "RiftCodex",
     "endpoint": "https://api.riftcodex.com/cards",
@@ -11,14 +11,27 @@
       "UNL",
       "VEN"
     ],
-    "pageSize": 100
+    "pageSize": 100,
+    "overlays": [
+      {
+        "provider": "Piltover Archive + Riot Card Gallery",
+        "set": "RAD",
+        "auditedAt": "2026-09-30",
+        "urls": [
+          "https://piltoverarchive.com/cards?sets=RAD",
+          "https://playriftbound.com/en-us/card-gallery/"
+        ],
+        "prints": 88,
+        "notes": "Printed artwork checked for metadata conflicts; includes 84 gallery prints plus three signed prints and Bomb. Two Ahri promotional artworks share RAD-038 and remain captured image URLs."
+      }
+    ]
   },
   "stats": {
     "rawRecords": 1302,
     "uniqueSourcePrints": 1171,
-    "uniquePrints": 1189,
-    "uniqueImageHashes": 1191,
-    "localOverlayCards": 19,
+    "uniquePrints": 1277,
+    "uniqueImageHashes": 1275,
+    "localOverlayCards": 107,
     "bySet": {
       "OGN": {
         "rawRecords": 352,
@@ -27,6 +40,10 @@
       "OGS": {
         "rawRecords": 24,
         "uniquePrints": 24
+      },
+      "RAD": {
+        "rawRecords": 0,
+        "uniquePrints": 88
       },
       "SFD": {
         "rawRecords": 288,
@@ -10662,6 +10679,2555 @@
       "aliases": [],
       "sourceIds": [
         "69bc5bd9d308c64675ca882d"
+      ]
+    },
+    {
+      "printId": "RAD-001",
+      "basePrintId": "RAD-001",
+      "setCode": "RAD",
+      "collectorCode": "001",
+      "name": "Amateur Demolitionist",
+      "type": "Unit",
+      "supertype": null,
+      "costEnergy": 2,
+      "costPower": 0,
+      "tags": [
+        "Bandle City",
+        "Yordle"
+      ],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/3dca5e04ff8dff983993f87d5a82a7fd56d7bc9c-744x1039.png?accountingTag=RB",
+      "imageHash": "3dca5e04ff8dff983993f87d5a82a7fd56d7bc9c",
+      "artist": "Kudos Productions",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:39603e08-2d31-4785-8d4f-963323a326af",
+        "riot-gallery:rad-001-167"
+      ]
+    },
+    {
+      "printId": "RAD-002",
+      "basePrintId": "RAD-002",
+      "setCode": "RAD",
+      "collectorCode": "002",
+      "name": "Banner of Conquest",
+      "type": "Gear",
+      "supertype": null,
+      "costEnergy": 1,
+      "costPower": 1,
+      "tags": [
+        "Device"
+      ],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/1e2a4e0a8cf533c82e9c3f4d507dd7eb63ece943-744x1039.png?accountingTag=RB",
+      "imageHash": "1e2a4e0a8cf533c82e9c3f4d507dd7eb63ece943",
+      "artist": "Fish Art Studio",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:48aae390-c69b-48da-9ea6-a62818ead3e2",
+        "riot-gallery:rad-002-167"
+      ]
+    },
+    {
+      "printId": "RAD-003",
+      "basePrintId": "RAD-003",
+      "setCode": "RAD",
+      "collectorCode": "003",
+      "name": "Bilgewater Tracker",
+      "type": "Unit",
+      "supertype": null,
+      "costEnergy": 3,
+      "costPower": 0,
+      "tags": [
+        "Bilgewater"
+      ],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/b660759a6bcb9c7ca41ea969cf11463259e284c9-744x1039.png?accountingTag=RB",
+      "imageHash": "b660759a6bcb9c7ca41ea969cf11463259e284c9",
+      "artist": "Six more Vodka",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:a14ef14e-a51c-4559-8d2c-db47236aaae6",
+        "riot-gallery:rad-003-167"
+      ]
+    },
+    {
+      "printId": "RAD-012",
+      "basePrintId": "RAD-012",
+      "setCode": "RAD",
+      "collectorCode": "012",
+      "name": "Runeblade Anvil",
+      "type": "Gear",
+      "supertype": null,
+      "costEnergy": 1,
+      "costPower": 0,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/11e2ddea70ec4dd8e562681a1ab1dfbc2b2dca0f-744x1039.png?accountingTag=RB",
+      "imageHash": "11e2ddea70ec4dd8e562681a1ab1dfbc2b2dca0f",
+      "artist": "Kudos Productions",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:5644fb12-6ad6-4361-93a5-5eac1a024597",
+        "riot-gallery:rad-012-167"
+      ]
+    },
+    {
+      "printId": "RAD-013",
+      "basePrintId": "RAD-013",
+      "setCode": "RAD",
+      "collectorCode": "013",
+      "name": "Lost to the Sand",
+      "type": "Spell",
+      "supertype": null,
+      "costEnergy": 3,
+      "costPower": 1,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/92071a0f4d495f5f7acdf78d060133b98d1cebae-744x1039.png?accountingTag=RB",
+      "imageHash": "92071a0f4d495f5f7acdf78d060133b98d1cebae",
+      "artist": "Kudos Productions",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:dc8f56b5-1f57-4b48-a445-033a1f686023",
+        "riot-gallery:rad-013-167"
+      ]
+    },
+    {
+      "printId": "RAD-023",
+      "basePrintId": "RAD-023",
+      "setCode": "RAD",
+      "collectorCode": "023",
+      "name": "Ziggs, Short-Fused",
+      "type": "Unit",
+      "supertype": "Champion",
+      "costEnergy": 5,
+      "costPower": 1,
+      "tags": [
+        "Ziggs",
+        "Zaun",
+        "Yordle"
+      ],
+      "champion": "Ziggs",
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/9df0d347bcfc0593cb724258ee07a1208c620848-744x1039.png?accountingTag=RB",
+      "imageHash": "9df0d347bcfc0593cb724258ee07a1208c620848",
+      "artist": "Pixelverse",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:4c7fd59e-4cf5-492c-a998-652ab1802227",
+        "riot-gallery:rad-023-167"
+      ]
+    },
+    {
+      "printId": "RAD-023A",
+      "basePrintId": "RAD-023",
+      "setCode": "RAD",
+      "collectorCode": "023A",
+      "name": "Ziggs, Short-Fused",
+      "type": "Unit",
+      "supertype": "Champion",
+      "costEnergy": 5,
+      "costPower": 1,
+      "tags": [
+        "Ziggs",
+        "Zaun",
+        "Yordle"
+      ],
+      "champion": "Ziggs",
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/2a3e03a41522fde7f458fae1fdb72c6224cf4202-744x1039.png?accountingTag=RB",
+      "imageHash": "2a3e03a41522fde7f458fae1fdb72c6224cf4202",
+      "artist": "Ziyan Lin",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": true,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:443d93a7-00dc-403b-9fa7-b89f401f999a",
+        "riot-gallery:rad-023a-167"
+      ]
+    },
+    {
+      "printId": "RAD-024",
+      "basePrintId": "RAD-024",
+      "setCode": "RAD",
+      "collectorCode": "024",
+      "name": "Blossoming Dreamroot",
+      "type": "Gear",
+      "supertype": null,
+      "costEnergy": 2,
+      "costPower": 0,
+      "tags": [
+        "Device"
+      ],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/5b819cc232389f3ef1438350d68c7801e181961c-744x1039.png?accountingTag=RB",
+      "imageHash": "5b819cc232389f3ef1438350d68c7801e181961c",
+      "artist": "Fish Art Studio",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:07e8f196-55aa-43fc-bb63-5ac51d83aa7a",
+        "riot-gallery:rad-024-167"
+      ]
+    },
+    {
+      "printId": "RAD-033",
+      "basePrintId": "RAD-033",
+      "setCode": "RAD",
+      "collectorCode": "033",
+      "name": "Command: Attack",
+      "type": "Spell",
+      "supertype": null,
+      "costEnergy": 1,
+      "costPower": 1,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/b025756992e22af480902e13b01e25acbc747221-744x1039.png?accountingTag=RB",
+      "imageHash": "b025756992e22af480902e13b01e25acbc747221",
+      "artist": "Yeon Art Studio",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:392a81da-2e06-4075-b76d-1d07b09b66d2",
+        "riot-gallery:rad-033-167"
+      ]
+    },
+    {
+      "printId": "RAD-034",
+      "basePrintId": "RAD-034",
+      "setCode": "RAD",
+      "collectorCode": "034",
+      "name": "Hunker Down",
+      "type": "Spell",
+      "supertype": null,
+      "costEnergy": 1,
+      "costPower": 0,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/111c518590b17919e5b851ef6c713c7eb7504ae2-744x1039.png?accountingTag=RB",
+      "imageHash": "111c518590b17919e5b851ef6c713c7eb7504ae2",
+      "artist": "Kudos Productions",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:c88469c9-3dd4-4f5b-ba3e-1b7c97e7f3f0",
+        "riot-gallery:rad-034-167"
+      ]
+    },
+    {
+      "printId": "RAD-035",
+      "basePrintId": "RAD-035",
+      "setCode": "RAD",
+      "collectorCode": "035",
+      "name": "Invigorating Bloom",
+      "type": "Gear",
+      "supertype": null,
+      "costEnergy": 3,
+      "costPower": 0,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/66d4436ef5d7a7a81c60ee9b1b3ebae06162b7d2-744x1039.png?accountingTag=RB",
+      "imageHash": "66d4436ef5d7a7a81c60ee9b1b3ebae06162b7d2",
+      "artist": "Kudos Productions",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:c45be633-93be-49c6-88c7-49f2b4bc1423",
+        "riot-gallery:rad-035-167"
+      ]
+    },
+    {
+      "printId": "RAD-038",
+      "basePrintId": "RAD-038",
+      "setCode": "RAD",
+      "collectorCode": "038",
+      "name": "Ahri, Confident",
+      "type": "Unit",
+      "supertype": "Champion",
+      "costEnergy": 4,
+      "costPower": 1,
+      "tags": [
+        "Ahri",
+        "Ionia"
+      ],
+      "champion": "Ahri",
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/cf3c6a5963ad27976960977b0a51ea185f551696-744x1039.png?accountingTag=RB",
+      "imageHash": "cf3c6a5963ad27976960977b0a51ea185f551696",
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/temporary/1790379856360-1cbp857fr3y.jpg",
+        "https://cdn.piltoverarchive.com/temporary/1790379906737-nco9pod88y.jpg"
+      ],
+      "artist": "Naifan Zhang",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:ab19eef7-682a-4f54-b64e-cbdd8152d07a",
+        "riot-gallery:rad-038-167"
+      ]
+    },
+    {
+      "printId": "RAD-045",
+      "basePrintId": "RAD-045",
+      "setCode": "RAD",
+      "collectorCode": "045",
+      "name": "K'Sante, Dauntless",
+      "type": "Unit",
+      "supertype": "Champion",
+      "costEnergy": 4,
+      "costPower": 1,
+      "tags": [
+        "K'Sante",
+        "Shurima"
+      ],
+      "champion": "K'Sante",
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/f56e9f9db199f915e32ea264b7dab70202f97957-744x1039.png?accountingTag=RB",
+      "imageHash": "f56e9f9db199f915e32ea264b7dab70202f97957",
+      "artist": "Pixelverse",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:43a54dc6-05d6-4869-8806-d5dee5098ec3",
+        "riot-gallery:rad-045-167"
+      ]
+    },
+    {
+      "printId": "RAD-045A",
+      "basePrintId": "RAD-045",
+      "setCode": "RAD",
+      "collectorCode": "045A",
+      "name": "K'Sante, Dauntless",
+      "type": "Unit",
+      "supertype": "Champion",
+      "costEnergy": 4,
+      "costPower": 1,
+      "tags": [
+        "K'Sante",
+        "Shurima"
+      ],
+      "champion": "K'Sante",
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/813f6a991117b82a389d5eeb119c08f4ecc12a44-744x1039.png?accountingTag=RB",
+      "imageHash": "813f6a991117b82a389d5eeb119c08f4ecc12a44",
+      "artist": "Yuande Wu",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": true,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:e24a3abe-7664-4010-ad33-895746c84ce8",
+        "riot-gallery:rad-045a-167"
+      ]
+    },
+    {
+      "printId": "RAD-046",
+      "basePrintId": "RAD-046",
+      "setCode": "RAD",
+      "collectorCode": "046",
+      "name": "Resplendent Rostrum",
+      "type": "Gear",
+      "supertype": null,
+      "costEnergy": 8,
+      "costPower": 1,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/df1c12e65cc3c63c96fb6c96b2071795f37f30a6-744x1039.png?accountingTag=RB",
+      "imageHash": "df1c12e65cc3c63c96fb6c96b2071795f37f30a6",
+      "artist": "Kudos Productions",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:15a9ee17-fecf-4b33-ba58-4804e369c708",
+        "riot-gallery:rad-046-167"
+      ]
+    },
+    {
+      "printId": "RAD-055",
+      "basePrintId": "RAD-055",
+      "setCode": "RAD",
+      "collectorCode": "055",
+      "name": "Clanging Sentry",
+      "type": "Unit",
+      "supertype": null,
+      "costEnergy": 3,
+      "costPower": 0,
+      "tags": [
+        "Piltover",
+        "Mech"
+      ],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/5d4c22ef863e041887a00d34b2dae1f3ce658326-744x1039.png?accountingTag=RB",
+      "imageHash": "5d4c22ef863e041887a00d34b2dae1f3ce658326",
+      "artist": "Kudos Productions",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:8ebdb1be-3a29-4b30-b49d-8e4556495e89",
+        "riot-gallery:rad-055-167"
+      ]
+    },
+    {
+      "printId": "RAD-056",
+      "basePrintId": "RAD-056",
+      "setCode": "RAD",
+      "collectorCode": "056",
+      "name": "Improvised Projectile",
+      "type": "Spell",
+      "supertype": null,
+      "costEnergy": 3,
+      "costPower": 1,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/ecbb970f955b8e12369921f30ad08cab04e59a3f-744x1039.png?accountingTag=RB",
+      "imageHash": "ecbb970f955b8e12369921f30ad08cab04e59a3f",
+      "artist": "Kudos Productions",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:d4a3db66-3f95-43b7-a3e3-be09502ad314",
+        "riot-gallery:rad-056-167"
+      ]
+    },
+    {
+      "printId": "RAD-059",
+      "basePrintId": "RAD-059",
+      "setCode": "RAD",
+      "collectorCode": "059",
+      "name": "Supernova",
+      "type": "Spell",
+      "supertype": null,
+      "costEnergy": 9,
+      "costPower": 1,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/bea8e402f99b0afb5af1b19c0ee8ea34052e736f-744x1039.png?accountingTag=RB",
+      "imageHash": "bea8e402f99b0afb5af1b19c0ee8ea34052e736f",
+      "artist": "Kudos Productions",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:ea6fd5ee-ee92-478f-b278-5d79824c6b05",
+        "riot-gallery:rad-059-167"
+      ]
+    },
+    {
+      "printId": "RAD-061",
+      "basePrintId": "RAD-061",
+      "setCode": "RAD",
+      "collectorCode": "061",
+      "name": "Ekko, Ingenious",
+      "type": "Unit",
+      "supertype": "Champion",
+      "costEnergy": 3,
+      "costPower": 0,
+      "tags": [
+        "Ekko",
+        "Zaun"
+      ],
+      "champion": "Ekko",
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/3129469742d7aa5c6921ebae841ccee1923bb279-744x1039.png?accountingTag=RB",
+      "imageHash": "3129469742d7aa5c6921ebae841ccee1923bb279",
+      "artist": "Luscinia Studio",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:44931a4a-c7a2-46cb-abec-fddde90307ab",
+        "riot-gallery:rad-061-167"
+      ]
+    },
+    {
+      "printId": "RAD-061A",
+      "basePrintId": "RAD-061",
+      "setCode": "RAD",
+      "collectorCode": "061A",
+      "name": "Ekko, Ingenious",
+      "type": "Unit",
+      "supertype": "Champion",
+      "costEnergy": 3,
+      "costPower": 0,
+      "tags": [
+        "Ekko",
+        "Zaun"
+      ],
+      "champion": "Ekko",
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/ef74305607facd046d2b2a61551e5ad962783a5a-744x1039.png?accountingTag=RB",
+      "imageHash": "ef74305607facd046d2b2a61551e5ad962783a5a",
+      "artist": "JunHuan",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": true,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:24592476-fcc9-452f-9946-fa8669f7b09c",
+        "riot-gallery:rad-061a-167"
+      ]
+    },
+    {
+      "printId": "RAD-063",
+      "basePrintId": "RAD-063",
+      "setCode": "RAD",
+      "collectorCode": "063",
+      "name": "Kai'Sa, Rebel",
+      "type": "Unit",
+      "supertype": "Champion",
+      "costEnergy": 5,
+      "costPower": 1,
+      "tags": [
+        "Kai'Sa",
+        "The Void"
+      ],
+      "champion": "Kai'Sa",
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/53a7fdbb66f0d05111f4a7f54853db30f62fa5c4-744x1039.png?accountingTag=RB",
+      "imageHash": "53a7fdbb66f0d05111f4a7f54853db30f62fa5c4",
+      "artist": "Calf Art Studio",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:2be8858a-6002-4414-93b9-c8286e1d5a8d",
+        "riot-gallery:rad-063-167"
+      ]
+    },
+    {
+      "printId": "RAD-067",
+      "basePrintId": "RAD-067",
+      "setCode": "RAD",
+      "collectorCode": "067",
+      "name": "Clocktower Guardian",
+      "type": "Unit",
+      "supertype": null,
+      "costEnergy": 8,
+      "costPower": 2,
+      "tags": [
+        "Shurima"
+      ],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/b846d604eee450a4ab8f457f2738b0596e7b361e-744x1039.png?accountingTag=RB",
+      "imageHash": "b846d604eee450a4ab8f457f2738b0596e7b361e",
+      "artist": "Polar Engine Studio",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:84994247-767d-4631-b7f0-ad1c14d9d4b5",
+        "riot-gallery:rad-067-167"
+      ]
+    },
+    {
+      "printId": "RAD-068",
+      "basePrintId": "RAD-068",
+      "setCode": "RAD",
+      "collectorCode": "068",
+      "name": "Orianna, Mechanical Marvel",
+      "type": "Unit",
+      "supertype": "Champion",
+      "costEnergy": 5,
+      "costPower": 0,
+      "tags": [
+        "Orianna",
+        "Piltover"
+      ],
+      "champion": "Orianna",
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/00f5a081a085e9c3851daf79d9e39bd378f71fe3-744x1039.png?accountingTag=RB",
+      "imageHash": "00f5a081a085e9c3851daf79d9e39bd378f71fe3",
+      "artist": "Luscinia Studio",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:b2e9050a-aa72-4c38-96c5-7bdc7f47298e",
+        "riot-gallery:rad-068-167"
+      ]
+    },
+    {
+      "printId": "RAD-068A",
+      "basePrintId": "RAD-068",
+      "setCode": "RAD",
+      "collectorCode": "068A",
+      "name": "Orianna, Mechanical Marvel",
+      "type": "Unit",
+      "supertype": "Champion",
+      "costEnergy": 5,
+      "costPower": 0,
+      "tags": [
+        "Orianna",
+        "Piltover"
+      ],
+      "champion": "Orianna",
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/d686182436183247cc1c1b0699440146c49980ed-744x1039.png?accountingTag=RB",
+      "imageHash": "d686182436183247cc1c1b0699440146c49980ed",
+      "artist": "Yannian",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": true,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:dfe0c24a-4542-4af9-91a5-5421b786d871",
+        "riot-gallery:rad-068a-167"
+      ]
+    },
+    {
+      "printId": "RAD-069",
+      "basePrintId": "RAD-069",
+      "setCode": "RAD",
+      "collectorCode": "069",
+      "name": "Zero Point Inflection",
+      "type": "Gear",
+      "supertype": null,
+      "costEnergy": 9,
+      "costPower": 2,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/5e0646270d27f9fa78f4c3a637695e5cdeb8ee67-744x1039.png?accountingTag=RB",
+      "imageHash": "5e0646270d27f9fa78f4c3a637695e5cdeb8ee67",
+      "artist": "Kudos Productions",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:a562b781-9563-4e88-acb3-9661946b2b89",
+        "riot-gallery:rad-069-167"
+      ]
+    },
+    {
+      "printId": "RAD-070",
+      "basePrintId": "RAD-070",
+      "setCode": "RAD",
+      "collectorCode": "070",
+      "name": "Hold 'Em",
+      "type": "Spell",
+      "supertype": null,
+      "costEnergy": 3,
+      "costPower": 0,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/0d9af22d38d32b0ec2a6584d25abe201730f9e11-744x1039.png?accountingTag=RB",
+      "imageHash": "0d9af22d38d32b0ec2a6584d25abe201730f9e11",
+      "artist": "Kudos Productions",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:8be99f1b-8ac6-4511-acf4-4ccb36bb0e5d",
+        "riot-gallery:rad-070-167"
+      ]
+    },
+    {
+      "printId": "RAD-073",
+      "basePrintId": "RAD-073",
+      "setCode": "RAD",
+      "collectorCode": "073",
+      "name": "Pillaged Armory",
+      "type": "Gear",
+      "supertype": null,
+      "costEnergy": 1,
+      "costPower": 0,
+      "tags": [
+        "Device"
+      ],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/374248eb65ca1e90a434652073dbbd3a12a11eda-744x1039.png?accountingTag=RB",
+      "imageHash": "374248eb65ca1e90a434652073dbbd3a12a11eda",
+      "artist": "Yeon Art Studio",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:60667149-f8f2-45e4-af8b-0e63f9fcb8fc",
+        "riot-gallery:rad-073-167"
+      ]
+    },
+    {
+      "printId": "RAD-081",
+      "basePrintId": "RAD-081",
+      "setCode": "RAD",
+      "collectorCode": "081",
+      "name": "Elnuk Herd",
+      "type": "Unit",
+      "supertype": null,
+      "costEnergy": 6,
+      "costPower": 0,
+      "tags": [
+        "Freljord"
+      ],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/1799cd4c46fcf0243b4022de2d427b15e67a15ad-744x1039.png?accountingTag=RB",
+      "imageHash": "1799cd4c46fcf0243b4022de2d427b15e67a15ad",
+      "artist": "Six More Vodka",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:99570b95-11ec-4b40-9869-88488de1b8ad",
+        "riot-gallery:rad-081-167"
+      ]
+    },
+    {
+      "printId": "RAD-082",
+      "basePrintId": "RAD-082",
+      "setCode": "RAD",
+      "collectorCode": "082",
+      "name": "Primordial Roar",
+      "type": "Spell",
+      "supertype": null,
+      "costEnergy": 4,
+      "costPower": 2,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/945633b0c2ed7f303245c917ffbcdb80dcfb524e-744x1039.png?accountingTag=RB",
+      "imageHash": "945633b0c2ed7f303245c917ffbcdb80dcfb524e",
+      "artist": "Polar Engine Studio",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:e59985c5-0f5f-4bc2-a196-ef88ae6d194c",
+        "riot-gallery:rad-082-167"
+      ]
+    },
+    {
+      "printId": "RAD-083",
+      "basePrintId": "RAD-083",
+      "setCode": "RAD",
+      "collectorCode": "083",
+      "name": "Stalwart Goatherd",
+      "type": "Unit",
+      "supertype": null,
+      "costEnergy": 4,
+      "costPower": 0,
+      "tags": [
+        "Mount Targon"
+      ],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/bff85727b58017cbd3921fd73e9b363f5a0205e4-744x1039.png?accountingTag=RB",
+      "imageHash": "bff85727b58017cbd3921fd73e9b363f5a0205e4",
+      "artist": "Six More Vodka",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:f870537c-d4bd-4530-bb0d-fe74ad1bbe88",
+        "riot-gallery:rad-083-167"
+      ]
+    },
+    {
+      "printId": "RAD-086",
+      "basePrintId": "RAD-086",
+      "setCode": "RAD",
+      "collectorCode": "086",
+      "name": "K'Sante, Courageous",
+      "type": "Unit",
+      "supertype": "Champion",
+      "costEnergy": 5,
+      "costPower": 0,
+      "tags": [
+        "K'Sante",
+        "Shurima"
+      ],
+      "champion": "K'Sante",
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/2a5edfa252798770045f8cd7cc50a93fbbb690fa-744x1039.png?accountingTag=RB",
+      "imageHash": "2a5edfa252798770045f8cd7cc50a93fbbb690fa",
+      "artist": "Pixelverse",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:2866450b-e512-4187-8bbe-a0ccd371c8ec",
+        "riot-gallery:rad-086-167"
+      ]
+    },
+    {
+      "printId": "RAD-086A",
+      "basePrintId": "RAD-086",
+      "setCode": "RAD",
+      "collectorCode": "086A",
+      "name": "K'Sante, Courageous",
+      "type": "Unit",
+      "supertype": "Champion",
+      "costEnergy": 5,
+      "costPower": 0,
+      "tags": [
+        "K'Sante",
+        "Shurima"
+      ],
+      "champion": "K'Sante",
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/e9f663dc9b2c215b94265149ec5f1927f8aa2480-744x1039.png?accountingTag=RB",
+      "imageHash": "e9f663dc9b2c215b94265149ec5f1927f8aa2480",
+      "artist": "HXY",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": true,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "riot-gallery:rad-086a-167"
+      ]
+    },
+    {
+      "printId": "RAD-090",
+      "basePrintId": "RAD-090",
+      "setCode": "RAD",
+      "collectorCode": "090",
+      "name": "Evelynn, Consuming",
+      "type": "Unit",
+      "supertype": "Champion",
+      "costEnergy": 5,
+      "costPower": 1,
+      "tags": [
+        "Evelynn",
+        "Demon"
+      ],
+      "champion": "Evelynn",
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/26b83de26622fb5163d2fe321ff29e2bf16ac027-744x1039.png?accountingTag=RB",
+      "imageHash": "26b83de26622fb5163d2fe321ff29e2bf16ac027",
+      "artist": "Luscinia Studio",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:972c623b-2b02-4c67-9a11-c22b66511e4d",
+        "riot-gallery:rad-090-167"
+      ]
+    },
+    {
+      "printId": "RAD-090A",
+      "basePrintId": "RAD-090",
+      "setCode": "RAD",
+      "collectorCode": "090A",
+      "name": "Evelynn, Consuming",
+      "type": "Unit",
+      "supertype": "Champion",
+      "costEnergy": 5,
+      "costPower": 1,
+      "tags": [
+        "Evelynn",
+        "Demon"
+      ],
+      "champion": "Evelynn",
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/5947488a0f6aa65e69f0612edce1f4b298a04260-744x1039.png?accountingTag=RB",
+      "imageHash": "5947488a0f6aa65e69f0612edce1f4b298a04260",
+      "artist": "黯荧岛Dark Glow",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": true,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:8d2abd31-7ac7-404f-89d4-fff66ea1bfbb",
+        "riot-gallery:rad-090a-167"
+      ]
+    },
+    {
+      "printId": "RAD-093",
+      "basePrintId": "RAD-093",
+      "setCode": "RAD",
+      "collectorCode": "093",
+      "name": "Disposal Expert",
+      "type": "Unit",
+      "supertype": null,
+      "costEnergy": 4,
+      "costPower": 0,
+      "tags": [
+        "Bandle City",
+        "Yordle"
+      ],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/79ec89753be773e7ea93b2116ea29d21c81fcef9-744x1039.png?accountingTag=RB",
+      "imageHash": "79ec89753be773e7ea93b2116ea29d21c81fcef9",
+      "artist": "Kudos Productions",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:dee2155c-4dfe-4348-b033-fe8dbfd9dc13",
+        "riot-gallery:rad-093-167"
+      ]
+    },
+    {
+      "printId": "RAD-095",
+      "basePrintId": "RAD-095",
+      "setCode": "RAD",
+      "collectorCode": "095",
+      "name": "Momentary Companion",
+      "type": "Unit",
+      "supertype": null,
+      "costEnergy": 4,
+      "costPower": 0,
+      "tags": [
+        "Shadow Isles",
+        "Demon"
+      ],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/aea67209470e47ec876a11ae9b3eacda00df7be1-744x1039.png?accountingTag=RB",
+      "imageHash": "aea67209470e47ec876a11ae9b3eacda00df7be1",
+      "artist": "Kudos Productions",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:cf74e569-65f6-476d-b093-274eaba70d1c",
+        "riot-gallery:rad-095-167"
+      ]
+    },
+    {
+      "printId": "RAD-096",
+      "basePrintId": "RAD-096",
+      "setCode": "RAD",
+      "collectorCode": "096",
+      "name": "Satchel Charge",
+      "type": "Spell",
+      "supertype": null,
+      "costEnergy": 3,
+      "costPower": 1,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/b07c26438f600b87c92e4ed778a1c8b073b47f5c-744x1039.png?accountingTag=RB",
+      "imageHash": "b07c26438f600b87c92e4ed778a1c8b073b47f5c",
+      "artist": "Polar Engine Studio",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:37294f49-dd64-430a-8c02-0dd8671f28bf",
+        "riot-gallery:rad-096-167"
+      ]
+    },
+    {
+      "printId": "RAD-105",
+      "basePrintId": "RAD-105",
+      "setCode": "RAD",
+      "collectorCode": "105",
+      "name": "Reckless Innovator",
+      "type": "Unit",
+      "supertype": null,
+      "costEnergy": 3,
+      "costPower": 0,
+      "tags": [
+        "Piltover"
+      ],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/b7ff5684309bcd346e6b3534e0d1f38ec1a38726-744x1039.png?accountingTag=RB",
+      "imageHash": "b7ff5684309bcd346e6b3534e0d1f38ec1a38726",
+      "artist": "Six More Vodka",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:d52c45c7-c354-4cd1-80d0-179a198a7375",
+        "riot-gallery:rad-105-167"
+      ]
+    },
+    {
+      "printId": "RAD-106",
+      "basePrintId": "RAD-106",
+      "setCode": "RAD",
+      "collectorCode": "106",
+      "name": "The Good Stuff",
+      "type": "Gear",
+      "supertype": null,
+      "costEnergy": 3,
+      "costPower": 1,
+      "tags": [
+        "Device"
+      ],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/e7dcc9ad059b471373f0093453a0ca7537d6aa0f-744x1039.png?accountingTag=RB",
+      "imageHash": "e7dcc9ad059b471373f0093453a0ca7537d6aa0f",
+      "artist": "Yeon Art Studio",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:d9edf485-847b-4f4b-9d14-bc669e20cc40",
+        "riot-gallery:rad-106-167"
+      ]
+    },
+    {
+      "printId": "RAD-115",
+      "basePrintId": "RAD-115",
+      "setCode": "RAD",
+      "collectorCode": "115",
+      "name": "Transpositionist",
+      "type": "Unit",
+      "supertype": null,
+      "costEnergy": 6,
+      "costPower": 0,
+      "tags": [
+        "Bilgewater"
+      ],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/60cf9dbb9345d44f0a9a78b60d5fb71411b50d69-744x1039.png?accountingTag=RB",
+      "imageHash": "60cf9dbb9345d44f0a9a78b60d5fb71411b50d69",
+      "artist": "Kudos Productions",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:26593b62-19c1-4155-b2a2-65ffc42313e2",
+        "riot-gallery:rad-115-167"
+      ]
+    },
+    {
+      "printId": "RAD-116",
+      "basePrintId": "RAD-116",
+      "setCode": "RAD",
+      "collectorCode": "116",
+      "name": "Concert Poster",
+      "type": "Gear",
+      "supertype": null,
+      "costEnergy": 1,
+      "costPower": 0,
+      "tags": [
+        "Device"
+      ],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/0e80322dac6065e3ee726f5f9a2650a88195a44c-744x1039.png?accountingTag=RB",
+      "imageHash": "0e80322dac6065e3ee726f5f9a2650a88195a44c",
+      "artist": "Yeon Art Studio/Anna Nikonova",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:bd0e160b-992e-4b22-8d5f-2ea345d7dc58",
+        "riot-gallery:rad-116-167"
+      ]
+    },
+    {
+      "printId": "RAD-125",
+      "basePrintId": "RAD-125",
+      "setCode": "RAD",
+      "collectorCode": "125",
+      "name": "Dune Devourer",
+      "type": "Unit",
+      "supertype": null,
+      "costEnergy": 7,
+      "costPower": 1,
+      "tags": [
+        "The Void"
+      ],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/4f49bf38f0d3abb71e148783ebec97f446db8166-744x1039.png?accountingTag=RB",
+      "imageHash": "4f49bf38f0d3abb71e148783ebec97f446db8166",
+      "artist": "Envar Studio",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:80d4af74-e515-4e1f-b444-de0ac8b46026",
+        "riot-gallery:rad-125-167"
+      ]
+    },
+    {
+      "printId": "RAD-126",
+      "basePrintId": "RAD-126",
+      "setCode": "RAD",
+      "collectorCode": "126",
+      "name": "Mournful Spirit",
+      "type": "Unit",
+      "supertype": null,
+      "costEnergy": 4,
+      "costPower": 0,
+      "tags": [
+        "Shadow Isles",
+        "Spirit"
+      ],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/6d8500ac7efc5382985f566212d88ac8f41c135d-744x1039.png?accountingTag=RB",
+      "imageHash": "6d8500ac7efc5382985f566212d88ac8f41c135d",
+      "artist": "Six More Vodka",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:b1c3cc56-fb26-41d6-af75-2aafeb09ee00",
+        "riot-gallery:rad-126-167"
+      ]
+    },
+    {
+      "printId": "RAD-127",
+      "basePrintId": "RAD-127",
+      "setCode": "RAD",
+      "collectorCode": "127",
+      "name": "Rousing Display",
+      "type": "Spell",
+      "supertype": null,
+      "costEnergy": 5,
+      "costPower": 0,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/18aa7cab082fd0e293260bcf480a1a76d12b64d9-744x1039.png?accountingTag=RB",
+      "imageHash": "18aa7cab082fd0e293260bcf480a1a76d12b64d9",
+      "artist": "Kudos Productions",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:b4c670fa-8a35-463b-ab27-d897dca3d317",
+        "riot-gallery:rad-127-167"
+      ]
+    },
+    {
+      "printId": "RAD-132",
+      "basePrintId": "RAD-132",
+      "setCode": "RAD",
+      "collectorCode": "132",
+      "name": "Heimerdinger, Academy Instructor",
+      "type": "Unit",
+      "supertype": "Champion",
+      "costEnergy": 6,
+      "costPower": 1,
+      "tags": [
+        "Heimerdinger",
+        "Piltover",
+        "Yordle"
+      ],
+      "champion": "Heimerdinger",
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/1795e905171c74b84b4b7f84a57fecbb4bbd6f75-744x1039.png?accountingTag=RB",
+      "imageHash": "1795e905171c74b84b4b7f84a57fecbb4bbd6f75",
+      "artist": "Polar Engine Studio",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [
+        "Heimerdiner, Academy Instructor"
+      ],
+      "sourceIds": [
+        "piltover-archive:7d45f4e1-fecd-4aa8-93b7-f0e9f67ab35c",
+        "riot-gallery:rad-132-167"
+      ]
+    },
+    {
+      "printId": "RAD-136",
+      "basePrintId": "RAD-136",
+      "setCode": "RAD",
+      "collectorCode": "136",
+      "name": "Dockside Lock-Up",
+      "type": "Gear",
+      "supertype": null,
+      "costEnergy": 6,
+      "costPower": 2,
+      "tags": [
+        "Device"
+      ],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/4f477ccc474cb16e4e9d681b388f0673f77fae5b-744x1039.png?accountingTag=RB",
+      "imageHash": "4f477ccc474cb16e4e9d681b388f0673f77fae5b",
+      "artist": "Yeon Art Studio",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:ef08f68c-dcc5-4edb-aa95-0d9d0b51c016",
+        "riot-gallery:rad-136-167"
+      ]
+    },
+    {
+      "printId": "RAD-137",
+      "basePrintId": "RAD-137",
+      "setCode": "RAD",
+      "collectorCode": "137",
+      "name": "Mordekaiser, Dominating",
+      "type": "Unit",
+      "supertype": "Champion",
+      "costEnergy": 9,
+      "costPower": 2,
+      "tags": [
+        "Mordekaiser",
+        "Noxus",
+        "Spirit"
+      ],
+      "champion": "Mordekaiser",
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/43068166258356908b364566abcfc57123e96caa-744x1039.png?accountingTag=RB",
+      "imageHash": "43068166258356908b364566abcfc57123e96caa",
+      "artist": "JunHuan",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:54fb8e54-55b3-41d6-a709-d619d2db1e06",
+        "riot-gallery:rad-137-167"
+      ]
+    },
+    {
+      "printId": "RAD-137A",
+      "basePrintId": "RAD-137",
+      "setCode": "RAD",
+      "collectorCode": "137A",
+      "name": "Mordekaiser, Dominating",
+      "type": "Unit",
+      "supertype": "Champion",
+      "costEnergy": 9,
+      "costPower": 2,
+      "tags": [
+        "Mordekaiser",
+        "Noxus",
+        "Spirit"
+      ],
+      "champion": "Mordekaiser",
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/566ec78530cf839148ca0bfb6e7cd7015bcc79fa-744x1039.png?accountingTag=RB",
+      "imageHash": "566ec78530cf839148ca0bfb6e7cd7015bcc79fa",
+      "artist": "HXY",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": true,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:a011560b-d369-4554-b558-2b56f5c02c2f",
+        "riot-gallery:rad-137a-167"
+      ]
+    },
+    {
+      "printId": "RAD-138",
+      "basePrintId": "RAD-138",
+      "setCode": "RAD",
+      "collectorCode": "138",
+      "name": "Seraphine, Not Alone",
+      "type": "Unit",
+      "supertype": "Champion",
+      "costEnergy": 5,
+      "costPower": 1,
+      "tags": [
+        "Seraphine",
+        "Piltover"
+      ],
+      "champion": "Seraphine",
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/756f0d5d9e83ba0ebcfaf1b69055fdc29458b084-744x1039.png?accountingTag=RB",
+      "imageHash": "756f0d5d9e83ba0ebcfaf1b69055fdc29458b084",
+      "artist": "Pixelverse",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:a9c92625-a171-4618-b8f4-0ee9e58d8290",
+        "riot-gallery:rad-138-167"
+      ]
+    },
+    {
+      "printId": "RAD-138A",
+      "basePrintId": "RAD-138",
+      "setCode": "RAD",
+      "collectorCode": "138A",
+      "name": "Seraphine, Not Alone",
+      "type": "Unit",
+      "supertype": "Champion",
+      "costEnergy": 5,
+      "costPower": 1,
+      "tags": [
+        "Seraphine",
+        "Piltover"
+      ],
+      "champion": "Seraphine",
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/c2e2bcf79a41ff7e524dfcb4b4a1304a77b87711-744x1039.png?accountingTag=RB",
+      "imageHash": "c2e2bcf79a41ff7e524dfcb4b4a1304a77b87711",
+      "artist": "J1nyuu",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": true,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:dd888873-cb06-415e-ab78-86f6c165d5a6",
+        "riot-gallery:rad-138a-167"
+      ]
+    },
+    {
+      "printId": "RAD-139",
+      "basePrintId": "RAD-139",
+      "setCode": "RAD",
+      "collectorCode": "139",
+      "name": "Ekko, Boy Who Shattered Time",
+      "type": "Legend",
+      "supertype": null,
+      "costEnergy": null,
+      "costPower": null,
+      "tags": [
+        "Ekko"
+      ],
+      "champion": "Ekko",
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/8ca3ef446631784ce1d261e30f6a163843ffcb2b-744x1039.png?accountingTag=RB",
+      "imageHash": "8ca3ef446631784ce1d261e30f6a163843ffcb2b",
+      "artist": "Envar Studio",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:8154d2d7-f37b-4594-ac99-f36829d0c55c",
+        "riot-gallery:rad-139-167"
+      ]
+    },
+    {
+      "printId": "RAD-140",
+      "basePrintId": "RAD-140",
+      "setCode": "RAD",
+      "collectorCode": "140",
+      "name": "Chronobreak",
+      "type": "Spell",
+      "supertype": "Signature",
+      "costEnergy": 2,
+      "costPower": 0,
+      "tags": [
+        "Ekko"
+      ],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/af2123a99f3e3e7e6c9b101c5fc2c9b0ff56e096-744x1040.png?accountingTag=RB",
+      "imageHash": "af2123a99f3e3e7e6c9b101c5fc2c9b0ff56e096",
+      "artist": "Luscinia Studio",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:02a6713c-e0f3-4c48-907a-744588df305b",
+        "riot-gallery:rad-140-167"
+      ]
+    },
+    {
+      "printId": "RAD-141",
+      "basePrintId": "RAD-141",
+      "setCode": "RAD",
+      "collectorCode": "141",
+      "name": "Ziggs, Hexplosives Expert",
+      "type": "Legend",
+      "supertype": null,
+      "costEnergy": null,
+      "costPower": null,
+      "tags": [
+        "Ziggs"
+      ],
+      "champion": "Ziggs",
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/69899f4d5e05ff0a060b9f38894cd77f9e17d195-744x1039.png?accountingTag=RB",
+      "imageHash": "69899f4d5e05ff0a060b9f38894cd77f9e17d195",
+      "artist": "Envar Studio",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:c0112bfe-4bb9-42ea-bcfe-3e216f8f2432",
+        "riot-gallery:rad-141-167"
+      ]
+    },
+    {
+      "printId": "RAD-142",
+      "basePrintId": "RAD-142",
+      "setCode": "RAD",
+      "collectorCode": "142",
+      "name": "Hexplosive Minefield",
+      "type": "Spell",
+      "supertype": "Signature",
+      "costEnergy": 2,
+      "costPower": 1,
+      "tags": [
+        "Ziggs"
+      ],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/65b599befcc6ed873de0e7965bf497a805505327-744x1040.png?accountingTag=RB",
+      "imageHash": "65b599befcc6ed873de0e7965bf497a805505327",
+      "artist": "Luscinia Studio",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:fb6f03c0-4e4d-44d0-acd3-40fc24ee55c4",
+        "riot-gallery:rad-142-167"
+      ]
+    },
+    {
+      "printId": "RAD-145",
+      "basePrintId": "RAD-145",
+      "setCode": "RAD",
+      "collectorCode": "145",
+      "name": "Orianna, Lady of Clockwork",
+      "type": "Legend",
+      "supertype": null,
+      "costEnergy": null,
+      "costPower": null,
+      "tags": [
+        "Orianna"
+      ],
+      "champion": "Orianna",
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/d1f940425d4d913d8f56c017254343bc898f4892-744x1039.png?accountingTag=RB",
+      "imageHash": "d1f940425d4d913d8f56c017254343bc898f4892",
+      "artist": "Envar Studio",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:d6437fd5-aa59-4891-93d3-a61147c0a650",
+        "riot-gallery:rad-145-167"
+      ]
+    },
+    {
+      "printId": "RAD-147",
+      "basePrintId": "RAD-147",
+      "setCode": "RAD",
+      "collectorCode": "147",
+      "name": "K'Sante, Pride of Nazumah",
+      "type": "Legend",
+      "supertype": null,
+      "costEnergy": null,
+      "costPower": null,
+      "tags": [
+        "K'Sante"
+      ],
+      "champion": "K'Sante",
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/190a27bf844fa21105824efc19de4e71c3137df6-744x1039.png?accountingTag=RB",
+      "imageHash": "190a27bf844fa21105824efc19de4e71c3137df6",
+      "artist": "Envar Studio",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [
+        "K'Sante Pride of Nazumah"
+      ],
+      "sourceIds": [
+        "piltover-archive:86244980-8d1b-428e-b41a-56ce74f8715b",
+        "riot-gallery:rad-147-167"
+      ]
+    },
+    {
+      "printId": "RAD-148",
+      "basePrintId": "RAD-148",
+      "setCode": "RAD",
+      "collectorCode": "148",
+      "name": "Ntofo Strikes",
+      "type": "Spell",
+      "supertype": "Signature",
+      "costEnergy": 2,
+      "costPower": 1,
+      "tags": [
+        "K'Sante"
+      ],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/ab5aa7d29bd49efe2c9da3b62a8065295c189991-744x1040.png?accountingTag=RB",
+      "imageHash": "ab5aa7d29bd49efe2c9da3b62a8065295c189991",
+      "artist": "Polar Engine Studio",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:886a6f3e-a00e-4cd8-8279-2b9767beae83",
+        "riot-gallery:rad-148-167"
+      ]
+    },
+    {
+      "printId": "RAD-150",
+      "basePrintId": "RAD-150",
+      "setCode": "RAD",
+      "collectorCode": "150",
+      "name": "Blade of the Exile",
+      "type": "Gear",
+      "supertype": "Signature",
+      "costEnergy": 3,
+      "costPower": 1,
+      "tags": [
+        "Equipment"
+      ],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/04aaded01b23641e496e39f51882ccfe89715492-744x1040.png?accountingTag=RB",
+      "imageHash": "04aaded01b23641e496e39f51882ccfe89715492",
+      "artist": "Polar Engine Studio",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:09ccd8a8-8bdf-4b05-a8b4-8fe1831039df",
+        "riot-gallery:rad-150-167"
+      ]
+    },
+    {
+      "printId": "RAD-151",
+      "basePrintId": "RAD-151",
+      "setCode": "RAD",
+      "collectorCode": "151",
+      "name": "Seraphine, Starry-Eyed Songstress",
+      "type": "Legend",
+      "supertype": null,
+      "costEnergy": null,
+      "costPower": null,
+      "tags": [
+        "Seraphine"
+      ],
+      "champion": "Seraphine",
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/399262205b15aa3b6306eb1d80a308791dcbe2ca-744x1039.png?accountingTag=RB",
+      "imageHash": "399262205b15aa3b6306eb1d80a308791dcbe2ca",
+      "artist": "Naifan Zhang",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:556c5b5a-ed1b-4e46-8e54-668778be33a9",
+        "riot-gallery:rad-151-167"
+      ]
+    },
+    {
+      "printId": "RAD-155",
+      "basePrintId": "RAD-155",
+      "setCode": "RAD",
+      "collectorCode": "155",
+      "name": "Jarvan IV, Exemplar of Demacia",
+      "type": "Legend",
+      "supertype": null,
+      "costEnergy": null,
+      "costPower": null,
+      "tags": [
+        "Jarvan IV"
+      ],
+      "champion": "Jarvan IV",
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/e85c005f938e44655f926bb406a47359ae51ecc1-744x1039.png?accountingTag=RB",
+      "imageHash": "e85c005f938e44655f926bb406a47359ae51ecc1",
+      "artist": "Grafit Studio",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:ce76a6bf-42e6-4dee-a774-57a5e7abf6e6",
+        "riot-gallery:rad-155-167"
+      ]
+    },
+    {
+      "printId": "RAD-156",
+      "basePrintId": "RAD-156",
+      "setCode": "RAD",
+      "collectorCode": "156",
+      "name": "Demacian Standard",
+      "type": "Gear",
+      "supertype": "Signature",
+      "costEnergy": 2,
+      "costPower": 1,
+      "tags": [
+        "Jarvan IV"
+      ],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/315b0f7901a83df38b9765f12b1edfdc7de566a3-744x1040.png?accountingTag=RB",
+      "imageHash": "315b0f7901a83df38b9765f12b1edfdc7de566a3",
+      "artist": "Luscinia Studio",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:2476fc2d-5d07-43f9-bbd4-135128138780",
+        "riot-gallery:rad-156-167"
+      ]
+    },
+    {
+      "printId": "RAD-160",
+      "basePrintId": "RAD-160",
+      "setCode": "RAD",
+      "collectorCode": "160",
+      "name": "Cosmic Vista",
+      "type": "Battlefield",
+      "supertype": null,
+      "costEnergy": null,
+      "costPower": null,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/0efb6db0a41350e9cfc116b235eeb92bb05ed5bf-1039x744.png?accountingTag=RB",
+      "imageHash": "0efb6db0a41350e9cfc116b235eeb92bb05ed5bf",
+      "artist": "Fish Art Studio",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:841036e9-c465-4786-adc5-e4649e4619bc",
+        "riot-gallery:rad-160-167"
+      ]
+    },
+    {
+      "printId": "RAD-161",
+      "basePrintId": "RAD-161",
+      "setCode": "RAD",
+      "collectorCode": "161",
+      "name": "Durand Memorial",
+      "type": "Battlefield",
+      "supertype": null,
+      "costEnergy": null,
+      "costPower": null,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/b565fec4e11308f5f01416a1c914d50a1d17ca19-1039x744.png?accountingTag=RB",
+      "imageHash": "b565fec4e11308f5f01416a1c914d50a1d17ca19",
+      "artist": "Fish Art Studio",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:f4332096-25bc-412d-93c0-5a0ec0dcf9b5",
+        "riot-gallery:rad-161-167"
+      ]
+    },
+    {
+      "printId": "RAD-164",
+      "basePrintId": "RAD-164",
+      "setCode": "RAD",
+      "collectorCode": "164",
+      "name": "Packed Amphitheater",
+      "type": "Battlefield",
+      "supertype": null,
+      "costEnergy": null,
+      "costPower": null,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/f4b396780dd7a5aa1be43f763265f308ee0fe665-1039x744.png?accountingTag=RB",
+      "imageHash": "f4b396780dd7a5aa1be43f763265f308ee0fe665",
+      "artist": "Grafit Studio",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:0ea985be-67bb-4dba-8770-1a4bb8c52945",
+        "riot-gallery:rad-164-167"
+      ]
+    },
+    {
+      "printId": "RAD-165",
+      "basePrintId": "RAD-165",
+      "setCode": "RAD",
+      "collectorCode": "165",
+      "name": "Rakelstake",
+      "type": "Battlefield",
+      "supertype": null,
+      "costEnergy": null,
+      "costPower": null,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/53c096e4bc843a4cfe84fd16d922033b7fcfb330-1039x744.png?accountingTag=RB",
+      "imageHash": "53c096e4bc843a4cfe84fd16d922033b7fcfb330",
+      "artist": "Fish Art Studio",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:e1b1f5ac-b51d-439f-a7ef-f48b6e23a0ca",
+        "riot-gallery:rad-165-167"
+      ]
+    },
+    {
+      "printId": "RAD-166",
+      "basePrintId": "RAD-166",
+      "setCode": "RAD",
+      "collectorCode": "166",
+      "name": "Ruined Monastery",
+      "type": "Battlefield",
+      "supertype": null,
+      "costEnergy": null,
+      "costPower": null,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/2d756c5198dafb151f51cceca4f11824575960cd-1039x744.png?accountingTag=RB",
+      "imageHash": "2d756c5198dafb151f51cceca4f11824575960cd",
+      "artist": "Grafit Studio",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:b3c14d60-6e99-4230-8c09-b934c8b00318",
+        "riot-gallery:rad-166-167"
+      ]
+    },
+    {
+      "printId": "RAD-167",
+      "basePrintId": "RAD-167",
+      "setCode": "RAD",
+      "collectorCode": "167",
+      "name": "Neeko, Blending In",
+      "type": "Unit",
+      "supertype": "Champion",
+      "costEnergy": 6,
+      "costPower": 1,
+      "tags": [
+        "Neeko",
+        "Ixtal"
+      ],
+      "champion": "Neeko",
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/607da6f534ce1b960ad02586ed4cd47c996e2c42-744x1039.png?accountingTag=RB",
+      "imageHash": "607da6f534ce1b960ad02586ed4cd47c996e2c42",
+      "artist": "Luscinia Studio",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:0f783ac5-09c6-4ac3-b306-551846c2f14f",
+        "riot-gallery:rad-167-167"
+      ]
+    },
+    {
+      "printId": "RAD-169",
+      "basePrintId": "RAD-169",
+      "setCode": "RAD",
+      "collectorCode": "169",
+      "name": "Ziggs, Hexplosives Expert",
+      "type": "Legend",
+      "supertype": null,
+      "costEnergy": null,
+      "costPower": null,
+      "tags": [
+        "Yordle",
+        "Ziggs"
+      ],
+      "champion": "Ziggs",
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/6d18e53ec0d84e5e44294c906321ebac737166b2-744x1039.png?accountingTag=RB",
+      "imageHash": "6d18e53ec0d84e5e44294c906321ebac737166b2",
+      "artist": "Kindlejack",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": true,
+        "signature": false
+      },
+      "aliases": [
+        "Hexplosives Expert"
+      ],
+      "sourceIds": [
+        "riot-gallery:rad-169-167"
+      ]
+    },
+    {
+      "printId": "RAD-169*",
+      "basePrintId": "RAD-169",
+      "setCode": "RAD",
+      "collectorCode": "169*",
+      "name": "Ziggs, Hexplosives Expert",
+      "type": "Legend",
+      "supertype": null,
+      "costEnergy": null,
+      "costPower": null,
+      "tags": [
+        "Ziggs"
+      ],
+      "champion": "Ziggs",
+      "imageUrl": "https://cdn.piltoverarchive.com/temporary/1790464787974-zurkq8ijt1.png",
+      "imageHash": null,
+      "artist": "Kindlejack",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": true,
+        "signature": true
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:a5864ad0-900f-4470-b943-dfc777e3999d"
+      ]
+    },
+    {
+      "printId": "RAD-171",
+      "basePrintId": "RAD-171",
+      "setCode": "RAD",
+      "collectorCode": "171",
+      "name": "Orianna, Lady of Clockwork",
+      "type": "Legend",
+      "supertype": null,
+      "costEnergy": null,
+      "costPower": null,
+      "tags": [
+        "Orianna"
+      ],
+      "champion": "Orianna",
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/8530505c438f23877bede020d829c6a9cf5fce78-744x1039.png?accountingTag=RB",
+      "imageHash": "8530505c438f23877bede020d829c6a9cf5fce78",
+      "artist": "Anh Dang",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": true,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:e26f6c6f-87ac-41b5-8f06-d0130065da33",
+        "riot-gallery:rad-171-167"
+      ]
+    },
+    {
+      "printId": "RAD-171*",
+      "basePrintId": "RAD-171",
+      "setCode": "RAD",
+      "collectorCode": "171*",
+      "name": "Orianna, Lady of Clockwork",
+      "type": "Legend",
+      "supertype": null,
+      "costEnergy": null,
+      "costPower": null,
+      "tags": [
+        "Orianna"
+      ],
+      "champion": "Orianna",
+      "imageUrl": "https://cdn.piltoverarchive.com/temporary/1790464754504-lhu47k7gb7c.png",
+      "imageHash": null,
+      "artist": "Anh Dang",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": true,
+        "signature": true
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:e8bd845c-e1d8-443a-9346-58935993e576"
+      ]
+    },
+    {
+      "printId": "RAD-172",
+      "basePrintId": "RAD-172",
+      "setCode": "RAD",
+      "collectorCode": "172",
+      "name": "K'Sante, Pride of Nazumah",
+      "type": "Legend",
+      "supertype": null,
+      "costEnergy": null,
+      "costPower": null,
+      "tags": [
+        "K'Sante"
+      ],
+      "champion": "K'Sante",
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/9d0d05c7427684aae952f5b66d7e724374c14ccc-744x1039.png?accountingTag=RB",
+      "imageHash": "9d0d05c7427684aae952f5b66d7e724374c14ccc",
+      "artist": "Valentine Tran",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": true,
+        "signature": false
+      },
+      "aliases": [
+        "K'Sante Pride of Nazumah"
+      ],
+      "sourceIds": [
+        "piltover-archive:dda8c401-0490-416b-ac87-942f18c1f5a1",
+        "riot-gallery:rad-172-167"
+      ]
+    },
+    {
+      "printId": "RAD-174",
+      "basePrintId": "RAD-174",
+      "setCode": "RAD",
+      "collectorCode": "174",
+      "name": "Seraphine, Starry-Eyed Songstress",
+      "type": "Legend",
+      "supertype": null,
+      "costEnergy": null,
+      "costPower": null,
+      "tags": [
+        "Seraphine"
+      ],
+      "champion": "Seraphine",
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/88f6970ac5639bdd47552befcb575a6f73c6dcdb-744x1039.png?accountingTag=RB",
+      "imageHash": "88f6970ac5639bdd47552befcb575a6f73c6dcdb",
+      "artist": "Anna Nikonova",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": true,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:3ec78e4c-0a3f-4616-a715-a0a19008e196",
+        "riot-gallery:rad-174-167"
+      ]
+    },
+    {
+      "printId": "RAD-174*",
+      "basePrintId": "RAD-174",
+      "setCode": "RAD",
+      "collectorCode": "174*",
+      "name": "Seraphine, Starry-Eyed Songstress",
+      "type": "Legend",
+      "supertype": null,
+      "costEnergy": null,
+      "costPower": null,
+      "tags": [
+        "Seraphine"
+      ],
+      "champion": "Seraphine",
+      "imageUrl": "https://cdn.piltoverarchive.com/temporary/1790468073459-px7vnw6c15.png",
+      "imageHash": null,
+      "artist": "Anna Nikonova",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": true,
+        "signature": true
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:0e34efc2-8854-4e5c-86b9-fa61badb8056"
+      ]
+    },
+    {
+      "printId": "RAD-176",
+      "basePrintId": "RAD-176",
+      "setCode": "RAD",
+      "collectorCode": "176",
+      "name": "Jarvan IV, Exemplar of Demacia",
+      "type": "Legend",
+      "supertype": null,
+      "costEnergy": null,
+      "costPower": null,
+      "tags": [
+        "Jarvan IV"
+      ],
+      "champion": "Jarvan IV",
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/5eb1418a7485194f5249c4f4a5a247b21b7daf5b-744x1039.png?accountingTag=RB",
+      "imageHash": "5eb1418a7485194f5249c4f4a5a247b21b7daf5b",
+      "artist": "Herman Ng",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": true,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:6f00c302-2057-4dfb-88a2-2eaa8995af79",
+        "riot-gallery:rad-176-167"
+      ]
+    },
+    {
+      "printId": "RAD-178",
+      "basePrintId": "RAD-178",
+      "setCode": "RAD",
+      "collectorCode": "178",
+      "name": "K'Sante, Courageous",
+      "type": "Unit",
+      "supertype": "Champion",
+      "costEnergy": 5,
+      "costPower": 0,
+      "tags": [
+        "K'Sante",
+        "Shurima"
+      ],
+      "champion": "K'Sante",
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/299741933964a0953312d7c2cc0919501d28bc98-744x1039.png?accountingTag=RB",
+      "imageHash": "299741933964a0953312d7c2cc0919501d28bc98",
+      "artist": "Luscinia Studio",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": true,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:60639d1a-7b33-435d-932e-7b8bae55e6b7",
+        "riot-gallery:rad-178-167"
+      ]
+    },
+    {
+      "printId": "RAD-179",
+      "basePrintId": "RAD-179",
+      "setCode": "RAD",
+      "collectorCode": "179",
+      "name": "Aphelios, Exalted",
+      "type": "Unit",
+      "supertype": "Champion",
+      "costEnergy": 4,
+      "costPower": 1,
+      "tags": [
+        "Aphelios",
+        "Mount Targon"
+      ],
+      "champion": "Aphelios",
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/d1ffd27d5777e08178ab9a9aad0943b8d72af98b-744x1039.png?accountingTag=RB",
+      "imageHash": "d1ffd27d5777e08178ab9a9aad0943b8d72af98b",
+      "artist": "Luscinia Studio",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": true,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:25745fdd-f908-409c-9daf-43e3366fc1c5",
+        "riot-gallery:rad-179-167"
+      ]
+    },
+    {
+      "printId": "RAD-180",
+      "basePrintId": "RAD-180",
+      "setCode": "RAD",
+      "collectorCode": "180",
+      "name": "Ezreal, Dashing",
+      "type": "Unit",
+      "supertype": "Champion",
+      "costEnergy": 4,
+      "costPower": 1,
+      "tags": [
+        "Ezreal",
+        "Piltover"
+      ],
+      "champion": "Ezreal",
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/262da39c80211046e27a839c50d210d19592267c-744x1039.png?accountingTag=RB",
+      "imageHash": "262da39c80211046e27a839c50d210d19592267c",
+      "artist": "Luscinia Studio",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": true,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:40f4ea95-37aa-41bb-b9d0-dbef00e81f85",
+        "riot-gallery:rad-180-167"
+      ]
+    },
+    {
+      "printId": "RAD-181",
+      "basePrintId": "RAD-181",
+      "setCode": "RAD",
+      "collectorCode": "181",
+      "name": "Yone, Blademaster",
+      "type": "Unit",
+      "supertype": "Champion",
+      "costEnergy": 5,
+      "costPower": 1,
+      "tags": [
+        "Yone",
+        "Ionia",
+        "Demon"
+      ],
+      "champion": "Yone",
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/1b40d15346ef3770703148402e875d24f5feef5b-744x1039.png?accountingTag=RB",
+      "imageHash": "1b40d15346ef3770703148402e875d24f5feef5b",
+      "artist": "Luscinia Studio",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": true,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:064da776-0357-4666-9b9f-1e3aa7f7a169",
+        "riot-gallery:rad-181-167"
+      ]
+    },
+    {
+      "printId": "RAD-182",
+      "basePrintId": "RAD-182",
+      "setCode": "RAD",
+      "collectorCode": "182",
+      "name": "Kayn, Unleashed",
+      "type": "Unit",
+      "supertype": "Champion",
+      "costEnergy": 6,
+      "costPower": 1,
+      "tags": [
+        "Kayn",
+        "Ionia"
+      ],
+      "champion": "Kayn",
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/df2fbb56c0d56c6c4e310edb17f0c2ae7a9d9e97-744x1039.png?accountingTag=RB",
+      "imageHash": "df2fbb56c0d56c6c4e310edb17f0c2ae7a9d9e97",
+      "artist": "Luscinia Studio",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": true,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:44818b19-04c9-4b98-8b4d-e59fb72aa098",
+        "riot-gallery:rad-182-167"
+      ]
+    },
+    {
+      "printId": "RAD-183",
+      "basePrintId": "RAD-183",
+      "setCode": "RAD",
+      "collectorCode": "183",
+      "name": "Sett, Kingpin",
+      "type": "Unit",
+      "supertype": "Champion",
+      "costEnergy": 4,
+      "costPower": 1,
+      "tags": [
+        "Sett",
+        "Ionia"
+      ],
+      "champion": "Sett",
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/fbc2c6a0a0ea33b58c9cfbdc91c6c229b02a90da-744x1039.png?accountingTag=RB",
+      "imageHash": "fbc2c6a0a0ea33b58c9cfbdc91c6c229b02a90da",
+      "artist": "Luscinia Studio",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": true,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:406f0b43-0d73-4a27-9a7d-538e414a1192",
+        "riot-gallery:rad-183-167"
+      ]
+    },
+    {
+      "printId": "RAD-R02",
+      "basePrintId": "RAD-R02",
+      "setCode": "RAD",
+      "collectorCode": "R02",
+      "name": "Calm Rune",
+      "type": "Rune",
+      "supertype": "Basic",
+      "costEnergy": null,
+      "costPower": null,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/34661f9fff9e12addbfa320a88b794fcffd6652f-744x1039.png?accountingTag=RB",
+      "imageHash": "34661f9fff9e12addbfa320a88b794fcffd6652f",
+      "artist": "Greg Ghielmetti & Leah Chen",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "riot-gallery:rad-r02"
+      ]
+    },
+    {
+      "printId": "RAD-R02A",
+      "basePrintId": "RAD-R02",
+      "setCode": "RAD",
+      "collectorCode": "R02A",
+      "name": "Calm Rune",
+      "type": "Rune",
+      "supertype": "Basic",
+      "costEnergy": null,
+      "costPower": null,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/34b4e5127ca68f78ad43e824af61728cfc7fbc19-744x1039.png?accountingTag=RB",
+      "imageHash": "34b4e5127ca68f78ad43e824af61728cfc7fbc19",
+      "artist": null,
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": true,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "riot-gallery:rad-r02a"
+      ]
+    },
+    {
+      "printId": "RAD-R03",
+      "basePrintId": "RAD-R03",
+      "setCode": "RAD",
+      "collectorCode": "R03",
+      "name": "Mind Rune",
+      "type": "Rune",
+      "supertype": "Basic",
+      "costEnergy": null,
+      "costPower": null,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/10804d84483e8813a6b5277e4527ac148bbabdd0-744x1039.png?accountingTag=RB",
+      "imageHash": "10804d84483e8813a6b5277e4527ac148bbabdd0",
+      "artist": "Greg Ghielmetti & Leah Chen",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "riot-gallery:rad-r03"
+      ]
+    },
+    {
+      "printId": "RAD-R03A",
+      "basePrintId": "RAD-R03",
+      "setCode": "RAD",
+      "collectorCode": "R03A",
+      "name": "Mind Rune",
+      "type": "Rune",
+      "supertype": "Basic",
+      "costEnergy": null,
+      "costPower": null,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/7216a84b4c3c2446e9f96f1dae02cb4fd96283d8-744x1039.png?accountingTag=RB",
+      "imageHash": "7216a84b4c3c2446e9f96f1dae02cb4fd96283d8",
+      "artist": null,
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": true,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "riot-gallery:rad-r03a"
+      ]
+    },
+    {
+      "printId": "RAD-SP4",
+      "basePrintId": "RAD-SP4",
+      "setCode": "RAD",
+      "collectorCode": "SP4",
+      "name": "Kai'Sa, Rebel",
+      "type": "Unit",
+      "supertype": "Champion",
+      "costEnergy": 5,
+      "costPower": 1,
+      "tags": [
+        "Kai'Sa",
+        "The Void"
+      ],
+      "champion": "Kai'Sa",
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/1c1bc3c006b5acf9013e98072a135ae411b2ccac-744x1039.png?accountingTag=RB",
+      "imageHash": "1c1bc3c006b5acf9013e98072a135ae411b2ccac",
+      "artist": "Zhongqi Li",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "riot-gallery:rad-sp4-005"
+      ]
+    },
+    {
+      "printId": "RAD-SP5",
+      "basePrintId": "RAD-SP5",
+      "setCode": "RAD",
+      "collectorCode": "SP5",
+      "name": "Seraphine, Not Alone",
+      "type": "Unit",
+      "supertype": "Champion",
+      "costEnergy": 5,
+      "costPower": 1,
+      "tags": [
+        "Seraphine",
+        "Piltover"
+      ],
+      "champion": "Seraphine",
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/ef6f277389bbb6361ef29a0332cd2cb34d4905aa-744x1039.png?accountingTag=RB",
+      "imageHash": "ef6f277389bbb6361ef29a0332cd2cb34d4905aa",
+      "artist": "Bullet lin",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:b79a2ce3-2d58-4e8b-9d64-03b718fa464e",
+        "riot-gallery:rad-sp5-005"
+      ]
+    },
+    {
+      "printId": "RAD-T02",
+      "basePrintId": "RAD-T02",
+      "setCode": "RAD",
+      "collectorCode": "T02",
+      "name": "Bomb",
+      "type": "Gear",
+      "supertype": "Token",
+      "costEnergy": 0,
+      "costPower": 0,
+      "tags": [
+        "Bomb"
+      ],
+      "champion": null,
+      "imageUrl": "https://cdn.piltoverarchive.com/temporary/1790379094995-j8jntogrzbo.png",
+      "imageHash": null,
+      "artist": "Kudos Productions",
+      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:e280b2b6-12b7-49fa-a38c-f8f8546e8e9f"
       ]
     },
     {

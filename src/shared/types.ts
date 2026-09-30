@@ -2335,6 +2335,22 @@ export interface SocialTeamApplication {
   reviewedBy: string;
 }
 
+export interface SocialTeamInvite {
+  inviteId: string;
+  teamId: string;
+  teamName: string;
+  senderName: string;
+  targetHandle: string;
+  status: "open" | "accepted" | "declined" | "revoked" | "expired";
+  expiresAt: number;
+  createdAt: number;
+}
+
+export interface SocialTeamInviteAcceptance {
+  alreadyMember: boolean;
+  team: { id: string; name: string; slug: string; role: SocialTeamRole };
+}
+
 export interface SocialTeamMessage {
   id: string;
   uid: string;
@@ -2602,6 +2618,12 @@ export interface RiftLiteApi {
   updateSocialTeam(teamId: string, patch: SocialTeamDraft): Promise<SocialTeamProfile>;
   applyToSocialTeam(teamId: string, draft: SocialTeamApplicationDraft): Promise<SocialTeamApplication>;
   getSocialTeamApplications(teamId: string): Promise<SocialTeamApplication[]>;
+  createSocialTeamInvite(teamId: string, targetHandle?: string): Promise<{ invite: SocialTeamInvite; inviteUrl: string }>;
+  getSocialTeamInvites(teamId: string): Promise<SocialTeamInvite[]>;
+  revokeSocialTeamInvite(teamId: string, inviteId: string): Promise<void>;
+  getMySocialTeamInvites(): Promise<SocialTeamInvite[]>;
+  acceptSocialTeamInvite(inviteId: string): Promise<SocialTeamInviteAcceptance>;
+  declineSocialTeamInvite(inviteId: string): Promise<void>;
   reviewSocialTeamApplication(teamId: string, applicationId: string, status: "accepted" | "declined"): Promise<SocialTeamApplication>;
   getSocialTeamMessages(teamId: string): Promise<SocialTeamMessage[]>;
   postSocialTeamMessage(teamId: string, text: string): Promise<SocialTeamMessage>;

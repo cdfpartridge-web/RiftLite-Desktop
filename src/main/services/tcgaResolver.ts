@@ -29,6 +29,7 @@ interface RegistryCardPayload {
   champion?: unknown;
   tags?: unknown;
   imageUrl?: unknown;
+  imageUrlAliases?: unknown;
   imageHash?: unknown;
   imageHashAliases?: unknown;
   hashes?: unknown;
@@ -51,6 +52,7 @@ interface RegistryCard {
   champion: string;
   legendProxy: boolean;
   hashes: string[];
+  imageUrls: string[];
   aliases: string[];
 }
 
@@ -75,6 +77,8 @@ export class TcgaResolver {
   private registryExactCodeMap = new Map<string, RegistryCard>();
   private registryAliasCodeMap = new Map<string, RegistryCard>();
   private registryHashMap = new Map<string, RegistryCard>();
+  private registryImageUrlMap = new Map<string, RegistryCard>();
+  private ambiguousImageUrls = new Set<string>();
   private ambiguousExactCodes = new Set<string>();
   private ambiguousAliasCodes = new Set<string>();
   private ambiguousHashes = new Set<string>();
@@ -134,6 +138,12 @@ export class TcgaResolver {
 
   private findRegistryCard(value: string): RegistryMatch {
     const decoded = decodeLoose(value);
+    const imageUrl = normalizedImageUrl(decoded);
+    if (imageUrl) {
+      if (this.ambiguousImageUrls.has(imageUrl)) return { matched: true };
+      const card = this.registryImageUrlMap.get(imageUrl);
+      if (card) return { matched: true, card };
+    }
     const hash = decoded.match(HASH_RE)?.[1]?.toLowerCase() ?? "";
     if (hash) {
       if (this.ambiguousHashes.has(hash)) {
@@ -262,6 +272,9 @@ export class TcgaResolver {
     for (const hash of card.hashes) {
       addUnambiguous(this.registryHashMap, this.ambiguousHashes, hash, card);
     }
+    for (const url of card.imageUrls) {
+      addUnambiguous(this.registryImageUrlMap, this.ambiguousImageUrls, url, card);
+    }
   }
 }
 
@@ -312,6 +325,7 @@ function normalizeRegistryCard(value: unknown, forcedKind?: RegistryCardKind): R
       && Boolean(exactCanonicalLegendName(champion))
     ),
     hashes: [...new Set(hashes)],
+    imageUrls: stringValues(raw.imageUrl, raw.imageUrlAliases).map(normalizedImageUrl).filter(Boolean),
     aliases: [...new Set(aliases)]
   };
 }
@@ -330,6 +344,15 @@ function registryCardKind(type: unknown, supertype: unknown): RegistryCardKind {
     return "rune";
   }
   return "other";
+}
+
+function normalizedImageUrl(value: string): string {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" ? `${url.origin}${url.pathname}` : "";
+  } catch {
+    return "";
+  }
 }
 
 function canonicalRuneArtCode(value: string): string {
