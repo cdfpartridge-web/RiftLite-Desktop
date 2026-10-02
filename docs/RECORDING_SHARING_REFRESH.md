@@ -1,6 +1,8 @@
 # Recording and sharing refresh — local implementation
 
-This checkout contains the desktop refresh on `codex/recording-sharing-refresh`, based on `98182cb`. Version remains **0.9.79**. Nothing has been published or deployed.
+**Published 2 October 2026:** The completed work below is now included in **v0.9.80** for Windows and both Mac architectures. The supporting website changes are live. [Release receipt](./RELEASE-2026-10-02.md). This supersedes the local-only status of the dated implementation and test-installer checkpoints below.
+
+The original local checkpoint contained the desktop refresh on `codex/recording-sharing-refresh`, based on `98182cb`, and retained version **0.9.79** without publication. The dated sections below describe those development checkpoints.
 
 ## User flow
 

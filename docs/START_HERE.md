@@ -1,5 +1,9 @@
 # Start here — RiftLite engineering
 
+**Published v0.9.80 — 2 October 2026:** Windows, Mac Intel and Mac Apple Silicon are live and Latest from immutable source **41b7ac3d1d81646b8b2d94608d8c660df2008eec**. Includes the recording/sharing refresh, replay recovery, deferred review queue, local crash diagnostics, performance fixes and 22 additional Radiance prints. The matching website is live from **23ab3cf** at deployment **dpl_GLPVDqpFc1vKCnRugLKt195t3ngo**. Both platform gates, packaged checks, all eight public assets/updaters and cross-platform compiled/resource parity passed. [Release and verification receipt](./RELEASE-2026-10-02.md).
+
+**Current desktop checkout:** `C:/Users/cdfpa/OneDrive/Documents/Claude/Projects/RiftLite/.codex-worktrees/recording-sharing-refresh-desktop`, branch `codex/recording-sharing-refresh`. **Clean release build:** sibling `release-v0.9.80`, detached at the immutable runtime source. **Website checkout:** sibling `opening-turns-lab-20260923`. These paths and the new release receipt supersede the dated operational paths below. The old primary checkout's canonical Windows installer files now contain v0.9.80, with v0.9.79 backed up; its older build directories are not the fresh release build. Opening Turns Lab and Replay Coach remain Coming soon. Do not move release tags, replace published assets, or rerun successful tagged jobs.
+
 **Published v0.9.79 — 30 September 2026:** Windows, Mac Intel and Mac Apple Silicon are live and Latest from source `ed01c41`. Includes 88 Radiance preview card prints, six legends, five battlefields, Bomb and private Team invitations. The supporting website is live from `d8082ed`, including correctly oriented battlefield art and Hub/Discord invitation fixes. Both platform gates, package/startup checks and all eight public assets passed. [Release and verification receipt](./RELEASE-2026-09-30.md). This supersedes earlier source-only Team/Hub and catalog statuses.
 
 
