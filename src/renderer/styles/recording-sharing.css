@@ -1,0 +1,100 @@
+.recording-sharing-page { max-width: 1160px; width: 100%; margin: 0 auto; padding: 24px; display: flex; flex-direction: column; gap: 20px; }
+.recording-sharing-heading, .recording-sharing-account, .recording-sharing-card-heading, .recording-sharing-next, .recording-sharing-attention, .recording-sharing-destination-heading { display: flex; align-items: center; justify-content: space-between; gap: 18px; }
+.recording-sharing-heading h2 { margin: 5px 0 7px; font-size: 26px; }
+.recording-sharing-page p { margin: 6px 0; line-height: 1.55; }
+.recording-sharing-heading p, .recording-sharing-copy p, .recording-sharing-destination p { color: var(--muted); font-size: 13px; }
+.recording-sharing-heading > div, .recording-sharing-copy, .recording-sharing-destination-heading > div, .recording-sharing-account > div { flex: 1; min-width: 0; }
+.recording-sharing-page button { flex-shrink: 0; }
+.recording-sharing-account { border: 1px solid var(--border); background: var(--surface); border-radius: 12px; padding: 15px 18px; }
+.recording-sharing-account > svg { color: var(--cyan-soft); flex-shrink: 0; }
+.recording-sharing-account strong, .recording-sharing-account span { display: block; font-size: 13px; }
+.recording-sharing-account span { color: var(--muted); margin-top: 4px; }
+.recording-sharing-sections { display: grid; gap: 12px; }
+.recording-sharing-card { border: 1px solid var(--border); background: var(--surface); border-radius: 14px; overflow: hidden; }
+.recording-sharing-card-heading { padding: 22px; }
+.recording-sharing-icon { display: grid; place-items: center; width: 46px; height: 46px; border-radius: 12px; background: rgb(40 215 255 / 8%); color: var(--cyan-soft); flex-shrink: 0; }
+.recording-sharing-copy h3 { margin: 0; font-size: 17px; }
+.recording-sharing-copy p { margin: 5px 0 9px; }
+.recording-sharing-summary { font-size: 12px; color: var(--cyan-soft); }
+.recording-sharing-chevron-open { transform: rotate(180deg); }
+.recording-sharing-controls { padding: 20px 22px; border-top: 1px solid var(--border); }
+.recording-sharing-controls[hidden] { display: none; }
+.recording-sharing-controls .rail-card { box-shadow: none; }
+.recording-sharing-controls .review-web-panel { border: 0; padding: 0; background: transparent; }
+.recording-sharing-footnote { font-size: 12px; padding-top: 12px; }
+.recording-sharing-discord { display: grid; gap: 18px; }
+.recording-sharing-journeys { display: flex; gap: 8px; flex-wrap: wrap; }
+.recording-sharing-journeys .segmented[data-active="true"] { background: rgb(40 215 255 / 12%); border-color: var(--cyan); color: var(--cyan-soft); }
+.recording-sharing-hub-picker { max-width: 440px; display: grid; gap: 8px; font-size: 13px; }
+.recording-sharing-hub-picker select { width: 100%; }
+.recording-sharing-next, .recording-sharing-destination { padding: 16px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); }
+.recording-sharing-destination[data-state="configured"] { border-color: rgb(132 242 180 / 30%); }
+.recording-sharing-next p { font-size: 13px; color: var(--muted); }
+.recording-sharing-checks { display: flex; flex-wrap: wrap; gap: 16px; margin: 12px 0; color: var(--success); font-size: 12px; }
+.recording-sharing-checks span { display: inline-flex; gap: 6px; align-items: center; }
+.recording-sharing-opt-in { border-top: 1px solid var(--border); padding-top: 12px; }
+.recording-sharing-opt-in .toggle-row { margin: 0 0 10px; }
+.recording-sharing-opt-in .toggle-row small { display: block; color: var(--muted); font-size: 12px; margin-top: 5px; font-weight: 400; }
+.recording-sharing-page .muted { font-size: 13px; }
+.recording-sharing-help, .recording-sharing-advanced { border-top: 1px solid var(--border); padding-top: 15px; font-size: 13px; }
+.recording-sharing-help summary, .recording-sharing-advanced summary { cursor: pointer; color: var(--muted); }
+.recording-sharing-help p { max-width: 840px; color: var(--muted); margin: 12px 0; }
+.recording-sharing-advanced > div { padding-top: 14px; }
+.recording-sharing-steps { display: grid; gap: 20px; padding: 12px 0 0 24px; margin: 0; }
+.recording-sharing-steps li { padding-left: 5px; font-size: 13px; }
+.recording-sharing-steps li::marker { color: var(--cyan-soft); font-weight: 700; }
+.recording-sharing-steps li > button { margin-top: 10px; }
+.recording-sharing-steps p { color: var(--muted); }
+.recording-sharing-hub-id { display: block; margin: 10px 0; padding: 8px 12px; background: var(--bg); border-radius: 7px; overflow-wrap: anywhere; }
+.recording-sharing-positive { color: var(--success); }
+.recording-sharing-inline-button { border: 0; padding: 0; background: transparent; color: var(--cyan-soft); text-decoration: underline; }
+.recording-sharing-selected { font-size: 12px; color: var(--muted); }
+.recording-sharing-notice { color: var(--success); font-size: 13px; }
+.recording-sharing-error { color: var(--danger); font-size: 13px; }
+.recording-sharing-attention { padding: 16px 18px; border: 1px solid rgb(255 191 92 / 35%); border-radius: 12px; }
+.recording-sharing-attention strong { font-size: 13px; color: #ffcf87; }
+.recording-sharing-attention p { font-size: 12px; color: var(--muted); }
+.recording-video-fields { border: 0; padding: 0; margin: 0; min-width: 0; display: grid; gap: 14px; }
+.recording-video-fields > label, .recording-video-grid > label { display: grid; gap: 7px; font-size: 13px; }
+.recording-video-fields label.toggle-row { display: flex; margin: 0; }
+.recording-video-fields .toggle-row small { display: block; color: var(--muted); font-size: 12px; margin-top: 5px; }
+.recording-video-grid { display: grid; grid-template-columns: 1fr 1fr; align-items: center; gap: 20px; }
+.recording-video-fields .recording-sharing-help > div { padding-top: 14px; }
+.modal-backdrop.replay-discord-backdrop { position: fixed; inset: 0; display: grid; place-items: center; padding: 16px; overflow: hidden; overscroll-behavior: contain; }
+.hub-lifecycle-modal.replay-discord-dialog { box-sizing: border-box; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; width: min(680px, 100%); min-width: 0; min-height: 0; max-height: calc(100vh - 32px); max-height: calc(100dvh - 32px); overflow: hidden; }
+.replay-discord-dialog > header, .replay-discord-dialog > footer { min-width: 0; }
+.replay-discord-dialog > header { align-items: flex-start; }
+.replay-discord-dialog > header > div { min-width: 0; }
+.replay-discord-dialog > header p { margin-bottom: 0; overflow-wrap: anywhere; }
+.replay-discord-dialog > header > button { flex: 0 0 auto; }
+.replay-discord-dialog-body { min-width: 0; min-height: 0; padding: 0 18px 18px; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; scrollbar-width: thin; scrollbar-color: var(--border-strong) var(--surface-2); }
+.replay-discord-dialog-body:focus-visible { outline: 2px solid var(--cyan); outline-offset: -3px; }
+.replay-discord-dialog h2 { display: flex; align-items: center; gap: 10px; }
+.replay-discord-dialog-body > p { font-size: 13px; line-height: 1.6; color: var(--muted); }
+.replay-discord-destinations { min-width: 0; padding: 12px; border: 1px solid var(--border); border-radius: 10px; display: grid; gap: 10px; margin: 16px 0; }
+.replay-discord-destinations legend { color: var(--muted); font-size: 12px; padding: 0 6px; }
+.replay-discord-destination { display: flex; align-items: flex-start; gap: 12px; padding: 10px; background: var(--surface-2); border-radius: 8px; }
+.replay-discord-destination > input { width: auto; flex: 0 0 auto; margin-top: 4px; }
+.replay-discord-destination > span { min-width: 0; }
+.replay-discord-destination strong, .replay-discord-destination small { display: block; }
+.replay-discord-destination small { margin-top: 5px; color: var(--muted); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.replay-discord-dialog > footer { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 10px; margin: 0; background: var(--surface-2); }
+.replay-discord-dialog > footer button { max-width: 100%; white-space: normal; }
+@media (max-height: 540px), (max-width: 480px) {
+  .modal-backdrop.replay-discord-backdrop { padding: 8px; }
+  .hub-lifecycle-modal.replay-discord-dialog { max-height: calc(100vh - 16px); max-height: calc(100dvh - 16px); }
+  .replay-discord-dialog > header, .replay-discord-dialog > footer { padding: 12px; }
+  .replay-discord-dialog h2 { margin: 5px 0; font-size: 18px; }
+  .replay-discord-dialog > header p { margin-top: 5px; font-size: 12px; }
+  .replay-discord-dialog-body { padding-inline: 12px; }
+}
+@media (max-width: 750px) {
+  .recording-sharing-page { padding: 16px; }
+  .recording-sharing-heading, .recording-sharing-account, .recording-sharing-next, .recording-sharing-destination-heading, .recording-sharing-attention { align-items: flex-start; flex-wrap: wrap; }
+  .recording-sharing-card-heading { padding: 16px; gap: 12px; align-items: flex-start; }
+  .recording-sharing-controls { padding: 16px; }
+  .recording-sharing-icon { width: 34px; height: 34px; }
+  .recording-sharing-card-heading > button { font-size: 12px; padding: 8px 10px; }
+  .recording-sharing-heading > div { flex-basis: 100%; }
+  .recording-video-grid { grid-template-columns: 1fr; }
+}

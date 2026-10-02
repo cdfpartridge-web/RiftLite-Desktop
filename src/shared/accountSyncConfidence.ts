@@ -81,7 +81,7 @@ export function buildAccountSyncChoicePreview(
       choice,
       title: "Keep this device's data?",
       actionLabel: "Keep local and replace cloud",
-      consequence: "This device becomes the source of truth. Its match history, decks, notebooks, and active-deck selection replace the current cloud backup.",
+      consequence: "This device's match history, decks, notebooks and settings (including the active-deck selection) will replace the current cloud backup.",
       local,
       cloud
     };
@@ -90,7 +90,7 @@ export function buildAccountSyncChoicePreview(
     choice,
     title: "Restore the cloud backup?",
     actionLabel: "Restore cloud on this device",
-    consequence: "The cloud copy becomes the source of truth for match history, decks, notebooks, and settings. Your sign-in and local replay video files stay on this device.",
+    consequence: "The cloud backup will replace local match history, decks, notebooks and settings. Your sign-in and local replay video files stay on this device.",
     local,
     cloud
   };
@@ -107,7 +107,7 @@ export function activeDeckSyncConfidence(
       title: "No active deck",
       state: "none",
       label: "Not selected",
-      detail: "Choose an active deck in Deck Library to include that selection in device sync."
+      detail: "Choose an active deck in Deck Library to include that selection in your account backup."
     };
   }
   if (!status?.enabled && status?.hasRemoteBackup) {
@@ -115,7 +115,7 @@ export function activeDeckSyncConfidence(
       title: activeDeck.title,
       state: "choice-required",
       label: "Waiting for data choice",
-      detail: "Choose whether this device or the cloud backup should be authoritative before the active-deck selection can sync."
+      detail: "Choose whether to keep this device's data or restore the cloud backup before automatic backup can include the active-deck selection."
     };
   }
   if (!(status?.enabled ?? settings.accountCloudSyncEnabled)) {
@@ -130,14 +130,14 @@ export function activeDeckSyncConfidence(
     return {
       title: activeDeck.title,
       state: "waiting",
-      label: "Waiting for first sync",
-      detail: "Sync now to include this deck and the active-deck selection in the account backup."
+      label: "Waiting for first backup",
+      detail: "Back up now to include this deck and the active-deck selection in the account backup."
     };
   }
   return {
     title: activeDeck.title,
     state: "synced",
-    label: "Included in device sync",
+    label: "Included in account backup",
     detail: "RiftLite includes both this deck and the active-deck selection in account backups."
   };
 }

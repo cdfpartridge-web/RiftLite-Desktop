@@ -20,7 +20,7 @@ export const GUIDED_TOUR_STEPS = [
   {
     id: "review",
     title: "Review every result",
-    description: "Matches, Local and Web Replays, and personal stats live together under Review.",
+    description: "Matches, Replays & videos, and personal stats live together under Review. Each game brings its interactive replay, video and log together.",
     target: { view: "matches" }
   },
   {
@@ -32,13 +32,13 @@ export const GUIDED_TOUR_STEPS = [
   {
     id: "community",
     title: "Explore the community",
-    description: "Community contains meta, decks, Spotlight, LFG, teams, Private Hubs, and the collapsed Scorepad tool.",
+    description: "Explore decks, meta and creators, find a match, or open Your groups for teams, private hubs and invitations.",
     target: { view: "community", communityTab: "legend-meta" }
   },
   {
     id: "utilities",
     title: "Your utilities stay close",
-    description: "Overlay, Account & integrations, Settings, navigation controls, and capture health remain available in the sidebar.",
+    description: "Recording & sharing is the setup home for replays, video, microphone and Discord. Account, Overlay and Settings remain in the sidebar.",
     target: { view: "account" }
   }
 ] as const satisfies readonly GuidedTourStep[];

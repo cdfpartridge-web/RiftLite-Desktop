@@ -21,6 +21,48 @@
 
 .review-replays .review-replays-heading {
   grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+}
+
+.review-replays .replay-library-toolbar {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.review-replays .replay-library-toolbar > button {
+  min-height: 44px;
+  padding: 10px 16px;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.review-replays .replay-library-toolbar > button svg {
+  flex-shrink: 0;
+}
+
+.review-replays .replay-library-toolbar .replay-library-browse {
+  border-color: #4b91c9;
+  background: linear-gradient(180deg, #173e60, #102e49);
+  color: #d5efff;
+}
+
+.review-replays .replay-library-toolbar .replay-library-browse:hover {
+  border-color: #84ceff;
+  background: linear-gradient(180deg, #21537c, #163d60);
+  color: #fff;
+}
+
+.review-replays .replay-library-toolbar .replay-library-refresh {
+  margin-left: auto;
+}
+
+@media (max-width: 1100px) {
+  .review-replays .replay-library-toolbar .replay-library-refresh { margin-left: 0; }
 }
 
 .review-replays .review-replays-total {

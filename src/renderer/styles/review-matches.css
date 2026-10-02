@@ -12,6 +12,11 @@
 .review-matches .local-match-filters { display: grid; gap: 16px; padding: 18px 20px 0; }
 .review-matches .review-history-title { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 .review-matches .review-history-title > div { display: grid; gap: 6px; }
+.review-matches .review-history-title { flex-wrap: wrap; }
+.review-matches .review-history-title .review-history-views { display: flex; flex-wrap: wrap; gap: 6px; }
+.review-matches .review-history-views button { min-height: 36px; padding: 7px 12px; font-size: 12px; }
+.review-matches .review-history-views button[aria-pressed="true"] { border-color: #4ab9d1; background: #10374a; color: #d5f7ff; }
+.review-matches .review-queue-hint { margin: 0; color: var(--review-muted); font-size: 12px; line-height: 1.6; }
 .review-matches .review-history-title span { color: var(--review-muted); font-size: 11px; }
 .review-matches .review-local-badge { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
 .review-matches .review-primary-filters { display: grid; grid-template-columns: minmax(220px, 2fr) minmax(140px, 1fr) minmax(120px, 1fr); gap: 12px; }

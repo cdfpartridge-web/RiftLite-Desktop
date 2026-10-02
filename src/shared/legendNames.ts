@@ -36,6 +36,7 @@ export const CANONICAL_LEGEND_NAMES = [
   MASTER_YI_WUJU_MASTER,
   "Mel",
   "Miss Fortune",
+  "Mordekaiser",
   "Nasus",
   "Orianna",
   "Ornn",
@@ -61,6 +62,7 @@ export const CANONICAL_LEGEND_NAMES = [
 ];
 
 const LEGEND_ALIAS_MAP: Record<string, string> = {
+  "iron revenant": "Mordekaiser",
   "boy who shattered time": "Ekko",
   "hexplosives expert": "Ziggs",
   "lady of clockwork": "Orianna",
@@ -172,6 +174,25 @@ const LEGEND_ALIAS_MAP: Record<string, string> = {
   "master of shadows": "Zed"
 };
 
+// These catalogs are fixed. Preparing their search keys once avoids sorting and
+// normalizing the entire alias list for every match rendered or counted.
+const LEGEND_ALIAS_NEEDLES = Object.entries(LEGEND_ALIAS_MAP)
+  .sort((a, b) => b[0].length - a[0].length)
+  .map(([alias, legend]) => ({
+    needle: ` ${alias.replace(/[^a-z0-9']/g, " ")} `.replace(/\s+/g, " "),
+    legend
+  }))
+  .filter(({ needle }) => needle.trim().length > 5);
+
+const CANONICAL_LEGEND_BY_KEY = new Map<string, string>();
+for (const legend of CANONICAL_LEGEND_NAMES) {
+  const key = canonicalKey(legend);
+  // Preserve the first matching name if two catalog entries share a key.
+  if (!CANONICAL_LEGEND_BY_KEY.has(key)) {
+    CANONICAL_LEGEND_BY_KEY.set(key, legend);
+  }
+}
+
 export function normalizeLegendName(value: unknown): string {
   const cleaned = String(value ?? "").replace(/\s+/g, " ").trim();
   if (!cleaned) {
@@ -246,9 +267,8 @@ function legendAlias(value: string): string | undefined {
     return exact;
   }
   const padded = ` ${key.replace(/[^a-z0-9']/g, " ")} `.replace(/\s+/g, " ");
-  for (const [alias, legend] of Object.entries(LEGEND_ALIAS_MAP).sort((a, b) => b[0].length - a[0].length)) {
-    const needle = ` ${alias.replace(/[^a-z0-9']/g, " ")} `.replace(/\s+/g, " ");
-    if (needle.trim().length > 5 && padded.includes(needle)) {
+  for (const { needle, legend } of LEGEND_ALIAS_NEEDLES) {
+    if (padded.includes(needle)) {
       return legend;
     }
   }
@@ -256,8 +276,7 @@ function legendAlias(value: string): string | undefined {
 }
 
 function canonicalLegend(value: string): string | undefined {
-  const key = canonicalKey(value);
-  return CANONICAL_LEGEND_NAMES.find((legend) => canonicalKey(legend) === key);
+  return CANONICAL_LEGEND_BY_KEY.get(canonicalKey(value));
 }
 
 function canonicalKey(value: string): string {

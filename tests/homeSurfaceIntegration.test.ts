@@ -34,9 +34,10 @@ describe("Home launchpad", () => {
     const releaseNotesSource = appSource.slice(releaseNotesStart, releaseNotesEnd);
 
     expect(releaseNotesSource).toContain("version: APP_VERSION_META");
-    expect(releaseNotesSource).toContain("Added 88 revealed Radiance prints");
-    expect(releaseNotesSource).toContain("Invite teammates by @handle");
-    expect(releaseNotesSource).toContain("Hub invitations now ask you to join explicitly");
+    expect(releaseNotesSource).toContain("Recording & sharing");
+    expect(releaseNotesSource).toContain("Needs review");
+    expect(releaseNotesSource).toContain("automatic local crash logs");
+    expect(releaseNotesSource).toContain("Added 22 more Radiance prints");
     expect(releaseNotesSource).not.toContain("Search Rules");
     expect(releaseNotesSource).not.toContain("Deck Insights is now the default Insights view");
   });

@@ -15,11 +15,12 @@ import {
 } from "../src/shared/navigationModel.js";
 
 describe("desktop navigation model", () => {
-  it("makes every existing ActiveView reachable", () => {
+  it("makes all top-level views reachable and retains the hosted library as an internal route", () => {
     const reachableViews = new Set(allNavigationItems().map((item) => item.target.view));
 
-    expect([...reachableViews].sort()).toEqual([...ACTIVE_VIEWS].sort());
-    for (const view of ACTIVE_VIEWS) {
+    expect([...reachableViews].sort()).toEqual(ACTIVE_VIEWS.filter((view) => view !== "web-replay" && view !== "hubs").sort());
+    expect(ACTIVE_VIEWS).toContain("web-replay");
+    for (const view of ACTIVE_VIEWS.filter((view) => view !== "web-replay" && view !== "hubs")) {
       expect(reachableViews.has(view), `${view} should be reachable`).toBe(true);
     }
   });
@@ -38,8 +39,7 @@ describe("desktop navigation model", () => {
   it("keeps the approved Review children and targets", () => {
     expect(REVIEW_NAVIGATION_ITEMS).toEqual([
       { id: "match-history", label: "Matches", target: { view: "matches" } },
-      { id: "local-replays", label: "Replays", target: { view: "replays" } },
-      { id: "web-replays", label: "Web Replays", target: { view: "web-replay" } },
+      { id: "local-replays", label: "Replays & videos", target: { view: "replays" } },
       { id: "my-stats", label: "Stats", target: { view: "stats" } }
     ]);
   });
@@ -60,8 +60,8 @@ describe("desktop navigation model", () => {
       { id: "community-decks", label: "Community Decks", target: { view: "community", communityTab: "community-decks" } },
       { id: "meta-matrix", label: "Meta & Matrix", target: { view: "community", communityTab: "legend-meta" } },
       { id: "spotlight", label: "Spotlight", target: { view: "spotlight" } },
-      { id: "find-match-teams", label: "Find Match & Teams", target: { view: "social" } },
-      { id: "private-hubs", label: "Private Hubs", target: { view: "hubs" } },
+      { id: "find-match-teams", label: "Find match", target: { view: "social" } },
+      { id: "your-groups", label: "Your groups", target: { view: "groups" } },
       { id: "scorepad", label: "Scorepad", target: { view: "scorepad" } }
     ]);
   });
@@ -82,7 +82,8 @@ describe("desktop navigation model", () => {
   it("keeps Overlay, Account and Settings as utilities", () => {
     expect(UTILITY_NAVIGATION_ITEMS).toEqual([
       { id: "overlay", label: "Overlay", target: { view: "stream" } },
-      { id: "account-integrations", label: "Account & integrations", target: { view: "account" } },
+      { id: "recording-sharing", label: "Recording & sharing", target: { view: "recording-sharing" } },
+      { id: "account-integrations", label: "Account", target: { view: "account" } },
       { id: "settings", label: "Settings", target: { view: "settings" } }
     ]);
   });
@@ -90,7 +91,7 @@ describe("desktop navigation model", () => {
   it.each([
     [{ view: "matches" }, "review", "match-history"],
     [{ view: "replays" }, "review", "local-replays"],
-    [{ view: "web-replay" }, "review", "web-replays"],
+    [{ view: "web-replay" }, "review", "local-replays"],
     [{ view: "stats" }, "review", "my-stats"],
     [{ view: "decks", deckFocus: "library" }, "prepare", "deck-library"],
     [{ view: "decks", deckFocus: "prep" }, "prepare", "matchup-prep"],
@@ -106,7 +107,8 @@ describe("desktop navigation model", () => {
     [{ view: "community", communityTab: "recent-matches" }, "community", "meta-matrix"],
     [{ view: "spotlight" }, "community", "spotlight"],
     [{ view: "social" }, "community", "find-match-teams"],
-    [{ view: "hubs" }, "community", "private-hubs"],
+    [{ view: "hubs" }, "community", "your-groups"],
+    [{ view: "groups" }, "community", "your-groups"],
     [{ view: "scorepad" }, "community", "scorepad"]
   ] satisfies ReadonlyArray<readonly [NavigationContext, string, string]>) (
     "resolves $0 to the owning $1 disclosure",
@@ -117,7 +119,7 @@ describe("desktop navigation model", () => {
   );
 
   it("does not assign primary routes or utilities to a disclosure", () => {
-    for (const view of ["home", "play", "insights", "stream", "account", "settings"] as const) {
+    for (const view of ["home", "play", "insights", "stream", "recording-sharing", "account", "settings"] as const) {
       expect(owningNavigationDisclosure({ view })).toBeNull();
     }
   });

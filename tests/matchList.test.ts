@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { localMatchesEligibleForStats, upsertMatchPreservingOrder } from "../src/shared/matchList";
+import { localMatchesEligibleForStats, matchNeedsReview, upsertMatchPreservingOrder } from "../src/shared/matchList";
 import type { MatchDraft } from "../src/shared/types";
 
 function match(id: string, capturedAt: string): MatchDraft {
@@ -56,5 +56,20 @@ describe("upsertMatchPreservingOrder", () => {
     const hidden = { ...match("hidden", "2026-04-24T12:00:00.000Z"), hiddenFromStats: true };
 
     expect(localMatchesEligibleForStats([pending, saved, hidden]).map((item) => item.id)).toEqual(["saved"]);
+  });
+
+  it("requires review for both deferred and incomplete captures, independently of result or sync", () => {
+    const base = match("review", "2026-04-24T13:00:00.000Z");
+    expect(matchNeedsReview({ ...base, status: "pending-review" })).toBe(true);
+    expect(matchNeedsReview({ ...base, status: "incomplete", result: "Incomplete" })).toBe(true);
+    expect(matchNeedsReview({ ...base, sync: { community: "pending", hubs: {}, teams: {} } })).toBe(false);
+    expect(matchNeedsReview({ ...base, result: "Incomplete" })).toBe(false);
+  });
+
+  it("excludes recycled and combined original records from review counts", () => {
+    const base = { ...match("review", "2026-04-24T13:00:00.000Z"), status: "pending-review" as const };
+    for (const patch of [{ deletedAt: "2026-04-25T13:00:00Z" }, { mergedIntoMatchId: "series" }, { hiddenFromHistory: true }, { hiddenFromStats: true }]) {
+      expect(matchNeedsReview({ ...base, ...patch })).toBe(false);
+    }
   });
 });

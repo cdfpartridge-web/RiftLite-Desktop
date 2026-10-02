@@ -6,7 +6,7 @@ import * as dateFilters from "../src/shared/dateFilter";
 import { canonicalLegendName, normalizeLegendName } from "../src/shared/legendNames";
 import { normalizePrivateHubWebReplayId } from "../src/shared/privateHubs";
 import { isCombinedOriginal, isCombinedRepairMatch } from "../src/shared/matchCombine";
-import { localMatchesEligibleForStats } from "../src/shared/matchList";
+import { localMatchesEligibleForStats, matchNeedsReview } from "../src/shared/matchList";
 import type { CommunityMatch, MatchDraft } from "../src/shared/types";
 
 // Execute the actual renderer filters and their declarations, without running
@@ -39,7 +39,7 @@ function loadFilters() {
   const code = source.statements.filter((statement) => included.has(statement)).map((statement) => statement.getText(source)).join("\n");
   const compiled = ts.transpileModule(code, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }).outputText;
   return runInNewContext(`${compiled}\n({${names.join(",")}});`, {
-    ...dateFilters, canonicalLegendName, normalizeLegendName, normalizePrivateHubWebReplayId, isCombinedOriginal, isCombinedRepairMatch, localMatchesEligibleForStats
+    ...dateFilters, canonicalLegendName, normalizeLegendName, normalizePrivateHubWebReplayId, isCombinedOriginal, isCombinedRepairMatch, localMatchesEligibleForStats, matchNeedsReview
   }, { timeout: 1_000 });
 }
 
@@ -96,6 +96,32 @@ describe("desktop reporting date filters", () => {
       ...filters.DEFAULT_MATCH_HISTORY_FILTERS, season: "", range: date, platform: "atlas", opponentLegend: "Irelia", format: "Bo1", seat: "1st"
     });
     expect(visible.map((row: MatchDraft) => row.id)).toEqual(["wanted"]);
+  });
+
+  it("finds unfinished reviews across seasons without treating pending uploads as reviews", () => {
+    const source = [
+      match("pending-result-known", 18, { status: "pending-review" }),
+      match("prior-season-incomplete", 18, { status: "incomplete", capturedAt: "2025-12-15T12:00:00Z", result: "Incomplete" }),
+      match("saved-sync-pending", 18, { sync: { community: "pending", hubs: {}, teams: {} } }),
+      match("deleted", 18, { status: "pending-review", deletedAt: "2026-09-19T12:00:00Z" }),
+      match("combined-original", 18, { status: "pending-review", mergedIntoMatchId: "series" })
+    ];
+    const before = JSON.stringify(source);
+    const queue = { ...filters.DEFAULT_MATCH_HISTORY_FILTERS, season: "", review: "needed" };
+    expect(filters.filterLocalMatches(source, queue).map((row: MatchDraft) => row.id)).toEqual(["pending-result-known", "prior-season-incomplete"]);
+    expect(filters.filterLocalMatches(source, { ...queue, range: date }).map((row: MatchDraft) => row.id)).toEqual(["pending-result-known"]);
+    expect(JSON.stringify(source)).toBe(before);
+  });
+
+  it("removes confirmed reviews from the queue but keeps them in history and statistics", () => {
+    const pending = match("deferred", 18, { status: "pending-review" });
+    const queue = { ...filters.DEFAULT_MATCH_HISTORY_FILTERS, season: "", review: "needed" };
+    expect(filters.filterLocalMatches([pending], queue)).toHaveLength(1);
+    expect(filters.localMatchStats([pending]).record).toBe("0-0");
+    const saved = { ...pending, status: "saved", sync: { community: "pending", hubs: {}, teams: {} } };
+    expect(filters.filterLocalMatches([saved], queue)).toEqual([]);
+    expect(filters.filterLocalMatches([saved], { ...queue, review: "" })).toHaveLength(1);
+    expect(filters.localMatchStats([saved]).record).toBe("1-0");
   });
 
   it("does not reintroduce combined originals when narrowing dates", () => {

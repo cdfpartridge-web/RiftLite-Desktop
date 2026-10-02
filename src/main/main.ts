@@ -1,4 +1,6 @@
-import { app, BrowserWindow, clipboard, desktopCapturer, dialog, globalShortcut, ipcMain, Menu, nativeImage, safeStorage, screen, session as electronSession, shell, webContents as electronWebContents } from "electron";
+import { loadAccountReplayLibrary } from "./services/accountReplayLibrary.js";
+import { app, BrowserWindow, clipboard, crashReporter, desktopCapturer, dialog, globalShortcut, ipcMain, Menu, nativeImage, safeStorage, screen, session as electronSession, shell, webContents as electronWebContents } from "electron";
+import { CrashDiagnostics } from "./services/crashDiagnostics.js";
 import type { NativeImage, OpenDialogOptions, SaveDialogOptions, WebContents } from "electron";
 import { execFile, spawn } from "node:child_process";
 import { once } from "node:events";
@@ -310,6 +312,7 @@ const UI_SNAPSHOT_PLATFORM = IS_PACKAGED_SMOKE_TEST
   ? process.env.RIFTLITE_UI_SNAPSHOT_PLATFORM?.trim().toLowerCase() ?? ""
   : "";
 const UI_SNAPSHOT_COLLAPSED = IS_PACKAGED_SMOKE_TEST && process.env.RIFTLITE_UI_SNAPSHOT_COLLAPSED === "1";
+const UI_SNAPSHOT_HIDDEN = IS_PACKAGED_SMOKE_TEST && process.env.RIFTLITE_UI_SNAPSHOT_HIDDEN === "1";
 const UI_SNAPSHOT_ATLAS_WAIT_MS = IS_PACKAGED_SMOKE_TEST
   ? Math.max(1_000, Math.min(30_000, Number.parseInt(process.env.RIFTLITE_UI_SNAPSHOT_ATLAS_WAIT_MS ?? "14000", 10) || 14_000))
   : 0;
@@ -350,6 +353,30 @@ if (!IS_PACKAGED_SMOKE_TEST) {
 app.commandLine.appendSwitch("disable-features", "WebRtcAllowInputVolumeAdjustment,WebRtcApmInAudioService");
 
 const gotSingleInstanceLock = IS_PACKAGED_SMOKE_TEST || app.requestSingleInstanceLock();
+
+// Start before any windows/processes are created. A second instance must not
+// overwrite the running instance's session marker. Smoke paths are isolated.
+const crashDiagnosticsDirectory = join(app.getPath("userData"), "Crash Diagnostics");
+const nativeCrashDumpDirectory = SMOKE_PATHS?.crashDumps ?? join(crashDiagnosticsDirectory, "Native Crashes");
+let nativeCrashReportingEnabled = false;
+let nativeCrashSetupError: unknown;
+if (gotSingleInstanceLock) {
+  try {
+    mkdirSync(nativeCrashDumpDirectory, { recursive: true });
+    app.setPath("crashDumps", nativeCrashDumpDirectory);
+    crashReporter.start({ productName: RIFTLITE_BUILD_IDENTITY.appName, uploadToServer: false,
+      globalExtra: { buildVersion: RIFTLITE_BUILD_IDENTITY.packageVersion } });
+    nativeCrashReportingEnabled = true;
+  } catch (error) { nativeCrashSetupError = error; }
+}
+const crashDiagnostics = gotSingleInstanceLock ? new CrashDiagnostics({
+  directory: crashDiagnosticsDirectory, version: app.getVersion(), platform: process.platform, arch: process.arch,
+  versions: { electron: process.versions.electron, chrome: process.versions.chrome, node: process.versions.node },
+  nativeDumpDirectory: nativeCrashDumpDirectory, nativeCrashReportingEnabled
+}) : null;
+crashDiagnostics?.initialize();
+if (nativeCrashSetupError) crashDiagnostics?.record("native-crash-setup-failed", { error: nativeCrashSetupError });
+let crashSampleTimer: ReturnType<typeof setInterval> | null = null;
 
 let mainWindow: BrowserWindow | null = null;
 let startupWindow: BrowserWindow | null = null;
@@ -524,6 +551,8 @@ function matchPersistenceDiagnostic(error: unknown): Error {
 }
 
 async function logStartupIssue(label: string, error: unknown): Promise<void> {
+  // Persist the bounded, redacted diagnostic before the legacy async log write.
+  crashDiagnostics?.record("startup-issue", { label, error });
   const line = [
     `[${new Date().toISOString()}] ${label}`,
     formatStartupError(error),
@@ -553,7 +582,7 @@ function updateStartupWindowStatus(status: string, failed = false): void {
 }
 
 function createStartupWindow(): BrowserWindow | null {
-  if (!app.isReady()) {
+  if (UI_SNAPSHOT_HIDDEN || !app.isReady()) {
     return null;
   }
   if (startupWindow && !startupWindow.isDestroyed()) {
@@ -1038,8 +1067,34 @@ process.on("unhandledRejection", (reason) => {
 });
 
 app.on("child-process-gone", (_event, details) => {
+  crashDiagnostics?.record("child-process-gone", { type: details.type, reason: details.reason, exitCode: details.exitCode });
   void logStartupIssue("child process gone", JSON.stringify(details));
 });
+
+app.on("render-process-gone", (_event, contents, details) => {
+  crashDiagnostics?.record("render-process-gone", { webContentsId: contents.id, reason: details.reason, exitCode: details.exitCode });
+});
+app.on("browser-window-created", (_event, window) => {
+  window.on("unresponsive", () => crashDiagnostics?.record("window-unresponsive", { windowId: window.id }));
+  window.on("responsive", () => crashDiagnostics?.record("window-responsive", { windowId: window.id }));
+});
+
+function sampleCrashDiagnostics(): void {
+  if (!crashDiagnostics) return;
+  try {
+    crashDiagnostics.recordSample({
+      main: process.memoryUsage(), systemMemoryKiB: process.getSystemMemoryInfo(), uptimeSeconds: process.uptime(),
+      servicesReady: mainServicesReady, videoSessions: replayVideoSessions.size, videoExportActive: replayMp4ExportLifecycle.active,
+      processes: app.getAppMetrics().slice(0, 64).map((metric) => ({
+        pid: metric.pid, type: metric.type, createdAt: metric.creationTime,
+        cpuPercent: metric.cpu.percentCPUUsage, memoryKiB: metric.memory
+      })),
+      pages: electronWebContents.getAllWebContents().filter((contents) => !contents.isDestroyed()).slice(0, 64).map((contents) => ({
+        id: contents.id, type: contents.getType(), loading: contents.isLoading(), platform: gamePlatformForTrustedUrl(contents.getURL())
+      }))
+    });
+  } catch (error) { crashDiagnostics.record("sample-unavailable", { error }); }
+}
 
 const REPLAY_FRAME_DEDUPE_THRESHOLD = 0.012;
 const REPLAY_FRAME_DIRECTORY_CACHE_MS = 30_000;
@@ -7904,6 +7959,7 @@ function handleAtlasShellStatusEvent(sender: WebContents, event: CaptureEvent): 
 
 async function createWindow(): Promise<void> {
   if (mainWindow && !mainWindow.isDestroyed()) {
+    if (UI_SNAPSHOT_HIDDEN) return;
     if (mainWindow.isMinimized()) mainWindow.restore();
     mainWindow.show();
     mainWindow.focus();
@@ -7933,6 +7989,7 @@ async function createWindow(): Promise<void> {
   });
   const createdMainWindow = mainWindow;
   createdMainWindow.on("close", (event) => {
+    crashDiagnostics?.record("main-window-close-requested", { exportActive: replayMp4ExportLifecycle.active });
     if (!replayMp4ExportLifecycle.active) {
       return;
     }
@@ -7940,6 +7997,7 @@ async function createWindow(): Promise<void> {
     deferQuitForReplayMp4Export("close-window", createdMainWindow);
   });
   createdMainWindow.once("closed", () => {
+    crashDiagnostics?.record("main-window-closed");
     if (mainWindow === createdMainWindow) {
       mainWindow = null;
     }
@@ -7952,7 +8010,7 @@ async function createWindow(): Promise<void> {
 
   const showMainWindow = () => {
     if (createdMainWindow.isDestroyed()) return;
-    createdMainWindow.show();
+    if (!UI_SNAPSHOT_HIDDEN) createdMainWindow.show();
     closeStartupWindow();
   };
   mainWindow.once("ready-to-show", showMainWindow);
@@ -8873,6 +8931,10 @@ function registerIpc(): void {
     assertTrustedAppIpcSender(event);
     return rawCaptureService.removeWebReplayUploadFromQueue(captureSessionId);
   });
+  handleTrustedAppIpc("raw-capture:stop-discord-retries", (event, captureSessionId: string) => {
+    assertTrustedAppIpcSender(event);
+    return rawCaptureService.stopWebReplayDiscordRetries(captureSessionId);
+  });
   handleTrustedAppIpc("raw-capture:payload", (event, replayId: string) => {
     assertTrustedAppIpcSender(event);
     return rawCaptureService.getRawCapturePayload(replayId);
@@ -8881,10 +8943,14 @@ function registerIpc(): void {
     assertTrustedAppIpcSender(event);
     return rawCaptureService.uploadRawCaptureToRiftLite(replayId, visibility);
   });
-  handleTrustedAppIpc("raw-capture:share-discord", (event, replayId: string) => {
+  handleTrustedAppIpc("raw-capture:share-discord", (event, replayId: string, hubIds?: string[]) => {
     assertTrustedAppIpcSender(event);
-    return rawCaptureService.shareRawCaptureToDiscord(replayId);
+    return rawCaptureService.shareRawCaptureToDiscord(replayId, hubIds);
   });
+  handleTrustedAppIpc("replay:library:list-owned", () => loadAccountReplayLibrary({
+    getAccountUid: async () => (await store.getSettings()).accountUid,
+    getAccessToken: (expectedAccountUid) => syncService.refreshLinkedAccountIdToken(expectedAccountUid)
+  }));
   handleTrustedAppIpc("replay:embed:prepare", (_event, replayId: string) => prepareRiftLiteReplayEmbed(replayId));
   handleTrustedAppIpc("replay:embed:prepare-library", () => prepareRiftLiteReplayLibraryEmbed());
   handleTrustedAppIpc("replays:import", () => importReplayBundle());
@@ -9115,6 +9181,29 @@ function registerIpc(): void {
     assertTrustedAppIpcSender(event);
     await diagnostics.ensureFile();
     return diagnostics.getPath();
+  });
+  handleTrustedAppIpc("crash-diagnostics:status", () => {
+    if (!crashDiagnostics) throw new Error("Crash diagnostics are not available in this instance.");
+    return crashDiagnostics.getStatus();
+  });
+  handleTrustedAppIpc("crash-diagnostics:export", async () => {
+    if (!crashDiagnostics) throw new Error("Crash diagnostics are not available in this instance.");
+    const options: SaveDialogOptions = {
+      title: "Export RiftLite crash log", defaultPath: join(app.getPath("downloads"), `riftlite-crash-log-${new Date().toISOString().replace(/[:.]/g, "-")}.json`),
+      filters: [{ name: "Crash diagnostic log", extensions: ["json"] }]
+    };
+    const result = mainWindow ? await dialog.showSaveDialog(mainWindow, options) : await dialog.showSaveDialog(options);
+    if (result.canceled || !result.filePath) return null;
+    sampleCrashDiagnostics();
+    const exported = crashDiagnostics.exportReport(result.filePath);
+    if (!exported.ok) throw new Error(exported.error || "The crash log could not be saved.");
+    shell.showItemInFolder(result.filePath);
+    return result.filePath;
+  });
+  handleTrustedAppIpc("crash-diagnostics:open", async () => {
+    if (!crashDiagnostics) throw new Error("Crash diagnostics are not available in this instance.");
+    const error = await shell.openPath(crashDiagnosticsDirectory);
+    if (error) throw new Error(error);
   });
   handleTrustedAppIpc("diagnostics:summary", (event) => {
     assertTrustedAppIpcSender(event);
@@ -9448,9 +9537,29 @@ function registerIpc(): void {
       ingestAtlasRawFrame("game-preload", event.sender, payload, "atlas-preload-frame");
     }
   });
+  let rendererFaultWindow = 0;
+  let rendererFaultCount = 0;
+  ipcMain.on("crash-diagnostics:renderer-fault", (event, value: unknown) => {
+    try { assertTrustedAppIpcSender(event); } catch { return; }
+    if (!value || typeof value !== "object" || Array.isArray(value)) return;
+    const fault = value as Record<string, unknown>;
+    if (typeof fault.kind !== "string" || !["error", "unhandled-rejection", "react-error"].includes(fault.kind) || typeof fault.message !== "string") return;
+    const now = Date.now();
+    if (now - rendererFaultWindow >= 60_000) { rendererFaultWindow = now; rendererFaultCount = 0; }
+    if (rendererFaultCount >= 20) return;
+    rendererFaultCount++;
+    crashDiagnostics?.record("renderer-error", {
+      webContentsId: event.sender.id, kind: fault.kind, message: fault.message.slice(0, 2_000),
+      stack: typeof fault.stack === "string" ? fault.stack.slice(0, 6_000) : undefined,
+      source: typeof fault.source === "string" ? fault.source.slice(0, 1_000) : undefined,
+      line: typeof fault.line === "number" && Number.isFinite(fault.line) ? fault.line : undefined,
+      column: typeof fault.column === "number" && Number.isFinite(fault.column) ? fault.column : undefined
+    });
+  });
 }
 
 function showOrCreateAppWindow(): void {
+  if (UI_SNAPSHOT_HIDDEN) return;
   if (mainWindow && !mainWindow.isDestroyed()) {
     if (mainWindow.isMinimized()) mainWindow.restore();
     mainWindow.show();
@@ -9493,6 +9602,9 @@ app.whenReady().then(async () => {
   if (!gotSingleInstanceLock) {
     return;
   }
+  sampleCrashDiagnostics();
+  crashSampleTimer = setInterval(sampleCrashDiagnostics, 15_000);
+  crashSampleTimer.unref();
   createStartupWindow();
   try {
     Menu.setApplicationMenu(null);
@@ -9559,6 +9671,7 @@ app.whenReady().then(async () => {
     }
     diagnostics = new CaptureDiagnostics();
     store.setPerformanceReporter((event) => {
+      crashDiagnostics?.record("database-slow", event);
       const capturedAt = new Date().toISOString();
       void diagnostics.record({
         id: `performance-database-${Date.now()}-${randomUUID()}`,
@@ -9570,6 +9683,7 @@ app.whenReady().then(async () => {
       }).catch(() => undefined);
     });
     eventLoopWatchdog = startEventLoopWatchdog((event) => {
+      crashDiagnostics?.record("event-loop-lag", event);
       const capturedAt = new Date().toISOString();
       void diagnostics.record({
         id: `performance-event-loop-${Date.now()}-${randomUUID()}`,
@@ -9608,6 +9722,7 @@ app.whenReady().then(async () => {
         ? "Updates are disabled during an isolated smoke test."
         : "Updates are disabled in this build.",
       beforeInstall: async () => {
+        crashDiagnostics?.record("update-install-requested");
         // electron-updater must own the quit that launches the downloaded
         // installer. Finalize the research capture first and then allow that
         // quit through the global before-quit guard.
@@ -9678,11 +9793,32 @@ app.whenReady().then(async () => {
       setTimeout(() => {
         void (async () => {
           if (!mainWindow || mainWindow.isDestroyed()) return;
+          const snapshotWindow = mainWindow;
+          if (UI_SNAPSHOT_HIDDEN) snapshotWindow.webContents.setBackgroundThrottling(false);
+          const waitForSnapshotState = async (script: string, description: string) => {
+            const deadline = Date.now() + 10_000;
+            while (Date.now() < deadline) {
+              if (snapshotWindow.isDestroyed()) throw new Error("Snapshot window closed before it was ready.");
+              if (await snapshotWindow.webContents.executeJavaScript(script)) return;
+              await new Promise((resolveSnapshotState) => setTimeout(resolveSnapshotState, 150));
+            }
+            throw new Error(`UI snapshot timed out waiting for ${description}.`);
+          };
+          await waitForSnapshotState(`Boolean(document.querySelector('.app-shell.ui-dev-modern .sidebar'))`, "the application shell");
           await mainWindow.webContents.executeJavaScript(
             `document.querySelector('.release-notes-modal .primary')?.click()`
           ).catch(() => undefined);
           await new Promise((resolveSnapshot) => setTimeout(resolveSnapshot, 250));
-          if (UI_SNAPSHOT_TOUR_ACTION) {
+          const dismissTourForRoute = Boolean(UI_SNAPSHOT_VIEW) && (!UI_SNAPSHOT_TOUR_ACTION || UI_SNAPSHOT_TOUR_ACTION === "finish");
+          if (dismissTourForRoute) {
+            await waitForSnapshotState(`(() => {
+              const tour = document.querySelector('.guided-tour-layer');
+              if (!tour) return true;
+              const button = tour.querySelector('.guided-tour-close');
+              if (button instanceof HTMLButtonElement) button.click();
+              return false;
+            })()`, "the guided tour to close");
+          } else if (UI_SNAPSHOT_TOUR_ACTION) {
             const requestedStep = Number.parseInt(UI_SNAPSHOT_TOUR_ACTION, 10);
             const clickCount = UI_SNAPSHOT_TOUR_ACTION === "finish"
               ? 10
@@ -9714,30 +9850,47 @@ app.whenReady().then(async () => {
             home: "Home",
             play: "Play",
             matches: "Matches",
-            replays: "Replays",
+            replays: "Replays & videos",
             "web-replay": "RiftLite web replay",
             stats: "Stats",
             decks: "Deck Library",
             "matchup-lab": "Matchup Lab",
             community: "Meta & Matrix",
             spotlight: "Spotlight",
-            social: "Find Match & Teams",
-            hubs: "Private Hubs",
+            social: "Find match",
+            hubs: "Your groups",
+            groups: "Your groups",
             scorepad: "Scorepad",
             stream: "Overlay",
-            account: "Account & integrations",
+            account: "Account",
+            "recording-sharing": "Recording & sharing",
             settings: "Settings"
           };
           const snapshotViewTitle = snapshotViewTitles[UI_SNAPSHOT_VIEW];
+          const snapshotRouteMarkers: Record<string, string> = {
+            "recording-sharing": ".recording-sharing-page",
+            groups: ".your-groups-page",
+            hubs: ".your-groups-page",
+            account: ".account-page",
+            replays: ".review-replays"
+          };
+          const snapshotRouteMarker = snapshotRouteMarkers[UI_SNAPSHOT_VIEW] ?? "";
           if (snapshotViewTitle) {
             const snapshotViewTitleLiteral = JSON.stringify(snapshotViewTitle);
-            await mainWindow.webContents.executeJavaScript(`(() => {
+            const routeClicked = await mainWindow.webContents.executeJavaScript(`(() => {
               const button = Array.from(document.querySelectorAll('button[title]')).find((candidate) => candidate.getAttribute('title') === ${snapshotViewTitleLiteral});
               if (!(button instanceof HTMLButtonElement)) return false;
               button.click();
               return true;
             })()`);
-            await new Promise((resolveView) => setTimeout(resolveView, 650));
+            if (!routeClicked) throw new Error(`UI snapshot navigation button missing: ${snapshotViewTitle}.`);
+            await waitForSnapshotState(`(() => {
+              const marker = ${JSON.stringify(snapshotRouteMarker)};
+              return document.querySelector('.topbar h1')?.textContent?.trim() === ${snapshotViewTitleLiteral}
+                && (!marker || Boolean(document.querySelector(marker)))
+                && (${dismissTourForRoute} ? !document.querySelector('.guided-tour-layer') : true);
+            })()`, `the ${snapshotViewTitle} page`);
+            await new Promise((resolveView) => setTimeout(resolveView, 250));
           }
           if (UI_SNAPSHOT_COLLAPSED) {
             await mainWindow.webContents.executeJavaScript(`(() => {
@@ -9757,6 +9910,10 @@ app.whenReady().then(async () => {
             const homeButton = document.querySelector('button[title="Home"]');
             const bounds = shell instanceof HTMLElement ? shell.getBoundingClientRect() : null;
             const bodyText = String(document.body?.innerText || '').replace(/\\s+/g, ' ').trim();
+            const requestedTitle = ${JSON.stringify(snapshotViewTitle ?? "")};
+            const requestedMarker = ${JSON.stringify(snapshotRouteMarker)};
+            const tourVisible = Boolean(document.querySelector('.guided-tour-layer'));
+            const currentRouteTitle = document.querySelector('.topbar h1')?.textContent?.trim() ?? '';
             return {
               readyState: document.readyState,
               shellFound: shell instanceof HTMLElement,
@@ -9766,7 +9923,12 @@ app.whenReady().then(async () => {
               width: bounds?.width || 0,
               height: bounds?.height || 0,
               bodyTextLength: bodyText.length,
-              hasRiftLiteText: bodyText.includes('RiftLite')
+              hasRiftLiteText: bodyText.includes('RiftLite'),
+              currentRouteTitle,
+              tourVisible,
+              expectedRouteReady: !requestedTitle || (currentRouteTitle === requestedTitle
+                && (!requestedMarker || Boolean(document.querySelector(requestedMarker)))
+                && (${dismissTourForRoute} ? !tourVisible : true))
             };
           })()`, true) as {
             readyState: string;
@@ -9778,6 +9940,9 @@ app.whenReady().then(async () => {
             height: number;
             bodyTextLength: number;
             hasRiftLiteText: boolean;
+            currentRouteTitle: string;
+            tourVisible: boolean;
+            expectedRouteReady: boolean;
           };
           const rendererReady = rendererReadiness.readyState === "complete" &&
             rendererReadiness.shellFound &&
@@ -9787,11 +9952,20 @@ app.whenReady().then(async () => {
             rendererReadiness.width >= 700 &&
             rendererReadiness.height >= 500 &&
             rendererReadiness.bodyTextLength >= 200 &&
-            rendererReadiness.hasRiftLiteText;
+            rendererReadiness.hasRiftLiteText &&
+            rendererReadiness.expectedRouteReady;
           if (!rendererReady) {
             throw new Error(`Renderer readiness check failed: ${JSON.stringify(rendererReadiness)}`);
           }
-          const image = await mainWindow.webContents.capturePage();
+          // A hidden window can retain its first composited frame after React navigates.
+          // Request a fresh paint before capturing, without showing the smoke window.
+          if (UI_SNAPSHOT_HIDDEN) {
+            snapshotWindow.webContents.invalidate();
+            await snapshotWindow.webContents.capturePage(undefined, { stayHidden: true, stayAwake: true });
+            await new Promise((resolvePaint) => setTimeout(resolvePaint, 350));
+            snapshotWindow.webContents.invalidate();
+          }
+          const image = await mainWindow.webContents.capturePage(undefined, { stayHidden: UI_SNAPSHOT_HIDDEN, stayAwake: true });
           await writeFile(resolve(UI_SNAPSHOT_PATH), image.toPNG());
           await writeFile(`${resolve(UI_SNAPSHOT_PATH)}.json`, JSON.stringify({
             version: 1,
@@ -9826,12 +10000,14 @@ app.whenReady().then(async () => {
 });
 
 app.on("window-all-closed", () => {
+  crashDiagnostics?.record("all-windows-closed");
   if (process.platform !== "darwin") {
     app.quit();
   }
 });
 
 app.on("before-quit", (event) => {
+  crashDiagnostics?.record("quit-requested", { videoExportActive: replayMp4ExportLifecycle.active });
   if (deferQuitForReplayMp4Export()) {
     event.preventDefault();
     return;
@@ -9859,6 +10035,8 @@ app.on("before-quit", (event) => {
 });
 
 app.on("will-quit", () => {
+  crashDiagnostics?.record("will-quit");
+  if (crashSampleTimer) { clearInterval(crashSampleTimer); crashSampleTimer = null; }
   eventLoopWatchdog?.stop();
   eventLoopWatchdog = null;
   overlayServer?.stop();
@@ -9868,4 +10046,15 @@ app.on("will-quit", () => {
     rawCaptureUploadRetryTimer = null;
   }
   globalShortcut.unregisterAll();
+});
+
+// Quit requests can be cancelled while an export finishes. Only a completed,
+// successful exit clears the marker used to detect an unexplained termination.
+app.on("quit", (_event, exitCode) => {
+  if (exitCode === 0) crashDiagnostics?.markCleanExit("electron-quit");
+  else crashDiagnostics?.record("nonzero-exit", { exitCode }, { fatal: true });
+});
+process.on("exit", (exitCode) => {
+  if (exitCode === 0) crashDiagnostics?.markCleanExit("process-exit");
+  else crashDiagnostics?.record("nonzero-exit", { exitCode }, { fatal: true });
 });

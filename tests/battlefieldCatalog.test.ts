@@ -13,6 +13,9 @@ const catalog = JSON.parse(
 const gamePreloadSource = readFileSync(new URL("../src/game-preload/gamePreload.ts", import.meta.url), "utf8");
 
 const newlySupportedBattlefields = [
+  "Bandle Scouts' Academy",
+  "Black Market",
+  "Hunter's Circle",
   "Cosmic Vista",
   "Durand Memorial",
   "Packed Amphitheater",

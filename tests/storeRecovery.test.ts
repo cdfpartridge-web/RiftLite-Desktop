@@ -513,6 +513,83 @@ describe("RiftLiteStore database recovery", () => {
     }
   });
 
+  it("batches diagnostic parent checks without losing deleted, missing or purged parent rules", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "riftlite-store-parent-batch-"));
+    try {
+      const store = new RiftLiteStore(join(directory, "riftlite.sqlite"), join(directory, "legacy.json"));
+      await store.load();
+      await store.saveMatch(savedMatch("match-active"));
+      await store.saveMatch(savedMatch("other-match"));
+      await store.saveReplay(savedReplay("active"));
+      await store.saveReplay({ ...savedReplay("deleted"), matchId: "match-active" });
+      await store.deleteReplay("deleted");
+      await store.saveReplay({ ...savedReplay("purged"), matchId: "match-active" });
+      await store.purgeReplay("purged");
+      await store.saveReplay(savedReplay("orphan"));
+      const parents = [
+        { replayId: "active", matchId: "match-active" },
+        { replayId: "active" },
+        { replayId: " active ", matchId: " match-active " },
+        { replayId: "active", matchId: "other-match" },
+        { replayId: "deleted", matchId: "match-active" },
+        { replayId: "purged", matchId: "match-active" },
+        { replayId: "orphan", matchId: "match-orphan" },
+        { replayId: "not-finalized", matchId: "match-active" },
+        { matchId: "match-active" },
+        { replayId: "not-finalized", matchId: "missing" },
+        {}
+      ];
+      const expected = [true, true, true, false, false, false, false, true, true, false, false];
+      await expect(store.hasActiveRawCaptureParents(parents)).resolves.toEqual(expected);
+      const internals = store as unknown as { db: { exec(sql: string): unknown } };
+      let queries = vi.spyOn(internals.db, "exec");
+      await expect(store.hasActiveRawCaptureParents(parents)).resolves.toEqual(expected);
+      expect(queries.mock.calls).toEqual([
+        ["SELECT data_json FROM replays"],
+        ["SELECT replay_id FROM replay_purge_tombstones"]
+      ]);
+      queries.mockRestore();
+      await Promise.all([store.getMatches(), store.getReplays()]);
+      queries = vi.spyOn(internals.db, "exec");
+      await expect(store.hasActiveRawCaptureParents(Array.from({ length: 50 }, () => parents).flat()))
+        .resolves.toEqual(Array.from({ length: 50 }, () => expected).flat());
+      expect(queries.mock.calls).toEqual([["SELECT replay_id FROM replay_purge_tombstones"]]);
+      queries.mockRestore();
+      await store.deleteMatch("match-active");
+      await expect(store.hasActiveRawCaptureParents(parents)).resolves.toEqual(parents.map(() => false));
+      await store.restoreMatch("match-active");
+      await expect(store.hasActiveRawCaptureParents([{ matchId: "match-active" }])).resolves.toEqual([true]);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("takes the diagnostic parent snapshot after pending database access and leaves upload checks live", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "riftlite-store-parent-batch-race-"));
+    try {
+      const store = new RiftLiteStore(join(directory, "riftlite.sqlite"), join(directory, "legacy.json"));
+      await store.load();
+      await store.saveMatch(savedMatch("match-active"));
+      await store.saveReplay(savedReplay("active"));
+      await Promise.all([store.getMatches(), store.getReplays()]);
+      const beforeDelete = await store.hasActiveRawCaptureParents([{ replayId: "active", matchId: "match-active" }]);
+      const internals = store as unknown as { database(): Promise<unknown> };
+      const database = internals.database.bind(internals);
+      let resume!: () => void;
+      const wait = new Promise<void>((resolve) => { resume = resolve; });
+      vi.spyOn(internals, "database").mockImplementationOnce(async () => { await wait; return database(); });
+      const duringDelete = store.hasActiveRawCaptureParents([{ replayId: "active", matchId: "match-active" }]);
+      await store.deleteReplay("active");
+      resume();
+      await expect(duringDelete).resolves.toEqual([false]);
+      expect(beforeDelete).toEqual([true]);
+      await expect(store.hasActiveRawCaptureParent("active", "match-active")).resolves.toBe(false);
+    } finally {
+      vi.restoreAllMocks();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("never lets a stale conditional sync save recreate a deleted or missing match", async () => {
     const directory = await mkdtemp(join(tmpdir(), "riftlite-store-save-match-if-lifecycle-"));
     try {

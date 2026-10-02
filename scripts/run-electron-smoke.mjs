@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
@@ -111,6 +111,19 @@ try {
   }
   if (/UI snapshot failed|Renderer readiness check failed/i.test(startupLog)) {
     throw new Error("RiftLite smoke startup log contains a renderer failure.");
+  }
+
+  const crashDirectory = join(smokeRoot, "UserData", "Crash Diagnostics");
+  const sessionFiles = readdirSync(crashDirectory).filter((name) => /^session-.*\.json$/.test(name));
+  if (sessionFiles.length !== 1) throw new Error("Isolated startup must create one crash diagnostic session.");
+  const crashSession = JSON.parse(readFileSync(join(crashDirectory, sessionFiles[0]), "utf8"));
+  if (crashSession.exitState !== "clean") throw new Error("Successful packaged exit did not persist a clean diagnostic session.");
+  const crashEvents = readFileSync(join(crashDirectory, `events-${crashSession.id}.jsonl`), "utf8").trim().split("\n").map((line) => JSON.parse(line));
+  if (!crashEvents.some((event) => event.category === "runtime-sample") || !crashEvents.some((event) => event.category === "session-clean-exit")) {
+    throw new Error("Packaged startup did not record automatic runtime and clean-exit diagnostics.");
+  }
+  if (crashEvents.some((event) => ["native-crash-setup-failed", "sample-unavailable", "renderer-error", "nonzero-exit"].includes(event.category))) {
+    throw new Error("Packaged startup recorded a crash diagnostic error.");
   }
 
   succeeded = true;

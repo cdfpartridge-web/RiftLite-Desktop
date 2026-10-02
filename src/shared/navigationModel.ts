@@ -13,10 +13,12 @@ export const ACTIVE_VIEWS = [
   "community",
   "social",
   "hubs",
+  "groups",
   "decks",
   "replays",
   "web-replay",
   "stream",
+  "recording-sharing",
   "account",
   "settings"
 ] as const;
@@ -52,8 +54,7 @@ export type PrimaryNavigationEntry =
 
 export const REVIEW_NAVIGATION_ITEMS = [
   { id: "match-history", label: "Matches", target: { view: "matches" } },
-  { id: "local-replays", label: "Replays", target: { view: "replays" } },
-  { id: "web-replays", label: "Web Replays", target: { view: "web-replay" } },
+  { id: "local-replays", label: "Replays & videos", target: { view: "replays" } },
   { id: "my-stats", label: "Stats", target: { view: "stats" } }
 ] as const satisfies readonly NavigationItem[];
 
@@ -70,8 +71,8 @@ export const COMMUNITY_NAVIGATION_ITEMS = [
   { id: "community-decks", label: "Community Decks", target: { view: "community", communityTab: "community-decks" } },
   { id: "meta-matrix", label: "Meta & Matrix", target: { view: "community", communityTab: "legend-meta" } },
   { id: "spotlight", label: "Spotlight", target: { view: "spotlight" } },
-  { id: "find-match-teams", label: "Find Match & Teams", target: { view: "social" } },
-  { id: "private-hubs", label: "Private Hubs", target: { view: "hubs" } },
+  { id: "find-match-teams", label: "Find match", target: { view: "social" } },
+  { id: "your-groups", label: "Your groups", target: { view: "groups" } },
   { id: "scorepad", label: "Scorepad", target: { view: "scorepad" } }
 ] as const satisfies readonly NavigationItem[];
 
@@ -110,7 +111,8 @@ export const PRIMARY_NAVIGATION = [
 
 export const UTILITY_NAVIGATION_ITEMS = [
   { id: "overlay", label: "Overlay", target: { view: "stream" } },
-  { id: "account-integrations", label: "Account & integrations", target: { view: "account" } },
+  { id: "recording-sharing", label: "Recording & sharing", target: { view: "recording-sharing" } },
+  { id: "account-integrations", label: "Account", target: { view: "account" } },
   { id: "settings", label: "Settings", target: { view: "settings" } }
 ] as const satisfies readonly NavigationItem[];
 
@@ -123,7 +125,7 @@ export interface NavigationContext {
 export type NavigationOwner =
   | { readonly kind: "primary"; readonly itemId: "home" | "play" | "insights" }
   | { readonly kind: "disclosure"; readonly disclosureId: NavigationDisclosureId; readonly itemId: string }
-  | { readonly kind: "utility"; readonly itemId: "overlay" | "account-integrations" | "settings" };
+  | { readonly kind: "utility"; readonly itemId: "overlay" | "recording-sharing" | "account-integrations" | "settings" };
 
 export function navigationOwner(context: NavigationContext): NavigationOwner {
   switch (context.view) {
@@ -138,7 +140,8 @@ export function navigationOwner(context: NavigationContext): NavigationOwner {
     case "replays":
       return disclosureOwner("review", "local-replays");
     case "web-replay":
-      return disclosureOwner("review", "web-replays");
+      // Existing deep links still open the hosted library within Replays & videos.
+      return disclosureOwner("review", "local-replays");
     case "stats":
       return disclosureOwner("review", "my-stats");
     case "decks":
@@ -158,11 +161,14 @@ export function navigationOwner(context: NavigationContext): NavigationOwner {
     case "social":
       return disclosureOwner("community", "find-match-teams");
     case "hubs":
-      return disclosureOwner("community", "private-hubs");
+    case "groups":
+      return disclosureOwner("community", "your-groups");
     case "scorepad":
       return disclosureOwner("community", "scorepad");
     case "stream":
       return { kind: "utility", itemId: "overlay" };
+    case "recording-sharing":
+      return { kind: "utility", itemId: "recording-sharing" };
     case "account":
       return { kind: "utility", itemId: "account-integrations" };
     case "settings":

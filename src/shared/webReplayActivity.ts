@@ -10,7 +10,7 @@ export function webReplayKeepLocalCandidates(queue: readonly WebReplayUploadQueu
   const candidates = new Map<string, WebReplayKeepLocalCandidate>();
   const excluded = new Set<string>();
   for (const item of queue) {
-    if (!["captured", "queued", "failed", "paused"].includes(item.stage)
+    if ((item.operationInProgress !== false && !["captured", "queued", "failed", "paused"].includes(item.stage))
       || !webReplayQueueItemCanBeKeptLocalOnly(item)) {
       excluded.add(item.captureSessionId);
       continue;
@@ -86,4 +86,10 @@ export function webReplayReadyWarningIsDismissed(
 ): boolean {
   const key = webReplayReadyWarningDismissalKey(item);
   return Boolean(key && dismissedKeys.includes(key));
+}
+
+/** Replay readiness and Discord delivery are independent; a dismissed board warning must not hide a sharing problem. */
+export function webReplayActivityItemVisible(item: WebReplayUploadQueueItem, dismissedKeys: readonly string[] = []): boolean {
+  if (item.stage !== "ready" || item.recommendedAction === "review-result" || item.discordShareStatus === "failed" || item.discordShareStatus === "partial") return true;
+  return Boolean(item.partialWarnings?.length) && !webReplayReadyWarningIsDismissed(item, dismissedKeys);
 }

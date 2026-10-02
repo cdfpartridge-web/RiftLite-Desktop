@@ -1,5 +1,23 @@
+import { ReplayOnlinePlayer } from "./ReplayOnlinePlayer";
+import type { GameDetailsTarget } from "../shared/gameDetails";
+import { resolveGameDetails, gameDetailsDisplayMatch, cloudReplayForGameSegment, type GameDetailsTab } from "../shared/gameDetails";
+import { GameDetailsView } from "./GameDetailsView";
+import { GameDetailsNavigationContext } from "./GameDetailsNavigation";
+import { YourGroupsView } from "./YourGroupsView";
+import { mergeAccountReplayLibrary, type AccountReplayLibraryResult } from "../shared/accountReplayLibrary";
+import type { GameCloudReplay } from "../shared/gameReplayAssets";
+import { RecordingSharingPage } from "./RecordingSharingPage";
+import { RecordingVideoSettings } from "./RecordingVideoSettings";
+import { GameReplayAssets } from "./GameReplayAssets";
+import { PlayCaptureStatus } from "./PlayCaptureStatus";
+import { ReplayDiscordShareDialog } from "./ReplayDiscordShareDialog";
+import { CrashDiagnosticsPanel } from "./CrashDiagnosticsPanel";
+import { AccountDisclosure, AccountIdentityCard } from "./AccountOverview";
+import { accountOverview } from "../shared/accountOverview";
+import { installRendererCrashLogging, reportRendererCrash } from "./rendererCrashLogging";
 import { DateFilter } from "./DateFilter";
 import { TeamInvitationInbox, TeamInvitationManager } from "./TeamInvitations";
+import { selectGroupTeams } from "../shared/yourGroups";
 import { DEFAULT_DATE_FILTER, dateFilterLabel, isInDateFilter, type DateFilterValue } from "../shared/dateFilter";
 import React, { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { createDefaultSettings } from "../shared/settingsDefaults";
@@ -229,6 +247,7 @@ import {
   addWebReplayWarningDismissal,
   keepWebReplayUploadsLocalOnly,
   parseWebReplayWarningDismissals,
+  webReplayActivityItemVisible,
   webReplayKeepLocalCandidates,
   webReplayReadyWarningDismissalKey,
   webReplayReadyWarningIsDismissed
@@ -270,7 +289,7 @@ import {
   type MatchCombineSavePayload,
   type MatchCombineWarning
 } from "../shared/matchCombine";
-import { localMatchesEligibleForStats, upsertMatchPreservingOrder } from "../shared/matchList";
+import { localMatchesEligibleForStats, matchNeedsReview, upsertMatchPreservingOrder } from "../shared/matchList";
 import { matchReviewErrorMessage } from "../shared/matchReviewError";
 import { markDeckGuideReviewed, reviewDeckGuide, reviewDeckNotebook } from "../shared/deckGuideReview";
 import { DeckGuideReviewNotice } from "./DeckGuideReviewNotice";
@@ -481,6 +500,7 @@ type MatchFocusTarget = {
   nonce: number;
 };
 type NavigationOptions = {
+  groupsTab?: "teams" | "hubs" | "invitations";
   communityTab?: CommunityTab;
   deckFocus?: DeckFocusTarget;
   deckId?: string;
@@ -570,12 +590,13 @@ const LAB_TRAINING_LEGEND_NAMES = new Set(LAB_TRAINING_LEGEND_NAME_BY_CANONICAL.
 const RELEASE_NOTES = {
   version: APP_VERSION_META,
   title: `RiftLite v${APP_VERSION_META}`,
-  intro: "Radiance preview cards are here, with easier private team invitations and clearer Discord hub joining.",
+  intro: "Simpler recording and sharing, clearer game reviews, and a smoother RiftLite.",
   items: [
-    "Added 88 revealed Radiance prints, including six new legends, five battlefields and Bomb tokens.",
-    "Replays recognise new preview cards and retain alternate and signed artwork.",
-    "Invite teammates by @handle or a private invite link; accept invitations from Teams.",
-    "Hub invitations now ask you to join explicitly, preserve admin roles and explain Discord membership requirements."
+    "Set up web replays, video, microphone and Discord together in Recording & sharing.",
+    "Find replays, videos and game logs together, with clearer upload recovery and Discord sharing.",
+    "Use Needs review in Matches to finish games saved for later, and manage invitations in Your groups.",
+    "Faster background checks and replay browsing, with automatic local crash logs for troubleshooting.",
+    "Added 22 more Radiance prints, including Mordekaiser and three new battlefields."
   ]
 };
 const RIOT_LEGAL_NOTICE = `RiftLite was created under Riot Games' "Legal Jibber Jabber" policy using assets owned by Riot Games. Riot Games does not endorse or sponsor this project.`;
@@ -985,6 +1006,7 @@ type MatrixFilters = {
 
 type MatchHistoryFilters = {
   season: CommunitySeasonId;
+  review: string;
   result: string;
   platform: string;
   format: string;
@@ -1037,6 +1059,7 @@ type MatrixCohort = {
 
 const DEFAULT_MATCH_HISTORY_FILTERS: MatchHistoryFilters = {
   season: CURRENT_COMMUNITY_SEASON,
+  review: "",
   result: "",
   platform: "",
   format: "",
@@ -3183,6 +3206,8 @@ function App() {
   const [expandedNavGroup, setExpandedNavGroup] = useState<NavigationDisclosureId | null>(null);
   const [rulesSearchOpen, setRulesSearchOpen] = useState(false);
   const [activeView, setActiveView] = useState<ActiveView>("home");
+  const [groupsInitialTab, setGroupsInitialTab] = useState<"teams" | "hubs" | "invitations">("teams");
+  const [gameDetailsTarget, setGameDetailsTarget] = useState<GameDetailsTarget | null>(null);
   const windowFullscreen = useWindowFullscreen();
   const [activeCommunityTab, setActiveCommunityTab] = useState<CommunityTab>("community-decks");
   const [communityDeckLegendTarget, setCommunityDeckLegendTarget] = useState("");
@@ -3220,6 +3245,7 @@ function App() {
     originalDisplay: string;
   } | null>(null);
   const autoConfirmingRef = useRef<string>("");
+  const explicitReviewIdRef = useRef<string>("");
   const actionFeedbackTimerRef = useRef<number | undefined>(undefined);
   const activeMp4ExportRef = useRef<RendererReplayMp4ExportRequest | null>(null);
   const mp4ExportRequestSequenceRef = useRef(0);
@@ -3260,6 +3286,19 @@ function App() {
   const enhancedInsightSessionActiveRef = useRef(false);
   const lastReplayStartEventRef = useRef<CaptureEvent | null>(null);
   const armedReplayVideoRef = useRef<Partial<Record<GamePlatform, ArmedReplayVideoSource>>>({});
+  const [playRecordingState, setPlayRecordingState] = useState({videoRecording: false, videoArmed: false, microphoneRecording: false});
+  useEffect(() => {
+    if (activeView !== "play") return;
+    const refresh = () => {
+      const runtime = replayVideoRef.current;
+      const videoRecording = runtime?.platform === activePlatform && runtime.recorder.state === "recording";
+      const next = { videoRecording, videoArmed: Boolean(armedReplayVideoRef.current[activePlatform]?.source.stream.getVideoTracks().some((track) => track.readyState === "live")),
+        microphoneRecording: Boolean(videoRecording && runtime?.micAudioIncluded && runtime.micStream?.getAudioTracks().some((track) => track.readyState === "live" && track.enabled)) };
+      setPlayRecordingState((previous) => previous.videoRecording === next.videoRecording && previous.videoArmed === next.videoArmed && previous.microphoneRecording === next.microphoneRecording ? previous : next);
+    };
+    refresh(); const timer = window.setInterval(refresh, 1000);
+    return () => window.clearInterval(timer);
+  }, [activeView, activePlatform]);
   const replayVideoPrimeTimerRef = useRef<number | undefined>(undefined);
   const replayVideoResizeResumeTimerRef = useRef<number | undefined>(undefined);
   const lastReplayArmAttemptRef = useRef(0);
@@ -3428,6 +3467,8 @@ function App() {
   ), [runReplayMp4ExportWithProgress]);
 
   function openView(nextView: ActiveView, options?: NavigationOptions) {
+    setGameDetailsTarget(null);
+    if (nextView === "groups") setGroupsInitialTab(options?.groupsTab ?? "teams");
     if (options?.communityTab) {
       setActiveCommunityTab(options.communityTab);
       if (options.communityTab !== "community-decks" || options.communityDeckLegend === undefined) {
@@ -3726,6 +3767,7 @@ function App() {
       return;
     }
     communityAccountUidRef.current = accountUid;
+    setGameDetailsTarget(null);
     setHubMatches({});
     setTeamMatches({});
     communityLoadedRef.current = false;
@@ -4393,7 +4435,7 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (!reviewDraft || !settings || reviewDraft.status === "saved") {
+    if (!reviewDraft || !settings || reviewDraft.status === "saved" || explicitReviewIdRef.current === reviewDraft.id) {
       return;
     }
     if (!settings.confirmationEnabled) {
@@ -4408,7 +4450,7 @@ function App() {
     if (!settings || communityLoadedRef.current) {
       return;
     }
-    if (activeView === "community" || activeView === "hubs") {
+    if (["community", "hubs", "groups"].includes(activeView)) {
       void refreshCommunityData(settings);
     }
   }, [activeView, settings]);
@@ -4712,6 +4754,9 @@ function App() {
       await window.riftlite.dismissMatchReview();
     }
     openNextQueuedReview();
+    if (matchNeedsReview(deferred)) {
+      showActionFeedback("Saved for later. Find this game in Review → Matches → Needs review.", 5_000);
+    }
   }
 
   async function chooseGamePlatform(platform: GamePlatform, openPlay = false): Promise<boolean> {
@@ -5025,7 +5070,7 @@ function App() {
     if (patch.activeHubs || patch.activeTeams || typeof patch.communitySyncEnabled === "boolean" || patch.syncMode) {
       communityLoadedRef.current = false;
       communityMatchesLoadedForTrackerRef.current = false;
-      if (activeViewRef.current === "community" || activeViewRef.current === "hubs" || activeViewRef.current === "social") {
+      if (["community", "hubs", "social", "groups"].includes(activeViewRef.current)) {
         void refreshCommunityData(next);
       }
     }
@@ -5198,6 +5243,7 @@ function App() {
   }
 
   function openNextQueuedReview(): MatchDraft | null {
+    explicitReviewIdRef.current = "";
     const shifted = shiftReviewDraft(queuedReviewDraftsRef.current);
     queuedReviewDraftsRef.current = shifted.remaining;
     reviewDraftRef.current = shifted.next;
@@ -5327,19 +5373,48 @@ function App() {
   }
 
   function openReplayForMatch(matchId: string) {
-    const replay = replays.find((item) => item.matchId === matchId);
-    if (!replay) {
-      showActionFeedback("No replay is linked to this match yet.");
-      return;
-    }
-    openReplayAt(replay.id);
+    openGameDetails({ kind: "match", id: matchId, tab: "media" });
   }
 
   function openReplayAt(replayId: string, timeMs?: number, correctionEventId?: string) {
-    setFocusedReplayId(replayId);
-    setFocusedReplayTimeMs(typeof timeMs === "number" && Number.isFinite(timeMs) ? Math.max(0, timeMs) : null);
-    setFocusedReplayEvidenceId(correctionEventId?.trim() ?? "");
-    setActiveView("replays");
+    openGameDetails({ kind: replayId.startsWith("match:") ? "match" : "replay", id: replayId.replace(/^match:/, ""),
+      tab: "media", timeMs: typeof timeMs === "number" && Number.isFinite(timeMs) ? Math.max(0, timeMs) : undefined,
+      evidenceId: correctionEventId?.trim() || undefined });
+  }
+
+  function openGameDetails(target: GameDetailsTarget) {
+    const accountUid = settingsRef.current?.accountUid || undefined;
+    if (target.accountUid && target.accountUid !== accountUid) return;
+    setGameDetailsTarget({ ...target, accountUid: target.accountUid || accountUid });
+  }
+
+  function openMatchReview(draft: MatchDraft) {
+    // Automatic capture confirmation must never submit a review explicitly
+    // opened by the user from history, replays, game details or Scorepad.
+    const prepared = prepareDraftForReview(draft);
+    explicitReviewIdRef.current = prepared.id;
+    reviewDraftRef.current = prepared;
+    setGameDetailsTarget(null);
+    setReviewDraft(prepared);
+  }
+
+  async function refreshGroupMemberships() {
+    const currentAccount = settingsRef.current?.accountUid;
+    const next = await window.riftlite.getSettings();
+    if (settingsRef.current?.accountUid !== currentAccount || next.accountUid !== currentAccount) return;
+    setSettings(next);
+    await refreshCommunityData(next, true);
+  }
+
+  async function deleteLocalMatch(id: string) {
+    await window.riftlite.deleteMatch(id);
+    const [nextMatches, nextReplays, nextDeletedMatches, nextDeletedReplays] = await Promise.all([
+      window.riftlite.getMatches(), window.riftlite.getReplays(), window.riftlite.getDeletedMatches(), window.riftlite.getDeletedReplays()
+    ]);
+    setMatches(nextMatches);
+    setReplays(nextReplays);
+    setDeletedMatches(nextDeletedMatches);
+    setDeletedReplays(nextDeletedReplays);
   }
 
   async function saveHubResult(result: HubActionResult) {
@@ -7307,11 +7382,13 @@ function App() {
     "matchup-lab": "Matchup Lab",
     spotlight: "Spotlight",
     community: activeCommunityTab === "community-decks" ? "Community Decks" : activeCommunityTab === "recent-matches" ? "Community Matches" : "Meta & Matrix",
-    social: "Find Match & Teams",
-    hubs: "Private Hubs",
+    social: "Find match",
+    hubs: "Your groups",
+    groups: "Your groups",
     decks: deckFocusTarget === "prep" ? "Matchup Prep" : "Deck Library",
-    replays: "Replays",
-    "web-replay": "Web Replays",
+    replays: "Replays & videos",
+    "web-replay": "Online replay library",
+    "recording-sharing": "Recording & sharing",
     stream: "Overlay",
     account: "Account",
     settings: "Settings"
@@ -7330,11 +7407,13 @@ function App() {
     "matchup-lab": "Study your toughest pairings with personal stats, community context, prep notes, and replay evidence.",
     spotlight: "Featured Riftbound creators, teams, and community projects.",
     community: activeCommunityTab === "community-decks" ? "Visual deck meta from public community-submitted deck data." : "Community data remains compatible with the existing RiftLite website.",
-    social: "Find matches and build public team profiles with linked RiftLite accounts.",
-    hubs: "Private hub sync uses hidden hub names and passwords, just like the current app.",
+    social: "Find players and arrange your next game.",
+    hubs: "Your teams, private hubs and invitations in one place.",
+    groups: "Your teams, private hubs and invitations in one place.",
     decks: "Import, refresh, and attach decks to captured matches.",
-    replays: "Review Atlas timelines reconstructed from retained capture evidence.",
-    "web-replay": "Set up, monitor, recover, and watch your account-linked Atlas and TCGA replays.",
+    replays: "Your interactive replays, videos and game logs, together by game.",
+    "web-replay": "Browse community replays and your online collection.",
+    "recording-sharing": "Choose what to record and where to share it.",
     stream: "OBS-friendly local overlay for session score and latest match.",
     account: "RiftLite profile, account link, and public visibility controls.",
     settings: "Privacy, sync, browser support, and capture behaviour."
@@ -7379,8 +7458,9 @@ function App() {
   const webReplayFailureCount = webReplayDiagnostics
     ? webReplayDiagnostics.lanes.atlas.failed + webReplayDiagnostics.lanes.tcga.failed
     : 0;
-  const webReplayNavBadge = webReplayFailureCount || webReplayPendingCount;
-  const webReplayNavBadgeTone = webReplayFailureCount ? "error" : "pending";
+  const webReplaySharingAttention = webReplayDiagnostics?.queue.filter((item) => item.stage === "ready" && (item.recommendedAction === "review-result" || item.discordShareStatus === "failed" || item.discordShareStatus === "partial")).length ?? 0;
+  const webReplayNavBadge = (webReplayFailureCount + webReplaySharingAttention) || webReplayPendingCount;
+  const webReplayNavBadgeTone = webReplayFailureCount || webReplaySharingAttention ? "error" : "pending";
   const atlasKnownHandShortcutAvailable = !(
     (settings.screenshotHotkeyEnabled && settings.screenshotHotkey.trim().toUpperCase() === "F12")
     || (
@@ -7452,7 +7532,7 @@ function App() {
             }
             const open = expandedNavGroup === entry.id;
             const active = navOwner.kind === "disclosure" && navOwner.disclosureId === entry.id;
-            const children = entry.children.filter((item) => RIFTLITE_WEB_REPLAY_FEATURE_VISIBLE || item.target.view !== "web-replay");
+            const children = entry.children;
             return (
               <div className="nav-disclosure" data-open={open} data-active={active} key={entry.id}>
                 <button
@@ -7476,7 +7556,7 @@ function App() {
                       title={item.label}
                       onClick={() => openNavigationTarget(item.target)}
                       icon={navigationIcon(item.id)}
-                      badge={item.target.view === "web-replay" && webReplayNavBadge ? webReplayNavBadge : undefined}
+                      badge={item.target.view === "replays" && webReplayNavBadge ? webReplayNavBadge : undefined}
                       badgeTone={webReplayNavBadgeTone}
                       key={item.id}
                     />
@@ -7552,11 +7632,16 @@ function App() {
               </button>
             </div>
           ) : null}
+          {activeView === "play" ? <PlayCaptureStatus
+            webEnabled={webReplayPlatformEnabled(settings, activePlatform === "atlas" ? "atlas" : "tcga") && settings.rawCapture.enabled}
+            webCapturing={Boolean(webReplayDiagnostics?.activeCapture)}
+            videoEnabled={settings.replayCaptureEnabled && settings.replayVideoEnabled} {...playRecordingState}
+            microphoneEnabled={settings.replayMicAudioEnabled} onOpenSetup={() => openView("recording-sharing")} /> : null}
           <div className="top-actions" data-hidden={activeView !== "play"} data-tour-target="play" style={activeView === "home" ? { display: "none" } : undefined}>
-            <button className="segmented" data-platform="tcga" onClick={() => void chooseGamePlatform("tcga")} data-active={activePlatform === "tcga"}>
+            <button className="segmented" data-platform="tcga" onClick={() => void chooseGamePlatform("tcga")} data-active={activePlatform === "tcga"} title="Play on TCGA" aria-label="Play on TCGA">
               <Gamepad2 size={16} /> <span className="play-action-label">TCGA</span>
             </button>
-            <button className="segmented" data-platform="atlas" onClick={() => void chooseGamePlatform("atlas")} data-active={activePlatform === "atlas"}>
+            <button className="segmented" data-platform="atlas" onClick={() => void chooseGamePlatform("atlas")} data-active={activePlatform === "atlas"} title="Play on Atlas" aria-label="Play on Atlas">
               <Gamepad2 size={16} /> <span className="play-action-label">Atlas</span>
             </button>
             {activePlatform === "atlas" && gameWebviewIsReady(activePlatform, mountedGamePlatform, preloadUrl) ? (
@@ -7746,6 +7831,9 @@ function App() {
         {activeView !== "play" ? (
           <DashboardView
             view={activeView}
+            groupsInitialTab={groupsInitialTab}
+            onRefreshMemberships={refreshGroupMemberships}
+            onOpenGameDetails={openGameDetails}
             activePlatform={activePlatform}
             matches={matches}
             replays={replays}
@@ -7834,7 +7922,7 @@ function App() {
             onMatchesChanged={async () => {
               setMatches(await window.riftlite.getMatches());
             }}
-            onReview={(draft) => setReviewDraft(prepareDraftForReview(draft))}
+            onReview={openMatchReview}
             replayFocusId={focusedReplayId}
             replayFocusTimeMs={focusedReplayTimeMs}
             replayFocusEvidenceId={focusedReplayEvidenceId}
@@ -7846,22 +7934,21 @@ function App() {
             mp4ExportActive={Boolean(mp4ExportProgress && mp4ExportProgress.stage !== "completed" && mp4ExportProgress.stage !== "failed")}
             onExportReplayMp4={exportReplayMp4WithProgress}
             onExportReplayPresentationMp4={exportReplayPresentationMp4WithProgress}
-            onDelete={async (id) => {
-              await window.riftlite.deleteMatch(id);
-              const [nextMatches, nextReplays, nextDeletedMatches, nextDeletedReplays] = await Promise.all([
-                window.riftlite.getMatches(),
-                window.riftlite.getReplays(),
-                window.riftlite.getDeletedMatches(),
-                window.riftlite.getDeletedReplays()
-              ]);
-              setMatches(nextMatches);
-              setReplays(nextReplays);
-              setDeletedMatches(nextDeletedMatches);
-              setDeletedReplays(nextDeletedReplays);
-            }}
+            onDelete={deleteLocalMatch}
           />
         ) : null}
       </section>
+
+      {gameDetailsTarget ? <GameDetailsDialog
+        key={`${gameDetailsTarget.kind}:${gameDetailsTarget.id}:${gameDetailsTarget.accountUid || "local"}`}
+        target={gameDetailsTarget} matches={matches} replays={replays} settings={settings} decks={decks}
+        onClose={() => setGameDetailsTarget(null)}
+        onReview={openMatchReview}
+        onDeleteMatch={deleteLocalMatch} onDeleteReplay={deleteReplay} onReplaysChanged={refreshReplays}
+        onNavigate={openView} onUndoCombinedMatch={undoCombinedMatch}
+        onExportReplayMp4={exportReplayMp4WithProgress} onExportReplayPresentationMp4={exportReplayPresentationMp4WithProgress}
+        mp4ExportActive={Boolean(mp4ExportProgress && mp4ExportProgress.stage !== "completed" && mp4ExportProgress.stage !== "failed")}
+      /> : null}
 
       {RULES_SEARCH_FEATURE_VISIBLE && rulesSearchOpen ? (
         <RulesSearchDrawer onClose={() => setRulesSearchOpen(false)} />
@@ -8247,11 +8334,12 @@ function navigationIcon(id: string): React.ReactNode {
     case "find-match-teams": return <Users size={19} />;
     case "community-decks": return <Globe2 size={19} />;
     case "spotlight": return <Compass size={19} />;
-    case "private-hubs": return <Shield size={19} />;
+    case "your-groups": return <Users size={19} />;
     case "search-rules": return <BookOpen size={19} />;
     case "scorepad": return <Calculator size={19} />;
     case "overlay": return <MonitorUp size={19} />;
     case "account-integrations": return <Shield size={19} />;
+    case "recording-sharing": return <SlidersHorizontal size={19} />;
     case "settings": return <Settings size={19} />;
     default: return <Activity size={19} />;
   }
@@ -9481,25 +9569,26 @@ function SyncModeControl({ settings, onSave, compact = false }: { settings: User
     : settings.syncMode === "community-only"
       ? "Only public community stats receive saved matches."
     : settings.syncMode === "local-only"
-      ? "Matches stay on this device until you choose otherwise."
+      ? "Saved match results are not shared with the community or private hubs."
       : publicEnabled
         ? "Public community stats and selected private hubs receive saved matches."
-        : "Custom sync is private unless community sharing is enabled.";
+        : "Custom result sharing is private unless community sharing is enabled.";
   return (
     <div className={compact ? "sync-mode-control compact" : "sync-mode-control"}>
       <label>
-        Share destination
+        Share match results
         <select
           value={settings.syncMode}
           onChange={(event) => void onSave(syncModePatch(event.target.value as UserSettings["syncMode"]))}
         >
-          <option value="community-and-hubs">Community + private hubs</option>
-          <option value="community-only">Community only</option>
+          <option value="community-and-hubs">Public community + private hubs</option>
+          <option value="community-only">Public community only</option>
           <option value="private-hubs-only">Private hubs only</option>
-          <option value="local-only">Local only</option>
+          <option value="local-only">Do not share results</option>
         </select>
       </label>
       <p className="muted"><Shield size={14} /> {modeCopy}</p>
+      {!compact ? <p className="muted">This controls who receives match results. Account backups and replay sharing have their own settings.</p> : null}
     </div>
   );
 }
@@ -9656,7 +9745,8 @@ function HomeView({
   onNavigate,
   onPlayPlatform,
   onSetDefaultGamePlatform,
-  onOpenReplayForMatch
+  onOpenReplayForMatch,
+  onOpenGameDetails
 }: {
   matches: MatchDraft[];
   replays: ReplayRecord[];
@@ -9670,6 +9760,7 @@ function HomeView({
   onPlayPlatform: (platform: GamePlatform) => void;
   onSetDefaultGamePlatform: (platform: GameProvider) => Promise<void>;
   onOpenReplayForMatch: (matchId: string) => void;
+  onOpenGameDetails: (target: GameDetailsTarget) => void;
 }) {
   const [dateFilter, setDateFilter] = useState<DateFilterValue>(DEFAULT_DATE_FILTER);
   const datedMatches = useMemo(() => matches.filter((match) => isInDateFilter(match.capturedAt, dateFilter)), [matches, dateFilter]);
@@ -10121,7 +10212,7 @@ function HomeView({
           <span className="modern-status-icon"><Layers size={20} /></span>
           <span><small>Active deck</small><strong>{activeDeck?.title || "Choose a deck"}</strong></span>
         </div>
-        <button type="button" className="modern-status-item modern-status-action" data-tone={webReplayStatus.tone} onClick={() => onNavigate("web-replay")}>
+        <button type="button" className="modern-status-item modern-status-action" data-tone={webReplayStatus.tone} onClick={() => onNavigate(settings.rawCapture.enabled ? "replays" : "recording-sharing")}>
           <span className="modern-status-icon"><Cloud size={20} /></span>
           <span><small>Web Replays</small><strong>{webReplayStatus.label}</strong></span>
         </button>
@@ -10228,7 +10319,7 @@ function HomeView({
                 return (
                   <div className="modern-match-row" key={match.id}>
                     <span className="modern-result-icon" data-result={match.result}>{match.result === "Win" ? <Check size={18} /> : match.result === "Loss" ? <X size={18} /> : <Activity size={18} />}</span>
-                    <button className="modern-match-copy" onClick={() => onNavigate("matches")}>
+                    <button className="modern-match-copy" onClick={() => onOpenGameDetails({ kind: "match", id: match.id })}>
                       <strong>{normalizeLegendName(match.myChampion) || "Unknown"} vs {normalizeLegendName(match.opponentChampion) || "Unknown"}</strong>
                       <span>{homeRelativeDate(match.capturedAt)} · {match.format} · {match.deckName || "No deck logged"}</span>
                     </button>
@@ -12222,6 +12313,9 @@ function MatchupLabView({
 
 function DashboardView({
   view,
+  groupsInitialTab,
+  onRefreshMemberships,
+  onOpenGameDetails,
   activePlatform,
   matches,
   replays,
@@ -12313,6 +12407,9 @@ function DashboardView({
   onDelete
 }: {
   view: ActiveView;
+  groupsInitialTab: "teams" | "hubs" | "invitations";
+  onRefreshMemberships: () => Promise<void>;
+  onOpenGameDetails: (target: GameDetailsTarget) => void;
   activePlatform: GamePlatform;
   matches: MatchDraft[];
   replays: ReplayRecord[];
@@ -12403,7 +12500,15 @@ function DashboardView({
   onReview: (draft: MatchDraft) => void;
   onDelete: (id: string) => Promise<void>;
 }) {
-  const visibleMatches = activeLocalMatches(matches);
+  const visibleMatches = useMemo(() => activeLocalMatches(matches), [matches]);
+  const replayDeliveryControls = { settings, diagnostics: webReplayDiagnostics, diagnosticsError: webReplayDiagnosticsError,
+      diagnosticsRefreshing: webReplayDiagnosticsRefreshing, onSettingsChanged, onRefreshDiagnostics: onRefreshWebReplayDiagnostics,
+      onOpenAccount: () => onNavigate("account"), onOpenSetup: () => onNavigate("recording-sharing"),
+      onLibraryChanged: () => { void onReplaysChanged(); },
+      onReviewResult: (item: WebReplayUploadQueueItem) => {
+        const match = matches.find((entry) => entry.id === item.localMatchId);
+        if (match) onReview(match); else onNavigate("matches");
+      } };
   if (view === "home") {
     return (
       <HomeView
@@ -12419,6 +12524,7 @@ function DashboardView({
         onPlayPlatform={onPlayPlatform}
         onSetDefaultGamePlatform={onSetDefaultGamePlatform}
         onOpenReplayForMatch={onOpenReplayForMatch}
+        onOpenGameDetails={onOpenGameDetails}
       />
     );
   }
@@ -12428,6 +12534,7 @@ function DashboardView({
   if (view === "matches") {
     return (
       <MatchesView
+        onOpenGameDetails={onOpenGameDetails}
         matches={matches}
         replays={replays}
         decks={decks}
@@ -12450,7 +12557,7 @@ function DashboardView({
     );
   }
   if (view === "stats") {
-    return <StatsView matches={visibleMatches} />;
+    return <StatsView matches={visibleMatches} onOpenGameDetails={onOpenGameDetails} />;
   }
   if (view === "insights") {
     return (
@@ -12490,9 +12597,22 @@ function DashboardView({
   if (view === "decks") {
     return <DecksView decks={decks} matches={visibleMatches} settings={settings} focusTarget={deckFocusTarget} selectionTarget={deckSelectionTarget} onFocusChange={onDeckFocusChange} onDecksChanged={onDecksChanged} />;
   }
+  if (view === "recording-sharing") {
+    return <RecordingSharingPage settings={settings} diagnostics={webReplayDiagnostics}
+      replayControls={<WebReplayUploadCentre {...replayDeliveryControls} presentation="capture" />}
+      videoControls={<RecordingVideoSettings settings={settings} onSave={onSaveSettings} onChooseReplayDirectory={onChooseReplayDirectory} onOpenReplayDirectory={onOpenReplayDirectory} />}
+      advancedControls={<WebReplayUploadCentre {...replayDeliveryControls} />}
+      onOpenAccount={() => onNavigate("account")} onOpenHubs={() => onNavigate("hubs")}
+      onOpenLibrary={() => onNavigate("replays")} onSettingsChanged={onSettingsChanged} onRefreshDiagnostics={onRefreshWebReplayDiagnostics} />;
+  }
   if (view === "replays") {
     return (
       <ReplayView
+        onOpenGameDetails={onOpenGameDetails}
+        deliveryAttentionCount={webReplayDiagnostics?.queue.filter((item) => item.stage === "failed" || item.stage === "paused" || item.recommendedAction === "review-result" || item.discordShareStatus === "failed" || item.discordShareStatus === "partial").length ?? 0}
+        deliveryControls={<WebReplayUploadCentre {...replayDeliveryControls} />}
+        onNavigate={onNavigate}
+        onReview={onReview}
         replays={replays}
         matches={visibleMatches}
         settings={settings}
@@ -12512,6 +12632,8 @@ function DashboardView({
   if (view === "web-replay") {
     return RIFTLITE_WEB_REPLAY_FEATURE_VISIBLE ? (
       <EmbeddedRiftReplayView
+        onOpenLibrary={() => onNavigate("replays")}
+        onOpenSetup={() => onNavigate("recording-sharing")}
         settings={settings}
         diagnostics={webReplayDiagnostics}
         diagnosticsError={webReplayDiagnosticsError}
@@ -12522,6 +12644,11 @@ function DashboardView({
       />
     ) : (
       <ReplayView
+        onOpenGameDetails={onOpenGameDetails}
+        deliveryAttentionCount={webReplayDiagnostics?.queue.filter((item) => item.stage === "failed" || item.stage === "paused" || item.recommendedAction === "review-result" || item.discordShareStatus === "failed" || item.discordShareStatus === "partial").length ?? 0}
+        deliveryControls={<WebReplayUploadCentre {...replayDeliveryControls} />}
+        onNavigate={onNavigate}
+        onReview={onReview}
         replays={replays}
         matches={visibleMatches}
         settings={settings}
@@ -12547,7 +12674,7 @@ function DashboardView({
         webReplayDiagnostics={webReplayDiagnostics}
         onSettingsChanged={onSettingsChanged}
         onRefreshWebReplayDiagnostics={onRefreshWebReplayDiagnostics}
-        onOpenWebReplays={() => onNavigate("web-replay")}
+        onOpenWebReplays={() => onNavigate("recording-sharing")}
         onAccountDataRestored={onAccountDataRestored}
       />
     );
@@ -12592,12 +12719,23 @@ function DashboardView({
       />
     );
   }
-  if (view === "hubs") {
-    return <HubsView settings={settings} matches={visibleMatches} replays={replays} hubMatches={hubMatches} onSave={onSaveSettings} onHubResult={onSaveHubResult} onSyncPrivateHubs={onSyncPrivateHubs} onSyncMatchesToHubs={onSyncMatchesToHubs} onDeleteHubMatch={onDeleteHubMatch} onRefresh={onRefreshCommunity} />;
+  if (view === "hubs" || view === "groups") {
+    return <YourGroupsView
+      key={`${settings.accountUid}:${settings.firebaseCredentialGeneration}:${view}`}
+      settings={settings} initialTab={view === "hubs" ? "hubs" : groupsInitialTab}
+      onOpenAccount={() => onNavigate("account")} onHubJoined={onSaveHubResult} onRefreshMemberships={onRefreshMemberships}
+      renderTeams={(options) => <TeamsPanel {...options} settings={settings} matches={visibleMatches} teamMatches={teamMatches}
+        onSaveSettings={onSaveSettings} onSyncTeams={onSyncTeams} onSyncMatchesToTeams={onSyncMatchesToTeams}
+        onDeleteTeamMatch={onDeleteTeamMatch} onRefreshTeamMatches={onRefreshTeamMatches} />}
+      renderHubs={(options) => <HubsView {...options} settings={settings} matches={visibleMatches} replays={replays} hubMatches={hubMatches}
+        onSave={onSaveSettings} onHubResult={onSaveHubResult} onSyncPrivateHubs={onSyncPrivateHubs} onSyncMatchesToHubs={onSyncMatchesToHubs}
+        onDeleteHubMatch={onDeleteHubMatch} onRefresh={onRefreshCommunity} />}
+    />;
   }
   if (view === "social") {
     return (
       <SocialHubView
+        onOpenGroups={() => onNavigate("groups")}
         settings={settings}
         matches={visibleMatches}
         teamMatches={teamMatches}
@@ -12714,6 +12852,7 @@ function webReplayDate(value?: string): string {
 }
 
 function webReplayStageLabel(item: WebReplayUploadQueueItem): string {
+  if (item.operationInProgress === false && ["authenticating", "initializing", "uploading", "completing"].includes(item.stage)) return "Waiting to retry";
   switch (item.stage) {
     case "authenticating": return "Checking account";
     case "initializing": return "Preparing upload";
@@ -12736,7 +12875,10 @@ function WebReplayUploadCentre({
   onSettingsChanged,
   onRefreshDiagnostics,
   onOpenAccount,
-  onLibraryChanged
+  onLibraryChanged,
+  presentation = "activity",
+  onReviewResult,
+  onOpenSetup
 }: {
   settings: UserSettings;
   diagnostics: WebReplayUploadDiagnostics | null;
@@ -12746,6 +12888,9 @@ function WebReplayUploadCentre({
   onRefreshDiagnostics: () => Promise<WebReplayUploadDiagnostics | null>;
   onOpenAccount: () => void;
   onLibraryChanged: () => void;
+  presentation?: "activity" | "capture";
+  onReviewResult?: (item: WebReplayUploadQueueItem) => void;
+  onOpenSetup?: () => void;
 }) {
   const [busyAction, setBusyAction] = useState("");
   const [notice, setNotice] = useState("");
@@ -12757,11 +12902,11 @@ function WebReplayUploadCentre({
       return [];
     }
   });
-  const status = webReplayCentreStatus(settings, diagnostics, diagnosticsError);
-  const [controlsExpanded, setControlsExpanded] = useState(status.tone !== "ready");
-  const [controlPanel, setControlPanel] = useState<"activity" | "capture" | "sharing" | "diagnostics">(() =>
-    diagnostics?.queue.some((item) => item.stage !== "ready" || item.partialWarnings?.length) ? "activity" : "capture"
-  );
+  const deliveryStatus = webReplayCentreStatus(settings, diagnostics, diagnosticsError);
+  const sharingAttention = diagnostics?.queue.some((item) => item.discordShareStatus === "failed" || item.discordShareStatus === "partial");
+  const status = sharingAttention ? { tone: "attention" as const, title: "Replay delivery needs attention", detail: "Check the upload and Discord status below. Replays marked Ready are already available to watch." } : deliveryStatus;
+  const [controlsExpanded, setControlsExpanded] = useState(true);
+  const [controlPanel, setControlPanel] = useState<"activity" | "diagnostics">("activity");
   const [showAllActivity, setShowAllActivity] = useState(false);
   const keepLocalBatchRunning = useRef(false);
   const [keepLocalProgress, setKeepLocalProgress] = useState({ completed: 0, total: 0 });
@@ -12771,12 +12916,11 @@ function WebReplayUploadCentre({
   const accountLinked = diagnostics?.accountLinked ?? Boolean(settings.accountUid && settings.firebaseRefreshToken);
   const accountVerified = diagnostics?.accountVerified ?? hasVerifiedRiftLiteAccount(settings);
   const queue = (diagnostics?.queue ?? [])
-    .filter((item) => item.stage !== "ready" || Boolean(item.partialWarnings?.length))
-    .filter((item) => !webReplayReadyWarningIsDismissed(item, dismissedWarningKeys));
+    .filter((item) => webReplayActivityItemVisible(item, dismissedWarningKeys));
   const visibleQueue = showAllActivity ? queue : queue.slice(0, 6);
   const keepLocalCandidates = webReplayKeepLocalCandidates(diagnostics?.queue ?? []);
   const partialReadyCount = queue.filter((item) => item.stage === "ready" && item.partialWarnings?.length).length;
-  const hasRetryableQueueItem = queue.some((item) => item.recommendedAction === "retry");
+  const hasRetryableQueueItem = queue.some((item) => item.recommendedAction === "retry" || item.discordShareStatus === "failed" || item.discordShareStatus === "partial");
   const selectedDiscordHubs = activeDiscordReplayHubIds(settings);
   const anyUploadEnabled = atlasEnabled || tcgaEnabled;
   // Passive status polling must never temporarily prevent consent revocation
@@ -12875,16 +13019,35 @@ function WebReplayUploadCentre({
 
   async function keepLocalOnly(item: WebReplayUploadQueueItem) {
     if (!window.confirm(
-      `Keep "${item.title}" locally only?\n\nThe match, local replay, and capture stay on this device. RiftLite will remove only this failed web upload from the queue.`
+      `Keep "${item.title}" locally?\n\nStop retrying this upload. The match, local replay, and capture stay on this device. Any copy already received by the website is unchanged.`
     )) return;
     setBusyAction(item.captureSessionId);
     setActionError("");
     try {
       await window.riftlite.removeWebReplayUploadFromQueue(item.captureSessionId);
       await onRefreshDiagnostics();
+      onLibraryChanged();
       setNotice("Removed from the web upload queue. The local replay was kept.");
     } catch (error) {
       setActionError(error instanceof Error ? error.message : "The upload could not be removed from the queue.");
+    } finally {
+      setBusyAction("");
+    }
+  }
+
+  async function stopDiscordRetries(item: WebReplayUploadQueueItem) {
+    if (!window.confirm(
+      `Stop Discord retries for "${item.title}"?\n\nYour online replay, local files, and any Discord posts already sent are kept. This game will no longer post automatically. You can still use Share to Discord later.`
+    )) return;
+    setBusyAction(item.captureSessionId);
+    setActionError("");
+    try {
+      await window.riftlite.stopWebReplayDiscordRetries(item.captureSessionId);
+      await onRefreshDiagnostics();
+      onLibraryChanged();
+      setNotice("Discord retries stopped for this game. Its online replay is still available.");
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Discord retries could not be stopped.");
     } finally {
       setBusyAction("");
     }
@@ -12915,6 +13078,7 @@ function WebReplayUploadCentre({
         setActionError(`${result.failures.length} upload${result.failures.length === 1 ? " could" : "s could"} not be cleared. ${first.title}: ${first.error}`);
       }
       await onRefreshDiagnostics();
+      onLibraryChanged();
     } catch (error) {
       setActionError(error instanceof Error ? error.message : "Upload activity could not be refreshed. Refresh to check the queue.");
     } finally {
@@ -12939,21 +13103,57 @@ function WebReplayUploadCentre({
     setNotice("Removed from Upload activity. Your local match and replay, and the online replay, were not changed.");
   }
 
-  async function setDiscordHub(hubId: string, selected: boolean) {
-    setBusyAction(`discord:${hubId}`);
-    setActionError("");
-    try {
-      const next = await window.riftlite.setWebReplayDiscordShareHub(hubId, selected);
-      onSettingsChanged(next);
-      setNotice(selected
-        ? "Future Web Replay links will be posted to this hub and use Unlisted visibility."
-        : `This Discord destination was removed.${next.rawCapture.visibility === "private" ? " New Web Replays use Private visibility." : ""}`);
-    } catch (error) {
-      setActionError(error instanceof Error ? error.message : "Discord replay sharing could not be changed.");
-    } finally {
-      setBusyAction("");
-    }
-  }
+  if (presentation === "capture") return <div>
+    {!accountVerified ? <button className="primary" onClick={onOpenAccount}>Connect account to enable uploads</button> : null}
+    {notice ? <p role="status">{notice}</p> : null}
+    {actionError ? <p role="alert">{replayDeliveryErrorMessage(actionError)}</p> : null}
+    <div className="review-web-panel" id="review-web-capture">
+          <div className="review-web-panel-heading"><strong>Save new replays automatically</strong><p>Choose your platforms and the visibility of future replays. Existing online replays keep their current visibility.</p></div>
+          <div className="web-replay-platform-grid">
+        <label className="web-replay-platform-card" data-enabled={atlasEnabled}>
+          <span>
+            <strong>Rift Atlas</strong>
+            <small>Automatically save Atlas matches</small>
+          </span>
+          <input
+            type="checkbox"
+            checked={atlasEnabled}
+            disabled={busy || (!accountVerified && !atlasEnabled)}
+            onChange={(event) => void setPlatformUpload("atlas", event.target.checked)}
+          />
+        </label>
+        <label className="web-replay-platform-card" data-enabled={tcgaEnabled}>
+          <span>
+            <strong>TCGA</strong>
+            <small>Automatically save TCGA matches</small>
+          </span>
+          <input
+            type="checkbox"
+            checked={tcgaEnabled}
+            disabled={busy || (!accountVerified && !tcgaEnabled)}
+            onChange={(event) => void setPlatformUpload("tcga", event.target.checked)}
+          />
+        </label>
+        <label className="web-replay-visibility-card">
+          <span>
+            <strong>New replay visibility</strong>
+            <small>Private means only your linked account</small>
+          </span>
+          <select
+            value={settings.rawCapture.visibility}
+            disabled={!anyUploadEnabled || busy || Boolean(selectedDiscordHubs.length)}
+            onChange={(event) => void setVisibility(event.target.value as UserSettings["rawCapture"]["visibility"])}
+          >
+            <option value="private">Private</option>
+            <option value="unlisted">Unlisted</option>
+            <option value="public">Public</option>
+          </select>
+        </label>
+          </div>
+          <p className="review-web-panel-note">{selectedDiscordHubs.length
+            ? "Discord sharing uses Unlisted visibility. Turn off automatic destinations in the Discord section to choose a different visibility."
+            : "Private replays are visible only to your linked account. Unlisted replays can be watched by anyone with their link. Public replays appear in the public library."}</p>
+        </div></div>;
 
   const StatusIcon = status.tone === "ready" ? Check : status.tone === "working" ? Activity : status.tone === "attention" ? AlertTriangle : Cloud;
   return (
@@ -12975,14 +13175,8 @@ function WebReplayUploadCentre({
             <button type="button" className="primary" onClick={onOpenAccount}><Link2 size={15} /> Link account</button>
           ) : !accountVerified ? (
             <button type="button" className="primary" onClick={onOpenAccount}><Shield size={15} /> Verify account</button>
-          ) : !anyUploadEnabled ? (
-            <button type="button" className="primary" disabled={busy} onClick={() => void setPlatformUpload("atlas", true, true)}>
-              <Upload size={15} /> Enable private Atlas replays
-            </button>
-          ) : !settings.rawCapture.enabled ? (
-            <button type="button" className="primary" disabled={busy} onClick={() => void setPlatformUpload(atlasEnabled ? "atlas" : "tcga", true)}>
-              <Play size={15} /> Resume replay capture
-            </button>
+          ) : !anyUploadEnabled || !settings.rawCapture.enabled ? (
+            <button type="button" className="secondary" onClick={onOpenSetup}>Recording &amp; sharing</button>
           ) : totals.pending || hasRetryableQueueItem ? (
             <button type="button" className="primary" disabled={busy} onClick={() => void retryUploads()}>
               <RotateCw size={15} /> {busyAction === "retry" ? "Retrying..." : "Retry eligible uploads"}
@@ -13022,7 +13216,6 @@ function WebReplayUploadCentre({
         {totals.pending ? <button type="button" onClick={() => { setControlPanel("activity"); setControlsExpanded(true); }}><Activity size={12} />{totals.pending} active or waiting</button> : null}
         {totals.failed ? <button type="button" data-attention="true" onClick={() => { setControlPanel("activity"); setControlsExpanded(true); }}><AlertTriangle size={12} />{totals.failed} failed</button> : null}
         {partialReadyCount ? <button type="button" data-attention="true" onClick={() => { setControlPanel("activity"); setControlsExpanded(true); }}><AlertTriangle size={12} />{partialReadyCount} completed with warnings</button> : null}
-        {selectedDiscordHubs.length ? <button type="button" onClick={() => { setControlPanel("sharing"); setControlsExpanded(true); }}>Sharing to {selectedDiscordHubs.length} hub{selectedDiscordHubs.length === 1 ? "" : "s"}</button> : null}
       </div>
 
       {notice ? <div className="settings-note" role="status" aria-live="polite">{notice}</div> : null}
@@ -13031,58 +13224,8 @@ function WebReplayUploadCentre({
       <div className="web-replay-control-body" id="web-replay-upload-controls" hidden={!controlsExpanded}>
         <nav className="review-tabs review-web-control-tabs" aria-label="Upload controls">
           <button type="button" aria-pressed={controlPanel === "activity"} aria-controls="review-web-activity" aria-label={queue.length ? `Activity, ${queue.length} uploads` : "Activity"} onClick={() => setControlPanel("activity")}><Activity size={14} />Activity{queue.length ? <span aria-hidden="true">{queue.length}</span> : null}</button>
-          <button type="button" aria-pressed={controlPanel === "capture"} aria-controls="review-web-capture" onClick={() => setControlPanel("capture")}><SlidersHorizontal size={14} />Capture & privacy</button>
-          <button type="button" aria-pressed={controlPanel === "sharing"} aria-controls="review-web-sharing" onClick={() => setControlPanel("sharing")}><Link2 size={14} />Sharing</button>
           <button type="button" aria-pressed={controlPanel === "diagnostics"} aria-controls="review-web-diagnostics" onClick={() => setControlPanel("diagnostics")}><Shield size={14} />Diagnostics</button>
         </nav>
-        <div className="review-web-panel" id="review-web-capture" hidden={controlPanel !== "capture"}>
-          <div className="review-web-panel-heading"><strong>Save new replays automatically</strong><p>Choose your platforms and the visibility of future replays. Existing online replays keep their current visibility.</p></div>
-          <div className="web-replay-platform-grid">
-        <label className="web-replay-platform-card" data-enabled={atlasEnabled}>
-          <span>
-            <strong>Rift Atlas</strong>
-            <small>Automatically save Atlas matches</small>
-          </span>
-          <input
-            type="checkbox"
-            checked={atlasEnabled}
-            disabled={busy || (!accountVerified && !atlasEnabled)}
-            onChange={(event) => void setPlatformUpload("atlas", event.target.checked)}
-          />
-        </label>
-        <label className="web-replay-platform-card" data-enabled={tcgaEnabled}>
-          <span>
-            <strong>TCGA</strong>
-            <small>Automatically save TCGA matches</small>
-          </span>
-          <input
-            type="checkbox"
-            checked={tcgaEnabled}
-            disabled={busy || (!accountVerified && !tcgaEnabled)}
-            onChange={(event) => void setPlatformUpload("tcga", event.target.checked)}
-          />
-        </label>
-        <label className="web-replay-visibility-card">
-          <span>
-            <strong>New replay visibility</strong>
-            <small>Private means only your linked account</small>
-          </span>
-          <select
-            value={settings.rawCapture.visibility}
-            disabled={!anyUploadEnabled || busy || Boolean(settings.rawCapture.webReplayDiscordShareHubIds.length)}
-            onChange={(event) => void setVisibility(event.target.value as UserSettings["rawCapture"]["visibility"])}
-          >
-            <option value="private">Private</option>
-            <option value="unlisted">Unlisted</option>
-            <option value="public">Public</option>
-          </select>
-        </label>
-          </div>
-          <p className="review-web-panel-note">{selectedDiscordHubs.length
-            ? "Discord sharing uses Unlisted visibility. Remove the selected destinations in Sharing to choose a different visibility."
-            : "Private replays are visible only to your linked account. Unlisted replays can be watched by anyone with their link. Public replays appear in the public library."}</p>
-        </div>
-
         <div className="review-web-panel" id="review-web-activity" hidden={controlPanel !== "activity"}>
           {queue.length ? (
             <div className="web-replay-delivery-list">
@@ -13125,7 +13268,10 @@ function WebReplayUploadCentre({
                   <strong>{item.title}</strong>
                   <small>{item.platform === "atlas" ? "Rift Atlas" : "TCGA"} · {webReplayStageLabel(item)} · {webReplayDate(item.lastAttemptAt || item.capturedAt)}</small>
                   {friendlyError ? <p>{friendlyError}</p> : null}
-                  {item.nextRetryAt ? <small>Automatic retry: {webReplayDate(item.nextRetryAt)}</small> : null}
+                  {item.discordShareError ? <p>Discord: {replayDeliveryErrorMessage(item.discordShareError)}</p> : null}
+                  {item.discordShareBlockedReason ? <small>Automatic Discord retries are paused. {item.discordShareBlockedReason === "result" ? "The website has not accepted this game's saved result yet." : "Retry after updating RiftLite or checking the destination setup."}</small> : null}
+                  {item.recommendedAction === "review-result" ? <p>The interactive replay can be watched now. Review the result before posting it to Discord.</p> : null}
+                  {item.nextRetryAt ? <small>{Date.parse(item.nextRetryAt) <= Date.now() ? "Waiting for the next retry pass" : `Automatic retry: ${webReplayDate(item.nextRetryAt)}`}</small> : null}
                   {item.partialWarnings?.length ? <small>{item.partialWarnings.join(" · ")}</small> : null}
                   {item.error && friendlyError !== item.error ? (
                     <details className="web-replay-item-technical"><summary>Technical error</summary><code>{item.error}</code></details>
@@ -13141,11 +13287,15 @@ function WebReplayUploadCentre({
                   {item.canUploadAnyway || item.recommendedAction === "upload-incomplete" ? (
                     <button type="button" className="primary" disabled={busy} onClick={() => void uploadIncomplete(item)}><Upload size={14} /> Upload anyway</button>
                   ) : null}
-                  {item.recommendedAction === "retry" ? (
-                    <button type="button" className="primary" disabled={busy} onClick={() => void retryUploads()}><RotateCw size={14} /> Retry now</button>
+                  {item.recommendedAction === "review-result" ? <button type="button" className="primary" onClick={() => onReviewResult?.(item)}>Review result</button> : null}
+                  {item.recommendedAction === "retry" || item.discordShareStatus === "failed" || item.discordShareStatus === "partial" || (item.operationInProgress === false && ["authenticating", "initializing", "uploading", "completing", "processing"].includes(item.stage)) ? (
+                    <button type="button" className="primary" disabled={busy} onClick={() => void retryUploads()}><RotateCw size={14} /> Retry queued deliveries</button>
                   ) : null}
                   {webReplayQueueItemCanBeKeptLocalOnly(item) ? (
                     <button type="button" className="secondary" disabled={busy} onClick={() => void keepLocalOnly(item)}>{itemBusy ? "Removing..." : "Keep local only"}</button>
+                  ) : null}
+                  {(item.processingStatus === "ready" || item.stage === "ready") && ["pending", "partial", "failed"].includes(item.discordShareStatus || "") ? (
+                    <button type="button" className="secondary" disabled={busy || item.operationInProgress} onClick={() => void stopDiscordRetries(item)}>{itemBusy ? "Stopping..." : "Stop Discord retries"}</button>
                   ) : null}
                   {webReplayReadyWarningDismissalKey(item) ? (
                     <button type="button" className="secondary" onClick={() => dismissCompletedWarning(item)}><X size={14} /> Clear from activity</button>
@@ -13157,24 +13307,6 @@ function WebReplayUploadCentre({
           {queue.length > 6 ? <button type="button" className="secondary review-web-more-activity" onClick={() => setShowAllActivity((value) => !value)}>{showAllActivity ? "Show recent activity" : `Show all ${queue.length} uploads`}</button> : null}
             </div>
           ) : <div className="review-web-activity-empty"><Check size={22} /><div><strong>No uploads need attention</strong><p>Active uploads and anything needing a decision appear here. Completed replays are in your library below.</p></div></div>}
-        </div>
-
-        <div className="review-web-panel" id="review-web-sharing" hidden={controlPanel !== "sharing"}>
-          <details className="web-replay-sharing-details" open>
-        <summary>Discord sharing</summary>
-        <p>Optional: selected private hubs receive future replay links. Shared replays become Unlisted.</p>
-        {settings.activeHubs.length ? settings.activeHubs.map((hub) => (
-          <label className="toggle-row" key={hub.id}>
-            <span>{hub.name}</span>
-            <input
-              type="checkbox"
-              checked={selectedDiscordHubs.includes(hub.id)}
-              disabled={busy || (!selectedDiscordHubs.includes(hub.id) && (!accountVerified || !anyUploadEnabled))}
-              onChange={(event) => void setDiscordHub(hub.id, event.target.checked)}
-            />
-          </label>
-        )) : <p>No joined private hubs are available.</p>}
-          </details>
         </div>
 
         <div className="review-web-panel" id="review-web-diagnostics" hidden={controlPanel !== "diagnostics"}>
@@ -13216,7 +13348,9 @@ function EmbeddedRiftReplayView({
   diagnosticsRefreshing,
   onSettingsChanged,
   onRefreshDiagnostics,
-  onOpenAccount
+  onOpenAccount,
+  onOpenLibrary,
+  onOpenSetup
 }: {
   settings: UserSettings;
   diagnostics: WebReplayUploadDiagnostics | null;
@@ -13225,6 +13359,8 @@ function EmbeddedRiftReplayView({
   onSettingsChanged: (settings: UserSettings) => void;
   onRefreshDiagnostics: () => Promise<WebReplayUploadDiagnostics | null>;
   onOpenAccount: () => void;
+  onOpenLibrary: () => void;
+  onOpenSetup: () => void;
 }) {
   const [reloadKey, setReloadKey] = useState(0);
   const [replayFullscreen, setReplayFullscreen] = useState(false);
@@ -13353,16 +13489,7 @@ function EmbeddedRiftReplayView({
           </button>
         </div>
       </div>
-      <WebReplayUploadCentre
-        settings={settings}
-        diagnostics={diagnostics}
-        diagnosticsError={diagnosticsError}
-        diagnosticsRefreshing={diagnosticsRefreshing}
-        onSettingsChanged={onSettingsChanged}
-        onRefreshDiagnostics={onRefreshDiagnostics}
-        onOpenAccount={onOpenAccount}
-        onLibraryChanged={() => setReloadKey((value) => value + 1)}
-      />
+      <div className="row-actions"><button className="secondary" onClick={onOpenLibrary}>Back to my games</button><button className="secondary" onClick={onOpenSetup}>Recording &amp; sharing</button></div>
       <div className="web-replay-frame-shell review-surface" aria-label="Web replay library">
         {embedState.url ? (
           <RiftReplayWebview
@@ -13763,7 +13890,8 @@ function SocialHubView({
   onSyncTeams,
   onSyncMatchesToTeams,
   onDeleteTeamMatch,
-  onRefreshTeamMatches
+  onRefreshTeamMatches,
+  onOpenGroups
 }: {
   settings: UserSettings;
   matches: MatchDraft[];
@@ -13773,6 +13901,7 @@ function SocialHubView({
   onSyncMatchesToTeams: (matchIds: string[], teamIds: string[]) => Promise<PrivateHubSyncResult>;
   onDeleteTeamMatch: (teamId: string, matchId: string) => Promise<void>;
   onRefreshTeamMatches: (teamId: string, forceRefresh?: boolean) => Promise<CommunityMatch[]>;
+  onOpenGroups?: () => void;
 }) {
   const [tab, setTab] = useState<"lfg" | "teams" | "applications" | "moderation">("lfg");
   const signedIn = Boolean(settings.accountUid && settings.firebaseRefreshToken);
@@ -13795,8 +13924,10 @@ function SocialHubView({
     <section className="social-hub stack">
       <div className="social-tabs">
         <button type="button" data-active={tab === "lfg"} onClick={() => setTab("lfg")}><Radio size={16} /> Find Match</button>
-        <button type="button" data-active={tab === "teams"} onClick={() => setTab("teams")}><Users size={16} /> Teams</button>
-        <button type="button" data-active={tab === "applications"} onClick={() => setTab("applications")}><Bell size={16} /> Applications</button>
+        {onOpenGroups ? <button type="button" onClick={onOpenGroups}><Users size={16} /> Your groups</button> : <>
+          <button type="button" data-active={tab === "teams"} onClick={() => setTab("teams")}><Users size={16} /> Teams</button>
+          <button type="button" data-active={tab === "applications"} onClick={() => setTab("applications")}><Bell size={16} /> Applications</button>
+        </>}
         {canOpenModeration ? (
           <button type="button" data-active={tab === "moderation"} onClick={() => setTab("moderation")}><Shield size={16} /> Moderation</button>
         ) : null}
@@ -14344,7 +14475,9 @@ function TeamsPanel({
   onSyncTeams,
   onSyncMatchesToTeams,
   onDeleteTeamMatch,
-  onRefreshTeamMatches
+  onRefreshTeamMatches,
+  hideInvitationInbox = false,
+  initialTeamId
 }: {
   settings: UserSettings;
   matches: MatchDraft[];
@@ -14354,6 +14487,8 @@ function TeamsPanel({
   onSyncMatchesToTeams: (matchIds: string[], teamIds: string[]) => Promise<PrivateHubSyncResult>;
   onDeleteTeamMatch: (teamId: string, matchId: string) => Promise<void>;
   onRefreshTeamMatches: (teamId: string, forceRefresh?: boolean) => Promise<CommunityMatch[]>;
+  hideInvitationInbox?: boolean;
+  initialTeamId?: string;
 }) {
   const [teams, setTeams] = useState<SocialTeamProfile[]>([]);
   const [mine, setMine] = useState<SocialTeamProfile[]>([]);
@@ -14459,6 +14594,10 @@ function TeamsPanel({
     void refreshTeams(false);
     return () => { teamPanelMounted.current = false; teamLoadRevision.current += 1; };
   }, []);
+
+  useEffect(() => {
+    if (initialTeamId) void loadTeam(initialTeamId);
+  }, [initialTeamId]);
 
   async function createTeam() {
     setBusy(true);
@@ -14710,7 +14849,7 @@ function TeamsPanel({
   const canManage = detail?.myRole === "owner" || detail?.myRole === "admin";
   const canPromoteAdmins = detail?.myRole === "owner";
   const isTeamMember = Boolean(detail?.myRole);
-  const privateMine = mine.filter((team) => team.visibility === "private" || !teams.some((publicTeam) => publicTeam.id === team.id));
+  const { joined: privateMine, discover: discoverTeams } = selectGroupTeams(teams, mine);
   const teamRows = detail ? (teamMatches[detail.team.id] ?? []) : [];
   const teamAnalytics = useMemo(() => validAnalytics(teamRows.map(communityToAnalytics)), [teamRows]);
   const filteredTeamAnalytics = useMemo(() => filterMatrixMatches(teamAnalytics, teamFilters), [teamAnalytics, teamFilters]);
@@ -14746,7 +14885,7 @@ function TeamsPanel({
                 setManageOpen(false);
               }}
             >
-              <ChevronLeft size={16} /> Team directory
+              <ChevronLeft size={16} /> Teams
             </button>
             <h2>{detail.team.name}</h2>
             <p>{detail.team.description || "No description yet."}</p>
@@ -15040,12 +15179,12 @@ function TeamsPanel({
       <section className="panel-card stack">
         <div className="section-row">
           <div>
-            <h2>Team directory</h2>
-            <p className="muted">{teams.length} public teams, {mine.length} joined</p>
+            <h2>{hideInvitationInbox ? "Teams" : "Team directory"}</h2>
+            <p className="muted">{mine.length} joined · {discoverTeams.length} public teams to discover</p>
           </div>
           <button type="button" className="secondary" disabled={busy} onClick={() => void refreshTeams()}><RefreshCw size={15} /> Refresh</button>
         </div>
-        {!selectedId ? <TeamInvitationInbox key={settings.accountUid} onJoined={async (result) => {
+        {!hideInvitationInbox && !selectedId ? <TeamInvitationInbox key={settings.accountUid} onJoined={async (result) => {
           const revision = teamLoadRevision.current;
           await refreshTeams(false);
           if (teamPanelMounted.current && revision === teamLoadRevision.current) await loadTeam(result.team.id);
@@ -15105,8 +15244,10 @@ function TeamsPanel({
             </div>
           </div>
         ) : null}
+        {!privateMine.length ? <p className="muted">You have not joined a team yet. Accept an invitation, apply to a public team or create your own.</p> : null}
+        <h3>Discover public teams</h3>
         <div className="team-card-grid">
-          {teams.map((team) => (
+          {discoverTeams.map((team) => (
             <button type="button" className="team-card" data-active={selectedId === team.id || selectedId === team.slug} key={team.id} onClick={() => void loadTeam(team.id)}>
               {team.logoUrl ? <img src={team.logoUrl} alt="" /> : <span>{team.name.slice(0, 1)}</span>}
               <strong>{team.name}</strong>
@@ -15279,6 +15420,8 @@ function AccountView({
   const [profile, setProfile] = useState<AccountProfile | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<AccountConnectionStatus | null>(null);
   const [connectionBusy, setConnectionBusy] = useState(false);
+  const [profileExpanded, setProfileExpanded] = useState(false);
+  const [troubleshootingExpanded, setTroubleshootingExpanded] = useState(false);
   const [cloudStatus, setCloudStatus] = useState<AccountCloudSyncStatus | null>(null);
   const [cloudConflicts, setCloudConflicts] = useState<AccountCloudSyncConflictSummary[]>([]);
   const [cloudConflictError, setCloudConflictError] = useState("");
@@ -15356,12 +15499,22 @@ function AccountView({
     () => accountMigrationProgress(connectionStatus, accountLinked),
     [accountLinked, connectionStatus]
   );
-  const showAccountSignInActions = !accountReady && !linkSession && (
-    !accountLinked ||
-    !signedIn ||
-    accountState === "reconnect" ||
-    (connectionStatus !== null && !connectionStatus.connected)
-  );
+  const overview = accountOverview(accountState, connectionStatus);
+  const showAccountSignInActions = overview.action === "sign-in";
+
+  useEffect(() => {
+    if (accountState === "needs-profile") setProfileExpanded(true);
+  }, [accountState]);
+
+  function openAccountSection(section: "profile" | "troubleshooting") {
+    if (section === "profile") setProfileExpanded(true);
+    else setTroubleshootingExpanded(true);
+    window.requestAnimationFrame(() => {
+      const target = document.getElementById(`account-${section}`);
+      target?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      target?.querySelector<HTMLElement>(section === "profile" ? "input" : "summary")?.focus({ preventScroll: true });
+    });
+  }
 
   function formatCloudDate(value?: string) {
     return value ? new Date(value).toLocaleString() : "Never";
@@ -15727,23 +15880,6 @@ function AccountView({
     }
   }
 
-  async function setReplayAutoUpload(enabled: boolean, makePrivate = false) {
-    if (enabled && !accountVerified) {
-      setStatus("Verify this account before enabling automatic replay upload.");
-      return;
-    }
-    const patch = rawCaptureSettingsForPlatformUpload(settings, "atlas", enabled);
-    if (makePrivate) patch.visibility = "private";
-    const next = await window.riftlite.updateRawCaptureSettings(patch);
-    onSettingsChanged(next);
-    setStatus(enabled
-      ? `New Atlas replays will upload privately to ${connectionStatus?.displayName || connectionStatus?.handle || "this verified account"}.`
-      : "Automatic Atlas replay upload is off.");
-    setConnectionStatus(await window.riftlite.getAccountConnectionStatus());
-    await onRefreshWebReplayDiagnostics();
-    if (enabled) setShowPostLinkWebReplayChoice(false);
-  }
-
   async function setAccountCloudSync(enabled: boolean, dismissPostLinkChoice = false) {
     if (!accountLinked) {
       setStatus("Link a RiftLite account before enabling device sync.");
@@ -15936,27 +16072,10 @@ function AccountView({
 
   return (
     <section className="dashboard-page account-page">
-      <div className="rail-card">
-        <h2>{accountReady ? "Your RiftLite account" : accountLinked && connectionStatus && !accountVerified ? "Account connection needs attention" : accountState === "needs-profile" ? "Finish your RiftLite account" : accountState === "reconnect" ? "Reconnect your RiftLite account" : "Create or sign in"}</h2>
-        <p className="muted">
-          {accountReady
-            ? `Verified as ${connectionStatus?.displayName || settings.accountDisplayName || settings.accountHandle}. The website, this desktop, private hubs, and web replays use this identity.`
-            : accountLinked && connectionStatus && !accountVerified
-              ? connectionStatus.message
-            : accountState === "needs-profile"
-              ? "Your device is linked. Choose the name other players will see to finish setup and unlock private-hub invites."
-              : accountState === "reconnect"
-                ? "Your account data is still safe, but this device's sign-in has expired. Reconnect to continue."
-                : "One account keeps your private hubs, Discord verification, and web replays together. Existing local matches stay on this device."}
-        </p>
-        <div className="drilldown-grid">
-          <Metric label="Status" value={accountReady ? "Verified" : accountLinked && !connectionStatus ? "Checking" : accountLinked && !accountVerified ? "Needs attention" : accountState === "needs-profile" ? "Name needed" : accountState === "reconnect" ? "Reconnect" : accountState === "linking" ? "Signing in" : "Local only"} />
-          <Metric label="Handle" value={settings.accountHandle || "Not claimed"} />
-          <Metric label="Email" value={settings.accountEmail || "Not connected"} />
-          <Metric label="Account ID" value={shortAccountId(settings.accountUid)} />
-          <Metric label="Private hubs" value={accountReady ? "Ready" : "Finish verification"} />
-          <Metric label="Web replays" value={accountVerified && connectionStatus?.replayLibraryReady ? `${connectionStatus.replayCount} found` : "Not verified"} />
-        </div>
+      <AccountIdentityCard overview={overview}
+        displayName={accountLinked ? connectionStatus?.displayName || settings.accountDisplayName : undefined}
+        handle={accountLinked ? connectionStatus?.handle || settings.accountHandle : undefined}
+        email={accountLinked ? settings.accountEmail : undefined}>
         <div className="row-actions">
           {showAccountSignInActions ? <>
             <button type="button" className="primary account-provider-button" disabled={linkBusy} onClick={() => void startLink("google")}>
@@ -15969,11 +16088,10 @@ function AccountView({
               <MessageCircle size={16} /> Recover with Discord
             </button>
           </> : null}
-          {accountLinked ? <button className="secondary" disabled={connectionBusy} onClick={() => void checkAccountConnection()}><RefreshCw size={16} /> Check connection</button> : null}
-          {profileLink ? <button className="secondary" onClick={() => void window.riftlite.openExternalResource(profileLink)}><ExternalLink size={16} /> Open profile</button> : null}
-          <button className="secondary" disabled={!signedIn || !publicDraft || !handleDraft.trim()} onClick={() => void refreshProfileMatches()}>
-            <RefreshCw size={16} /> Refresh matches
-          </button>
+          {overview.action === "finish-profile" ? <button type="button" className="primary" onClick={() => openAccountSection("profile")}><Users size={16} /> Choose my name</button> : null}
+          {overview.action === "check-connection" ? <button type="button" className="primary" disabled={connectionBusy} onClick={() => void checkAccountConnection()}><RefreshCw size={16} />{connectionBusy ? "Checking…" : "Check connection"}</button> : null}
+          {overview.action === "troubleshooting" ? <button type="button" className="primary" onClick={() => openAccountSection("troubleshooting")}><Shield size={16} /> Review connection</button> : null}
+          {accountReady && !showPostLinkWebReplayChoice ? <button type="button" className="secondary" onClick={onOpenWebReplays}><Film size={16} /> Recording &amp; sharing</button> : null}
         </div>
         {showAccountSignInActions ? <p className="muted account-provider-help">Use the same Google or email method that created your account. Discord only recovers an account you previously connected to Discord; a profile handle is not a sign-in method.</p> : null}
         {linkSession ? (
@@ -15999,15 +16117,15 @@ function AccountView({
             </div>
           </div>
         ) : null}
-        {status ? <p className="muted">{status}</p> : null}
-      </div>
+        {status ? <p className="muted" role="status">{status}</p> : null}
+      </AccountIdentityCard>
       {showPostLinkSyncChoice && accountLinked && !cloudEnabled ? (
         <div className="rail-card account-post-link-sync-choice">
           <div className="account-sync-choice-heading">
             <span className="account-link-status-icon" aria-hidden="true"><Cloud size={24} /></span>
             <div>
-              <h2>Keep history and decks synced across devices?</h2>
-              <p className="muted">This optional account backup includes match history, decks, notebooks, and settings. Replay videos and raw replay files stay on this computer.</p>
+              <h2>Back up my data?</h2>
+              <p className="muted">Optional backup for match history, decks, notebooks, and settings, ready to restore on another device. This does not share match results with other players. Replay videos and raw replay files stay on this computer.</p>
             </div>
           </div>
           {cloudStatus?.hasRemoteBackup ? (
@@ -16028,7 +16146,7 @@ function AccountView({
               </div>
               <div className="row-actions account-sync-choice-actions">
                 <button type="button" className="primary" disabled={cloudBusy} onClick={() => requestAccountSyncChoice("restore-cloud", true)}>
-                  <RotateCcw size={16} /> Restore cloud and enable
+                  <RotateCcw size={16} /> Restore cloud and enable backups
                 </button>
                 <button type="button" className="secondary" disabled={cloudBusy} onClick={() => requestAccountSyncChoice("keep-local", true)}>
                   <Upload size={16} /> Keep local and replace cloud
@@ -16039,80 +16157,24 @@ function AccountView({
           ) : (
             <div className="row-actions account-sync-choice-actions">
               <button type="button" className="primary" disabled={cloudBusy} onClick={() => void setAccountCloudSync(true, true)}>
-                <Cloud size={16} /> Keep them synced
+                <Cloud size={16} /> Enable automatic backup
               </button>
               <button type="button" className="secondary" disabled={cloudBusy} onClick={() => setShowPostLinkSyncChoice(false)}>Not now</button>
             </div>
           )}
         </div>
       ) : null}
-      {showPostLinkWebReplayChoice && accountLinked ? (
-        <div className="rail-card account-post-link-web-replay-choice">
-          <div className="account-sync-choice-heading">
-            <span className="account-link-status-icon" aria-hidden="true"><Cloud size={24} /></span>
-            <div>
-              <span className="modern-kicker">Optional replay library</span>
-              <h2>Automatically save new Atlas Web Replays?</h2>
-              <p className="muted">RiftLite will capture the Atlas match feed and upload completed replays privately to this verified account. TCGA remains a separate opt-in.</p>
-            </div>
-          </div>
-          <div className="row-actions account-sync-choice-actions">
-            {accountVerified ? (
-              <button type="button" className="primary" onClick={() => void setReplayAutoUpload(true, true)}>
-                <Upload size={16} /> Enable private Atlas replays
-              </button>
-            ) : (
-              <button type="button" className="primary" disabled={connectionBusy} onClick={() => void checkAccountConnection()}>
-                <Shield size={16} /> Verify account first
-              </button>
-            )}
-            <button type="button" className="secondary" onClick={() => setShowPostLinkWebReplayChoice(false)}>Set up later</button>
-          </div>
-        </div>
-      ) : null}
-      <div className="rail-card">
-        <h2>Replay and account connection</h2>
-        <p className="muted">One verified identity owns your private hubs, Discord link, device backup, and every new web replay you separately enable.</p>
-        <div className="drilldown-grid">
-          <Metric label="Website identity" value={accountVerified ? "Matches desktop" : accountLinked ? "Check required" : "Not connected"} />
-          <Metric label="Replay library" value={connectionStatus?.replayLibraryReady ? "Accessible" : "Not verified"} />
-          <Metric label="Replay upload target" value={accountVerified ? connectionStatus?.displayName || connectionStatus?.handle || "Verified account" : "Blocked"} />
-          <Metric label="Older data" value={connectionStatus?.migrationState === "attention" ? "Needs repair" : connectionStatus?.migrationState === "pending" ? "Finishing" : "Ready"} />
-          <Metric label="Last verified" value={formatCloudDate(connectionStatus?.checkedAt || settings.accountLastVerifiedAt)} />
-          <Metric label="Atlas auto upload" value={replayAutoUploadEnabled ? "On" : "Off"} />
-          <Metric label="TCGA auto upload" value={tcgaReplayAutoUploadEnabled ? "On" : "Off"} />
-          <Metric label="Discord reports" value={discordReplayShareEnabled ? `${selectedDiscordShareHubIds.length} hub${selectedDiscordShareHubIds.length === 1 ? "" : "s"}` : "Off"} />
-        </div>
-        <div className="account-migration-progress" data-tone={migrationProgress.tone}>
-          <div>
-            <strong>{migrationProgress.label}</strong>
-            <span>Account linking step {migrationProgress.current} of {migrationProgress.total}</span>
-          </div>
-          <progress value={migrationProgress.percent} max={100} aria-label={`Account migration ${migrationProgress.percent}% complete`} />
-          <small>{migrationProgress.detail}</small>
-        </div>
-        {connectionStatus?.message ? <div className={`settings-note ${connectionStatus.verified ? "" : "warning"}`}>{connectionStatus.message}</div> : null}
-        {connectionStatus?.migrationMessage ? <div className="settings-note warning">{connectionStatus.migrationMessage}</div> : null}
-        <div className="account-web-replay-summary" data-state={webReplayDiagnostics?.state || "attention"}>
-          <div>
-            <strong><Cloud size={16} /> Web Replay delivery</strong>
-            <span>{webReplayDiagnostics?.summary || "Open Web Replays to finish setup and check delivery."}</span>
-          </div>
-          <button type="button" className="primary" onClick={onOpenWebReplays}>
-            Manage Web Replays
-          </button>
-        </div>
-        <div className="row-actions">
-          <button className="secondary" disabled={!accountLinked || connectionBusy} onClick={() => void checkAccountConnection()}><RefreshCw size={16} /> Verify now</button>
-          {connectionStatus?.migrationState !== "ready" ? <button className="secondary" disabled={connectionBusy} onClick={() => void repairAccountConnection()}><RotateCcw size={16} /> Repair older links</button> : null}
-          <button className="secondary" onClick={() => void window.riftlite.openExternalResource("https://www.riftlite.com/account")}><ExternalLink size={16} /> Open website account</button>
-        </div>
-      </div>
-      <div className="rail-card">
-        <h2>{profileComplete ? "Profile" : "Choose your RiftLite name"}</h2>
+      {showPostLinkWebReplayChoice && accountLinked ? <div className="rail-card account-post-link-web-replay-choice">
+        <h2>Choose what to record and share</h2><p>Your account is connected. Set up interactive replays, local video and optional Discord sharing together.</p>
+        <div className="row-actions"><button className="primary" onClick={onOpenWebReplays}>Recording &amp; sharing</button><button className="secondary" onClick={() => setShowPostLinkWebReplayChoice(false)}>Later</button></div>
+      </div> : null}
+      <AccountDisclosure id="account-profile" title={profileComplete ? "Profile & privacy" : "Choose your RiftLite name"}
+        description={profileComplete ? "Your handle, display name and what other players can see." : "Your display name and unique @handle for invitations."}
+        open={profileExpanded} onToggle={setProfileExpanded}>
         {!accountLinked ? <p className="muted">Create or sign in above first. RiftLite will return here automatically.</p> : null}
-        <label>Handle<input value={handleDraft} onChange={(event) => setHandleDraft(event.target.value)} placeholder="your-handle" /></label>
+        <label>Account handle<input value={handleDraft} onChange={(event) => setHandleDraft(event.target.value)} placeholder="your-handle" /></label>
         <label>Display name<input value={displayNameDraft} onChange={(event) => setDisplayNameDraft(event.target.value)} placeholder="Name shown in RiftLite" /></label>
+        <p className="muted">These identify your RiftLite account. The local capture name in Settings is separate.</p>
         {!profileComplete && accountLinked ? <p className="muted">Your display name can contain spaces. Your unique handle is used for direct hub invites.</p> : null}
         {profileComplete ? (
           <>
@@ -16131,15 +16193,8 @@ function AccountView({
             <p className="muted">Optional mailing-list consent. Your email is kept private and is never shown on public profiles, search, community stats, or hubs.</p>
           </>
         ) : null}
-        <div className="row-actions">
-          <button className="primary" disabled={!accountLinked || !handleDraft.trim() || isGenericAccountDisplayName(displayNameDraft)} onClick={() => void saveProfile()}><Save size={16} /> {profileComplete ? "Save profile" : "Finish setup"}</button>
-          {profileLink ? <button className="secondary" onClick={() => void copyProfileLink()}>Copy profile link</button> : null}
-        </div>
-        {profile ? <p className="muted">Profile updated {profile.updatedAt ? new Date(profile.updatedAt).toLocaleString() : "recently"}.</p> : null}
-      </div>
-      {accountReady ? <>
-      <div className="rail-card">
-        <h2>Public sections</h2>
+        {accountReady ? <div className="account-profile-public-sections">
+        <h3>Public profile sections</h3>
         <p className="muted">These only apply when the public profile page is enabled. Private hub matches, notes, and Scorepad-only matches stay hidden.</p>
         <label className="toggle-row">
           <span><BarChart3 size={16} /> Stats</span>
@@ -16157,12 +16212,21 @@ function AccountView({
           <span><Shield size={16} /> Hub badges</span>
           <input type="checkbox" checked={showHubBadgesDraft} onChange={(event) => setShowHubBadgesDraft(event.target.checked)} />
         </label>
-      </div>
+        </div> : null}
+        <div className="row-actions">
+          <button className="primary" disabled={!accountLinked || !handleDraft.trim() || isGenericAccountDisplayName(displayNameDraft)} onClick={() => void saveProfile()}><Save size={16} /> {profileComplete ? "Save profile" : "Finish setup"}</button>
+          {profileLink ? <button className="secondary" onClick={() => void copyProfileLink()}>Copy profile link</button> : null}
+          {profileLink ? <button className="secondary" onClick={() => void window.riftlite.openExternalResource(profileLink)}><ExternalLink size={16} /> Open profile</button> : null}
+          <button className="secondary" disabled={!signedIn || !publicDraft || !handleDraft.trim()} onClick={() => void refreshProfileMatches()}><RefreshCw size={16} /> Refresh public matches</button>
+        </div>
+        {profile ? <p className="muted">Profile updated {profile.updatedAt ? new Date(profile.updatedAt).toLocaleString() : "recently"}.</p> : null}
+      </AccountDisclosure>
+      {accountReady ? <>
       <div className="rail-card">
-        <h2>Device sync</h2>
-        <p className="muted">Optional account backup for match history, decks, notebooks, and settings. Replay videos and raw replay files stay local so the cloud copy stays lightweight.</p>
+        <h2>Back up my data</h2>
+        <p className="muted">Save match history, decks, notebooks, and settings to your RiftLite account, ready to restore on another device. This is separate from sharing match results. Replay videos and raw replay files stay on this computer.</p>
         <label className="toggle-row">
-          <span><RefreshCw size={16} /> Sync this device to my RiftLite account</span>
+          <span><Cloud size={16} /> Automatically back up this device</span>
           <input
             type="checkbox"
             checked={cloudEnabled}
@@ -16170,10 +16234,10 @@ function AccountView({
             onChange={(event) => void setAccountCloudSync(event.target.checked)}
           />
         </label>
-        {!accountLinked ? <p className="muted">Link a RiftLite account first, then turn this on from any device you want to keep in sync.</p> : null}
+        {!accountLinked ? <p className="muted">Sign in first, then choose whether to back up this device.</p> : null}
         {cloudNeedsChoice ? (
           <div className="settings-note warning">
-            A backup already exists for this account. Choose Restore cloud to use it on this device, or Keep local and replace cloud to make this device authoritative. Sync stays off until you choose; leaving it unchanged cancels safely.
+            A backup already exists for this account. Choose Restore cloud to use it on this device, or Keep local and replace cloud to replace it with this device's data. Automatic backup stays off until you choose.
           </div>
         ) : null}
         <div className="account-sync-confidence" aria-label="Local and cloud account data comparison">
@@ -16188,7 +16252,7 @@ function AccountView({
             <strong>{cloudSyncSnapshot.available ? cloudSyncSnapshot.deviceName : "No backup yet"}</strong>
             <div><b>{cloudSyncSnapshot.matches}</b><span>matches</span></div>
             <div><b>{cloudSyncSnapshot.decks}</b><span>decks</span></div>
-            <small>{cloudSyncSnapshot.available ? formatCloudDate(cloudSyncSnapshot.updatedAt) : "Sync this device to create one"}</small>
+            <small>{cloudSyncSnapshot.available ? formatCloudDate(cloudSyncSnapshot.updatedAt) : "Back up this device to create one"}</small>
           </section>
         </div>
         <div className="account-active-deck-sync" data-state={activeDeckConfidence.state}>
@@ -16246,9 +16310,11 @@ function AccountView({
             ))}
           </div>
         ) : null}
+        <details className="account-backup-details">
+        <summary>Backup details</summary>
         <div className="drilldown-grid">
           <Metric label="Remote backup" value={cloudStatus?.hasRemoteBackup ? "Available" : "None yet"} />
-          <Metric label="Last successful sync" value={formatCloudDate(cloudStatus?.lastSyncedAt || settings.accountCloudSyncLastSyncedAt)} />
+          <Metric label="Last successful backup" value={formatCloudDate(cloudStatus?.lastSyncedAt || settings.accountCloudSyncLastSyncedAt)} />
           <Metric label="Local / cloud matches" value={`${localSyncSnapshot.matches} / ${cloudCounts.matches}`} />
           <Metric label="Local / cloud decks" value={`${localSyncSnapshot.decks} / ${cloudCounts.decks}`} />
           <Metric label="Active deck status" value={activeDeckConfidence.label} />
@@ -16256,29 +16322,29 @@ function AccountView({
           <Metric label="Replay files" value="Local only" />
           <Metric label="Backup size" value={cloudStatus?.remoteBytes ? formatBytes(cloudStatus.remoteBytes) : "-"} />
         </div>
+        </details>
         <div className="row-actions">
           <button className="primary" disabled={!accountLinked || cloudBusy} onClick={() => {
             if (cloudNeedsChoice) requestAccountSyncChoice("keep-local");
             else void uploadAccountCloudSync();
           }}>
-            <Upload size={16} /> {cloudNeedsChoice ? "Keep local and replace cloud" : "Sync now"}
+            <Upload size={16} /> {cloudNeedsChoice ? "Keep local and replace cloud" : "Back up now"}
           </button>
           <button className="secondary" disabled={!accountLinked || cloudBusy || !cloudStatus?.hasRemoteBackup} onClick={() => requestAccountSyncChoice("restore-cloud")}>
-            <RotateCcw size={16} /> {cloudNeedsChoice ? "Restore cloud and enable" : "Restore on this device"}
+            <RotateCcw size={16} /> {cloudNeedsChoice ? "Restore cloud and enable backups" : "Restore on this device"}
           </button>
           <button className="secondary" disabled={cloudBusy} onClick={() => void loadCloudStatus()}>
             <RefreshCw size={16} /> Check status
           </button>
         </div>
         <p className="muted">
-          {cloudStatus?.message || settings.accountCloudSyncLastError || "Auto-sync waits briefly after changes so it does not upload after every click."}
+          {cloudStatus?.message || settings.accountCloudSyncLastError || "Automatic backup saves changes after a short delay."}
         </p>
         <p className="muted">
           Last restore: {formatCloudDate(cloudStatus?.lastRestoredAt || settings.accountCloudSyncLastRestoredAt)}
         </p>
       </div>
-      <div className="rail-card">
-        <h2>Find players</h2>
+      <AccountDisclosure id="account-player-search" title="Find players" description="Search public RiftLite profiles by handle.">
         <div className="search-row">
           <input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="Search public handles..." />
           <button className="secondary" onClick={() => void searchProfiles()}>Search</button>
@@ -16294,17 +16360,56 @@ function AccountView({
           ))}
           {!searchResults.length ? <p className="muted">Only searchable public profiles appear here.</p> : null}
         </div>
-      </div>
+      </AccountDisclosure>
       </> : null}
-      <div className="rail-card">
-        <h2>Data controls</h2>
+      <AccountDisclosure id="account-troubleshooting" title="Troubleshooting"
+        description={connectionStatus?.migrationState === "attention" ? "Older account links need attention. Review connection details and repair options." : "Connection checks, account IDs and older account links."}
+        open={troubleshootingExpanded} onToggle={setTroubleshootingExpanded}>
+        <p className="muted">Use these checks if sign-in or account-owned data is not working as expected.</p>
+        <div className="drilldown-grid">
+          <Metric label="Account ID" value={shortAccountId(settings.accountUid)} />
+          <Metric label="Website identity" value={accountVerified ? "Matches desktop" : accountLinked ? "Check required" : "Not connected"} />
+          <Metric label="Replay library" value={connectionStatus?.replayLibraryReady ? "Accessible" : "Not verified"} />
+          <Metric label="Replay upload target" value={accountVerified ? connectionStatus?.displayName || connectionStatus?.handle || "Verified account" : "Blocked"} />
+          <Metric label="Older data" value={connectionStatus?.migrationState === "attention" ? "Needs repair" : connectionStatus?.migrationState === "pending" ? "Finishing" : "Ready"} />
+          <Metric label="Last verified" value={formatCloudDate(connectionStatus?.checkedAt || settings.accountLastVerifiedAt)} />
+          <Metric label="Atlas auto upload" value={replayAutoUploadEnabled ? "On" : "Off"} />
+          <Metric label="TCGA auto upload" value={tcgaReplayAutoUploadEnabled ? "On" : "Off"} />
+          <Metric label="Discord reports" value={discordReplayShareEnabled ? `${selectedDiscordShareHubIds.length} hub${selectedDiscordShareHubIds.length === 1 ? "" : "s"}` : "Off"} />
+        </div>
+        <div className="account-migration-progress" data-tone={migrationProgress.tone}>
+          <div>
+            <strong>{migrationProgress.label}</strong>
+            <span>Account linking step {migrationProgress.current} of {migrationProgress.total}</span>
+          </div>
+          <progress value={migrationProgress.percent} max={100} aria-label={`Account migration ${migrationProgress.percent}% complete`} />
+          <small>{migrationProgress.detail}</small>
+        </div>
+        {connectionStatus?.message ? <div className={`settings-note ${connectionStatus.verified ? "" : "warning"}`}>{connectionStatus.message}</div> : null}
+        {connectionStatus?.migrationMessage ? <div className="settings-note warning">{connectionStatus.migrationMessage}</div> : null}
+        <div className="account-web-replay-summary" data-state={webReplayDiagnostics?.state || "attention"}>
+          <div>
+            <strong><Cloud size={16} /> Web Replay delivery</strong>
+            <span>{webReplayDiagnostics?.summary || "Open Recording & sharing to finish setup and check delivery."}</span>
+          </div>
+          <button type="button" className="primary" onClick={onOpenWebReplays}>
+            Recording & sharing
+          </button>
+        </div>
+        <div className="row-actions">
+          {overview.action !== "check-connection" ? <button className="secondary" disabled={!accountLinked || connectionBusy} onClick={() => void checkAccountConnection()}><RefreshCw size={16} />{connectionBusy ? "Checking…" : "Check connection"}</button> : null}
+          {connectionStatus?.migrationState !== "ready" ? <button className="secondary" disabled={connectionBusy} onClick={() => void repairAccountConnection()}><RotateCcw size={16} /> Repair older links</button> : null}
+          <button className="secondary" onClick={() => void window.riftlite.openExternalResource("https://www.riftlite.com/account")}><ExternalLink size={16} /> Open website account</button>
+        </div>
+      </AccountDisclosure>
+      <AccountDisclosure id="account-data-controls" title="Account data & devices" description="Export account data, switch accounts or disconnect this device.">
         <p className="muted">These controls affect the linked RiftLite profile. Local no-login capture still works if you unlink.</p>
         <div className="row-actions">
           <button className="secondary" disabled={!signedIn} onClick={() => void exportAccountData()}><FileText size={16} /> Export account data</button>
           <button className="secondary" disabled={!signedIn || connectionBusy} onClick={() => void switchAccount()}><RefreshCw size={16} /> Switch account safely</button>
           <button className="secondary danger" disabled={!signedIn} onClick={() => void unlinkAccount()}>Unlink this device</button>
         </div>
-      </div>
+      </AccountDisclosure>
       {syncChoicePreview ? (
         <div className="modal-backdrop account-sync-preview-backdrop" onMouseDown={(event) => {
           if (event.target === event.currentTarget && !cloudBusy) setPendingSyncChoice(null);
@@ -17230,6 +17335,7 @@ function MatchesView({
   onReview,
   onDelete,
   onOpenReplay,
+  onOpenGameDetails,
   onSyncMatchesToHubs,
   onSyncMatchesToTeams,
   onSaveCombinedMatches,
@@ -17249,6 +17355,7 @@ function MatchesView({
   onReview: (draft: MatchDraft) => void;
   onDelete: (id: string) => Promise<void>;
   onOpenReplay: (matchId: string) => void;
+  onOpenGameDetails: (target: GameDetailsTarget) => void;
   onSyncMatchesToHubs: (matchIds: string[], hubIds: string[]) => Promise<PrivateHubSyncResult>;
   onSyncMatchesToTeams: (matchIds: string[], teamIds: string[]) => Promise<PrivateHubSyncResult>;
   onSaveCombinedMatches: (payload: MatchCombineSavePayload) => Promise<MatchDraft>;
@@ -17274,6 +17381,7 @@ function MatchesView({
   const [sessionGoal, setSessionGoal] = useState("");
   const [sessionDeckId, setSessionDeckId] = useState("");
   const activeMatches = useMemo(() => activeLocalMatches(matches), [matches]);
+  const reviewCount = useMemo(() => matches.filter(matchNeedsReview).length, [matches]);
   const analyticsMatches = useMemo(
     () => validAnalytics(localMatchesEligibleForStats(activeMatches).map(localToAnalytics)),
     [activeMatches]
@@ -17343,15 +17451,16 @@ function MatchesView({
   const historyTotal = filters.combinedOriginals ? matches.length : activeMatches.length;
   const activeFilterEntries = (Object.keys(filters) as Array<keyof MatchHistoryFilters>)
     .filter((key) => (key === "range" ? filters.range.preset !== "all" : filters[key] !== DEFAULT_MATCH_HISTORY_FILTERS[key]));
-  const additionalFilterCount = activeFilterEntries.filter((key) => !["search", "season", "range"].includes(key)).length;
+  const additionalFilterCount = activeFilterEntries.filter((key) => !["search", "season", "range", "review"].includes(key)).length;
   const filterLabels: Record<keyof MatchHistoryFilters, string> = {
-    season: "Season", search: "Search", legend: "Legend", myLegend: "My legend", opponentLegend: "Opponent legend",
+    season: "Season", review: "Review", search: "Search", legend: "Legend", myLegend: "My legend", opponentLegend: "Opponent legend",
     deck: "Deck", deckPresence: "Deck data", result: "Result", platform: "Platform", format: "Format", source: "Source",
     seat: "Seat", range: "Date", sync: "Sync", notes: "Notes", testingSession: "Testing session", combinedOriginals: "Combined originals"
   };
 
   function filterValueLabel(key: keyof MatchHistoryFilters) {
     if (key === "range") return dateFilterLabel(filters.range);
+    if (key === "review") return "Needs review";
     const value = String(filters[key]);
     if (key === "season") return COMMUNITY_SEASONS.find((season) => season.id === value)?.label || "All seasons";
     if (key === "testingSession") return testingSessions.find((session) => session.id === value)?.label || "No session";
@@ -17449,15 +17558,7 @@ function MatchesView({
   }
 
   function openReplayForMatchRow(match: MatchDraft) {
-    const segments = replaySegmentsForMatch(match, replayByMatch);
-    if (!segments.length) {
-      return;
-    }
-    if (segments.length === 1) {
-      onOpenReplay(segments[0].matchId);
-      return;
-    }
-    setReplayPickerMatchId(match.id);
+    onOpenGameDetails({ kind: "match", id: match.id, tab: "media" });
   }
 
   async function undoCombinedSelectedMatch(matchId: string) {
@@ -17595,8 +17696,16 @@ function MatchesView({
       <section className="review-surface local-match-filters">
         <div className="review-history-title">
           <div><h3>Browse matches</h3><span>{filteredMatches.length} of {historyTotal} match{historyTotal === 1 ? "" : "es"} · {COMMUNITY_SEASONS.find((season) => season.id === filters.season)?.label || "All seasons"}</span></div>
+          <div className="review-history-views" role="group" aria-label="Match review status">
+            <button className="secondary" aria-pressed={!filters.review} onClick={() => setFilter("review", "")}>All matches</button>
+            <button className="secondary" aria-pressed={filters.review === "needed"} onClick={() => {
+              setFilters({ ...DEFAULT_MATCH_HISTORY_FILTERS, season: "", review: "needed" });
+              setSelectedMatchId("");
+            }}>Needs review ({reviewCount})</button>
+          </div>
           <span className="review-local-badge"><FolderOpen size={13} /> Saved on this device</span>
         </div>
+        {filters.review === "needed" ? <p className="review-queue-hint">Games saved for later review. Choose <strong>Review result</strong>, check the result and who went first, then <strong>Save match</strong> to finish. Unreviewed games do not count in your stats.</p> : null}
         <div className="review-primary-filters">
           <label>Search<input value={filters.search} onChange={(event) => setFilter("search", event.target.value)} placeholder="Find an opponent, deck or flag…" /></label>
           <label>Season<select value={filters.season} onChange={(event) => setFilter("season", event.target.value)}>
@@ -17772,11 +17881,11 @@ function MatchesView({
             key={match.id}
             tabIndex={0}
             role="button"
-            onClick={() => setSelectedMatchId((current) => current === match.id ? "" : match.id)}
+            onClick={() => onOpenGameDetails({ kind: "match", id: match.id })}
             onKeyDown={(event) => {
               if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) {
                 event.preventDefault();
-                setSelectedMatchId((current) => current === match.id ? "" : match.id);
+                onOpenGameDetails({ kind: "match", id: match.id });
               }
             }}
           >
@@ -17818,26 +17927,12 @@ function MatchesView({
             </div>
             <SyncPill match={match} />
             <div className="row-actions">
-              {replaySegments.length ? (
-                <button className="secondary" onClick={(event) => { event.stopPropagation(); openReplayForMatchRow(match); }}>
-                  <Images size={14} /> {replayLabel}
-                </button>
-              ) : null}
-              <button className="secondary" onClick={(event) => { event.stopPropagation(); onReview(match); }}>Edit</button>
-              {match.platform === "atlas" ? (
-                <button type="button" className="secondary" aria-haspopup="dialog" disabled={!canReadAtlasMatchGameLog(match, replaySegments)} title={canReadAtlasMatchGameLog(match, replaySegments) ? "Read the captured Atlas game log" : "Replay evidence was not kept for this match"} onClick={(event) => { event.stopPropagation(); setGameLogMatchId(match.id); }}>
-                  <FileText size={14} /> Game log
-                </button>
-              ) : null}
-              {canImportAtlasHistory(match) ? (
-                <button className="secondary" aria-haspopup="dialog" title="View opponent deck and sideboard changes" onClick={(event) => { event.stopPropagation(); setDeckMatchId(match.id); }}>
-                  <Layers size={14} /> Deck
-                </button>
-              ) : null}
+              {matchNeedsReview(match) ? <button className="primary" onClick={(event) => { event.stopPropagation(); onReview(match); }}><Check size={14} /> Review result</button> : null}
+              <button className="secondary" onClick={(event) => { event.stopPropagation(); onOpenGameDetails({ kind: "match", id: match.id }); }}><Eye size={14} /> Open game</button>
               <details className="review-row-more" onClick={(event) => event.stopPropagation()}>
                 <summary aria-label={`More actions for match against ${match.opponentName || "unknown opponent"}`}>More <ChevronDown size={12} /></summary>
                 <div className="review-row-more-menu">
-                  <button className="secondary" onClick={() => setSelectedMatchId(match.id)}><Eye size={14} /> Match details</button>
+                  {!matchNeedsReview(match) ? <button className="secondary" onClick={() => onReview(match)}>Edit match</button> : null}
                   <button className="secondary review-delete-action" onClick={() => void onDelete(match.id)}><Trash2 size={14} /> Delete match</button>
                 </div>
               </details>
@@ -17845,8 +17940,9 @@ function MatchesView({
           </div>
           );
         })}
-        {!historyTotal ? <p className="empty-state">Captured matches will appear here after review.</p> : null}
-        {historyTotal && !filteredMatches.length ? <p className="empty-state">No matches match those filters.</p> : null}
+        {filters.review === "needed" && !reviewCount ? <p className="empty-state" role="status">All caught up. No matches need review. Your saved games are in All matches.</p>
+          : !historyTotal ? <p className="empty-state">Captured matches will appear here, including games saved for later review.</p>
+          : !filteredMatches.length ? <p className="empty-state">{filters.review === "needed" ? "No reviews match these filters. Choose Needs review again to show all unfinished reviews." : "No matches match those filters."}</p> : null}
       </div>
       {selectedMatch ? (
         <div
@@ -17885,7 +17981,7 @@ function MatchesView({
             setCombineModalOpen(false);
             setSelectedSyncIds([]);
             setFilters(DEFAULT_MATCH_HISTORY_FILTERS);
-            setSelectedMatchId(combined.id);
+            onOpenGameDetails({ kind: "match", id: combined.id });
             setSyncStatus(`Combined Bo3 saved as ${combined.result} ${displayMatchRecord(combined) || "record pending"}. Original split rows are hidden from normal stats.`);
           }}
         />
@@ -18361,6 +18457,7 @@ function filterLocalMatches(matches: MatchDraft[], filters: MatchHistoryFilters)
     const myLegend = normalizeLegendName(match.myChampion);
     const opponentLegend = normalizeLegendName(match.opponentChampion);
     const combinedOriginal = isCombinedOriginal(match);
+    if (filters.review === "needed" && !matchNeedsReview(match)) return false;
     if (!matchInCommunitySeason(match, filters.season)) return false;
     if (!filters.combinedOriginals && combinedOriginal) return false;
     if (filters.combinedOriginals === "only" && !combinedOriginal) return false;
@@ -18493,7 +18590,7 @@ function sortLeaderboardRows(rows: ReturnType<typeof leaderboardRows>, sort: Lea
   });
 }
 
-function StatsView({ matches }: { matches: MatchDraft[] }) {
+function StatsView({ matches, onOpenGameDetails }: { matches: MatchDraft[]; onOpenGameDetails: (target: GameDetailsTarget) => void }) {
   const [selectedStat, setSelectedStat] = useState<StatsDrilldownSelection | null>(null);
   const [sourceFilter, setSourceFilter] = useState("");
   const [personalFilters, setPersonalFilters] = useState<MatrixFilters>(DEFAULT_PERSONAL_MATRIX_FILTERS);
@@ -18523,6 +18620,7 @@ function StatsView({ matches }: { matches: MatchDraft[] }) {
   }
 
   return (
+    <GameDetailsNavigationContext.Provider value={(id) => onOpenGameDetails({ kind: "match", id })}>
     <section className="dashboard-page analytics-page">
       <section className="metric-grid">
         <Metric
@@ -18574,6 +18672,7 @@ function StatsView({ matches }: { matches: MatchDraft[] }) {
         onResetFilters={resetPersonalFilters}
       />
     </section>
+    </GameDetailsNavigationContext.Provider>
   );
 }
 
@@ -21192,8 +21291,18 @@ function ReplayView({
   onSaveSettings,
   mp4ExportActive,
   onExportReplayMp4,
-  onExportReplayPresentationMp4
+  onExportReplayPresentationMp4,
+  onNavigate,
+  onReview,
+  onOpenGameDetails,
+  deliveryControls,
+  deliveryAttentionCount
 }: {
+  onNavigate: (view: ActiveView) => void;
+  onReview: (match: MatchDraft) => void;
+  onOpenGameDetails: (target: GameDetailsTarget) => void;
+  deliveryControls: React.ReactNode;
+  deliveryAttentionCount: number;
   replays: ReplayRecord[];
   matches: MatchDraft[];
   settings: UserSettings;
@@ -21208,6 +21317,15 @@ function ReplayView({
   onExportReplayMp4: (replayId: string, options: ReplayMp4ExportOptions) => Promise<string>;
   onExportReplayPresentationMp4: (replayId: string, payload: ReplayPresentationRecordingPayload) => Promise<string>;
 }) {
+  function openDeliveryActivity() {
+    const activity = document.querySelector<HTMLDetailsElement>(".replay-library-activity");
+    if (!activity) return;
+    activity.open = true;
+    window.requestAnimationFrame(() => {
+      activity.scrollIntoView({ block: "start", behavior: "smooth" });
+      activity.querySelector("summary")?.focus({ preventScroll: true });
+    });
+  }
   const [platformFilter, setPlatformFilter] = useState<"all" | GamePlatform>("all");
   const [mediaFilter, setMediaFilter] = useState("all");
   const [rangeFilter, setRangeFilter] = useState<DateFilterValue>(DEFAULT_DATE_FILTER);
@@ -21226,6 +21344,41 @@ function ReplayView({
   const [status, setStatus] = useState("");
   const [exportingReplay, setExportingReplay] = useState<{ id: string; clipStartMs: number } | null>(null);
   const [visibleReplayCount, setVisibleReplayCount] = useState(REPLAY_LIST_PAGE_SIZE);
+  const [onlineReplayUrl, setOnlineReplayUrl] = useState("");
+  useEffect(() => { setOnlineReplayUrl(""); }, [settings.accountUid]);
+  const [cloudLibrary, setCloudLibrary] = useState<AccountReplayLibraryResult | null>(null);
+  const [cloudLoading, setCloudLoading] = useState(false);
+  const [cloudRefresh, setCloudRefresh] = useState(0);
+  const [extraSelectedId, setExtraSelectedId] = useState("");
+  const [logMatch, setLogMatch] = useState<MatchDraft | null>(null);
+  const logSegments = useMemo(() => logMatch ? replays.filter((replay) => replay.matchId === logMatch.id || logMatch.combinedFromMatchIds?.includes(replay.matchId)).map((replay) => ({ matchId: replay.matchId, replay })) : [], [logMatch, replays]);
+  useEffect(() => {
+    let cancelled = false;
+    setCloudLibrary(null);
+    setExtraSelectedId("");
+    if (!hasVerifiedRiftLiteAccount(settings)) { setCloudLoading(false); return; }
+    setCloudLoading(true);
+    void window.riftlite.getAccountReplayLibrary().then((result) => {
+      if (!cancelled && result.accountUid === settings.accountUid) setCloudLibrary(result);
+    }).catch(() => {
+      if (!cancelled) setCloudLibrary({accountUid: settings.accountUid, available: false, items: [], limit: 100, mayHaveMore: false, error: "Online replays could not be loaded. Your local games are still available."});
+    }).finally(() => { if (!cancelled) setCloudLoading(false); });
+    return () => { cancelled = true; };
+  }, [settings.accountUid, settings.accountLastVerifiedAt, cloudRefresh]);
+  const ownedCloud = cloudLibrary?.accountUid === settings.accountUid ? cloudLibrary : null;
+  const mergedLibrary = useMemo(() => mergeAccountReplayLibrary(replays, matches, ownedCloud?.items ?? []), [replays, matches, ownedCloud]);
+  const extraEntries = mergedLibrary.filter((entry) => !entry.replay);
+  const visibleExtraEntries = extraEntries.filter((entry) => {
+    const cloud = entry.cloudReplay; const match = entry.match;
+    const title = cloud?.title || `${match?.myChampion || "Player"} vs ${match?.opponentChampion || "Opponent"}`;
+    return (!deferredSearch.trim() || [title, match?.myName, match?.opponentName, cloud?.listing?.playerName, cloud?.listing?.opponentName, cloud?.listing?.playerLegend, cloud?.listing?.opponentLegend].filter(Boolean).join(" ").toLowerCase().includes(deferredSearch.trim().toLowerCase()))
+      && (platformFilter === "all" || (cloud?.platform || match?.platform) === platformFilter)
+      && (mediaFilter === "all" || (mediaFilter === "web" && (cloud?.status === "ready" || match?.webReplayId)))
+      && flagFilter === "all" && (folderFilter === "all" || folderFilter === "unfiled")
+      && isInDateFilter(cloud?.capturedAt || cloud?.createdAt || match?.capturedAt || "", rangeFilter);
+  });
+
+  const asCloudAsset = (cloud: typeof extraEntries[number]["cloudReplay"]): GameCloudReplay | undefined => cloud ? { id: cloud.replayId, url: cloud.url, status: cloud.status, partialWarnings: cloud.warnings } : undefined;
   const replayFolders = settings.replayFolders ?? [];
   const replayFolderIds = useMemo(() => new Set(replayFolders.map((folder) => folder.id)), [replayFolders]);
   const replayFolderById = useMemo(() => new Map(replayFolders.map((folder) => [folder.id, folder])), [replayFolders]);
@@ -21241,7 +21394,7 @@ function ReplayView({
         if (
           mediaFilter !== "all" &&
           (mediaFilter === "web"
-            ? !hasReadyRiftLiteWebReplay(item.replay)
+            ? !(hasReadyRiftLiteWebReplay(item.replay) || mergedLibrary.some((entry) => entry.replay?.id === item.replay.id && entry.cloudReplay?.status === "ready"))
             : replayHealthKind(item.replay) !== mediaFilter)
         ) {
           return false;
@@ -21273,13 +21426,17 @@ function ReplayView({
         return !needle || item.searchText.includes(needle);
       });
     },
-    [deferredSearch, flagFilter, folderFilter, mediaFilter, platformFilter, rangeFilter, replayFolderIds, replayItems]
+    [mergedLibrary, deferredSearch, flagFilter, folderFilter, mediaFilter, platformFilter, rangeFilter, replayFolderIds, replayItems]
   );
   const selectedItem = filteredItems.find((item) => item.replay.id === selectedReplayId) ?? filteredItems[0] ?? null;
   const selectedIndex = selectedItem ? filteredItems.findIndex((item) => item.replay.id === selectedItem.replay.id) : -1;
   const visibleLimit = Math.max(visibleReplayCount, selectedIndex + 1);
   const visibleReplayItems = filteredItems.slice(0, visibleLimit);
-  const selectedModel = useMemo(() => selectedItem ? buildAtlasReplay(selectedItem.replay, selectedItem.match) : null, [selectedItem]);
+  const extraSelected = visibleExtraEntries.find((entry) => entry.id === extraSelectedId) ?? (!filteredItems.length ? visibleExtraEntries[0] : null);
+  const listedLocalIds = new Set(filteredItems.map((item) => item.replay.id));
+  const listedExtraIds = new Set(visibleExtraEntries.map((entry) => entry.id));
+  const libraryRows = mergedLibrary.filter((entry) => entry.replay ? listedLocalIds.has(entry.replay.id) : !bulkSelectMode && listedExtraIds.has(entry.id))
+    .sort((a,b) => (Date.parse(b.replay?.capturedAt || b.cloudReplay?.capturedAt || b.cloudReplay?.createdAt || b.match?.capturedAt || "") || 0) - (Date.parse(a.replay?.capturedAt || a.cloudReplay?.capturedAt || a.cloudReplay?.createdAt || a.match?.capturedAt || "") || 0));
   const activeReplayFolder = replayFolderById.get(folderFilter) ?? null;
   const selectedReplayCount = selectedReplayIds.size;
   const allFilteredReplaysSelected = filteredItems.length > 0
@@ -21296,21 +21453,7 @@ function ReplayView({
     if (!focusReplayId) {
       return;
     }
-    setSearch("");
-    setPlatformFilter("all");
-    setMediaFilter("all");
-    setRangeFilter(DEFAULT_DATE_FILTER);
-    setFlagFilter("all");
-    setFolderFilter("all");
-    setSelectedReplayId(focusReplayId);
-    if (typeof focusReplayTimeMs === "number" || focusReplayEvidenceId) {
-      setFocusedSeekRequest({
-        replayId: focusReplayId,
-        timeMs: typeof focusReplayTimeMs === "number" ? focusReplayTimeMs : undefined,
-        correctionEventId: focusReplayEvidenceId || undefined,
-        token: Date.now()
-      });
-    }
+    onOpenGameDetails({ kind: focusReplayId.startsWith("match:") ? "match" : "replay", id: focusReplayId.replace(/^match:/, ""), tab: "media", timeMs: focusReplayTimeMs ?? undefined, evidenceId: focusReplayEvidenceId || undefined });
     onFocusConsumed();
   }, [focusReplayEvidenceId, focusReplayId, focusReplayTimeMs, onFocusConsumed]);
 
@@ -21543,33 +21686,25 @@ function ReplayView({
     }
   }
 
-  if (!replays.length) {
-    return (
-      <section className="dashboard-page replay-coming-soon review-workspace review-replays">
-        <div className="rail-card replay-placeholder review-surface">
-          <History size={34} />
-          <h2>No replays captured yet</h2>
-          <p>{settings.replayCaptureEnabled ? "Replay evidence will appear here after captured matches." : "Replay capture is currently off in Settings."}</p>
-          <div className="row-actions centered-actions">
-            <button className="secondary" onClick={() => void importReplay()}><FolderOpen size={16} /> Import replay or recording</button>
-            <button className="secondary" onClick={() => void window.riftlite.openReplayFolder()}><FolderOpen size={16} /> Replay folder</button>
-          </div>
-          {status ? <p className="muted">{status}</p> : null}
-        </div>
-      </section>
-    );
-  }
 
   return (
     <section className="dashboard-page replay-page review-workspace review-replays">
       <header className="review-page-heading review-replays-heading">
         <div>
           <span className="review-kicker">Your replay library</span>
-          <h2>Revisit the moments that matter.</h2>
-          <p>Watch a match, mark a turning point, or build a review to share.</p>
+          <h2>Replays &amp; videos</h2>
+          <p>Select a game to watch its interactive replay, local video or game log.</p>
         </div>
-        <span className="review-replays-total"><History size={16} /> {replays.length} saved replay{replays.length === 1 ? "" : "s"}</span>
+        <span className="review-replays-total"><History size={16} /> {mergedLibrary.length} game{mergedLibrary.length === 1 ? "" : "s"}</span>
+        <div className="replay-library-toolbar row-actions" role="group" aria-label="Replay library actions">
+          <button className="primary replay-library-setup" onClick={() => onNavigate("recording-sharing")}><SlidersHorizontal size={18} />Recording &amp; sharing</button>
+          <button className="secondary replay-library-browse" onClick={() => onNavigate("web-replay")}><Globe2 size={18} />Browse online replays</button>
+          <button className="secondary replay-library-refresh" disabled={cloudLoading || !hasVerifiedRiftLiteAccount(settings)} aria-busy={cloudLoading} title={!hasVerifiedRiftLiteAccount(settings) ? "Connect your RiftLite account to refresh your online games" : undefined} onClick={() => setCloudRefresh((value) => value + 1)}><RefreshCw size={18} />{cloudLoading ? "Loading online games…" : "Refresh online games"}</button>
+        </div>
       </header>
+      {ownedCloud?.error ? <p className="settings-note warning replay-library-message" role="status">{ownedCloud.error} <button className="secondary" onClick={() => onNavigate("account")}>Check account</button></p> : null}
+      {ownedCloud?.mayHaveMore ? <p className="muted replay-library-message">Showing the latest 100 online games alongside local history. <button className="secondary" onClick={() => onNavigate("web-replay")}>Open online library</button></p> : null}
+      <details className="replay-library-activity" open={deliveryAttentionCount > 0 || undefined}><summary>Upload activity &amp; issues{deliveryAttentionCount ? ` · ${deliveryAttentionCount} need attention` : ""}</summary>{deliveryControls}</details>
       <aside className="rail-card replay-browser review-surface">
         {!settings.replayCaptureEnabled ? (
           <div className="replay-disabled-banner">
@@ -21580,7 +21715,7 @@ function ReplayView({
         <div className="replay-browser-header">
           <div>
             <h2>Your library</h2>
-            <span>{visibleReplayItems.length} of {filteredItems.length} shown</span>
+            <span>{Math.min(visibleReplayCount, libraryRows.length)} of {libraryRows.length} games shown</span>
           </div>
           <div className="replay-browser-actions">
             <button
@@ -21768,21 +21903,30 @@ function ReplayView({
           </div>
         ) : null}
         <div className="replay-list">
-          {visibleReplayItems.map((item) => {
+          {libraryRows.slice(0, visibleReplayCount).map((entry) => {
+            if (!entry.replay) return <button type="button" key={entry.id} className="replay-item" onClick={() => onOpenGameDetails(entry.match ? { kind: "match", id: entry.match.id } : { kind: "cloud", id: entry.cloudReplay!.replayId, accountUid: settings.accountUid })}>
+            <strong>{entry.cloudReplay?.title || `${entry.match?.myChampion || "Player"} vs ${entry.match?.opponentChampion || "Opponent"}`}</strong>
+            <span>{entry.cloudReplay?.platform || entry.match?.platform} · {new Date(entry.cloudReplay?.capturedAt || entry.cloudReplay?.createdAt || entry.match?.capturedAt || "").toLocaleString()}</span>
+            <small>{entry.cloudReplay ? "Online replay" : "Saved game"} · {entry.cloudReplay?.status || "View available assets"}</small>
+          </button>;
+            const item = filteredItems.find((item) => item.replay.id === entry.replay?.id);
+            if (!item) return null;
             const replaySelected = selectedReplayIds.has(item.replay.id);
             return (
               <div className="replay-item-shell" data-selected={replaySelected} key={item.replay.id}>
                 <button
                   type="button"
                   className="replay-item"
-                  data-active={!bulkSelectMode && selectedItem?.replay.id === item.replay.id}
+                  data-active={!bulkSelectMode && !extraSelected && selectedItem?.replay.id === item.replay.id}
                   aria-pressed={bulkSelectMode ? replaySelected : undefined}
-                  aria-current={!bulkSelectMode && selectedItem?.replay.id === item.replay.id ? "true" : undefined}
+                  aria-current={!bulkSelectMode && !extraSelected && selectedItem?.replay.id === item.replay.id ? "true" : undefined}
                   onClick={() => {
                     if (bulkSelectMode) {
                       toggleReplaySelection(item.replay.id);
                     } else {
+                      setExtraSelectedId("");
                       setSelectedReplayId(item.replay.id);
+                      onOpenGameDetails({ kind: "replay", id: item.replay.id, tab: "summary" });
                     }
                   }}
                 >
@@ -21827,32 +21971,25 @@ function ReplayView({
               </div>
             );
           })}
-          {visibleReplayItems.length < filteredItems.length ? (
+          {visibleReplayCount < libraryRows.length ? (
             <button
               type="button"
               className="secondary replay-load-more"
               onClick={() => setVisibleReplayCount((current) => current + REPLAY_LIST_PAGE_SIZE)}
             >
-              Show {Math.min(REPLAY_LIST_PAGE_SIZE, filteredItems.length - visibleReplayItems.length)} more
+              Show {Math.min(REPLAY_LIST_PAGE_SIZE, libraryRows.length - visibleReplayCount)} more
             </button>
           ) : null}
-          {!filteredItems.length ? <p className="muted">No replays match this filter.</p> : null}
+          {!filteredItems.length && !visibleExtraEntries.length ? <p className="muted">{mergedLibrary.length ? "No games match these filters." : cloudLoading ? "Loading online games…" : "No saved games yet."}</p> : null}
         </div>
       </aside>
 
-      {selectedModel ? (
-        <ReplayDetail
-          model={selectedModel}
-          settings={settings}
-          replayFolders={replayFolders}
-          focusSeekRequest={focusedSeekRequest?.replayId === selectedModel.replay.id ? focusedSeekRequest : null}
-          onFocusSeekConsumed={() => setFocusedSeekRequest(null)}
-          onExport={(clipStartMs) => setExportingReplay({ id: selectedModel.replay.id, clipStartMs })}
-          onExportPresentationMp4={onExportReplayPresentationMp4}
-          onSaveReplay={saveReplay}
-          onDeleteReplay={() => void onDeleteReplay(selectedModel.replay.id)}
-        />
-      ) : null}
+      {!mergedLibrary.length ? <section className="rail-card replay-library-empty">
+        <History size={30} /><h2>{cloudLoading ? "Loading your online games…" : mergedLibrary.length ? "Choose a game to review" : "Your games will appear here"}</h2>
+        <p>{mergedLibrary.length ? "Change your filters to find a game, then choose its replay, video or log." : "Set up what you want to record before your next game. You can also import an existing recording."}</p>
+        <div className="row-actions"><button className="primary" onClick={() => onNavigate("recording-sharing")}>Set up recording</button><button className="secondary" onClick={() => void importReplay()}><FolderOpen size={15} />Import recording</button></div>
+        {!hasVerifiedRiftLiteAccount(settings) ? <p>Already have online replays? <button className="secondary" onClick={() => onNavigate("account")}>Connect your account</button></p> : null}
+      </section> : null}
       {exportingReplay ? (
         <ReplayExportDialog
           replay={replays.find((replay) => replay.id === exportingReplay.id) ?? null}
@@ -21866,6 +22003,161 @@ function ReplayView({
       ) : null}
     </section>
   );
+}
+
+function GameDetailsDialog({
+  target, matches, replays, settings, decks = [], onClose, onReview, onDeleteMatch,
+  onDeleteReplay, onReplaysChanged, onNavigate, onExportReplayMp4,
+  onExportReplayPresentationMp4, mp4ExportActive, onUndoCombinedMatch
+}: {
+  target: GameDetailsTarget;
+  matches: MatchDraft[];
+  replays: ReplayRecord[];
+  settings: UserSettings;
+  decks?: SavedDeck[];
+  onClose: () => void;
+  onReview: (match: MatchDraft) => void;
+  onDeleteMatch: (id: string) => Promise<void>;
+  onDeleteReplay: (id: string) => Promise<void>;
+  onReplaysChanged: (focusReplayId?: string) => Promise<void>;
+  onNavigate: (view: ActiveView) => void;
+  onExportReplayMp4: (replayId: string, options: ReplayMp4ExportOptions) => Promise<string>;
+  onExportReplayPresentationMp4: (replayId: string, payload: ReplayPresentationRecordingPayload) => Promise<string>;
+  mp4ExportActive: boolean;
+  onUndoCombinedMatch?: (id: string) => Promise<void>;
+}) {
+  const [tab, setTab] = useState<GameDetailsTab>(target.tab ?? (target.kind === "replay" ? "media" : "summary"));
+  const [mediaVisited, setMediaVisited] = useState(tab === "media");
+  const [ownerLibrary, setOwnerLibrary] = useState<AccountReplayLibraryResult | null>(null);
+  const [cloudLoading, setCloudLoading] = useState(false);
+  const [cloudError, setCloudError] = useState("");
+  const [selectedReplayId, setSelectedReplayId] = useState(target.kind === "replay" ? target.id : "");
+  const [onlineUrl, setOnlineUrl] = useState("");
+  const [logOpen, setLogOpen] = useState(false);
+  const [status, setStatus] = useState("");
+  const [uploading, setUploading] = useState(false);
+  const [exportStart, setExportStart] = useState<number | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<{ kind: "match" | "replay"; id: string } | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [seekConsumed, setSeekConsumed] = useState(false);
+  const activeAccount = useRef(settings.accountUid);
+  activeAccount.current = settings.accountUid;
+  useEffect(() => {
+    let cancelled = false;
+    const expectedAccountUid = settings.accountUid;
+    setOwnerLibrary(null); setCloudError(""); setOnlineUrl("");
+    if (!hasVerifiedRiftLiteAccount(settings)) { setCloudLoading(false); return; }
+    setCloudLoading(true);
+    void window.riftlite.getAccountReplayLibrary().then((result) => {
+      if (cancelled || activeAccount.current !== expectedAccountUid || result.accountUid !== expectedAccountUid) return;
+      setOwnerLibrary(result); setCloudError(result.error ?? "");
+    }).catch(() => { if (!cancelled && activeAccount.current === expectedAccountUid) setCloudError("Online details could not be loaded. Your saved local game is still available."); })
+      .finally(() => { if (!cancelled && activeAccount.current === expectedAccountUid) setCloudLoading(false); });
+    return () => { cancelled = true; };
+  }, [settings.accountUid, settings.accountLastVerifiedAt, settings.accountLastVerificationError]);
+  useEffect(() => {
+    if (tab === "media") setMediaVisited(true);
+    else document.querySelectorAll<HTMLMediaElement>(".game-details-dialog video, .game-details-dialog audio").forEach((media) => media.pause());
+  }, [tab]);
+  const details = useMemo(() => resolveGameDetails(target, matches, replays, settings.accountUid, ownerLibrary), [target, matches, replays, settings.accountUid, ownerLibrary]);
+  const displayMatch = gameDetailsDisplayMatch(details);
+  const selectedReplay = details.replays.find((replay) => replay.id === selectedReplayId) ?? details.replays[0];
+  const segmentMatch = selectedReplay
+    ? matches.find((match) => !match.deletedAt && match.id === selectedReplay.matchId) ?? (selectedReplay.matchSnapshot?.id === selectedReplay.matchId ? selectedReplay.matchSnapshot : undefined)
+    : displayMatch;
+  const selectedCloud = cloudReplayForGameSegment(details, selectedReplay);
+  const cloudAsset: GameCloudReplay | undefined = selectedCloud ? { id: selectedCloud.replayId, url: selectedCloud.url, status: selectedCloud.status, partialWarnings: selectedCloud.warnings } : undefined;
+  const replayMediaRequested = mediaVisited || tab === "media";
+  const replayModel = useMemo(() => replayMediaRequested && selectedReplay ? buildAtlasReplay(selectedReplay, segmentMatch) : null, [replayMediaRequested, selectedReplay, segmentMatch]);
+  const logSegments = useMemo(() => details.replays.map((replay) => ({ matchId: replay.matchId, replay })), [details.replays]);
+  const canReadLog = Boolean(displayMatch && canReadAtlasMatchGameLog(displayMatch, logSegments));
+  const training = details.match ? labTrainingContextFromMatch(details.match, decks) : null;
+  const date = displayMatch?.capturedAt || selectedReplay?.capturedAt || selectedCloud?.capturedAt || selectedCloud?.createdAt;
+  const subtitle = [displayMatch ? `${displayMatch.myName || "Player"} vs ${displayMatch.opponentName || "Opponent"}` : selectedCloud?.listing ? `${selectedCloud.listing.playerName || "Player"} vs ${selectedCloud.listing.opponentName || "Opponent"}` : "", date && Number.isFinite(Date.parse(date)) ? new Date(date).toLocaleString() : "", displayMatch?.format].filter(Boolean).join(" · ");
+  function navigate(view: ActiveView) { onClose(); onNavigate(view); }
+  function reviewMatch() { if (details.match) { onClose(); onReview(details.match); } }
+  function openTraining(destination: LabTrainingDestination) {
+    if (!training) return;
+    try { storeLabTrainingHandoff(window.localStorage, createLabTrainingHandoff({ destination, source: "match-detail", ...training })); } catch { /* The lab can still open safely with its normal defaults. */ }
+    navigate(destination === "mulligan" ? "mulligan-lab" : "sideboard-lab");
+  }
+  async function saveReplay(replay: ReplayRecord) {
+    try { await window.riftlite.saveReplay(replay); await onReplaysChanged(); setStatus("Replay saved."); return true; }
+    catch (error) { setStatus(rendererErrorMessage(error, "The replay could not be saved.")); return false; }
+  }
+  async function uploadReplay() {
+    if (!selectedReplay || uploading) return;
+    setUploading(true); setStatus("Uploading interactive replay…");
+    try { await window.riftlite.uploadRawCaptureToRiftLite(selectedReplay.id, settings.rawCapture.visibility); await onReplaysChanged(); setStatus("Upload updated. Open Replay & video to see its progress."); }
+    catch (error) { setStatus(rendererErrorMessage(error, "The replay could not be uploaded.")); }
+    finally { setUploading(false); }
+  }
+  async function performExport(kind: "bundle" | "flags" | "mp4", options?: ReplayMp4ExportOptions) {
+    if (!selectedReplay) return;
+    setExportStart(null);
+    try {
+      const path = kind === "bundle" ? await window.riftlite.exportReplayBundle(selectedReplay.id) : kind === "flags" ? await window.riftlite.exportReplayFlagsText(selectedReplay.id) : await onExportReplayMp4(selectedReplay.id, options!);
+      setStatus(path ? `Exported ${path}` : "Export cancelled.");
+    } catch (error) { setStatus(rendererErrorMessage(error, "Export failed.")); }
+  }
+  async function confirmDelete() {
+    if (!pendingDelete || deleting) return;
+    setDeleting(true);
+    try {
+      if (pendingDelete.kind === "match") await onDeleteMatch(pendingDelete.id);
+      else await onDeleteReplay(pendingDelete.id);
+      onClose();
+    } catch (error) { setStatus(rendererErrorMessage(error, "The item could not be deleted. Please try again.")); setPendingDelete(null); }
+    finally { setDeleting(false); }
+  }
+  const assets = <GameReplayAssets replay={selectedReplay} match={segmentMatch ?? displayMatch} cloudReplay={cloudAsset}
+    accountReady={hasVerifiedRiftLiteAccount(settings)} webCaptureEnabled={settings.rawCapture.enabled} videoRecordingEnabled={settings.replayCaptureEnabled && settings.replayVideoEnabled}
+    gameLogAvailable={canReadLog} busy={uploading} onWatchVideo={() => setTab("media")} onWatchWebReplay={setOnlineUrl}
+    onUploadReplay={() => void uploadReplay()} onViewLog={() => setLogOpen(true)} onSetUp={() => navigate("recording-sharing")} onReviewResult={reviewMatch} onOpenDelivery={() => navigate("replays")} />;
+  const summary = details.unavailableReason ? <div className="game-details-unavailable">{cloudLoading && target.kind === "cloud" ? "Loading your online game…" : details.unavailableReason}</div> : <>
+    <div className="game-details-summary-grid">
+      <Metric label="Result" value={displayMatch ? `${displayMatch.result}${displayMatch.score ? ` · ${displayMatch.score}` : ""}` : selectedCloud?.listing?.result || "Not saved locally"} />
+      <Metric label="Format" value={displayMatch?.format || selectedCloud?.listing?.format || "Unknown"} />
+      <Metric label="Source" value={displayMatch ? matchSourceLabel(displayMatch) : selectedReplay?.platform || selectedCloud?.platform || "Unknown"} />
+      <Metric label="Deck" value={displayMatch?.deckName || "Not saved"} />
+      {displayMatch ? <Metric label="Seat" value={seatLabel(localToAnalytics(displayMatch).wentFirst)} /> : null}
+    </div>
+    {assets}
+    {displayMatch?.games.length ? <section className="game-details-section"><h3>Games in this match</h3><div className="game-details-games">{displayMatch.games.map((game) => <div className="game-details-game" key={game.gameNumber}><strong>Game {game.gameNumber}</strong><span>{game.result}</span><span>{scoreTextFromGame(game) || "Score not saved"}</span><span>{seatLabel(game.wentFirst)}</span></div>)}</div></section> : null}
+    {displayMatch?.combinedFromMatchIds?.length && details.replays.length < displayMatch.combinedFromMatchIds.length ? <p className="muted">Some games in this combined match have no saved replay. Choose an available game under Replay &amp; video.</p> : null}
+    {training ? <section className="game-details-section"><h3>Practise this matchup</h3><p>Take this match's deck and opponent into a focused training run.</p><div className="row-actions"><button className="secondary" onClick={() => openTraining("mulligan")}>Train mulligan</button>{training.sideboardEligible ? <button className="secondary" onClick={() => openTraining("sideboard")}>Train sideboarding</button> : null}</div></section> : null}
+  </>;
+  const deckPanel = <>
+    {segmentMatch?.deckSnapshotJson ? <section className="game-details-section"><h3>Your recorded deck</h3><DeckCodePanel title={segmentMatch.deckName || "Recorded deck"} sourceUrl={segmentMatch.deckSourceUrl} snapshotJson={segmentMatch.deckSnapshotJson} /></section> : <p className="game-details-unavailable">No deck list is saved for this game. RiftLite will not substitute your current deck.</p>}
+    {segmentMatch?.platform === "atlas" && matches.some((match) => !match.deletedAt && match.id === segmentMatch.id) ? <AtlasMatchDeckPanel key={segmentMatch.id} matchId={segmentMatch.id} initialHistory={segmentMatch.atlasHistory} /> : <p className="muted">Opponent deck history is available only for linked local Atlas matches when Atlas has recorded it.</p>}
+  </>;
+  return <GameDetailsView title={details.title} subtitle={subtitle} tab={tab} onTabChange={setTab} onClose={onClose}
+    notice={<>{cloudError && !details.unavailableReason ? <p role="status">{cloudError}</p> : null}{status ? <p role="status">{status}</p> : null}
+      {details.replays.length > 1 ? <label className="game-details-segments">Replay game<select value={selectedReplay?.id || ""} onChange={(event) => { setSelectedReplayId(event.target.value); setSeekConsumed(true); }}>{details.replays.map((replay, index) => { const gameIndex = displayMatch?.combinedFromMatchIds?.indexOf(replay.matchId) ?? -1; return <option key={replay.id} value={replay.id}>{gameIndex >= 0 ? `Game ${gameIndex + 1}` : `Recording ${index + 1}`} · {replay.title}</option>; })}</select><span>Replay, video and deck use this recording.</span></label> : null}
+    </>}
+    actions={<>{details.match ? <button className={matchNeedsReview(details.match) ? "primary" : "secondary"} onClick={reviewMatch}>{matchNeedsReview(details.match) ? "Review result" : "Edit match"}</button> : null}
+      {details.match || selectedReplay ? <details><summary>More <ChevronDown size={14} /></summary><div>
+        {selectedReplay ? <button className="secondary" onClick={() => setExportStart(0)}>Export replay</button> : null}
+        {details.match && isCombinedRepairMatch(details.match) && onUndoCombinedMatch ? <button className="secondary" onClick={async () => { try { await onUndoCombinedMatch(details.match!.id); onClose(); } catch (error) { setStatus(rendererErrorMessage(error, "Could not undo combine.")); } }}>Undo combine</button> : null}
+        {selectedReplay ? <button className="secondary danger" onClick={() => setPendingDelete({ kind: "replay", id: selectedReplay.id })}>Delete replay</button> : null}
+        {details.match ? <button className="secondary danger" onClick={() => setPendingDelete({ kind: "match", id: details.match!.id })}>Delete match</button> : null}
+      </div></details> : null}</>}
+    panels={{ summary,
+      media: <>
+        {replayModel ? <ReplayDetail key={replayModel.replay.id} embedded model={replayModel} settings={settings} replayFolders={settings.replayFolders ?? []}
+          cloudReplay={cloudAsset} onWatchWebReplay={setOnlineUrl} onSetUp={() => navigate("recording-sharing")} onReview={reviewMatch} onOpenDelivery={() => navigate("replays")}
+          focusSeekRequest={!seekConsumed && (target.timeMs !== undefined || target.evidenceId) ? { replayId: replayModel.replay.id, timeMs: target.timeMs, correctionEventId: target.evidenceId, token: 1 } : null} onFocusSeekConsumed={() => setSeekConsumed(true)}
+          onExport={setExportStart} onExportPresentationMp4={onExportReplayPresentationMp4} onSaveReplay={saveReplay} onDeleteReplay={() => setPendingDelete({ kind: "replay", id: replayModel.replay.id })} />
+          : !replayModel ? <>{assets}{!details.unavailableReason ? <p className="muted">Only the assets listed above are available for this game on this computer.</p> : <p className="game-details-unavailable">{details.unavailableReason}</p>}</> : null}</>,
+      decks: tab === "decks" ? deckPanel : null,
+      notes: <section className="game-details-section"><h3>Match notes</h3><p className="game-details-notes-text">{displayMatch?.notes || "No match notes have been saved for this game."}</p>{displayMatch?.flags ? <p><strong>Flags:</strong> {displayMatch.flags}</p> : null}{details.match ? <button className="secondary" onClick={reviewMatch}>Edit notes</button> : <p className="muted">Match notes can be edited on the computer with the saved match record.</p>}
+        {selectedReplay ? <><hr /><h3>Replay moments &amp; annotations</h3><p>{selectedReplay.flags?.length ?? 0} marked moments · {selectedReplay.annotations?.length ?? 0} annotations · {selectedReplay.voiceNotes?.length ?? 0} voice notes</p><button className="secondary" onClick={() => setTab("media")}>Open replay notes</button></> : null}</section>
+    }} overlays={<>
+      {pendingDelete ? <div className="modal-backdrop" onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); if (!deleting) setPendingDelete(null); } }}><section className="game-details-section" role="alertdialog" aria-modal="true" aria-labelledby="game-delete-title" aria-describedby="game-delete-description"><h3 id="game-delete-title">Delete this {pendingDelete.kind}?</h3><p id="game-delete-description">Remove this {pendingDelete.kind} from your local history? It will be moved to Deleted items.</p><div className="row-actions"><button className="secondary" autoFocus disabled={deleting} onClick={() => setPendingDelete(null)}>Cancel</button><button className="secondary danger" disabled={deleting} onClick={() => void confirmDelete()}>{deleting ? "Deleting…" : "Delete"}</button></div></section></div> : null}
+      {onlineUrl ? <ReplayOnlinePlayer key={`${settings.accountUid}:${onlineUrl}`} url={onlineUrl} accountUid={settings.accountUid} onClose={() => setOnlineUrl("")} /> : null}
+      {logOpen && displayMatch ? <AtlasGameLogDialog match={displayMatch} segments={logSegments} onClose={() => setLogOpen(false)} /> : null}
+      {exportStart !== null && selectedReplay ? <ReplayExportDialog replay={selectedReplay} currentTimeMs={exportStart} onCancel={() => setExportStart(null)} onExportBundle={() => void performExport("bundle")} onExportFlagsText={() => void performExport("flags")} onExportMp4={(options) => void performExport("mp4", options)} mp4ExportActive={mp4ExportActive} /> : null}
+    </>} />;
 }
 
 type RendererReplayMp4ExportRequest = {
@@ -22839,7 +23131,13 @@ function ReplayDetail({
   onExport,
   onExportPresentationMp4,
   onSaveReplay,
-  onDeleteReplay
+  onDeleteReplay,
+  onSetUp,
+  onReview,
+  onOpenDelivery,
+  onWatchWebReplay,
+  cloudReplay,
+  embedded = false
 }: {
   model: AtlasReplayViewModel;
   settings: UserSettings;
@@ -22850,7 +23148,19 @@ function ReplayDetail({
   onExportPresentationMp4: (replayId: string, payload: ReplayPresentationRecordingPayload) => Promise<string>;
   onSaveReplay: (replay: ReplayRecord, focusSavedReplay?: boolean) => Promise<boolean>;
   onDeleteReplay: () => void;
+  onSetUp: () => void;
+  onReview: () => void;
+  onOpenDelivery: () => void;
+  onWatchWebReplay: (url: string) => void;
+  cloudReplay?: GameCloudReplay;
+  embedded?: boolean;
 }) {
+  const [shareDialogOpen, setShareDialogOpen] = useState(false);
+  const [gameLogOpen, setGameLogOpen] = useState(false);
+  const [uploadBusy, setUploadBusy] = useState(false);
+  const gameMatch = model.match ?? (model.replay.matchSnapshot?.id === model.replay.matchId ? model.replay.matchSnapshot : undefined);
+  const gameLogSegments = useMemo(() => [{matchId: model.replay.matchId, replay: model.replay}], [model.replay]);
+  useEffect(() => { setShareDialogOpen(false); setGameLogOpen(false); }, [model.replay.id, settings.accountUid]);
   const analyticsMatch = model.match ? localToAnalytics(model.match) : null;
   const replayIntelligence = useMemo(() => buildReplayIntelligence(model.replay, model), [model]);
   const allScreenshots = useMemo(() => replayScreenshots(model), [model]);
@@ -23377,7 +23687,8 @@ function ReplayDetail({
   }
 
   async function uploadRawCapture() {
-    setRawCaptureStatus("Uploading raw capture...");
+    setUploadBusy(true);
+    setRawCaptureStatus("Uploading interactive replay…");
     try {
       const result = await window.riftlite.uploadRawCaptureToRiftLite(model.replay.id, settings.rawCapture.visibility);
       const updatedReplays = await window.riftlite.getReplays();
@@ -23389,39 +23700,12 @@ function ReplayDetail({
       await onSaveReplay(saved);
       setRawCaptureStatus(`RiftLite replay uploaded: ${result.url}`);
     } catch (error) {
-      setRawCaptureStatus(rendererErrorMessage(error, "Raw capture upload failed."));
-    }
+      setRawCaptureStatus(rendererErrorMessage(error, "Replay upload failed."));
+    } finally { setUploadBusy(false); }
   }
 
-  async function shareRawCaptureToDiscord() {
-    const activeHubIds = new Set(settings.activeHubs.map((hub) => hub.id));
-    const hubIds = activeDiscordReplayHubIds(settings).filter((hubId) => activeHubIds.has(hubId));
-    const hubNames = settings.activeHubs
-      .filter((hub) => hubIds.includes(hub.id))
-      .map((hub) => `${hub.name} (${hub.id})`);
-    if (!hubIds.length) {
-      setRawCaptureStatus("Select a Discord replay destination from the Account tab first.");
-      return;
-    }
-    const destinations = hubNames.length ? hubNames.join(", ") : hubIds.join(", ");
-    if (!window.confirm(
-      `Make this replay Unlisted and post its link to ${destinations}? Anyone with the Discord link will be able to watch it.`
-    )) {
-      return;
-    }
-    setRawCaptureStatus("Sharing replay to Discord...");
-    try {
-      const result = await window.riftlite.shareRawCaptureToDiscord(model.replay.id);
-      const updatedReplays = await window.riftlite.getReplays();
-      const saved = updatedReplays.find((replay) => replay.id === model.replay.id) ?? null;
-      if (saved) await onSaveReplay(saved);
-      setRawCaptureStatus(result.status === "shared"
-        ? "Replay posted to Discord. Its visibility is now Unlisted."
-        : result.error || "One or more Discord destinations could not receive the replay.");
-    } catch (error) {
-      setRawCaptureStatus(rendererErrorMessage(error, "Discord replay share failed."));
-    }
-  }
+  function shareRawCaptureToDiscord() { setShareDialogOpen(true); }
+
 
   function toggleLayer(layerId: string) {
     setVisibleLayerIds((current) => {
@@ -23481,7 +23765,7 @@ function ReplayDetail({
   }
 
   return (
-    <div className={`replay-detail-stack ${presentationMode ? "presentation-mode" : ""}`}>
+    <div className={`replay-detail-stack ${embedded ? "game-details-embedded-replay" : ""} ${presentationMode ? "presentation-mode" : ""}`}>
       <section className="rail-card replay-hero">
         <div>
           <span>{model.platformLabel} replay</span>
@@ -23537,12 +23821,15 @@ function ReplayDetail({
           >
             <Images size={16} /> Visual replay
           </button>
-          <button type="button" className="primary" onClick={() => onExport(replayVideoCurrentMs)}>
+          {!embedded ? <button type="button" className="primary" onClick={() => onExport(replayVideoCurrentMs)}>
             <ExternalLink size={16} /> Export
-          </button>
+          </button> : null}
+          {gameMatch && matchNeedsReview(gameMatch) ? <button className="primary" onClick={onReview}>Review result</button> : null}
+          {model.replay.rawCapture?.localPath ? <button className="secondary" onClick={() => setShareDialogOpen(true)}><MessageCircle size={16} />Share to Discord</button> : null}
           <details className="review-disclosure review-replays-hero-tools">
             <summary>Replay tools <ChevronDown size={15} /></summary>
             <div>
+          {embedded ? <><button type="button" className="secondary" onClick={() => onExport(replayVideoCurrentMs)}><ExternalLink size={16} />Export replay</button><button type="button" className="secondary" onClick={() => setEditingReplayTitle(true)}>Rename replay</button></> : null}
           <label className="replay-folder-assignment">
             <FolderOpen size={13} /> Folder
             <select value={model.replay.folderId ?? ""} onChange={(event) => void moveReplayToFolder(event.target.value)}>
@@ -23569,6 +23856,14 @@ function ReplayDetail({
         </div>
       </section>
 
+      <GameReplayAssets replay={model.replay} match={gameMatch} cloudReplay={cloudReplay}
+        accountReady={hasVerifiedRiftLiteAccount(settings)} webCaptureEnabled={settings.rawCapture.enabled} videoRecordingEnabled={settings.replayCaptureEnabled && settings.replayVideoEnabled}
+        gameLogAvailable={Boolean(gameMatch && canReadAtlasMatchGameLog(gameMatch, gameLogSegments))} busy={uploadBusy}
+        onWatchVideo={() => document.querySelector(".replay-video-panel")?.scrollIntoView({behavior: "smooth", block: "start"})}
+        onWatchWebReplay={onWatchWebReplay} onUploadReplay={() => void uploadRawCapture()} onViewLog={() => setGameLogOpen(true)} onSetUp={onSetUp} onReviewResult={onReview} onOpenDelivery={onOpenDelivery} />
+      {rawCaptureStatus ? <p role="status">{rawCaptureStatus}</p> : null}
+      {gameLogOpen && gameMatch ? <AtlasGameLogDialog match={gameMatch} segments={gameLogSegments} onClose={() => setGameLogOpen(false)} /> : null}
+      {shareDialogOpen ? <ReplayDiscordShareDialog key={`${settings.accountUid}:${model.replay.id}`} replay={model.replay} match={gameMatch} settings={settings} onReviewResult={() => { setShareDialogOpen(false); onReview(); }} onClose={() => setShareDialogOpen(false)} onOpenSetup={onSetUp} onShared={async (updated) => { await onSaveReplay(updated); }} /> : null}
       {model.replay.video ? (
         <ReplayVideoPlayer
           key={model.replay.id}
@@ -23618,7 +23913,7 @@ function ReplayDetail({
       <nav className="review-tabs review-replays-detail-nav" aria-label="Replay workspace">
         <button type="button" aria-pressed={replayDetailPane === "moments"} data-active={replayDetailPane === "moments"} onClick={() => setReplayDetailPane("moments")}><Flag size={15} /> Moments & notes <small>{visibleFlags.length}</small></button>
         <button type="button" aria-pressed={replayDetailPane === "evidence"} data-active={replayDetailPane === "evidence"} onClick={() => setReplayDetailPane("evidence")}><Activity size={15} /> Evidence</button>
-        <button type="button" aria-pressed={replayDetailPane === "match"} data-active={replayDetailPane === "match"} onClick={() => setReplayDetailPane("match")}><Layers size={15} /> Match details</button>
+        {!embedded ? <button type="button" aria-pressed={replayDetailPane === "match"} data-active={replayDetailPane === "match"} onClick={() => setReplayDetailPane("match")}><Layers size={15} /> Match details</button> : null}
         <button type="button" aria-pressed={replayDetailPane === "share"} data-active={replayDetailPane === "share"} onClick={() => setReplayDetailPane("share")}><ExternalLink size={15} /> Share & organise</button>
       </nav>
 
@@ -23653,14 +23948,14 @@ function ReplayDetail({
 
       <div className="review-replays-pane" hidden={replayDetailPane !== "share"} role="region" aria-label="Replay sharing and organisation">
       {RIFTLITE_WEB_REPLAY_FEATURE_VISIBLE ? (
-        <ReplayRawCapturePanel
+        <details className="review-disclosure"><summary>Upload details &amp; recovery</summary><ReplayRawCapturePanel
           replay={model.replay}
           settings={settings}
           status={rawCaptureStatus}
           onUpload={() => void uploadRawCapture()}
           onShareDiscord={() => void shareRawCaptureToDiscord()}
           onRevealSource={() => void revealLocalReplayFile("raw-capture")}
-        />
+        /></details>
       ) : null}
 
       <section className="rail-card replay-pack-panel">
@@ -24350,26 +24645,18 @@ function ReplayRawCapturePanel({
   onRevealSource: () => void;
 }) {
   const rawCapture = replay.rawCapture;
-  if (!settings.rawCapture.enabled && !rawCapture) {
+  if (!rawCapture) {
     return null;
   }
   const deliverySummary = replayDeliverySummary(rawCapture, settings.rawCapture.enabled);
   const hasRiftLiteReplay = Boolean(rawCapture?.uploadUrl?.includes("riftlite.com/replays/"));
   const accountReady = hasVerifiedRiftLiteAccount(settings);
   const canUpload = Boolean(
-    settings.rawCapture.enabled &&
     accountReady &&
     rawCapture?.localPath &&
     !hasRiftLiteReplay
   );
-  const activeHubIds = new Set(settings.activeHubs.map((hub) => hub.id));
-  const discordHubIds = activeDiscordReplayHubIds(settings).filter((hubId) => activeHubIds.has(hubId));
-  const canShareDiscord = Boolean(
-    accountReady &&
-    (replay.platform === "atlas" || replay.platform === "tcga") &&
-    hasRiftLiteReplay &&
-    discordHubIds.length
-  );
+  const canShareDiscord = accountReady && hasRiftLiteReplay;
   const discordShared = rawCapture?.discordShareStatus === "shared";
   const deliveryStages = replayDeliveryStages(rawCapture);
   return (
@@ -24413,13 +24700,13 @@ function ReplayRawCapturePanel({
           <button
             className="secondary"
             type="button"
-            disabled={!canShareDiscord || discordShared}
+            disabled={!canShareDiscord}
             onClick={onShareDiscord}
             title={canShareDiscord
               ? "Makes this replay Unlisted and posts its permanent link to the selected hub Discord reports channel."
-              : "Select a Discord replay destination from the Account tab first."}
+              : "Connect your RiftLite account before sharing."}
           >
-            <Radio size={14} /> {discordShared ? "Shared to Discord" : rawCapture?.discordShareStatus === "failed" ? "Retry Discord share" : "Share to Discord"}
+            <Radio size={14} /> {discordShared ? "Share again…" : "Share to Discord…"}
           </button>
         </div>
       ) : (
@@ -27481,72 +27768,19 @@ function SettingsView({
   onClearEnhancedInsightsData: () => Promise<{ matchesUpdated: number; replaysUpdated: number }>;
 }) {
   const [showAdvancedDiagnostics, setShowAdvancedDiagnostics] = useState(false);
-  const [audioInputs, setAudioInputs] = useState<MediaDeviceInfo[]>([]);
-  const [audioStatus, setAudioStatus] = useState("");
   const [supportStatus, setSupportStatus] = useState("");
   const [atlasDiagnostics, setAtlasDiagnostics] = useState<AtlasConnectionDiagnostics | null>(null);
   const [atlasSupportBusy, setAtlasSupportBusy] = useState<"test" | AtlasWebviewRecoveryMode | "">("");
   const [atlasSupportStatus, setAtlasSupportStatus] = useState("");
   const [backupStatus, setBackupStatus] = useState("");
   const [backupBusy, setBackupBusy] = useState(false);
-  const [shadowClipHotkeyDraft, setShadowClipHotkeyDraft] = useState(settings.replayShadowClipHotkey);
-  const [quickFlagHotkeyDraft, setQuickFlagHotkeyDraft] = useState(settings.replayQuickFlagHotkey);
   const [enhancedInsightsClearBusy, setEnhancedInsightsClearBusy] = useState(false);
   const [enhancedInsightsStatus, setEnhancedInsightsStatus] = useState("");
-  useEffect(() => {
-    setShadowClipHotkeyDraft(settings.replayShadowClipHotkey);
-  }, [settings.replayShadowClipHotkey]);
-  useEffect(() => {
-    setQuickFlagHotkeyDraft(settings.replayQuickFlagHotkey);
-  }, [settings.replayQuickFlagHotkey]);
-
-  async function saveShadowClipHotkeyDraft() {
-    const hotkey = shadowClipHotkeyDraft.trim();
-    if (hotkey && hotkey !== settings.replayShadowClipHotkey) {
-      await onSave({ replayShadowClipHotkey: hotkey });
-    } else if (!hotkey) {
-      setShadowClipHotkeyDraft(settings.replayShadowClipHotkey);
-    }
-  }
-
-  async function saveQuickFlagHotkeyDraft() {
-    const hotkey = quickFlagHotkeyDraft.trim();
-    if (hotkey && hotkey !== settings.replayQuickFlagHotkey) {
-      await onSave({ replayQuickFlagHotkey: hotkey });
-    } else if (!hotkey) {
-      setQuickFlagHotkeyDraft(settings.replayQuickFlagHotkey);
-    }
-  }
-
-  async function refreshAudioInputs(requestPermission = false) {
-    if (!navigator.mediaDevices?.enumerateDevices) {
-      setAudioStatus("Microphone device listing is not available on this system.");
-      return;
-    }
-    let permissionStream: MediaStream | null = null;
-    try {
-      if (requestPermission) {
-        permissionStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      }
-      const devices = await navigator.mediaDevices.enumerateDevices();
-      setAudioInputs(devices.filter((device) => device.kind === "audioinput"));
-      setAudioStatus(requestPermission ? "Microphones refreshed." : "");
-    } catch (error) {
-      setAudioStatus(error instanceof Error ? error.message : "Microphone access was blocked.");
-    } finally {
-      permissionStream?.getTracks().forEach((track) => track.stop());
-    }
-  }
-  useEffect(() => {
-    void refreshAudioInputs(false);
-  }, []);
   useEffect(() => {
     void window.riftlite.getAtlasConnectionDiagnostics()
       .then(setAtlasDiagnostics)
       .catch(() => undefined);
   }, []);
-  const replayPath = settings.replayDirectory || "Default: Documents\\RiftLite\\Replay Bundles";
-  const replayGuardrail = replaySettingsGuardrail(settings);
 
   async function copySupportSummary() {
     await copyTextToClipboard(buildCaptureSupportSummary({
@@ -27691,8 +27925,9 @@ function SettingsView({
           </div>
         </div>
         <div className="rail-card">
-          <h2>Profile</h2>
-          <label>Username<input value={settings.username} onChange={(event) => void onSave({ username: event.target.value })} /></label>
+          <h2>Local capture &amp; result sharing</h2>
+          <label>Local capture name<input value={settings.username} onChange={(event) => void onSave({ username: event.target.value })} /></label>
+          <p className="muted">The player name used by this device for captures. Manage your RiftLite account handle and display name on the Account page.</p>
           <SyncModeControl settings={settings} onSave={onSave} />
           <label className="toggle-row">
             <span><Bell size={16} /> Confirm matches</span>
@@ -27802,155 +28037,10 @@ function SettingsView({
           </div>
           {enhancedInsightsStatus ? <p className="muted" role="status" aria-live="polite">{enhancedInsightsStatus}</p> : null}
         </div>
-        <div className="rail-card">
-          <h2>Replays</h2>
-          <p className="muted">Visual frames stay lightweight. Video replay is optional and attaches shareable video to the .riftreplay teaching bundle.</p>
-          <label className="toggle-row">
-            <span><History size={16} /> Replay capture</span>
-            <input
-              type="checkbox"
-              checked={settings.replayCaptureEnabled}
-              onChange={(event) => void onSave({ replayCaptureEnabled: event.target.checked })}
-            />
-          </label>
-          <label className="toggle-row">
-            <span><Camera size={16} /> Timed visual frames</span>
-            <input
-              type="checkbox"
-              checked={settings.replayKeyframesEnabled}
-              onChange={(event) => void onSave({ replayKeyframesEnabled: event.target.checked })}
-            />
-          </label>
-          <label>
-            Visual frame detail
-            <select
-              value={settings.replayFramePreset}
-              disabled={!settings.replayCaptureEnabled || !settings.replayKeyframesEnabled || settings.replayVideoEnabled}
-              onChange={(event) => void onSave({ replayFramePreset: event.target.value as ReplayFramePreset })}
-            >
-              {Object.entries(REPLAY_FRAME_PRESETS).map(([value, preset]) => (
-                <option value={value} key={value}>{preset.label} - {preset.interval} - {preset.note}</option>
-              ))}
-            </select>
-          </label>
-          <label className="toggle-row">
-            <span><Video size={16} /> Video Replay Beta</span>
-            <input
-              type="checkbox"
-              checked={settings.replayVideoEnabled}
-              onChange={(event) => void onSave({ replayVideoEnabled: event.target.checked })}
-            />
-          </label>
-          <div className="settings-note">
-            Video capture uses direct game-frame mode and includes the embedded game's audio when available. Microphone recording remains optional.
-          </div>
-          <label>
-            Video quality
-            <select
-              value={settings.replayVideoQuality}
-              disabled={!settings.replayVideoEnabled}
-              onChange={(event) => void onSave({ replayVideoQuality: event.target.value as ReplayVideoQuality })}
-            >
-              {Object.entries(REPLAY_VIDEO_PROFILES).map(([value, profile]) => (
-                <option value={value} key={value}>{profile.label} - target {profile.bitrateKbps} kbps</option>
-              ))}
-            </select>
-          </label>
-          <div className="settings-note">
-            Shadow clips reuse the main video replay buffer, so pressing the hotkey saves a recent short replay without starting a second recorder.
-          </div>
-          <label className="toggle-row">
-            <span><Scissors size={16} /> Shadow clip hotkey</span>
-            <input
-              type="checkbox"
-              checked={settings.replayShadowClipEnabled}
-              disabled={!settings.replayVideoEnabled}
-              onChange={(event) => void onSave({ replayShadowClipEnabled: event.target.checked })}
-            />
-          </label>
-          <label>
-            Shadow clip length
-            <select
-              value={String(normalizeReplayShadowClipSeconds(settings.replayShadowClipSeconds))}
-              disabled={!settings.replayVideoEnabled || !settings.replayShadowClipEnabled}
-              onChange={(event) => void onSave({ replayShadowClipSeconds: normalizeReplayShadowClipSeconds(event.target.value) })}
-            >
-              <option value="30">30 seconds</option>
-              <option value="60">1 minute</option>
-              <option value="120">2 minutes</option>
-              <option value="300">5 minutes</option>
-              <option value="600">10 minutes</option>
-            </select>
-          </label>
-          <label className="toggle-row">
-            <span><Keyboard size={16} /> Enable clip shortcut</span>
-            <input
-              type="checkbox"
-              checked={settings.replayShadowClipHotkeyEnabled}
-              disabled={!settings.replayVideoEnabled || !settings.replayShadowClipEnabled}
-              onChange={(event) => void onSave({ replayShadowClipHotkeyEnabled: event.target.checked })}
-            />
-          </label>
-          <label>
-            Clip shortcut
-            <input
-              value={shadowClipHotkeyDraft}
-              disabled={!settings.replayVideoEnabled || !settings.replayShadowClipEnabled || !settings.replayShadowClipHotkeyEnabled}
-              onChange={(event) => setShadowClipHotkeyDraft(event.target.value)}
-              onBlur={() => void saveShadowClipHotkeyDraft()}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  event.currentTarget.blur();
-                }
-              }}
-              placeholder="CommandOrControl+Shift+C"
-            />
-          </label>
-          <label className="toggle-row">
-            <span><Flag size={16} /> Review flag shortcut</span>
-            <input
-              type="checkbox"
-              checked={settings.replayQuickFlagHotkeyEnabled}
-              disabled={!settings.replayVideoEnabled && settings.enhancedInsightsEnabled !== true}
-              onChange={(event) => void onSave({ replayQuickFlagHotkeyEnabled: event.target.checked })}
-            />
-          </label>
-          <label>
-            Review flag shortcut
-            <input
-              value={quickFlagHotkeyDraft}
-              disabled={(!settings.replayVideoEnabled && settings.enhancedInsightsEnabled !== true) || !settings.replayQuickFlagHotkeyEnabled}
-              onChange={(event) => setQuickFlagHotkeyDraft(event.target.value)}
-              onBlur={() => void saveQuickFlagHotkeyDraft()}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  event.currentTarget.blur();
-                }
-              }}
-              placeholder="CommandOrControl+Shift+F"
-            />
-          </label>
-          <p className="muted">Hotkeys use Electron accelerator names, for example CommandOrControl+Shift+C. With Enhanced Insights, the review marker works without video and asks for context after the match.</p>
-          {replayGuardrail ? <div className="settings-note warning">{replayGuardrail}</div> : null}
-          <label>Replay folder<input readOnly value={replayPath} /></label>
-          <div className="row-actions">
-            <button className="secondary" onClick={() => void onChooseReplayDirectory()}><FolderOpen size={16} /> Choose</button>
-            <button className="secondary" onClick={() => void onOpenReplayDirectory()}>Open folder</button>
-            {settings.replayDirectory ? (
-              <button className="secondary" onClick={() => void onSave({ replayDirectory: "" })}>Use default</button>
-            ) : null}
-          </div>
-          <p className="muted">Direct game frame records only the embedded TCGA/Atlas view and avoids per-frame capture work. Click anywhere in the Play screen before queueing so Windows can arm the stream.</p>
+        <div className="rail-card"><h2>Recording &amp; sharing</h2>
+          <p className="muted">Set up interactive replays, local videos, microphones and Discord in one place.</p>
+          <button className="primary" onClick={() => window.dispatchEvent(new CustomEvent("riftlite:navigate", { detail: { view: "recording-sharing" } }))}>Open Recording &amp; sharing</button>
         </div>
-        {RIFTLITE_WEB_REPLAY_FEATURE_VISIBLE ? (
-          <div className="rail-card">
-            <h2>Web Replays</h2>
-            <p className="muted">Setup, platform consent, visibility, upload activity, recovery actions, and Discord sharing now live together in Review &gt; Web Replays.</p>
-            <button type="button" className="primary" onClick={() => window.dispatchEvent(new CustomEvent("riftlite:navigate", { detail: { view: "web-replay" } }))}>
-              <Cloud size={16} /> Open Web Replay centre
-            </button>
-          </div>
-        ) : null}
         {DECK_TRACKER_FEATURE_ENABLED ? (
           <div className="rail-card">
             <h2>Atlas Event Deck Tracker Beta</h2>
@@ -28001,30 +28091,6 @@ function SettingsView({
             <p className="muted">No screenshots are uploaded or scanned. Tracker data stays local unless you explicitly export or sync a supported replay bundle.</p>
           </div>
         ) : null}
-        <div className="rail-card">
-          <h2>Voice notes</h2>
-          <p className="muted">Voice notes are optional coaching clips. RiftLite only asks for microphone access when you press record or refresh devices, and exported .riftreplay files include any voice notes you choose to save.</p>
-          <label>
-            Microphone
-            <select
-              value={settings.microphoneDeviceId}
-              onChange={(event) => void onSave({ microphoneDeviceId: event.target.value })}
-            >
-              <option value="">System default microphone</option>
-              {audioInputs.map((device, index) => (
-                <option value={device.deviceId} key={device.deviceId || index}>
-                  {device.label || `Microphone ${index + 1}`}
-                </option>
-              ))}
-            </select>
-          </label>
-          <div className="row-actions">
-            <button type="button" className="secondary" onClick={() => void refreshAudioInputs(true)}>
-              <Mic size={14} /> Refresh microphones
-            </button>
-          </div>
-          {audioStatus ? <p className="muted">{audioStatus}</p> : null}
-        </div>
         </SettingsAccordionSection>
         <SettingsAccordionSection
           id="settings-app-data"
@@ -28158,6 +28224,7 @@ function SettingsView({
           {atlasSupportStatus ? <p className="muted">{atlasSupportStatus}</p> : null}
         </div>
         <LegalNoticePanel />
+        <CrashDiagnosticsPanel />
         <div className="rail-card">
           <h2>Diagnostics</h2>
           <p className="muted">Advanced capture tools are tucked away for tester reports, replay diagnostics, and support.</p>
@@ -28429,7 +28496,7 @@ function resizeHubImage(file: File): Promise<string> {
   });
 }
 
-function HubsView({ settings, matches, replays, hubMatches, onSave, onHubResult, onSyncPrivateHubs, onSyncMatchesToHubs, onDeleteHubMatch, onRefresh }: {
+function HubsView({ settings, matches, replays, hubMatches, onSave, onHubResult, onSyncPrivateHubs, onSyncMatchesToHubs, onDeleteHubMatch, onRefresh, hideInvitationInbox = false, initialHubId }: {
   settings: UserSettings;
   matches: MatchDraft[];
   replays: ReplayRecord[];
@@ -28440,13 +28507,15 @@ function HubsView({ settings, matches, replays, hubMatches, onSave, onHubResult,
   onSyncMatchesToHubs: (matchIds: string[], hubIds: string[]) => Promise<PrivateHubSyncResult>;
   onDeleteHubMatch: (hubId: string, matchId: string) => Promise<void>;
   onRefresh: () => Promise<void>;
+  hideInvitationInbox?: boolean;
+  initialHubId?: string;
 }) {
   const [name, setName] = useState("");
   const [password, setPassword] = useState("");
   const [mode, setMode] = useState<"create" | "join">("join");
   const [message, setMessage] = useState("");
   const [syncStatus, setSyncStatus] = useState("");
-  const [selectedHubId, setSelectedHubId] = useState("");
+  const [selectedHubId, setSelectedHubId] = useState(initialHubId || "");
   const [targetHubId, setTargetHubId] = useState("");
   const [selectedMatchIds, setSelectedMatchIds] = useState<string[]>([]);
   const [hubMembers, setHubMembers] = useState<HubMember[]>([]);
@@ -28497,6 +28566,10 @@ function HubsView({ settings, matches, replays, hubMatches, onSave, onHubResult,
   }, [settings.activeHubs]);
 
   useEffect(() => {
+    if (initialHubId) setSelectedHubId(initialHubId);
+  }, [initialHubId]);
+
+  useEffect(() => {
     const firstEnabled = settings.activeHubs.find((hub) => hub.sync)?.id || settings.activeHubs[0]?.id || "";
     setTargetHubId((current) => current && settings.activeHubs.some((hub) => hub.id === current) ? current : firstEnabled);
     setSelectedHubId((current) => current && settings.activeHubs.some((hub) => hub.id === current) ? current : "");
@@ -28516,13 +28589,14 @@ function HubsView({ settings, matches, replays, hubMatches, onSave, onHubResult,
   }, [settings.accountUid, selectedHubId, targetHubId, settings.activeHubs]);
 
   useEffect(() => {
+    if (hideInvitationInbox) return;
     if (!settings.accountUid) {
       setHubInbox([]);
       setInboxStatus("");
       return;
     }
     void refreshHubInbox(false);
-  }, [settings.accountUid]);
+  }, [settings.accountUid, hideInvitationInbox]);
 
   useEffect(() => {
     let current = true;
@@ -28547,12 +28621,15 @@ function HubsView({ settings, matches, replays, hubMatches, onSave, onHubResult,
 
   useEffect(() => {
     if (!settings.accountUid) return;
+    let current = true;
     void window.riftlite.refreshAccountHubs()
       .then((nextSettings) => {
+        if (!current || nextSettings.accountUid !== settings.accountUid) return;
         if (privateHubMembershipsEqual(activeHubsRef.current, nextSettings.activeHubs)) return;
         return onSave({ activeHubs: nextSettings.activeHubs });
       })
       .catch(() => undefined);
+    return () => { current = false; };
   }, [settings.accountUid]);
 
   async function submitHub() {
@@ -29118,7 +29195,7 @@ function HubsView({ settings, matches, replays, hubMatches, onSave, onHubResult,
             {syncStatus ? <p className="muted">{syncStatus}</p> : null}
           </div>
         </section>
-        {hubInboxPanel}
+        {!hideInvitationInbox ? hubInboxPanel : null}
       </section>
     );
   }
@@ -29159,7 +29236,8 @@ function HubsView({ settings, matches, replays, hubMatches, onSave, onHubResult,
       <div className="rail-card hub-health-card">
         <div className="row-actions">
           <div>
-            <h2>Hub Health</h2>
+            <h2>Hub connection</h2>
+            <button className="secondary" onClick={() => window.dispatchEvent(new CustomEvent("riftlite:navigate", {detail:{view:"recording-sharing"}}))}>Recording &amp; sharing</button>
             <p className="muted">One view of the account, exact hub identity, Discord setup, and replay delivery.</p>
           </div>
           <button className="secondary" onClick={() => void refreshHubHealth(selectedHub.id)}>
@@ -29201,7 +29279,7 @@ function HubsView({ settings, matches, replays, hubMatches, onSave, onHubResult,
             ) : null}
             {!hubHealth.account.profileComplete ? <p className="muted">Action needed: finish the account handle and player name.</p> : null}
             {hubDiscordReplayShareEnabled && !hubHealth.discord.configured ? <p className="muted">Action needed: run the Discord setup command for this exact hub ID.</p> : null}
-            {hubDiscordReplayShareEnabled && hubHealth.discord.configured && !hubHealth.discord.verified ? <p className="muted">Action needed: run /verify in the configured Discord server with this RiftLite account.</p> : null}
+            {hubDiscordReplayShareEnabled && hubHealth.discord.configured && !hubHealth.discord.verified ? <p className="muted">To use member commands, run /verify in the connected server. Verification is separate from posting replay links.</p> : null}
             {hubHealthStatus ? <p className="muted">{hubHealthStatus}</p> : null}
           </>
         )}
@@ -29283,7 +29361,7 @@ function HubsView({ settings, matches, replays, hubMatches, onSave, onHubResult,
           </>
         )}
       </div>
-      {hubInboxPanel}
+      {!hideInvitationInbox ? hubInboxPanel : null}
       <div className="rail-card">
         <h2>Hub feed</h2>
         {hubFeedRows.map(({ hub, match }) => (
@@ -29761,6 +29839,7 @@ function LegendMetaPanel({ matches, expanded = false, showFlags = true }: { matc
 }
 
 function RecentMatchesPanel({ matches, showFlags = true }: { matches: AnalyticsMatch[]; showFlags?: boolean }) {
+  const onOpenGameDetails = React.useContext(GameDetailsNavigationContext);
   const [selectedId, setSelectedId] = useState("");
   const recent = useMemo(
     () => [...matches].sort((a, b) => new Date(b.capturedAt).getTime() - new Date(a.capturedAt).getTime()).slice(0, 12),
@@ -29777,7 +29856,7 @@ function RecentMatchesPanel({ matches, showFlags = true }: { matches: AnalyticsM
             className="event-row recent-match-row interactive-row"
             data-active={selectedId === match.id}
             key={match.id}
-            onClick={() => setSelectedId(match.id)}
+            onClick={() => onOpenGameDetails ? onOpenGameDetails(match.id) : setSelectedId(match.id)}
           >
             <span>
               <strong>{match.myName || "Unknown player"} vs {match.opponentName || "Unknown opponent"}</strong>
@@ -30538,6 +30617,7 @@ function MatrixDrilldown({ myLegend, opponentLegend, cell, showFlags = true, poo
   pooled?: boolean;
   onClose: () => void;
 }) {
+  const onOpenGameDetails = React.useContext(GameDetailsNavigationContext);
   const [selectedMatch, setSelectedMatch] = useState<AnalyticsMatch | null>(null);
   const mirror = isMirrorLegendPair(myLegend, opponentLegend);
   const drilldownKey = `${myLegend}|${opponentLegend}|${cell.matches.map((match) => match.id).join("|")}`;
@@ -30592,7 +30672,7 @@ function MatrixDrilldown({ myLegend, opponentLegend, cell, showFlags = true, poo
               className="event-row recent-match-row interactive-row"
               data-active={selectedMatch?.id === match.id}
               key={match.id}
-              onClick={() => setSelectedMatch((current) => current?.id === match.id ? null : match)}
+              onClick={() => onOpenGameDetails ? onOpenGameDetails(match.id) : setSelectedMatch((current) => current?.id === match.id ? null : match)}
             >
               <span>
                 <strong>{match.myName || "Unknown player"} vs {match.opponentName || "Unknown opponent"}</strong>
@@ -30614,6 +30694,7 @@ function MatrixDrilldown({ myLegend, opponentLegend, cell, showFlags = true, poo
 }
 
 function StatsDrilldown({ title, subtitle, matches, primaryLegend, secondaryLegend, showFlags = true, onClose }: StatsDrilldownSelection & { onClose: () => void }) {
+  const onOpenGameDetails = React.useContext(GameDetailsNavigationContext);
   const [selectedMatch, setSelectedMatch] = useState<AnalyticsMatch | null>(null);
   const drilldownKey = `${title}|${primaryLegend ?? ""}|${secondaryLegend ?? ""}|${matches.map((match) => match.id).join("|")}`;
   const stats = analyticsResultStats(matches);
@@ -30653,7 +30734,7 @@ function StatsDrilldown({ title, subtitle, matches, primaryLegend, secondaryLege
                 className="event-row recent-match-row interactive-row"
                 data-active={selectedMatch?.id === match.id}
                 key={match.id}
-                onClick={() => setSelectedMatch((current) => current?.id === match.id ? null : match)}
+                onClick={() => onOpenGameDetails ? onOpenGameDetails(match.id) : setSelectedMatch((current) => current?.id === match.id ? null : match)}
               >
                 <span>
                   <strong>{match.myName || "Unknown player"} vs {match.opponentName || "Unknown opponent"}</strong>
@@ -30792,7 +30873,7 @@ function StatRow({ label, value, onClick }: { label: string; value: string; onCl
 }
 
 function SyncPill({ match }: { match: MatchDraft }) {
-  if (match.status === "pending-review" || match.status === "incomplete") {
+  if (matchNeedsReview(match)) {
     return <span className="sync-pill pending">review needed</span>;
   }
   const hubStates = Object.values(match.sync.hubs);
@@ -32298,7 +32379,7 @@ function reviewFooterHint(draft: MatchDraft, isScorepadDraft: boolean): string {
     return "Source: Scorepad - public community sync disabled";
   }
   const evidence = `${draft.rawEvidence.length} evidence event${draft.rawEvidence.length === 1 ? "" : "s"} retained`;
-  return `${evidence} - Review later keeps this pending and unsynced`;
+  return `${evidence} · Save match finishes this review. Review later keeps it in Matches → Needs review.`;
 }
 
 function scoreTextFromPoints(myPoints: number | undefined, oppPoints: number | undefined): string {
@@ -33393,7 +33474,14 @@ function captureNoticeMessage(health: CaptureHealth, fallback: string): string {
 const deckTrackerPopoutMode = typeof window !== "undefined"
   && new URLSearchParams(window.location.search).get("deckTrackerPopout") === "1";
 
-createRoot(document.getElementById("root")!).render(
+installRendererCrashLogging();
+
+createRoot(document.getElementById("root")!, {
+  onUncaughtError: (error) => {
+    reportRendererCrash("react-error", error);
+    console.error(error);
+  }
+}).render(
   <React.StrictMode>
     {deckTrackerPopoutMode ? <DeckTrackerPopoutApp /> : <App />}
   </React.StrictMode>

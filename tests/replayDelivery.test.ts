@@ -18,6 +18,25 @@ function metadata(patch: Partial<RawCaptureReplayMetadata> = {}): RawCaptureRepl
 }
 
 describe("replayDeliveryStages", () => {
+  it("does not promise automatic retries for a legacy Discord result rejection", () => {
+    expect(replayDeliveryErrorMessage("RiftLite replay Discord replay share 409: The completed match result is not available yet. RiftLite will retry before posting this replay to Discord.")).toBe("The replay is online, but the website does not yet have the result needed for its Discord post.");
+  });
+  it("distinguishes stopped Discord retries from the ready replay and its completed upload", () => {
+    const replay = metadata({ uploadStatus: "uploaded", processingStatus: "ready", resultStatus: "resolved",
+      uploadedAt: "2026-10-01T10:00:00Z", webReplayDiscordShareEligible: false,
+      discordSharedHubIds: ["already-posted"], discordShareStoppedAt: "2026-10-01T11:00:00Z" });
+    expect(replayDeliverySummary(replay)).toMatchObject({ statusLabel: "ready", uploadLabel: "Uploaded", discordLabel: "Automatic retries stopped" });
+    expect(replayDeliveryStages(replay).find((stage) => stage.id === "discord")).toMatchObject({ state: "skipped", detail: expect.stringContaining("online replay is kept") });
+  });
+
+  it("keeps the replay ready while only Discord awaits result review", () => {
+    const replay = metadata({ uploadStatus: "uploaded", processingStatus: "ready", resultStatus: "resolved",
+      discordShareStatus: "pending", discordResultReviewRequired: true, uploadedAt: "2026-10-01T10:00:00Z" });
+    expect(replayDeliverySummary(replay)).toMatchObject({ statusLabel: "ready", uploadLabel: "Uploaded", discordLabel: "Review result" });
+    expect(replayDeliveryStages(replay).find((stage) => stage.id === "discord")).toMatchObject({ state: "pending", detail: expect.stringContaining("Review and save") });
+    expect(replayDeliveryStages(replay).find((stage) => stage.id === "result")?.state).toBe("pending");
+  });
+
   it("keeps a captured replay visibly waiting for its result and upload", () => {
     expect(replayDeliveryStages(metadata()).map((stage) => [stage.id, stage.state])).toEqual([
       ["capture", "complete"],

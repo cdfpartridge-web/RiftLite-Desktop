@@ -1,0 +1,43 @@
+.game-replay-assets { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 16px 0; }
+.game-replay-asset { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; padding: 16px; min-width: 0; border: 1px solid #284155; border-radius: 12px; background: #0a1826; color: #eff7ff; }
+.game-replay-asset-heading { display: flex; align-items: center; gap: 8px; color: #b9dbef; }
+.game-replay-asset-heading h3 { margin: 0; font-size: 14px; font-weight: 650; }
+.game-replay-asset-status { font-size: 13px; color: #bdd0df; }
+.game-replay-asset[data-tone="ready"] .game-replay-asset-status { color: #79e1bb; }
+.game-replay-asset[data-tone="pending"] .game-replay-asset-status { color: #8ad9fa; }
+.game-replay-asset[data-tone="attention"] .game-replay-asset-status { color: #ffd28a; }
+.game-replay-asset p { margin: 0; color: #afc2d4; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.game-replay-asset button { margin-top: auto; }
+@media (max-width: 760px) { .game-replay-assets { grid-template-columns: 1fr; } }
+.play-capture-status { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.play-capture-status button { display: inline-flex; align-items: center; gap: 5px; min-height: 28px; padding: 5px 8px; border: 1px solid #284155; border-radius: 6px; background: #0a1826; color: #b9ccda; font-size: 11px; cursor: pointer; }
+.play-capture-status button[data-recording="true"] { border-color: #366858; color: #91ebc8; }
+.play-capture-status button:focus-visible { outline: 2px solid #8ad9fa; outline-offset: 2px; }
+.play-capture-compact { display: none; }
+
+.replay-library-toolbar, .replay-library-message, .replay-library-activity { grid-column: 1 / -1; }
+.replay-library-activity { padding: 12px 16px; border: 1px solid #284155; border-radius: 10px; background: #0a1826; }
+.replay-library-activity > summary { cursor: pointer; color: #b9dbef; font-size: 13px; font-weight: 600; }
+.replay-library-activity[open] > summary { margin-bottom: 12px; }
+.play-capture-status { padding: 6px 16px; flex-shrink: 0; }
+.play-topbar { container-type: inline-size; }
+.play-topbar .play-capture-status { padding: 0; flex-wrap: nowrap; gap: 5px; }
+.play-topbar .play-capture-status button { white-space: nowrap; }
+.play-topbar .play-capture-status svg { flex-shrink: 0; }
+.app-shell.ui-dev-modern .play-topbar { flex-direction: row; align-items: center; flex-wrap: nowrap; flex-shrink: 0; overflow-x: auto; overflow-y: hidden; }
+.ui-dev-modern .play-topbar .top-actions { width: auto; margin-left: auto; flex-wrap: nowrap; flex-shrink: 0; }
+@container (max-width: 1040px) {
+  .play-capture-status .play-capture-full { display: none; }
+  .play-capture-status .play-capture-compact { display: inline; }
+}
+@container (max-width: 760px) {
+  .play-topbar .play-action-label { display: none; }
+  .app-shell.ui-dev-modern .play-topbar .force-stop-action { width: 34px; min-width: 34px; padding-inline: 0; }
+}
+
+.replay-online-player { width: calc(100vw - 40px); height: calc(100vh - 40px); max-width: none; max-height: none; padding: 0; border: 1px solid #284155; border-radius: 12px; background: #071422; color: #eff7ff; overflow: hidden; }
+.replay-online-player::backdrop { background: #000b; }
+.replay-online-player[open] { display: flex; flex-direction: column; }
+.replay-online-player header { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 12px 16px; flex-shrink: 0; }
+.replay-online-player > p { padding: 24px; }
+.replay-online-webview { flex: 1; min-height: 0; display: flex; width: 100%; }

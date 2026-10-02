@@ -86,15 +86,17 @@ describe("account sync confidence", () => {
     expect(keepLocal.actionLabel).toBe("Keep local and replace cloud");
     expect(keepLocal.local.matches).toBe(1);
     expect(keepLocal.cloud.matches).toBe(18);
-    expect(keepLocal.consequence).toContain("This device becomes the source of truth");
+    expect(keepLocal.consequence).toContain("This device's match history");
+    expect(keepLocal.consequence).toContain("will replace the current cloud backup");
 
     expect(restoreCloud.actionLabel).toBe("Restore cloud on this device");
     expect(restoreCloud.local.decks).toBe(1);
     expect(restoreCloud.cloud.decks).toBe(4);
-    expect(restoreCloud.consequence).toContain("cloud copy becomes the source of truth");
+    expect(restoreCloud.consequence).toContain("The cloud backup will replace local match history");
+    expect(restoreCloud.consequence).toContain("Your sign-in and local replay video files stay on this device");
   });
 
-  it("explains whether the active deck is local, waiting for a choice, or included in sync", () => {
+  it("explains whether the active deck is local, waiting for a choice, or included in the account backup", () => {
     expect(activeDeckSyncConfidence(settings(), [localDeck], null)).toMatchObject({
       title: "Irelia Tempo",
       state: "local-only",
@@ -108,7 +110,7 @@ describe("account sync confidence", () => {
       settings({ accountCloudSyncEnabled: true, accountCloudSyncLastSyncedAt: "2026-07-19T10:00:00.000Z" }),
       [localDeck],
       cloudStatus({ enabled: true, lastSyncedAt: "2026-07-19T10:00:00.000Z" })
-    )).toMatchObject({ state: "synced", label: "Included in device sync" });
+    )).toMatchObject({ state: "synced", label: "Included in account backup" });
   });
 
   it("turns account migration states into visible four-stage progress", () => {

@@ -1,8 +1,62 @@
 import { describe, expect, it } from "vitest";
 import { legendFromImageUrl, legendImageUrl } from "../src/shared/legendImages";
-import { canonicalLegendName, isCanonicalLegendName, normalizeLegendName } from "../src/shared/legendNames";
+import { CANONICAL_LEGEND_NAMES, canonicalLegendName, isCanonicalLegendName, legendAliasesFor, normalizeLegendName } from "../src/shared/legendNames";
 
 describe("normalizeLegendName", () => {
+  it("resolves every canonical legend with capture punctuation, case and starter suffixes", () => {
+    for (const legend of CANONICAL_LEGEND_NAMES) {
+      const variants = [
+        legend,
+        legend.toUpperCase(),
+        `  ${legend.replace(/ /g, "  ")}  `,
+        legend.replace(/'/g, "’"),
+        `${legend} - Starter`
+      ];
+      for (const value of variants) {
+        expect(normalizeLegendName(value), value).toBe(legend);
+        expect(canonicalLegendName(value), value).toBe(legend);
+      }
+    }
+  });
+
+  it("resolves every registered subtitle and full captured legend name", () => {
+    for (const legend of CANONICAL_LEGEND_NAMES) {
+      for (const alias of legendAliasesFor(legend)) {
+        for (const value of [alias, alias.toUpperCase(), `${alias} - Starter`, `${legend}, ${alias}`]) {
+          expect(normalizeLegendName(value), value).toBe(legend);
+          expect(canonicalLegendName(value), value).toBe(legend);
+        }
+      }
+    }
+  });
+
+  it("preserves longest alias precedence and catalog order for equal lengths", () => {
+    expect(normalizeLegendName("Gloomist / Blade Dancer")).toBe("Irelia");
+    expect(normalizeLegendName("Blade Dancer / Gloomist")).toBe("Irelia");
+    expect(normalizeLegendName("Gloomist / Alluring")).toBe("Ahri");
+    expect(normalizeLegendName("Alluring / Gloomist")).toBe("Ahri");
+    expect(normalizeLegendName("Viktor, Blade Dancer")).toBe("Irelia");
+    expect(normalizeLegendName("Master Yi, Blade Dancer")).toBe("Master Yi");
+  });
+
+  it("matches subtitles at word boundaries without expanding short aliases", () => {
+    expect(normalizeLegendName("Captured: [nine tailed fox]")).toBe("Ahri");
+    expect(normalizeLegendName("Captured: [Soul’s Reflection]")).toBe("Mel");
+    expect(normalizeLegendName("Gloomists")).toBe("Gloomists");
+    expect(canonicalLegendName("Gloomists")).toBe("");
+    expect(normalizeLegendName("Rebel")).toBe("Jinx");
+    expect(normalizeLegendName("Captured Rebel")).toBe("Captured Rebel");
+  });
+
+  it("keeps unknown names and comma fallbacks without treating them as canonical", () => {
+    expect(normalizeLegendName("  New   Legend, Unknown subtitle ")).toBe("New Legend");
+    expect(canonicalLegendName("New Legend, Unknown subtitle")).toBe("");
+    expect(normalizeLegendName("Viktor, Unknown subtitle")).toBe("Viktor");
+    expect(normalizeLegendName(null)).toBe("");
+    expect(normalizeLegendName(undefined)).toBe("");
+    expect(normalizeLegendName(42)).toBe("42");
+  });
+
   it("normalizes subtitle-only legend captures to primary legend names", () => {
     expect(normalizeLegendName("Gloomist")).toBe("Vex");
     expect(normalizeLegendName("Bloodharbor Ripper")).toBe("Pyke");

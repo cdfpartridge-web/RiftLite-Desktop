@@ -11,59 +11,46 @@ describe("Web Replay desktop centre", () => {
     expect(mainSource).toContain('handleTrustedAppIpc("raw-capture:retry-pending"');
     expect(mainSource).toContain('handleTrustedAppIpc("raw-capture:upload-incomplete"');
     expect(mainSource).toContain('handleTrustedAppIpc("raw-capture:remove-from-queue"');
+    expect(mainSource).toContain('handleTrustedAppIpc("raw-capture:stop-discord-retries"');
     expect(mainSource).toContain("uploadPendingRawCapturesWithAccountRefresh(true)");
     expect(preloadSource).toContain('getWebReplayUploadDiagnostics: () => ipcRenderer.invoke("raw-capture:diagnostics")');
     expect(preloadSource).toContain('retryPendingWebReplayUploads: () => ipcRenderer.invoke("raw-capture:retry-pending")');
     expect(preloadSource).toContain('uploadIncompleteWebReplay: (captureSessionId) => ipcRenderer.invoke("raw-capture:upload-incomplete"');
     expect(preloadSource).toContain('removeWebReplayUploadFromQueue: (captureSessionId) => ipcRenderer.invoke("raw-capture:remove-from-queue"');
+    expect(preloadSource).toContain('stopWebReplayDiscordRetries: (captureSessionId) => ipcRenderer.invoke("raw-capture:stop-discord-retries"');
   });
 
-  it("makes Review > Web Replays the setup, status, and recovery centre", () => {
-    expect(appSource).toContain("function WebReplayUploadCentre");
-    expect(appSource).toContain("Enable private Atlas replays");
-    expect(appSource).toContain('setPlatformUpload("atlas"');
-    expect(appSource).toContain('setPlatformUpload("tcga"');
-    expect(appSource).toContain("rawCaptureSettingsForPlatformUpload(settings, platform, enabled)");
-    expect(appSource).toContain("Resume replay capture");
-    expect(appSource).toContain("diagnostics?.queue");
-    expect(appSource).toContain("Upload activity");
-    expect(appSource).toContain("Retry eligible uploads");
-    expect(appSource).toContain('hasRetryableQueueItem = queue.some((item) => item.recommendedAction === "retry")');
-    expect(appSource).toContain("totals.pending || hasRetryableQueueItem");
-    expect(appSource).toContain("window.riftlite.retryPendingWebReplayUploads()");
-    expect(appSource).toContain("Upload anyway");
-    expect(appSource).toContain("Keep local only");
-    expect(appSource).toContain("Removed from Upload activity");
-    expect(appSource).toContain("Clear from activity");
-    expect(appSource).toContain("webReplayReadyWarningDismissalKey(item)");
-    expect(appSource).toContain("dismissCompletedWarning(item)");
-    expect(appSource).toContain("window.riftlite.uploadIncompleteWebReplay(item.captureSessionId)");
-    expect(appSource).toContain("window.riftlite.removeWebReplayUploadFromQueue(item.captureSessionId)");
-    expect(appSource).toContain("webReplayQueueItemCanBeKeptLocalOnly(item)");
-    expect(appSource).toContain('className="web-replay-technical-details"');
-    expect(appSource).toContain("replayDeliveryErrorMessage(item.error, {");
-    expect(appSource).toContain("httpStatus: item.lastHttpStatus");
+  it("routes capture setup and local video preferences through Recording & sharing", () => {
+    const route = appSource.slice(appSource.indexOf('if (view === "recording-sharing")'), appSource.indexOf('if (view === "replays")'));
+    expect(route).toContain("RecordingSharingPage");
+    expect(route).toContain('presentation="capture"');
+    expect(route).toContain("RecordingVideoSettings");
+    expect(appSource.includes("rawCaptureSettingsForPlatformUpload(settings, platform, enabled)")).toBe(true);
+    expect(mainSource.includes('handleTrustedAppIpc("replay:library:list-owned"')).toBe(true);
+    expect(preloadSource.includes('getAccountReplayLibrary: () => ipcRenderer.invoke("replay:library:list-owned")')).toBe(true);
   });
 
-  it("keeps healthy upload diagnostics compact so the replay library retains the page", () => {
-    expect(appSource).toContain('const [controlsExpanded, setControlsExpanded] = useState(status.tone !== "ready")');
-    expect(appSource).toContain('if (status.tone !== "ready" || actionError) setControlsExpanded(true)');
-    expect(appSource).toContain('data-expanded={controlsExpanded}');
-    expect(appSource).toContain('aria-expanded={controlsExpanded}');
-    expect(appSource).toContain('aria-controls="web-replay-upload-controls"');
-    expect(appSource).toContain('id="web-replay-upload-controls"');
-    expect(appSource).toContain('hidden={!controlsExpanded}');
-    expect(appSource).toContain('"Hide upload controls"');
-    expect(appSource).toContain('"Manage uploads"');
+  it("preserves recovery actions and result review independently of a ready online replay", () => {
+    const recovery = appSource.slice(appSource.indexOf("function WebReplayUploadCentre"), appSource.indexOf("function EmbeddedRiftReplayView"));
+    for (const required of [
+      'webReplayActivityItemVisible(item, dismissedWarningKeys)',
+      'onReviewResult?.(item)',
+      'window.riftlite.retryPendingWebReplayUploads()',
+      'window.riftlite.uploadIncompleteWebReplay(item.captureSessionId)',
+      'window.riftlite.removeWebReplayUploadFromQueue(item.captureSessionId)',
+      'window.riftlite.stopWebReplayDiscordRetries(item.captureSessionId)',
+      'webReplayQueueItemCanBeKeptLocalOnly(item)',
+      'webReplayReadyWarningDismissalKey(item)',
+    ]) expect(recovery.includes(required), required).toBe(true);
   });
 
-  it("keeps Account and Settings as concise deep-links instead of duplicate controls", () => {
-    expect(appSource).toContain('className="account-web-replay-summary"');
-    expect(appSource).toContain("Manage Web Replays");
-    expect(appSource).toContain("Open Web Replay centre");
-    expect(appSource).toContain("showPostLinkWebReplayChoice");
-    expect(appSource).toContain("Automatically save new Atlas Web Replays?");
-    expect(appSource).not.toContain("Web Replay upload diagnostics");
+  it("keeps account onboarding and legacy settings as links to the canonical setup", () => {
+    const account = appSource.slice(appSource.indexOf("function AccountView"), appSource.indexOf("function MatchesView"));
+    expect(account.includes('onClick={onOpenWebReplays}')).toBe(true);
+    expect(account.includes('Recording & sharing') || account.includes('Recording &amp; sharing')).toBe(true);
+    expect(account.includes('Automatically save new Atlas Web Replays?')).toBe(false);
+    expect(appSource.includes('view: "recording-sharing"')).toBe(true);
+    expect(appSource.includes('onOpenWebReplays={() => onNavigate("recording-sharing")}')).toBe(true);
   });
 
   it("keeps queue health live and visible outside the centre", () => {

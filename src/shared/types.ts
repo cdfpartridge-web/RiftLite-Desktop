@@ -1,3 +1,15 @@
+import type { AccountReplayLibraryResult } from "./accountReplayLibrary.js";
+import type { CrashDiagnosticsStatus } from "./crashDiagnostics.js";
+
+export interface RendererCrashFault {
+  kind: "error" | "unhandled-rejection" | "react-error";
+  message: string;
+  stack?: string;
+  source?: string;
+  line?: number;
+  column?: number;
+}
+
 export type GameProvider = "tcga" | "atlas";
 
 export type GamePlatform = GameProvider | "sim";
@@ -1534,7 +1546,8 @@ export type WebReplayRecommendedAction =
   | "reconnect-account"
   | "upload-incomplete"
   | "remove-from-queue"
-  | "open-replay";
+  | "open-replay"
+  | "review-result";
 
 export interface RawCaptureSettings {
   enabled: boolean;
@@ -1613,6 +1626,12 @@ export interface RawCaptureReplayMetadata {
   discordShareStatus?: "pending" | "shared" | "partial" | "failed";
   discordSharedHubIds?: string[];
   discordShareError?: string;
+  /** Explicitly stops this capture's automatic Discord delivery, preserving its online replay. */
+  discordShareStoppedAt?: string;
+  discordManualShareAt?: string;
+  discordShareBlockedReason?: "setup" | "result";
+  discordShareBlockedResult?: string;
+  discordResultReviewRequired?: boolean;
   lastUploadAttemptAt?: string;
   captureCompletedAt?: string;
   resultStatus?: "pending" | "resolved";
@@ -1684,6 +1703,12 @@ export interface WebReplayUploadFailureDiagnostic {
 }
 
 export interface WebReplayUploadQueueItem {
+  /** Whether this capture has a live upload or sharing operation on this device. */
+  operationInProgress?: boolean;
+  localMatchId?: string;
+  discordShareStatus?: RawCaptureReplayMetadata["discordShareStatus"];
+  discordShareBlockedReason?: RawCaptureReplayMetadata["discordShareBlockedReason"];
+  discordShareError?: string;
   platform: "atlas" | "tcga";
   captureSessionId: string;
   localReplayId?: string;
@@ -1736,7 +1761,7 @@ export interface RiftLiteReplayUploadResult {
 export interface RiftLiteReplayDiscordShareResult {
   replayId: string;
   url: string;
-  visibility: "unlisted";
+  visibility: RawCaptureVisibility;
   status: "shared" | "partial" | "failed";
   sharedHubIds: string[];
   error?: string;
@@ -2541,9 +2566,11 @@ export interface RiftLiteApi {
   retryPendingWebReplayUploads(): Promise<number>;
   uploadIncompleteWebReplay(captureSessionId: string): Promise<RiftLiteReplayUploadResult>;
   removeWebReplayUploadFromQueue(captureSessionId: string): Promise<void>;
+  stopWebReplayDiscordRetries(captureSessionId: string): Promise<void>;
   getRawCapturePayload(replayId: string): Promise<unknown | null>;
   uploadRawCaptureToRiftLite(replayId: string, visibility?: RawCaptureVisibility): Promise<RiftLiteReplayUploadResult>;
-  shareRawCaptureToDiscord(replayId: string): Promise<RiftLiteReplayDiscordShareResult>;
+  getAccountReplayLibrary(): Promise<AccountReplayLibraryResult>;
+  shareRawCaptureToDiscord(replayId: string, hubIds?: string[]): Promise<RiftLiteReplayDiscordShareResult>;
   prepareReplayEmbed(replayId: string): Promise<ReplayEmbedSessionResult>;
   prepareReplayLibraryEmbed(): Promise<ReplayEmbedSessionResult>;
   importReplayBundle(): Promise<ReplayRecord | null>;
@@ -2650,6 +2677,10 @@ export interface RiftLiteApi {
   getOverlayInfo(): Promise<OverlayInfo>;
   openOverlayTextFolder(): Promise<void>;
   getDiagnosticsPath(): Promise<string>;
+  getCrashDiagnosticsStatus(): Promise<CrashDiagnosticsStatus>;
+  exportCrashDiagnostics(): Promise<string | null>;
+  openCrashDiagnosticsFolder(): Promise<void>;
+  reportRendererFault(fault: RendererCrashFault): void;
   getDiagnosticsSummary(): Promise<CaptureDiagnosticsSummary>;
   createDiagnosticsBundle(options?: {
     includeSensitiveData?: boolean;

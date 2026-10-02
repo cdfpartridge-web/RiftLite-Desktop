@@ -35,7 +35,10 @@ export interface ReplayDeliveryErrorContext {
 }
 
 export function webReplayQueueItemCanBeKeptLocalOnly(item: WebReplayUploadQueueItem): boolean {
-  if (item.processingStatus === "ready") return false;
+  if (item.processingStatus === "ready" || item.stage === "ready" || item.operationInProgress) return false;
+  // A persisted "uploading" stage can survive a crash or restart. Only the
+  // service's live operation state can establish that it is still busy.
+  if (item.operationInProgress === false && item.locallyAvailable) return true;
   return item.recommendedAction === "remove-from-queue" || Boolean(
     item.locallyAvailable && ["captured", "queued", "failed", "paused"].includes(item.stage)
   );
@@ -47,6 +50,9 @@ export function replayDeliveryErrorMessage(
 ): string {
   const message = typeof value === "string" ? value.trim() : "";
   const searchable = `${context.code ?? ""} ${message}`;
+  if (/Discord replay share 409:/i.test(message) && /completed match result|replay_result_pending/i.test(message)) {
+    return "The replay is online, but the website does not yet have the result needed for its Discord post.";
+  }
   if (REPLAY_AUTH_ERROR_PATTERN.test(searchable) || context.errorClass === "authentication") {
     return "RiftLite account verification is required. Open Account, finish verification or reconnect the same account, then retry. The local replay capture is safe.";
   }
@@ -119,7 +125,7 @@ export function replayDeliverySummary(
         : automaticUpload
           ? "Queued"
           : "Not uploaded";
-  const discordLabel = !discordEligible
+  const discordLabel = metadata.discordShareStoppedAt ? "Automatic retries stopped" : metadata.discordResultReviewRequired ? "Review result" : !discordEligible
     ? "Not selected"
     : metadata.discordShareStatus === "shared"
       ? "Shared"
@@ -161,9 +167,9 @@ function replayDeliveryStatusLabel(
 
 export function replayDeliveryStages(metadata: RawCaptureReplayMetadata | undefined): ReplayDeliveryStage[] {
   const captureComplete = Boolean(metadata?.localPath || metadata?.captureCompletedAt);
-  const resultResolved = metadata?.resultStatus === "resolved" || (
+  const resultResolved = !metadata?.discordResultReviewRequired && (metadata?.resultStatus === "resolved" || (
     metadata?.resultStatus === undefined && metadata?.discordShareStatus === "shared"
-  );
+  ));
   const uploadComplete = metadata?.uploadStatus === "uploaded";
   const uploadFailed = metadata?.uploadStatus === "failed" || metadata?.uploadStatus === "too-large";
   const uploadActive = metadata?.processingStatus === "uploading" || (
@@ -236,7 +242,9 @@ export function replayDeliveryStages(metadata: RawCaptureReplayMetadata | undefi
     {
       id: "discord",
       label: "Discord delivered",
-      state: !discordEligible
+      state: metadata?.discordResultReviewRequired
+        ? "pending"
+        : !discordEligible
         ? "skipped"
         : metadata?.discordShareStatus === "shared"
           ? "complete"
@@ -245,7 +253,11 @@ export function replayDeliveryStages(metadata: RawCaptureReplayMetadata | undefi
             : uploadComplete
               ? "active"
               : "pending",
-      detail: !discordEligible
+      detail: metadata?.discordShareStoppedAt
+        ? "Automatic Discord retries stopped for this game; the online replay is kept"
+        : metadata?.discordResultReviewRequired
+        ? "Review and save the match result before posting to Discord"
+        : !discordEligible
         ? "Not selected for a private hub"
         : metadata?.discordShareStatus === "shared"
           ? "Replay link posted to every selected hub"

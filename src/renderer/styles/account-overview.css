@@ -1,0 +1,27 @@
+.account-identity-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+.account-identity-heading h2 { margin: 0; }
+.account-identity-status { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; border: 1px solid var(--border); border-radius: 999px; padding: 5px 9px; color: var(--muted); font-size: 12px; }
+.account-identity-status[data-tone="ready"] { color: var(--success); }
+.account-identity-status[data-tone="attention"] { color: var(--warning, #f5c46b); }
+.account-identity-name { display: flex; align-items: baseline; flex-wrap: wrap; gap: 7px 12px; margin: 16px 0 8px; overflow-wrap: anywhere; }
+.account-identity-name strong { font-size: 18px; }
+.account-identity-name span { color: var(--cyan-soft); }
+.account-identity-name small { color: var(--muted); }
+.account-identity-card > p { line-height: 1.6; }
+.account-identity-card .row-actions { margin-top: 14px; flex-wrap: wrap; }
+.account-disclosure > summary { display: flex; align-items: center; justify-content: space-between; gap: 14px; list-style: none; cursor: pointer; }
+.account-disclosure > summary::-webkit-details-marker { display: none; }
+.account-disclosure > summary strong, .account-disclosure > summary small { display: block; }
+.account-disclosure > summary strong { font-size: 16px; }
+.account-disclosure > summary small { margin-top: 5px; color: var(--muted); line-height: 1.5; }
+.account-disclosure > summary > svg { color: var(--muted); flex-shrink: 0; }
+.account-disclosure[open] > summary > svg { transform: rotate(180deg); }
+.account-disclosure > summary:focus-visible { outline: 2px solid var(--cyan); outline-offset: 6px; border-radius: 4px; }
+.account-disclosure-content { display: grid; gap: 14px; min-width: 0; margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--border); }
+.account-disclosure-content > p { margin: 0; line-height: 1.55; }
+.account-profile-public-sections { display: grid; gap: 10px; padding-top: 14px; border-top: 1px solid var(--border); }
+.account-profile-public-sections h3, .account-profile-public-sections p { margin: 0; }
+.account-backup-details { margin-top: 16px; }
+.account-backup-details > summary { cursor: pointer; color: var(--muted); }
+.account-backup-details[open] > summary { margin-bottom: 14px; }
+@media (max-width: 540px) { .account-identity-heading { flex-wrap: wrap; } .account-identity-status { flex-shrink: 1; } }

@@ -1,4 +1,11 @@
 import type { MatchDraft } from "./types.js";
+import { isCombinedOriginal } from "./matchCombine.js";
+
+/** Review completion is independent of the game's result and delivery status. */
+export function matchNeedsReview(match: MatchDraft): boolean {
+  return !match.deletedAt && !isCombinedOriginal(match) &&
+    (match.status === "pending-review" || match.status === "incomplete");
+}
 
 export function upsertMatchPreservingOrder(matches: MatchDraft[], saved: MatchDraft): MatchDraft[] {
   const existingIndex = matches.findIndex((match) => match.id === saved.id);

@@ -1,0 +1,16 @@
+.crash-diagnostics-card { min-width: 0; }
+.crash-diagnostics-card > p { line-height: 1.55; }
+.crash-diagnostics-health { display: flex; align-items: flex-start; gap: 10px; padding: 12px; margin: 14px 0; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); }
+.crash-diagnostics-health > svg { flex-shrink: 0; margin-top: 2px; color: var(--cyan-soft); }
+.crash-diagnostics-health[data-state="ready"] > svg { color: var(--success); }
+.crash-diagnostics-health[data-state="attention"] > svg { color: var(--warning, #f5c46b); }
+.crash-diagnostics-health > div { min-width: 0; }
+.crash-diagnostics-health strong, .crash-diagnostics-health span { display: block; }
+.crash-diagnostics-health span { color: var(--muted); font-size: 12px; line-height: 1.5; margin-top: 4px; }
+.crash-diagnostics-previous p { margin: 6px 0 0; line-height: 1.5; }
+.crash-diagnostics-actions { flex-wrap: wrap; margin-top: 12px; }
+.crash-diagnostics-actions button { white-space: normal; }
+.crash-diagnostics-privacy { font-size: 12px; margin-bottom: 0; }
+.crash-diagnostics-notice { font-size: 13px; color: var(--cyan-soft); }
+.crash-diagnostics-export-path { display: block; margin-top: 8px; color: var(--muted); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.crash-diagnostics-card .settings-note { overflow-wrap: anywhere; }

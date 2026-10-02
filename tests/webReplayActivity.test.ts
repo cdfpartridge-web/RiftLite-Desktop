@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  webReplayActivityItemVisible,
   addWebReplayWarningDismissal,
   keepWebReplayUploadsLocalOnly,
   parseWebReplayWarningDismissals,
@@ -95,6 +96,15 @@ describe("Web Replay bulk keep local", () => {
     ])).toEqual([]);
   });
 
+  it("allows interrupted upload stages to be kept local only when the service confirms no live operation", () => {
+    const interrupted = pendingItem({ stage: "completing", processingStatus: "uploading", locallyAvailable: true, recommendedAction: "wait", operationInProgress: false });
+    expect(webReplayKeepLocalCandidates([interrupted])).toHaveLength(1);
+    expect(webReplayKeepLocalCandidates([{ ...interrupted, operationInProgress: true }])).toEqual([]);
+    expect(webReplayKeepLocalCandidates([{ ...interrupted, operationInProgress: undefined }])).toEqual([]);
+    expect(webReplayKeepLocalCandidates([{ ...interrupted, processingStatus: "ready" }])).toEqual([]);
+    expect(webReplayKeepLocalCandidates([interrupted, { ...interrupted, operationInProgress: true }])).toEqual([]);
+  });
+
   it("excludes a whole capture when an alias is already online or active", () => {
     expect(webReplayKeepLocalCandidates([
       pendingItem(),
@@ -146,5 +156,19 @@ describe("Web Replay bulk keep local", () => {
     const [candidate] = webReplayKeepLocalCandidates([pendingItem()]);
     expect(await keepWebReplayUploadsLocalOnly([candidate, candidate], remove)).toEqual({ keptCount: 1, failures: [] });
     expect(remove).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("Independent Discord delivery activity", () => {
+  it("keeps failed and partial Discord deliveries visible after replay completion", () => {
+    expect(webReplayActivityItemVisible(queueItem({ partialWarnings: [], discordShareStatus: "failed" }))).toBe(true);
+    expect(webReplayActivityItemVisible(queueItem({ partialWarnings: [], discordShareStatus: "partial" }))).toBe(true);
+    expect(webReplayActivityItemVisible(queueItem({ partialWarnings: [], discordShareStatus: "shared" }))).toBe(false);
+  });
+  it("does not let dismissing a board warning hide review or Discord actions", () => {
+    const item = queueItem(); const dismissed = [webReplayReadyWarningDismissalKey(item)];
+    expect(webReplayActivityItemVisible(item, dismissed)).toBe(false);
+    expect(webReplayActivityItemVisible({...item, recommendedAction:"review-result"}, dismissed)).toBe(true);
+    expect(webReplayActivityItemVisible({...item, discordShareStatus:"failed"}, dismissed)).toBe(true);
   });
 });

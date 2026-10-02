@@ -1,4 +1,7 @@
 [
+  {"name":"Bandle Scouts' Academy","aliases":[],"is_active":true,"image_name":"Bandle Scouts' Academy"},
+  {"name":"Black Market","aliases":[],"is_active":true,"image_name":"Black Market"},
+  {"name":"Hunter's Circle","aliases":[],"is_active":true,"image_name":"Hunter's Circle"},
   {"name":"Cosmic Vista","aliases":[],"is_active":true,"image_name":"Cosmic Vista"},
   {"name":"Durand Memorial","aliases":[],"is_active":true,"image_name":"Durand Memorial"},
   {"name":"Packed Amphitheater","aliases":[],"is_active":true,"image_name":"Packed Amphitheater"},

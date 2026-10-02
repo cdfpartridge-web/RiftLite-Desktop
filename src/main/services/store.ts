@@ -1231,6 +1231,43 @@ export class RiftLiteStore {
     return Boolean(match && !match.deletedAt);
   }
 
+  /**
+   * One read-only snapshot for the upload activity list. Reuse hydrated library
+   * caches instead of parsing the same match/replay JSON for every manifest.
+   * Build synchronously after database() so a committed mutation cannot split
+   * the snapshot. Uploads must still use the live single-parent check above.
+   */
+  async hasActiveRawCaptureParents(
+    parents: ReadonlyArray<{ replayId?: string; matchId?: string }>
+  ): Promise<boolean[]> {
+    if (!parents.length) return [];
+    const db = await this.database();
+    const matches = this.matchesCache ??= (db.exec("SELECT data_json FROM matches ORDER BY captured_at DESC")[0]?.values ?? [])
+      .map((row) => this.parseStoredMatch(row[0]))
+      .filter((match): match is MatchDraft => Boolean(match));
+    const replays = this.replaysCache ?? (db.exec("SELECT data_json FROM replays")[0]?.values ?? [])
+      .map((row) => this.parseStoredReplayMetadata(row[0]))
+      .filter((replay): replay is StoredReplayRecord => Boolean(replay));
+    const activeMatches = new Set(matches.filter((match) => !match.deletedAt).map((match) => match.id));
+    const replayParents = new Map(replays.map((replay) => [replay.id, replay]));
+    const purgedReplays = new Set((db.exec("SELECT replay_id FROM replay_purge_tombstones")[0]?.values ?? [])
+      .map((row) => String(row[0])));
+    return parents.map(({ replayId, matchId }) => {
+      const normalizedReplayId = replayId?.trim() ?? "";
+      const normalizedMatchId = matchId?.trim() ?? "";
+      if (normalizedReplayId) {
+        if (purgedReplays.has(normalizedReplayId)) return false;
+        const replay = replayParents.get(normalizedReplayId);
+        if (replay) {
+          return !replay.deletedAt
+            && (!normalizedMatchId || replay.matchId === normalizedMatchId)
+            && activeMatches.has(replay.matchId);
+        }
+      }
+      return Boolean(normalizedMatchId && activeMatches.has(normalizedMatchId));
+    });
+  }
+
   /** Atomically applies delayed replay metadata only while the replay is live. */
   async updateActiveReplay(
     id: string,

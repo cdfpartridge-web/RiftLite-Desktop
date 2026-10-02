@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-09-30T07:29:48.381Z",
+  "generatedAt": "2026-10-01T16:42:48.807Z",
   "source": {
     "provider": "RiftCodex",
     "endpoint": "https://api.riftcodex.com/cards",
@@ -23,15 +23,26 @@
         ],
         "prints": 88,
         "notes": "Printed artwork checked for metadata conflicts; includes 84 gallery prints plus three signed prints and Bomb. Two Ahri promotional artworks share RAD-038 and remain captured image URLs."
+      },
+      {
+        "provider": "Piltover Archive + Riot Card Gallery",
+        "set": "RAD",
+        "auditedAt": "2026-10-01",
+        "urls": [
+          "https://piltoverarchive.com/cards?sets=RAD",
+          "https://playriftbound.com/en-us/card-gallery/"
+        ],
+        "prints": 110,
+        "notes": "Full 3-page Piltover scan (107 entries) unioned with 84 Riot gallery prints. Added 22 print identities covering 18 previously unsupported card names; includes Mordekaiser and three battlefields. All new printed images checked. Corrected Lost to the Sands, retaining its former name alias and artwork. Existing identities retained."
       }
     ]
   },
   "stats": {
     "rawRecords": 1302,
     "uniqueSourcePrints": 1171,
-    "uniquePrints": 1277,
+    "uniquePrints": 1299,
     "uniqueImageHashes": 1275,
-    "localOverlayCards": 107,
+    "localOverlayCards": 129,
     "bySet": {
       "OGN": {
         "rawRecords": 352,
@@ -43,7 +54,7 @@
       },
       "RAD": {
         "rawRecords": 0,
-        "uniquePrints": 88
+        "uniquePrints": 110
       },
       "SFD": {
         "rawRecords": 288,
@@ -10770,6 +10781,32 @@
       ]
     },
     {
+      "printId": "RAD-004",
+      "basePrintId": "RAD-004",
+      "setCode": "RAD",
+      "collectorCode": "004",
+      "name": "Brawl",
+      "type": "Spell",
+      "supertype": null,
+      "costEnergy": 3,
+      "costPower": 1,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cdn.piltoverarchive.com/temporary/1790788934976-is7hcdpo3s.png",
+      "imageHash": null,
+      "artist": "Kudos Productions",
+      "updatedAt": "2026-10-01T16:38:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:7712de9c-c5b7-464e-970c-b0a133868f59"
+      ]
+    },
+    {
       "printId": "RAD-012",
       "basePrintId": "RAD-012",
       "setCode": "RAD",
@@ -10801,7 +10838,7 @@
       "basePrintId": "RAD-013",
       "setCode": "RAD",
       "collectorCode": "013",
-      "name": "Lost to the Sand",
+      "name": "Lost to the Sands",
       "type": "Spell",
       "supertype": null,
       "costEnergy": 3,
@@ -10817,10 +10854,41 @@
         "overnumbered": false,
         "signature": false
       },
-      "aliases": [],
+      "aliases": [
+        "Lost to the Sand"
+      ],
       "sourceIds": [
         "piltover-archive:dc8f56b5-1f57-4b48-a445-033a1f686023",
         "riot-gallery:rad-013-167"
+      ]
+    },
+    {
+      "printId": "RAD-015",
+      "basePrintId": "RAD-015",
+      "setCode": "RAD",
+      "collectorCode": "015",
+      "name": "Akali, Brash",
+      "type": "Unit",
+      "supertype": "Champion",
+      "costEnergy": 5,
+      "costPower": 1,
+      "tags": [
+        "Akali",
+        "Ionia"
+      ],
+      "champion": "Akali",
+      "imageUrl": "https://cdn.piltoverarchive.com/temporary/1790807820855-obaxe2xxu6n.png",
+      "imageHash": null,
+      "artist": "Luscinia Studio",
+      "updatedAt": "2026-10-01T16:38:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:76a52107-8185-47e7-99d7-8876aea8a71f"
       ]
     },
     {
@@ -10912,6 +10980,32 @@
       "sourceIds": [
         "piltover-archive:07e8f196-55aa-43fc-bb63-5ac51d83aa7a",
         "riot-gallery:rad-024-167"
+      ]
+    },
+    {
+      "printId": "RAD-025",
+      "basePrintId": "RAD-025",
+      "setCode": "RAD",
+      "collectorCode": "025",
+      "name": "Consult the Heavens",
+      "type": "Spell",
+      "supertype": null,
+      "costEnergy": 1,
+      "costPower": 0,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cdn.piltoverarchive.com/temporary/1790807717659-a7dubci4cft.webp",
+      "imageHash": null,
+      "artist": "Kudos Productions",
+      "updatedAt": "2026-10-01T16:38:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:8b080312-49ec-4fb6-9490-59205bc6ed9c"
       ]
     },
     {
@@ -11117,6 +11211,58 @@
       ]
     },
     {
+      "printId": "RAD-047",
+      "basePrintId": "RAD-047",
+      "setCode": "RAD",
+      "collectorCode": "047",
+      "name": "Fanfare",
+      "type": "Spell",
+      "supertype": null,
+      "costEnergy": 3,
+      "costPower": 0,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cdn.piltoverarchive.com/temporary/1790822157151-cnfkcq86bll.webp",
+      "imageHash": null,
+      "artist": "Kudos Productions",
+      "updatedAt": "2026-10-01T16:38:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:18faa145-a164-43d4-80f3-8a4611d9d383"
+      ]
+    },
+    {
+      "printId": "RAD-048",
+      "basePrintId": "RAD-048",
+      "setCode": "RAD",
+      "collectorCode": "048",
+      "name": "High Note",
+      "type": "Spell",
+      "supertype": null,
+      "costEnergy": 3,
+      "costPower": 0,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cdn.piltoverarchive.com/temporary/1790856733371-f16h1l54g88.webp",
+      "imageHash": null,
+      "artist": "Kudos Productions",
+      "updatedAt": "2026-10-01T16:38:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:065b1973-f883-4478-9b1a-11b4840f8ec0"
+      ]
+    },
+    {
       "printId": "RAD-055",
       "basePrintId": "RAD-055",
       "setCode": "RAD",
@@ -11171,6 +11317,35 @@
       "sourceIds": [
         "piltover-archive:d4a3db66-3f95-43b7-a3e3-be09502ad314",
         "riot-gallery:rad-056-167"
+      ]
+    },
+    {
+      "printId": "RAD-057",
+      "basePrintId": "RAD-057",
+      "setCode": "RAD",
+      "collectorCode": "057",
+      "name": "Piltovan Guidebot",
+      "type": "Unit",
+      "supertype": null,
+      "costEnergy": 4,
+      "costPower": 0,
+      "tags": [
+        "Piltover",
+        "Mech"
+      ],
+      "champion": null,
+      "imageUrl": "https://cdn.piltoverarchive.com/temporary/1790809314749-pwnrkgeqq3m.png",
+      "imageHash": null,
+      "artist": "Kudos Productions",
+      "updatedAt": "2026-10-01T16:38:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:4ace6c29-ea07-4378-9c59-9777bb22d1e1"
       ]
     },
     {
@@ -11434,6 +11609,34 @@
       ]
     },
     {
+      "printId": "RAD-071",
+      "basePrintId": "RAD-071",
+      "setCode": "RAD",
+      "collectorCode": "071",
+      "name": "Nazuman Ntofo",
+      "type": "Gear",
+      "supertype": null,
+      "costEnergy": 1,
+      "costPower": 0,
+      "tags": [
+        "Equipment"
+      ],
+      "champion": null,
+      "imageUrl": "https://cdn.piltoverarchive.com/temporary/1790776647561-w6j6aon4pz.png",
+      "imageHash": null,
+      "artist": "Yeon Art Studio",
+      "updatedAt": "2026-10-01T16:38:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:1fac49d3-d06a-4967-8fe6-ea739eddef3c"
+      ]
+    },
+    {
       "printId": "RAD-073",
       "basePrintId": "RAD-073",
       "setCode": "RAD",
@@ -11460,6 +11663,32 @@
       "sourceIds": [
         "piltover-archive:60667149-f8f2-45e4-af8b-0e63f9fcb8fc",
         "riot-gallery:rad-073-167"
+      ]
+    },
+    {
+      "printId": "RAD-079",
+      "basePrintId": "RAD-079",
+      "setCode": "RAD",
+      "collectorCode": "079",
+      "name": "Avalanche",
+      "type": "Spell",
+      "supertype": null,
+      "costEnergy": 5,
+      "costPower": 2,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cdn.piltoverarchive.com/temporary/1790789337611-38wzt0nuj3a.png",
+      "imageHash": null,
+      "artist": "Six more Vodka",
+      "updatedAt": "2026-10-01T16:38:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:b457acd0-7dee-4ee6-bcfe-f95bbea56939"
       ]
     },
     {
@@ -11545,6 +11774,61 @@
       "sourceIds": [
         "piltover-archive:f870537c-d4bd-4530-bb0d-fe74ad1bbe88",
         "riot-gallery:rad-083-167"
+      ]
+    },
+    {
+      "printId": "RAD-084",
+      "basePrintId": "RAD-084",
+      "setCode": "RAD",
+      "collectorCode": "084",
+      "name": "Cataclysm",
+      "type": "Spell",
+      "supertype": null,
+      "costEnergy": 4,
+      "costPower": 1,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cdn.piltoverarchive.com/temporary/1790781570679-qo1cw3tqjah.png",
+      "imageHash": null,
+      "artist": "Polar Engine Studio",
+      "updatedAt": "2026-10-01T16:38:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:f02d62a7-3ca1-42dc-9649-746327bdb922"
+      ]
+    },
+    {
+      "printId": "RAD-085",
+      "basePrintId": "RAD-085",
+      "setCode": "RAD",
+      "collectorCode": "085",
+      "name": "Graves, Blasting Through",
+      "type": "Unit",
+      "supertype": "Champion",
+      "costEnergy": 5,
+      "costPower": 1,
+      "tags": [
+        "Graves",
+        "Bilgewater"
+      ],
+      "champion": "Graves",
+      "imageUrl": "https://cdn.piltoverarchive.com/temporary/1790851040006-yrpizl19cyk.png",
+      "imageHash": null,
+      "artist": "Yeon Art Studio",
+      "updatedAt": "2026-10-01T16:38:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:a4396349-a4bc-48d4-9c89-c5f93fc75ea9"
       ]
     },
     {
@@ -11812,6 +12096,35 @@
       ]
     },
     {
+      "printId": "RAD-107",
+      "basePrintId": "RAD-107",
+      "setCode": "RAD",
+      "collectorCode": "107",
+      "name": "Bedeviling Stranger",
+      "type": "Unit",
+      "supertype": null,
+      "costEnergy": 2,
+      "costPower": 0,
+      "tags": [
+        "Shadow Isles",
+        "Demon"
+      ],
+      "champion": null,
+      "imageUrl": "https://cdn.piltoverarchive.com/temporary/1790765615873-5d1n6pffi4.png",
+      "imageHash": null,
+      "artist": "Kudos Productions",
+      "updatedAt": "2026-10-01T16:38:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:9bd52f21-f932-4168-ac3e-a7a5a2212b11"
+      ]
+    },
+    {
       "printId": "RAD-115",
       "basePrintId": "RAD-115",
       "setCode": "RAD",
@@ -11867,6 +12180,32 @@
       "sourceIds": [
         "piltover-archive:bd0e160b-992e-4b22-8d5f-2ea345d7dc58",
         "riot-gallery:rad-116-167"
+      ]
+    },
+    {
+      "printId": "RAD-117",
+      "basePrintId": "RAD-117",
+      "setCode": "RAD",
+      "collectorCode": "117",
+      "name": "For Demacia!",
+      "type": "Spell",
+      "supertype": null,
+      "costEnergy": 3,
+      "costPower": 0,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cdn.piltoverarchive.com/temporary/1790789109702-trz835s71i.png",
+      "imageHash": null,
+      "artist": "Original Force",
+      "updatedAt": "2026-10-01T16:38:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:33c981d3-472f-4517-9512-5935ed8651b2"
       ]
     },
     {
@@ -12256,6 +12595,34 @@
       ]
     },
     {
+      "printId": "RAD-143",
+      "basePrintId": "RAD-143",
+      "setCode": "RAD",
+      "collectorCode": "143",
+      "name": "Mordekaiser, Iron Revenant",
+      "type": "Legend",
+      "supertype": null,
+      "costEnergy": null,
+      "costPower": null,
+      "tags": [
+        "Mordekaiser"
+      ],
+      "champion": "Mordekaiser",
+      "imageUrl": "https://cdn.piltoverarchive.com/temporary/1790861904340-69cuehy8is7.png",
+      "imageHash": null,
+      "artist": "TUTU",
+      "updatedAt": "2026-10-01T16:38:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:1f12122b-e2de-48fe-9c5b-86668e6984b8"
+      ]
+    },
+    {
       "printId": "RAD-145",
       "basePrintId": "RAD-145",
       "setCode": "RAD",
@@ -12403,6 +12770,34 @@
       ]
     },
     {
+      "printId": "RAD-152",
+      "basePrintId": "RAD-152",
+      "setCode": "RAD",
+      "collectorCode": "152",
+      "name": "Encore",
+      "type": "Spell",
+      "supertype": "Signature",
+      "costEnergy": 3,
+      "costPower": 1,
+      "tags": [
+        "Seraphine"
+      ],
+      "champion": null,
+      "imageUrl": "https://cdn.piltoverarchive.com/temporary/1790781443831-p9gq1bpwl3c.png",
+      "imageHash": null,
+      "artist": "Luscinia Studio",
+      "updatedAt": "2026-10-01T16:38:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:fefbee75-1c71-4bb5-9417-2ce90788388a"
+      ]
+    },
+    {
       "printId": "RAD-155",
       "basePrintId": "RAD-155",
       "setCode": "RAD",
@@ -12461,6 +12856,58 @@
       ]
     },
     {
+      "printId": "RAD-157",
+      "basePrintId": "RAD-157",
+      "setCode": "RAD",
+      "collectorCode": "157",
+      "name": "Bandle Scouts' Academy",
+      "type": "Battlefield",
+      "supertype": null,
+      "costEnergy": null,
+      "costPower": null,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cdn.piltoverarchive.com/temporary/1790776491287-wgnx80p34.png",
+      "imageHash": null,
+      "artist": "Grafit Studio",
+      "updatedAt": "2026-10-01T16:38:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:0d9823d4-cd71-43d0-8fcc-281211779d37"
+      ]
+    },
+    {
+      "printId": "RAD-158",
+      "basePrintId": "RAD-158",
+      "setCode": "RAD",
+      "collectorCode": "158",
+      "name": "Black Market",
+      "type": "Battlefield",
+      "supertype": null,
+      "costEnergy": null,
+      "costPower": null,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cdn.piltoverarchive.com/temporary/1790843655788-ar4rh14elc5.png",
+      "imageHash": null,
+      "artist": "Fish Art Studio",
+      "updatedAt": "2026-10-01T16:38:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:a775d3e4-2505-4928-81e2-88202d7c0181"
+      ]
+    },
+    {
       "printId": "RAD-160",
       "basePrintId": "RAD-160",
       "setCode": "RAD",
@@ -12512,6 +12959,32 @@
       "sourceIds": [
         "piltover-archive:f4332096-25bc-412d-93c0-5a0ec0dcf9b5",
         "riot-gallery:rad-161-167"
+      ]
+    },
+    {
+      "printId": "RAD-163",
+      "basePrintId": "RAD-163",
+      "setCode": "RAD",
+      "collectorCode": "163",
+      "name": "Hunter's Circle",
+      "type": "Battlefield",
+      "supertype": null,
+      "costEnergy": null,
+      "costPower": null,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cdn.piltoverarchive.com/temporary/1790843714259-tcp81yfeqh.webp",
+      "imageHash": null,
+      "artist": "Fish Art Studio",
+      "updatedAt": "2026-10-01T16:38:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:6dce197e-3af8-4d61-b0c2-4342e605eb57"
       ]
     },
     {
@@ -12626,6 +13099,62 @@
       ]
     },
     {
+      "printId": "RAD-168",
+      "basePrintId": "RAD-168",
+      "setCode": "RAD",
+      "collectorCode": "168",
+      "name": "Ekko, Boy Who Shattered Time",
+      "type": "Legend",
+      "supertype": null,
+      "costEnergy": null,
+      "costPower": null,
+      "tags": [
+        "Ekko"
+      ],
+      "champion": "Ekko",
+      "imageUrl": "https://cdn.piltoverarchive.com/temporary/1790780763402-ma5oycnmcxd.png",
+      "imageHash": null,
+      "artist": "Blaine Burgos",
+      "updatedAt": "2026-10-01T16:38:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": true,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:07464866-dbaa-45d1-835a-a0be43b2cd6b"
+      ]
+    },
+    {
+      "printId": "RAD-168*",
+      "basePrintId": "RAD-168",
+      "setCode": "RAD",
+      "collectorCode": "168*",
+      "name": "Ekko, Boy Who Shattered Time",
+      "type": "Legend",
+      "supertype": null,
+      "costEnergy": null,
+      "costPower": null,
+      "tags": [
+        "Ekko"
+      ],
+      "champion": "Ekko",
+      "imageUrl": "https://cdn.piltoverarchive.com/temporary/1790780819472-em758t7h7v.png",
+      "imageHash": null,
+      "artist": "Blaine Burgos",
+      "updatedAt": "2026-10-01T16:38:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": true,
+        "signature": true
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:a3198fc6-8c8a-410e-bf6c-db5413ca5f21"
+      ]
+    },
+    {
       "printId": "RAD-169",
       "basePrintId": "RAD-169",
       "setCode": "RAD",
@@ -12682,6 +13211,34 @@
       "aliases": [],
       "sourceIds": [
         "piltover-archive:a5864ad0-900f-4470-b943-dfc777e3999d"
+      ]
+    },
+    {
+      "printId": "RAD-170",
+      "basePrintId": "RAD-170",
+      "setCode": "RAD",
+      "collectorCode": "170",
+      "name": "Mordekaiser, Iron Revenant",
+      "type": "Legend",
+      "supertype": null,
+      "costEnergy": null,
+      "costPower": null,
+      "tags": [
+        "Mordekaiser"
+      ],
+      "champion": "Mordekaiser",
+      "imageUrl": "https://cdn.piltoverarchive.com/temporary/1790861929849-r5d1gj52nae.png",
+      "imageHash": null,
+      "artist": "Taylor Jenson",
+      "updatedAt": "2026-10-01T16:38:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": true,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:c2d1aad0-555b-4c41-9a8b-8604c0b0758c"
       ]
     },
     {
@@ -13141,6 +13698,61 @@
       "aliases": [],
       "sourceIds": [
         "riot-gallery:rad-r03a"
+      ]
+    },
+    {
+      "printId": "RAD-R04A",
+      "basePrintId": "RAD-R04",
+      "setCode": "RAD",
+      "collectorCode": "R04A",
+      "name": "Body Rune",
+      "type": "Rune",
+      "supertype": "Basic",
+      "costEnergy": null,
+      "costPower": null,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cdn.piltoverarchive.com/temporary/1790789187684-a5ei0j01o4.png",
+      "imageHash": null,
+      "artist": "Yeon Art Studio",
+      "updatedAt": "2026-10-01T16:38:00.000Z",
+      "variants": {
+        "alternateArt": true,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:acaff6e4-d16b-4e60-a134-fef0ce559138"
+      ]
+    },
+    {
+      "printId": "RAD-SP3",
+      "basePrintId": "RAD-SP3",
+      "setCode": "RAD",
+      "collectorCode": "SP3",
+      "name": "Evelynn, In Control",
+      "type": "Unit",
+      "supertype": "Champion",
+      "costEnergy": 4,
+      "costPower": 1,
+      "tags": [
+        "Evelynn",
+        "Demon"
+      ],
+      "champion": "Evelynn",
+      "imageUrl": "https://cdn.piltoverarchive.com/temporary/1790781091015-r8bupi5784.png",
+      "imageHash": null,
+      "artist": "Yuande Wu",
+      "updatedAt": "2026-10-01T16:38:00.000Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:ae110919-6d9c-41d1-9436-b88ed3718f6b"
       ]
     },
     {

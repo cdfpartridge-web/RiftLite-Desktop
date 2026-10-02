@@ -5,17 +5,19 @@ import { TcgaResolver } from "../src/main/services/tcgaResolver";
 import { canonicalLegendName } from "../src/shared/legendNames";
 import { legendFromImageUrl, legendImageUrl } from "../src/shared/legendImages";
 import { resolveBundledCardImage, resolveCardArtwork } from "../src/renderer/cardArtwork";
+import { homeDeckThemeForLegend } from "../src/shared/homeDeckTheme";
 
 const cards = registry.cards.filter(card => card.setCode === "RAD");
 
 describe("Radiance preview capture and artwork", () => {
   it("resolves every revealed print from collector codes and available Riot image hashes", async () => {
     const resolver = new TcgaResolver(resolve("resources/tcga_card_lookup.json"));
-    expect(cards).toHaveLength(88);
+    expect(cards).toHaveLength(110);
     for (const card of cards) {
       await expect(resolver.resolveCard(card.printId)).resolves.toBe(card.name);
       if (card.imageHash) await expect(resolver.resolveCard(card.imageHash)).resolves.toBe(card.name);
       expect(resolveBundledCardImage(card.printId), card.printId).toBe(card.imageUrl);
+      await expect(resolver.resolveCard(`${card.imageUrl}${card.imageUrl.includes("?") ? "&" : "?"}width=400`)).resolves.toBe(card.name);
       if (card.type === "Legend") {
         expect(canonicalLegendName(card.name)).toBe(card.champion);
         expect(canonicalLegendName(card.name.split(", ")[1])).toBe(card.champion);
@@ -44,7 +46,20 @@ describe("Radiance preview capture and artwork", () => {
     for (const [base, variant] of [["RAD-023", "RAD-023A"], ["RAD-169", "RAD-169*"], ["RAD-R02", "RAD-R02A"], ["RAD-063", "RAD-SP4"]]) {
       expect(resolveBundledCardImage(base)).not.toBe(resolveBundledCardImage(variant));
     }
-    expect(registry.stats.bySet.RAD.uniquePrints).toBe(88);
+    expect(resolveBundledCardImage("RAD-168")).not.toBe(resolveBundledCardImage("RAD-168*"));
+    expect(resolveBundledCardImage("RAD-R04A")).not.toBe(resolveBundledCardImage("OGN-126"));
+    expect(registry.stats.bySet.RAD.uniquePrints).toBe(110);
+  });
+
+  it("supports newly revealed champion costs, setup cards and the corrected printed title", () => {
+    const card = (id: string) => cards.find(c => c.printId === id);
+    expect(card("RAD-015")).toMatchObject({ name: "Akali, Brash", supertype: "Champion", costEnergy: 5, costPower: 1 });
+    expect(card("RAD-085")).toMatchObject({ name: "Graves, Blasting Through", supertype: "Champion", costEnergy: 5, costPower: 1 });
+    expect(card("RAD-SP3")).toMatchObject({ name: "Evelynn, In Control", supertype: "Champion", costEnergy: 4, costPower: 1 });
+    expect(card("RAD-013")).toMatchObject({ name: "Lost to the Sands", aliases: ["Lost to the Sand"] });
+    expect(card("RAD-152")).toMatchObject({ name: "Encore", type: "Spell", supertype: "Signature", costEnergy: 3, costPower: 1 });
+    expect(legendFromImageUrl(`${legendImageUrl("Mordekaiser")}?width=400`)).toBe("Mordekaiser");
+    expect(homeDeckThemeForLegend("Mordekaiser, Iron Revenant")?.domains).toEqual(["Fury", "Order"]);
   });
 
   it("recognises preview images with no collector code in their filename", async () => {
