@@ -13,9 +13,11 @@ const catalog = JSON.parse(
 const gamePreloadSource = readFileSync(new URL("../src/game-preload/gamePreload.ts", import.meta.url), "utf8");
 
 const newlySupportedBattlefields = [
+  "Black Rose Sanctum",
+  "Firelights' Hideout",
   "Bandle Scouts' Academy",
   "Black Market",
-  "Hunter's Circle",
+  "Hunters' Circle",
   "Cosmic Vista",
   "Durand Memorial",
   "Packed Amphitheater",

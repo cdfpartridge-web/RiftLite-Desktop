@@ -7,7 +7,8 @@
 .game-replay-asset[data-tone="pending"] .game-replay-asset-status { color: #8ad9fa; }
 .game-replay-asset[data-tone="attention"] .game-replay-asset-status { color: #ffd28a; }
 .game-replay-asset p { margin: 0; color: #afc2d4; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
-.game-replay-asset button { margin-top: auto; }
+.game-replay-asset-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: auto; }
+.game-replay-asset .game-replay-visibility-action { border-color: #348499; color: #9cecf7; background: #102c3c; }
 @media (max-width: 760px) { .game-replay-assets { grid-template-columns: 1fr; } }
 .play-capture-status { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .play-capture-status button { display: inline-flex; align-items: center; gap: 5px; min-height: 28px; padding: 5px 8px; border: 1px solid #284155; border-radius: 6px; background: #0a1826; color: #b9ccda; font-size: 11px; cursor: pointer; }

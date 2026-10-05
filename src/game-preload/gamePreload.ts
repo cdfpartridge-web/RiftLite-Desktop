@@ -101,9 +101,12 @@ const TCGA_RESEARCH_DOM_CHECKPOINT_MIN_INTERVAL_MS = 10_000;
 const ATLAS_INTERACTION_QUIET_MS = 900;
 const DECK_TRACKER_FEATURE_ENABLED = false;
 const BATTLEFIELD_NAMES = [
+  { name: "Black Rose Sanctum", canonical: "Black Rose Sanctum" },
+  { name: "Firelights' Hideout", canonical: "Firelights' Hideout" },
   { name: "Bandle Scouts' Academy", canonical: "Bandle Scouts' Academy" },
   { name: "Black Market", canonical: "Black Market" },
-  { name: "Hunter's Circle", canonical: "Hunter's Circle" },
+  { name: "Hunters' Circle", canonical: "Hunters' Circle" },
+  { name: "Hunter's Circle", canonical: "Hunters' Circle" },
   { name: "Ravensbloom Conservatory", canonical: "Ravenbloom Conservatory" },
   { name: "Grove of the God-Willow", canonical: "Grove of the God-Willow" },
   { name: "Ravenbloom Conservatory", canonical: "Ravenbloom Conservatory" },

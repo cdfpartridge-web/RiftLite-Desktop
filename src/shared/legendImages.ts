@@ -1,10 +1,35 @@
 import { riftboundCardCodeAliases } from "./cardIdentity.js";
+import { LEGEND_PRINTS } from "./generatedLegendPrints.js";
+import { canonicalLegendName } from "./legendNames.js";
+
+const LEGEND_BY_PRINT = new Map<string, string>();
+const LEGEND_BY_IMAGE = new Map<string, string>();
+const LEGEND_BY_HASH = new Map<string, string>();
+
+for (const [printId, name, urls, hashes] of LEGEND_PRINTS) {
+  const legend = canonicalLegendName(name);
+  if (!legend) continue;
+  addLegendIdentity(LEGEND_BY_PRINT, printId, legend);
+  for (const url of urls) {
+    addLegendIdentity(LEGEND_BY_IMAGE, decodeLoose(url).split(/[?#]/)[0], legend);
+    addLegendIdentity(LEGEND_BY_HASH, imageHash(url), legend);
+  }
+  for (const hash of hashes) addLegendIdentity(LEGEND_BY_HASH, hash.toLowerCase(), legend);
+}
+
+function addLegendIdentity(index: Map<string, string>, key: string, legend: string): void {
+  if (!key) return;
+  // Conflicting source images must not identify either player's legend.
+  const previous = index.get(key);
+  index.set(key, previous === undefined || previous === legend ? legend : "");
+}
 
 function riftAtlasCardImageUrl(cardCode: string): string {
   return `https://assets.riftatlas-workers.com/cdn-cgi/image/width=192,quality=85,format=auto,fit=scale-down/riftbound/cards/small-v2/${cardCode}.webp`;
 }
 
 const LEGEND_IMAGE_URLS: Record<string, string> = {
+  "Evelynn": "https://cdn.piltoverarchive.com/cards/RAD-153.webp",
   "Mordekaiser": "https://cdn.piltoverarchive.com/temporary/1790861904340-69cuehy8is7.png",
   "Ekko": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/8ca3ef446631784ce1d261e30f6a163843ffcb2b-744x1039.png?accountingTag=RB",
   "Ziggs": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/69899f4d5e05ff0a060b9f38894cd77f9e17d195-744x1039.png?accountingTag=RB",
@@ -115,12 +140,18 @@ export function legendFromImageUrl(value: unknown): string {
     return "";
   }
   const decoded = decodeLoose(raw);
+  const exactImage = decoded.split(/[?#]/)[0];
+  if (LEGEND_BY_IMAGE.has(exactImage)) return LEGEND_BY_IMAGE.get(exactImage) ?? "";
+  const directHash = imageHash(decoded);
+  if (directHash && LEGEND_BY_HASH.has(directHash)) return LEGEND_BY_HASH.get(directHash) ?? "";
   const directCodes = cardCodes(decoded);
+  for (const code of directCodes) {
+    if (LEGEND_BY_PRINT.has(code)) return LEGEND_BY_PRINT.get(code) ?? "";
+  }
   const mappedLegend = directCodes.map((code) => LEGEND_CARD_CODE_MAP[code]).find(Boolean) ?? "";
   if (mappedLegend) {
     return mappedLegend;
   }
-  const directHash = imageHash(decoded);
   for (const [legend, url] of Object.entries(LEGEND_IMAGE_URLS)) {
     const candidate = decodeLoose(url);
     if (decoded.split(/[?#]/)[0] === candidate.split(/[?#]/)[0]) {

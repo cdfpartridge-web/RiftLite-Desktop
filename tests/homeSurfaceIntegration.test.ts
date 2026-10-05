@@ -35,9 +35,9 @@ describe("Home launchpad", () => {
 
     expect(releaseNotesSource).toContain("version: APP_VERSION_META");
     expect(releaseNotesSource).toContain("Recording & sharing");
-    expect(releaseNotesSource).toContain("Needs review");
-    expect(releaseNotesSource).toContain("automatic local crash logs");
-    expect(releaseNotesSource).toContain("Added 22 more Radiance prints");
+    expect(releaseNotesSource).toContain("Change visibility");
+    expect(releaseNotesSource).toContain("Known opponent hand");
+    expect(releaseNotesSource).toContain("Added 66 card prints");
     expect(releaseNotesSource).not.toContain("Search Rules");
     expect(releaseNotesSource).not.toContain("Deck Insights is now the default Insights view");
   });

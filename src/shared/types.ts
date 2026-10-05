@@ -1618,6 +1618,8 @@ export interface RawCaptureReplayMetadata {
   error?: string;
   localPath?: string;
   visibility?: RawCaptureVisibility;
+  /** A failed visibility update still required to finish this upload; never a future-game default. */
+  pendingVisibility?: RawCaptureVisibility;
   webReplayAutoUploadEligible?: boolean;
   webReplayAutoUploadAccountUid?: string;
   webReplayDiscordShareEligible?: boolean;

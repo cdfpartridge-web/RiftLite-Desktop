@@ -590,13 +590,13 @@ const LAB_TRAINING_LEGEND_NAMES = new Set(LAB_TRAINING_LEGEND_NAME_BY_CANONICAL.
 const RELEASE_NOTES = {
   version: APP_VERSION_META,
   title: `RiftLite v${APP_VERSION_META}`,
-  intro: "Simpler recording and sharing, clearer game reviews, and a smoother RiftLite.",
+  intro: "Clearer replay visibility, restored hand reveals, and the latest card artwork.",
   items: [
-    "Set up web replays, video, microphone and Discord together in Recording & sharing.",
-    "Find replays, videos and game logs together, with clearer upload recovery and Discord sharing.",
-    "Use Needs review in Matches to finish games saved for later, and manage invitations in Your groups.",
-    "Faster background checks and replay browsing, with automatic local crash logs for troubleshooting.",
-    "Added 22 more Radiance prints, including Mordekaiser and three new battlefields."
+    "Choose Change visibility on a saved game or in My replays to make it Public, Unlisted or Private.",
+    "Recording & sharing keeps your future-upload default separate from completed replays, and automatic Discord delivery respects a later Private choice.",
+    "Known opponent hand now picks up modern Atlas reveal effects and remembers revealed cards while keeping unknown draws hidden.",
+    "Added 66 card prints: 40 Radiance previews and 26 older alternate arts, promos and tokens, including Evelynn and signed Mordekaiser.",
+    "Alternate and signed legends retain their artwork and are recognised correctly in captures and replays."
   ]
 };
 const RIOT_LEGAL_NOTICE = `RiftLite was created under Riot Games' "Legal Jibber Jabber" policy using assets owned by Riot Games. Riot Games does not endorse or sponsor this project.`;
@@ -8109,20 +8109,17 @@ function AtlasKnownOpponentHandPanel({
       || deckTrackerImageUrlFromId(previewedCard.code || previewedCard.cardId)
     : "";
   const previewedCardName = previewedCard?.name || previewedCard?.code || "Known card";
-  const hasAnonymousDeparture = !state.activeReveal
-    && handCount !== null
+  const hasAnonymousDeparture = handCount !== null
     && knownCount > handCount;
-  const summary = state.activeReveal
-    ? `${knownCount} card${knownCount === 1 ? "" : "s"} revealed now`
-    : hasAnonymousDeparture
-      ? `${knownCount} remembered possibilities · ${handCount} card${handCount === 1 ? "" : "s"} currently in hand`
+  const summary = hasAnonymousDeparture
+    ? `${knownCount} remembered possibilities · ${handCount} card${handCount === 1 ? "" : "s"} currently in hand`
     : handCount !== null
       ? `${knownCount} known · ${handCount} card${handCount === 1 ? "" : "s"} currently in hand`
-      : `${knownCount} card${knownCount === 1 ? "" : "s"} remembered from the last reveal`;
-  const explanation = state.activeReveal
-    ? "Atlas is exposing these exact card instances to you."
-    : hasAnonymousDeparture
-      ? "Atlas hid which remembered card left. Treat these as possibilities and dismiss one when you can identify it."
+      : `${knownCount} known card${knownCount === 1 ? "" : "s"}`;
+  const explanation = hasAnonymousDeparture
+    ? "Atlas hid which remembered card left. Treat these as possibilities and dismiss one when you can identify it."
+    : state.activeReveal
+      ? "Revealed cards are added automatically. Previously revealed cards remain as a memory aid."
       : "Unknown draws are not added. Cards stay here only as a memory aid until played or dismissed.";
 
   useEffect(() => {
@@ -12603,7 +12600,7 @@ function DashboardView({
       videoControls={<RecordingVideoSettings settings={settings} onSave={onSaveSettings} onChooseReplayDirectory={onChooseReplayDirectory} onOpenReplayDirectory={onOpenReplayDirectory} />}
       advancedControls={<WebReplayUploadCentre {...replayDeliveryControls} />}
       onOpenAccount={() => onNavigate("account")} onOpenHubs={() => onNavigate("hubs")}
-      onOpenLibrary={() => onNavigate("replays")} onSettingsChanged={onSettingsChanged} onRefreshDiagnostics={onRefreshWebReplayDiagnostics} />;
+      onOpenLibrary={() => onNavigate("replays")} onManageReplayVisibility={() => onNavigate("web-replay")} onSettingsChanged={onSettingsChanged} onRefreshDiagnostics={onRefreshWebReplayDiagnostics} />;
   }
   if (view === "replays") {
     return (
@@ -13136,17 +13133,17 @@ function WebReplayUploadCentre({
         </label>
         <label className="web-replay-visibility-card">
           <span>
-            <strong>New replay visibility</strong>
-            <small>Private means only your linked account</small>
+            <strong>Default visibility for future replays</strong>
+            <small>Choose who can watch new uploads</small>
           </span>
           <select
             value={settings.rawCapture.visibility}
             disabled={!anyUploadEnabled || busy || Boolean(selectedDiscordHubs.length)}
             onChange={(event) => void setVisibility(event.target.value as UserSettings["rawCapture"]["visibility"])}
           >
-            <option value="private">Private</option>
-            <option value="unlisted">Unlisted</option>
-            <option value="public">Public</option>
+            <option value="private">Private — only me</option>
+            <option value="unlisted">Unlisted — anyone with the link</option>
+            <option value="public">Public — listed for everyone</option>
           </select>
         </label>
           </div>

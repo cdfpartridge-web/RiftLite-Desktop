@@ -17,6 +17,7 @@ export type RecordingSharingPageProps = {
   onOpenAccount: () => void;
   onOpenHubs: (hubId?: string) => void;
   onOpenLibrary: () => void;
+  onManageReplayVisibility: () => void;
   onSettingsChanged: (settings: UserSettings) => void;
   onRefreshDiagnostics?: () => void | Promise<unknown>;
   initialSection?: RecordingSharingSection;
@@ -26,7 +27,7 @@ export type RecordingSharingPageProps = {
 const RESULTS_BOT_INSTALL_URL = "https://discord.com/oauth2/authorize?client_id=1524708623790510241";
 
 export function RecordingSharingPage({ settings, diagnostics, replayControls, videoControls, advancedControls,
-  onOpenAccount, onOpenHubs, onOpenLibrary, onSettingsChanged, onRefreshDiagnostics, initialSection, api = window.riftlite
+  onOpenAccount, onOpenHubs, onOpenLibrary, onManageReplayVisibility, onSettingsChanged, onRefreshDiagnostics, initialSection, api = window.riftlite
 }: RecordingSharingPageProps) {
   const [expanded, setExpanded] = useState<RecordingSharingSection | null>(initialSection ?? null);
   const currentAccount = useRef(settings.accountUid);
@@ -64,7 +65,7 @@ export function RecordingSharingPage({ settings, diagnostics, replayControls, vi
       <button className="secondary" type="button" onClick={onOpenAccount}>{verified ? "Account" : "Connect account"}</button>
     </div>
     <div className="recording-sharing-sections">
-      {section("replays", "Interactive replays", "Revisit the board and each turn online.", replaySummary, <Layers size={22} />, <>{replayControls}<p className="muted recording-sharing-footnote">These choices apply to future games. Existing online replays keep their current visibility.</p></>)}
+      {section("replays", "Interactive replays", "Revisit the board and each turn online.", replaySummary, <Layers size={22} />, <>{replayControls}<div className="recording-sharing-footnote"><p className="muted">To change a past replay, open My replays and choose Change visibility on that game. Your default for future games stays separate.</p><button className="secondary" type="button" onClick={onManageReplayVisibility}><Shield size={15} />Change a past replay’s visibility</button></div></>)}
       {section("video", "Video recordings", "Save a video of your game on this computer.", videoOn ? `Recording enabled · ${settings.replayMicAudioEnabled ? "Microphone on" : "Microphone off"}` : "Video recording off", <Video size={22} />, videoControls)}
       {section("discord", "Discord", "Post interactive replay links to your server.", destinations.length ? `${destinations.length} automatic sharing destination${destinations.length === 1 ? "" : "s"} selected` : "Optional · Automatic sharing off", <MessageCircle size={22} />, <DiscordSetup key={settings.accountUid || "local"} settings={settings} accountVerified={verified} uploadEnabled={Boolean(settings.rawCapture.enabled && (atlas || tcga))} api={api} onOpenAccount={onOpenAccount} onOpenHubs={onOpenHubs} onOpenReplaySetup={() => setExpanded("replays")} onSettingsChanged={(next) => { if (currentAccount.current === next.accountUid) onSettingsChanged(next); }} onRefreshDiagnostics={onRefreshDiagnostics} />)}
     </div>

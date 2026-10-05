@@ -2,6 +2,7 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import registryData from "../resources/riftbound_card_registry.json";
 import { TcgaResolver } from "../src/main/services/tcgaResolver";
+import { resolveBundledCardImage } from "../src/renderer/cardArtwork";
 
 type RegistryCard = {
   printId: string;
@@ -26,6 +27,24 @@ function resolver(): TcgaResolver {
 }
 
 describe("packaged Riftbound registry", () => {
+  it("recognizes the newly audited historical promos, alternate runes and tokens without replacing their exact artwork", async () => {
+    const cardResolver = resolver();
+    const printIds = [
+      "ARC-001", "ARC-002", "ARC-003", "ARC-004", "ARC-005", "ARC-006",
+      "OGN-007B", "OGN-042B", "OGN-089B", "OGN-126B", "OGN-166B", "OGN-214B", "OGN-151B", "OGN-197B",
+      "UNL-R01A", "UNL-R02A", "UNL-R03A", "UNL-R04A", "UNL-R05A", "UNL-R06A",
+      "SFD-T01", "SFD-T02", "VEN-041A", "VEN-T01", "VEN-T05", "VEN-T06"
+    ];
+    for (const printId of printIds) {
+      const card = cards.find(card => card.printId === printId);
+      expect(card, printId).toBeDefined();
+      await expect(cardResolver.resolveCard(printId)).resolves.toBe(card?.name);
+      expect(resolveBundledCardImage(printId), printId).toBe(card?.imageUrl);
+    }
+    expect(resolveBundledCardImage("UNL-R01A")).not.toBe(resolveBundledCardImage("OGN-007A"));
+    expect(resolveBundledCardImage("OGN-151B")).not.toBe(resolveBundledCardImage("OGN-151A"));
+  });
+
   it("resolves every catalogued Legend and collectible Battlefield by exact print id", async () => {
     const cardResolver = resolver();
     const legends = cards.filter((card) => card.type.toLowerCase() === "legend");

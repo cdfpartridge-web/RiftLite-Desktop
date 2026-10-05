@@ -92,6 +92,13 @@ describe("card artwork presentation", () => {
     expect(resolveDeckCardArtwork({ cardId: "UNL-089", imageUrl: custom })).toBe(custom);
   });
 
+  it("preserves registered alternate-image aliases with capture sizing parameters", () => {
+    const promo = "https://cdn.piltoverarchive.com/temporary/1790379856360-1cbp857fr3y.jpg?width=400&quality=85#card";
+    expect(resolveCardArtwork("RAD-038", promo)).toBe(promo);
+    // An image alias never authorizes substituting another card's artwork.
+    expect(resolveCardArtwork("RAD-023", promo)).not.toBe(promo);
+  });
+
   it("allows a valid code to supply missing art when the card ID is an opaque provider ID", () => {
     const signed = cardRegistryData.cards.find((entry) => entry.printId === "UNL-226*")!.imageUrl;
     expect(resolveDeckCardArtwork({ cardId: "d5f17dc1-3cc1-478c-8c83-fdc081e2b377", code: "UNL-226S" }))

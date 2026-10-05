@@ -15,8 +15,12 @@ const CARD_IMAGE_BY_CODE: ReadonlyMap<string, string> = new Map(
 );
 const CAPTURED_ART_ALIASES = new Map(cardRegistryData.cards.flatMap(card =>
   "imageUrlAliases" in card && Array.isArray(card.imageUrlAliases)
-    ? card.imageUrlAliases.map(url => [url, card.printId] as const) : []
+    ? card.imageUrlAliases.map(url => [imageAliasKey(url), card.printId] as const) : []
 ));
+
+function imageAliasKey(url: string): string {
+  return url.split(/[?#]/)[0];
+}
 
 /** Fallback aliases are queried in order, never registered over exact prints. */
 export function resolveBundledCardImage(
@@ -41,7 +45,7 @@ export function resolveCardArtwork(
   imageByCode: ReadonlyMap<string, string> = CARD_IMAGE_BY_CODE
 ): string {
   const code = riftboundCardCodeFromValue(value) || riftboundCardCodeFromValue(sourceImageUrl);
-  const aliasCode = CAPTURED_ART_ALIASES.get(sourceImageUrl);
+  const aliasCode = CAPTURED_ART_ALIASES.get(imageAliasKey(sourceImageUrl));
   if (aliasCode && (!code || aliasCode === code)) return sourceImageUrl;
   return exactPrintImage(code, imageByCode) || sourceImageUrl || resolveBundledCardImage(code, imageByCode);
 }

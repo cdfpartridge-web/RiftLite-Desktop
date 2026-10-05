@@ -62,7 +62,7 @@ const HOME_DECK_LEGENDS_BY_THEME: Record<HomeDeckThemeId, readonly string[]> = {
   "order-chaos": ["Kennen"],
   "mind-order": ["Seraphine", "LeBlanc", "Lux", "Renata Glasc", "Viktor"],
   "fury-body": ["Lucian", "Renekton", "Rengar", "Volibear"],
-  "body-chaos": ["Kha'Zix", "Miss Fortune", "Sivir"]
+  "body-chaos": ["Evelynn", "Kha'Zix", "Miss Fortune", "Sivir"]
 };
 
 function mixHex(first: string, second: string, firstWeight: number): string {

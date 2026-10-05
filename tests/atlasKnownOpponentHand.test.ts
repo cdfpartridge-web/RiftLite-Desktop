@@ -95,6 +95,225 @@ function seedReveal(tracker: AtlasKnownOpponentHandTracker): void {
   ])))).toBe(true);
 }
 
+function modernCommit(operations: unknown[], actionType = "set_hand_reveal") {
+  return {
+    type: "authoritative_patch_commit", gameInstanceId: "836WZ", gameNumber: 1,
+    sequence: nextServerSequence++, action: { type: actionType }, patch: { operations }
+  };
+}
+
+function handSnapshot(cards: unknown[], playerId = "plr_opp") {
+  return {
+    type: "authoritative_snapshot", gameInstanceId: "836WZ", gameNumber: 1,
+    sequence: nextServerSequence++, snapshot: { players: [{ id: playerId, board: { hand: cards } }] }
+  };
+}
+
+const revealedCard = (id: string, code = "OGS-011", name = "Flash") => ({
+  ...fullCard(id, code, name), revealedToOpponent: true
+});
+
+describe("Atlas individual opponent hand reveals", () => {
+  it("captures the current five-card reveal without a legacy board flag and keeps the next draw unknown", () => {
+    const tracker = new AtlasKnownOpponentHandTracker();
+    tracker.ingest(frame(handSnapshot(Array.from({ length: 5 }, (_, index) => placeholder(index)))));
+    const names = ["Shadow's Call", "Cull the Weak", "Sprite Fountain", "Rally the Troops", "Vanguard Armory"];
+    tracker.ingest(frame(modernCommit([
+      { op: "zone_remove", playerId: "plr_opp", zone: "hand", cardIds: Array.from({ length: 5 }, (_, index) => placeholder(index).id) },
+      ...names.map((name, index) => ({
+        op: "zone_insert", playerId: "plr_opp", zone: "hand", index,
+        cards: [revealedCard(`modern_${index}`, `TEST-${index}`, name)]
+      }))
+    ])));
+    expect(tracker.getState()).toMatchObject({ opponentPlayerId: "plr_opp", activeReveal: true, opponentHandCount: 5 });
+    expect(tracker.getState().cards.map((card) => card.name)).toEqual(names);
+
+    tracker.ingest(frame(modernCommit([{ op: "zone_insert", playerId: "plr_opp", zone: "hand", cards: [placeholder(5)] }], "draw_cards")));
+    expect(tracker.getState().cards).toHaveLength(5);
+    expect(tracker.getState().opponentHandCount).toBe(6);
+    // Even an accidentally named payload has no reveal permission of its own.
+    tracker.ingest(frame(modernCommit([{ op: "zone_insert", playerId: "plr_opp", zone: "hand", cards: [fullCard("not_revealed", "OGN-058", "Discipline")] }], "draw_cards")));
+    expect(tracker.getState().cards).toHaveLength(5);
+    expect(tracker.getState().opponentHandCount).toBe(7);
+  });
+
+  it("supports partial reveal field patches, remembers concealment, and never upgrades the whole hand", () => {
+    const tracker = new AtlasKnownOpponentHandTracker();
+    tracker.ingest(frame(handSnapshot([fullCard("first", "OGS-011", "Flash"), fullCard("second", "OGN-058", "Discipline")])));
+    expect(tracker.getState().cards).toEqual([]);
+    tracker.ingest(frame(modernCommit([{ op: "patch_card_fields", playerId: "plr_opp", zone: "hand", cardId: "first", fields: { revealedToOpponent: true } }])));
+    expect(tracker.getState().cards.map((card) => card.instanceId)).toEqual(["first"]);
+    expect(tracker.getState()).toMatchObject({ activeReveal: true, opponentHandCount: 2 });
+    tracker.ingest(frame(modernCommit([{ op: "patch_card_fields", playerId: "plr_opp", zone: "hand", cardId: "first", fields: { revealedToOpponent: false } }])));
+    expect(tracker.getState().activeReveal).toBe(false);
+    expect(tracker.getState().cards.map((card) => card.instanceId)).toEqual(["first"]);
+    tracker.ingest(frame(modernCommit([{ op: "patch_card_fields", playerId: "plr_opp", zone: "hand", cardId: "second", fields: { revealedToOpponent: true } }])));
+    expect(tracker.getState().cards.map((card) => card.instanceId)).toEqual(["first", "second"]);
+    tracker.ingest(frame(modernCommit([{ op: "unset_card_fields", playerId: "plr_opp", zone: "hand", cardId: "second", fields: ["revealedToOpponent"] }])));
+    expect(tracker.getState().activeReveal).toBe(false);
+    expect(tracker.getState().cards).toHaveLength(2);
+  });
+
+  it("recovers only explicitly revealed hand cards from an incoming reconnect snapshot", () => {
+    const tracker = new AtlasKnownOpponentHandTracker();
+    tracker.ingest(frame(handSnapshot([
+      revealedCard("shown"), fullCard("private_named", "OGN-058", "Discipline"), placeholder(2)
+    ])));
+    expect(tracker.getState().cards.map((card) => card.instanceId)).toEqual(["shown"]);
+    expect(tracker.getState().opponentHandCount).toBe(3);
+    tracker.dismiss("shown");
+    tracker.ingest(frame(handSnapshot([revealedCard("shown"), placeholder(1), placeholder(2)])));
+    expect(tracker.getState().cards).toEqual([]);
+  });
+
+  it("does not lose a revealed card when the server replaces the same hand instances", () => {
+    const tracker = new AtlasKnownOpponentHandTracker();
+    tracker.ingest(frame(handSnapshot([revealedCard("first"), revealedCard("second")])));
+    tracker.ingest(frame(modernCommit([
+      { op: "zone_remove", playerId: "plr_opp", zone: "hand", cardIds: ["first", "second"] },
+      { op: "zone_insert", playerId: "plr_opp", zone: "hand", cards: [revealedCard("first"), revealedCard("second")] }
+    ])));
+    expect(tracker.getState().cards.map((card) => card.instanceId)).toEqual(["first", "second"]);
+    expect(tracker.getState().opponentHandCount).toBe(2);
+  });
+
+  it("prunes departed remembered instances when a reconnect provides the complete exact hand", () => {
+    const tracker = new AtlasKnownOpponentHandTracker();
+    tracker.ingest(frame(handSnapshot([revealedCard("first"), revealedCard("second")])));
+    tracker.ingest(frame(handSnapshot([revealedCard("second")])));
+    expect(tracker.getState().cards.map((card) => card.instanceId)).toEqual(["second"]);
+    expect(tracker.getState()).toMatchObject({ activeReveal: true, opponentHandCount: 1 });
+    tracker.ingest(frame(handSnapshot([placeholder(0)])));
+    expect(tracker.getState().cards.map((card) => card.instanceId)).toEqual(["second"]);
+    expect(tracker.getState().activeReveal).toBe(false);
+  });
+
+  it("preserves remembered cards during a modern concealment replacement and removes played instances", () => {
+    const tracker = new AtlasKnownOpponentHandTracker();
+    tracker.ingest(frame(handSnapshot([revealedCard("first"), revealedCard("second")])));
+    tracker.ingest(frame(modernCommit([
+      { op: "zone_remove", playerId: "plr_opp", zone: "hand", cardIds: ["first", "second"] },
+      { op: "zone_insert", playerId: "plr_opp", zone: "hand", cards: [placeholder(0), placeholder(1)] }
+    ])));
+    expect(tracker.getState()).toMatchObject({ activeReveal: false, opponentHandCount: 2 });
+    expect(tracker.getState().cards.map((card) => card.instanceId)).toEqual(["first", "second"]);
+    tracker.ingest(frame(modernCommit([
+      { op: "zone_remove", playerId: "plr_opp", zone: "hand", cardIds: [placeholder(0).id] },
+      { op: "zone_insert", playerId: "plr_opp", zone: "base", cards: [fullCard("first", "OGS-011", "Flash")] }
+    ], "play_card")));
+    expect(tracker.getState().cards.map((card) => card.instanceId)).toEqual(["second"]);
+    expect(tracker.getState().opponentHandCount).toBe(1);
+    tracker.ingest(frame(handSnapshot([])));
+    expect(tracker.getState().cards).toEqual([]);
+    expect(tracker.getState().opponentHandCount).toBe(0);
+  });
+
+  it("ends individual reveal state when the last known card enters the chain", () => {
+    const tracker = new AtlasKnownOpponentHandTracker();
+    tracker.ingest(frame(handSnapshot([revealedCard("first")])));
+    tracker.ingest(frame(modernCommit([{ op: "chain_insert", entries: [{ id: "chain_first", byPlayerId: "plr_opp", sourceCardId: "first", card: fullCard("copy", "OGS-011", "Flash") }] }], "play_card")));
+    expect(tracker.getState()).toMatchObject({ activeReveal: false, opponentHandCount: 0, cards: [] });
+  });
+
+  it("fails closed for unknown perspective, spectators, outgoing packets and non-hand flags", () => {
+    const packet = modernCommit([{ op: "zone_insert", playerId: "plr_opp", zone: "hand", cards: [revealedCard("secret")] }]);
+    for (const options of [
+      { dir: "out" as const },
+      { requestUrl: "wss://realtime.riftatlas-workers.com/parties/match/836WZ" },
+      { requestUrl: "wss://realtime.riftatlas-workers.com/parties/match/836WZ?playerId=spectator" }
+    ]) {
+      const tracker = new AtlasKnownOpponentHandTracker();
+      tracker.ingest(frame(packet, options));
+      tracker.ingest(frame(handSnapshot([revealedCard("snapshot_secret")]), options));
+      expect(tracker.getState().cards).toEqual([]);
+    }
+    const tracker = new AtlasKnownOpponentHandTracker();
+    tracker.ingest(frame(modernCommit([
+      ...["base", "deck", "sideboard", "runeDeck"].map((zone) => ({ op: "zone_insert", playerId: "plr_opp", zone, cards: [revealedCard(`non_hand_${zone}`)] })),
+      { op: "zone_insert", playerId: "plr_local", zone: "hand", cards: [{ ...revealedCard("own"), ownerPlayerId: "plr_local" }] },
+      { op: "zone_insert", playerId: "plr_opp", zone: "hand", cards: [{ ...revealedCard("owner_mismatch"), ownerPlayerId: "plr_local" }, { ...placeholder(0), name: "Flash", cardCode: "OGS-011", revealedToOpponent: true }] }
+    ])));
+    expect(tracker.getState().cards).toEqual([]);
+  });
+
+  it("does not guess ambiguous opponent reveals or accept truthy non-boolean flags", () => {
+    const tracker = new AtlasKnownOpponentHandTracker();
+    tracker.ingest(frame(modernCommit([
+      { op: "zone_insert", playerId: "plr_opp", zone: "hand", cards: [revealedCard("first")] },
+      { op: "zone_insert", playerId: "plr_third", zone: "hand", cards: [{ ...revealedCard("third"), ownerPlayerId: "plr_third" }] }
+    ])));
+    expect(tracker.getState().cards).toEqual([]);
+    const flags = new AtlasKnownOpponentHandTracker();
+    flags.ingest(frame(handSnapshot(["true", 1, undefined, false].map((flag, index) => ({ ...revealedCard(`flag_${index}`), revealedToOpponent: flag })))));
+    expect(flags.getState().cards).toEqual([]);
+  });
+
+  it("clears cached hand identities and flags at room, game and viewer boundaries", () => {
+    for (const boundary of [
+      { type: "room_shell_leave" },
+      { type: "authoritative_snapshot", gameNumber: 2 },
+      { type: "room_shell_sync", roomCode: "NEWROOM" },
+      { type: "room_shell_sync", sessionDoc: { viewer: { role: "spectator" } } }
+    ]) {
+      const tracker = new AtlasKnownOpponentHandTracker();
+      tracker.ingest(frame(handSnapshot([revealedCard("first")])));
+      tracker.ingest(frame(boundary));
+      expect(tracker.getState().cards).toEqual([]);
+      tracker.ingest(frame(modernCommit([{ op: "patch_card_fields", playerId: "plr_opp", zone: "hand", cardId: "first", fields: { revealedToOpponent: true } }])));
+      expect(tracker.getState().cards).toEqual([]);
+    }
+  });
+
+  it("revokes a stale legacy whole-hand reveal on reconnect before accepting later draws", () => {
+    const tracker = new AtlasKnownOpponentHandTracker();
+    seedReveal(tracker);
+    const snapshot = handSnapshot([placeholder(0), placeholder(1), placeholder(2), placeholder(3)]);
+    Object.assign(snapshot.snapshot.players[0]!.board, { handRevealToOpponent: false });
+    tracker.ingest(frame(snapshot));
+    expect(tracker.getState().activeReveal).toBe(false);
+    tracker.ingest(frame(modernCommit([{ op: "zone_insert", playerId: "plr_opp", zone: "hand", cards: [fullCard("unrevealed_draw", "OGS-011", "Flash")] }], "draw_cards")));
+    expect(tracker.getState().cards.map((card) => card.instanceId)).not.toContain("unrevealed_draw");
+    expect(tracker.getState().cards).toHaveLength(4);
+  });
+
+  it("forgets identity tracking after a known card goes back to a hidden deck", () => {
+    const tracker = new AtlasKnownOpponentHandTracker();
+    tracker.ingest(frame(handSnapshot([revealedCard("first")])));
+    tracker.ingest(frame(modernCommit([{ op: "zone_move", from: { playerId: "plr_opp", zone: "hand" }, to: { playerId: "plr_opp", zone: "deck" }, cardId: "first" }], "move_card")));
+    expect(tracker.getState().cards).toEqual([]);
+    tracker.ingest(frame(modernCommit([{ op: "zone_insert", playerId: "plr_opp", zone: "hand", cards: [fullCard("first", "OGS-011", "Flash")] }], "draw_cards")));
+    expect(tracker.getState().cards).toEqual([]);
+    tracker.ingest(frame(modernCommit([{ op: "patch_card_fields", playerId: "plr_opp", zone: "hand", cardId: "first", fields: { revealedToOpponent: true } }])));
+    expect(tracker.getState().cards.map((card) => card.instanceId)).toEqual(["first"]);
+  });
+
+  it("removes a concealed known card when an exact deck insertion proves it left the hand", () => {
+    const tracker = new AtlasKnownOpponentHandTracker();
+    tracker.ingest(frame(handSnapshot([revealedCard("first"), revealedCard("second")])));
+    tracker.ingest(frame(modernCommit([
+      { op: "zone_remove", playerId: "plr_opp", zone: "hand", cardIds: ["first", "second"] },
+      { op: "zone_insert", playerId: "plr_opp", zone: "hand", cards: [placeholder(0), placeholder(1)] }
+    ])));
+    tracker.ingest(frame(modernCommit([
+      { op: "zone_remove", playerId: "plr_opp", zone: "hand", cardIds: [placeholder(0).id] },
+      { op: "zone_insert", playerId: "plr_opp", zone: "deck", cards: [{ id: "first" }] }
+    ], "move_card")));
+    expect(tracker.getState().cards.map((card) => card.instanceId)).toEqual(["second"]);
+    expect(tracker.getState().opponentHandCount).toBe(1);
+    tracker.ingest(frame(modernCommit([{ op: "zone_insert", playerId: "plr_opp", zone: "hand", cards: [fullCard("first", "OGS-011", "Flash")] }], "draw_cards")));
+    expect(tracker.getState().cards.map((card) => card.instanceId)).toEqual(["second"]);
+  });
+
+  it("counts a concealed known card leaving for the chain even when no matching slot removal arrives", () => {
+    const tracker = new AtlasKnownOpponentHandTracker();
+    tracker.ingest(frame(handSnapshot([revealedCard("first"), revealedCard("second")])));
+    tracker.ingest(frame(handSnapshot([placeholder(0), placeholder(1)])));
+    tracker.ingest(frame(modernCommit([{ op: "chain_insert", entries: [{ id: "chain_first", byPlayerId: "plr_opp", sourceCardId: "first" }] }], "play_card")));
+    expect(tracker.getState().cards.map((card) => card.instanceId)).toEqual(["second"]);
+    expect(tracker.getState().opponentHandCount).toBe(1);
+  });
+});
+
 describe("AtlasKnownOpponentHandTracker", () => {
   it("captures a real incoming Atlas reveal and keeps duplicate prints by exact instance", () => {
     const tracker = new AtlasKnownOpponentHandTracker();

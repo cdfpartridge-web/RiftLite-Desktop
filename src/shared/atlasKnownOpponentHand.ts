@@ -20,6 +20,8 @@ type PatchAnalysis = {
   fullHandCardsByPlayer: Map<string, AtlasKnownOpponentHandCard[]>;
 };
 
+type ObservedHand = { cards: JsonRecord[]; complete: boolean };
+
 const PUBLIC_OPPONENT_ZONES = new Set([
   "base",
   "battlefield",
@@ -45,6 +47,8 @@ export class AtlasKnownOpponentHandTracker {
   private readonly knownIdentityByInstance = new Map<string, AtlasKnownOpponentHandCard>();
   private readonly knownSourceByChainEntry = new Map<string, string>();
   private readonly seenFrames = new Set<string>();
+  private readonly observedHands = new Map<string, ObservedHand>();
+  private legacyActiveReveal = false;
 
   ingest(payload: RawCaptureAppendFramePayload): boolean {
     if (payload.platform !== "atlas") {
@@ -73,21 +77,25 @@ export class AtlasKnownOpponentHandTracker {
     const viewerChanged = this.learnLocalPlayerId(packet, payload, capturedAt);
     if (
       payload.frame.dir !== "in"
-      || frameType !== "authoritative_patch_commit"
+      || !["authoritative_patch_commit", "authoritative_snapshot"].includes(frameType)
       || !this.localPlayerId
     ) {
       return boundaryChanged || viewerChanged;
     }
 
     const patch = readObject(packet.patch);
-    const operations = readArray(patch?.operations)
-      .map(readObject)
-      .filter((operation): operation is JsonRecord => Boolean(operation));
+    const operations = frameType === "authoritative_snapshot"
+      ? snapshotHandOperations(packet)
+      : readArray(patch?.operations)
+        .map(readObject)
+        .filter((operation): operation is JsonRecord => Boolean(operation));
     if (!operations.length) {
       return boundaryChanged || viewerChanged;
     }
 
-    const patchChanged = this.applyAuthoritativePatch(operations, capturedAt);
+    const patchChanged = this.applyAuthoritativePatch(
+      operations, capturedAt, readString(readObject(packet.action)?.type)
+    );
     return boundaryChanged || viewerChanged || patchChanged;
   }
 
@@ -121,21 +129,39 @@ export class AtlasKnownOpponentHandTracker {
     return this.resetContext(currentTimestamp());
   }
 
-  private applyAuthoritativePatch(operations: JsonRecord[], capturedAt: string): boolean {
+  private applyAuthoritativePatch(operations: JsonRecord[], capturedAt: string, actionType: string): boolean {
+    // Reconnects may skip the commit that turned a legacy reveal off. A fresh
+    // snapshot proves individual flags only, never a stale whole-hand permission.
+    if (operations.some((operation) => operation.op === "observed_hand_snapshot")) {
+      this.legacyActiveReveal = false;
+    }
     const analysis = analyzePatch(operations, capturedAt);
+    const previousReveals = observedReveals(this.observedHands, capturedAt);
+    observeHandOperations(this.observedHands, operations);
+    const currentReveals = observedReveals(this.observedHands, capturedAt);
+    const explicitReveals = explicitHandRevealIds(operations);
+    const newReveals = new Map([...currentReveals].map(([playerId, cards]) => [
+      playerId,
+      cards.filter((card) => explicitReveals.get(playerId)?.has(card.instanceId) || !(previousReveals.get(playerId) ?? []).some((previous) => (
+        previous.instanceId === card.instanceId && previous.cardKey === card.cardKey
+      )))
+    ]));
+    const modernPlayers = [...newReveals]
+      .filter(([playerId, cards]) => playerId !== this.localPlayerId && cards.length > 0)
+      .map(([playerId]) => playerId);
     const positivePlayers = uniqueStrings(
       analysis.directives
         .filter((directive) => directive.revealed && directive.playerId !== this.localPlayerId)
         .map((directive) => directive.playerId)
     );
-    const ambiguousPositiveReveal = positivePlayers.length > 1;
+    const ambiguousPositiveReveal = uniqueStrings([...positivePlayers, ...modernPlayers]).length > 1;
 
     let next = this.state;
     let usedHandReplacement = false;
 
     // A reveal is accepted only when the same authoritative patch both enables
     // the opponent-facing reveal and supplies an authoritative hand replacement.
-    if (positivePlayers.length === 1) {
+    if (positivePlayers.length === 1 && !ambiguousPositiveReveal) {
       const opponentPlayerId = positivePlayers[0]!;
       const cards = dedupeCardsByInstance(analysis.fullHandCardsByPlayer.get(opponentPlayerId) ?? []);
       const handInsertCount = analysis.handInsertCountByPlayer.get(opponentPlayerId) ?? 0;
@@ -150,6 +176,7 @@ export class AtlasKnownOpponentHandTracker {
       );
       if (hasExactCards || hasAuthoritativeEmptyHand) {
         this.rememberKnownIdentities(cards);
+        this.legacyActiveReveal = true;
         next = {
           ...next,
           opponentPlayerId,
@@ -168,6 +195,7 @@ export class AtlasKnownOpponentHandTracker {
       && directive.playerId === next.opponentPlayerId
     ));
     if (falseDirective) {
+      this.legacyActiveReveal = false;
       const replacementCount = analysis.handInsertCountByPlayer.get(falseDirective.playerId);
       next = {
         ...next,
@@ -179,18 +207,64 @@ export class AtlasKnownOpponentHandTracker {
       usedHandReplacement = true;
     }
 
+    // Current Atlas marks individual hand cards. This evidence never enables
+    // the legacy whole-hand permission for later, unrelated draws.
+    if (modernPlayers.length === 1 && !ambiguousPositiveReveal) {
+      const opponentPlayerId = modernPlayers[0]!;
+      if (!next.opponentPlayerId || next.opponentPlayerId === opponentPlayerId) {
+        if (!positivePlayers.includes(opponentPlayerId)) this.legacyActiveReveal = false;
+        const cards = newReveals.get(opponentPlayerId)!;
+        this.rememberKnownIdentities(cards);
+        next = {
+          ...next,
+          opponentPlayerId,
+          revealedAt: capturedAt,
+          cards: dedupeCardsByInstance([...next.cards, ...cards])
+        };
+      }
+    }
+
     if (!next.opponentPlayerId) {
       return this.commit(next, capturedAt);
     }
 
     const opponentPlayerId = next.opponentPlayerId;
+    for (const operation of operations) {
+      const op = readString(operation.op);
+      const to = readObject(operation.to);
+      const destinationPlayer = readRealPlayerId(op === "zone_move" ? to?.playerId : operation.playerId);
+      const destinationZone = normalizeZone(op === "zone_move" ? to?.zone : operation.zone);
+      if (destinationPlayer !== opponentPlayerId || !["deck", "maindeck", "runedeck", "sideboard"].includes(destinationZone)) continue;
+      const values = op === "zone_insert" ? readArray(operation.cards)
+        : op === "zone_move" ? [operation.card, { id: operation.cardId }] : [];
+      for (const value of values) this.knownIdentityByInstance.delete(exactCardInstanceId(value));
+    }
+    const modernConcealment = actionType === "set_hand_reveal"
+      && (previousReveals.get(opponentPlayerId)?.length ?? 0) > 0
+      && (currentReveals.get(opponentPlayerId)?.length ?? 0) === 0
+      && (analysis.handInsertCountByPlayer.get(opponentPlayerId) ?? 0) > 0;
     this.rememberKnownChainSources(operations, opponentPlayerId);
     const departedInstanceIds = knownDepartures(
       operations,
       opponentPlayerId,
       new Set(next.cards.map((card) => card.instanceId)),
-      !usedHandReplacement && !falseDirective
+      !usedHandReplacement && !falseDirective && !modernConcealment
     );
+    for (const instanceId of finalHandArrivals(operations, opponentPlayerId)) {
+      departedInstanceIds.delete(instanceId);
+    }
+    const observedHand = this.observedHands.get(opponentPlayerId);
+    if (observedHand && departedInstanceIds.size) {
+      const previousObservedCount = observedHand.cards.length;
+      observedHand.cards = observedHand.cards.filter((card) => !departedInstanceIds.has(readString(card.id)));
+      const exactRemovedCount = previousObservedCount - observedHand.cards.length;
+      const explicitRemovals = analysis.handRemoveCountByPlayer.get(opponentPlayerId) ?? 0;
+      if (departedInstanceIds.size > exactRemovedCount + explicitRemovals) {
+        // A played anonymous slot cannot be mapped back to an exact index.
+        // Keep the arithmetic hand count rather than overriding it with stale slots.
+        observedHand.complete = false;
+      }
+    }
     const cardsByInstance = new Map(
       next.cards
         .filter((card) => !departedInstanceIds.has(card.instanceId))
@@ -198,7 +272,7 @@ export class AtlasKnownOpponentHandTracker {
     );
 
     if (
-      next.activeReveal
+      this.legacyActiveReveal
       && !usedHandReplacement
       && !ambiguousPositiveReveal
       && !analysis.directives.some((directive) => (
@@ -221,7 +295,7 @@ export class AtlasKnownOpponentHandTracker {
       opponentPlayerId,
       this.knownIdentityByInstance,
       this.knownSourceByChainEntry,
-      next.activeReveal,
+      this.legacyActiveReveal,
       capturedAt
     )) {
       cardsByInstance.set(card.instanceId, card);
@@ -249,6 +323,20 @@ export class AtlasKnownOpponentHandTracker {
       }
     }
 
+    next = {
+      ...next,
+      activeReveal: this.legacyActiveReveal || (observedReveals(this.observedHands, capturedAt).get(opponentPlayerId)?.length ?? 0) > 0,
+      ...(observedHand?.complete ? { opponentHandCount: observedHand.cards.length } : {})
+    };
+    if (observedHand?.complete && observedHand.cards.every((card) => (
+      card.isPlaceholder !== true && Boolean(exactCardInstanceId(card))
+    ))) {
+      // An exact reconnect snapshot also proves which old instances left hand
+      // while disconnected. Anonymous placeholders cannot provide that proof.
+      const present = new Set(observedHand.cards.map(exactCardInstanceId));
+      next = { ...next, cards: next.cards.filter((card) => present.has(card.instanceId)) };
+    }
+
     return this.commit(next, capturedAt);
   }
 
@@ -269,6 +357,8 @@ export class AtlasKnownOpponentHandTracker {
     if (roomChanged || gameChanged) {
       this.knownIdentityByInstance.clear();
       this.knownSourceByChainEntry.clear();
+      this.observedHands.clear();
+      this.legacyActiveReveal = false;
       this.localPlayerId = "";
       return this.commit({
         ...emptyState(),
@@ -356,6 +446,8 @@ export class AtlasKnownOpponentHandTracker {
     this.seenFrames.clear();
     this.knownIdentityByInstance.clear();
     this.knownSourceByChainEntry.clear();
+    this.observedHands.clear();
+    this.legacyActiveReveal = false;
     this.localPlayerId = "";
     if (isEmptyState(this.state)) {
       return false;
@@ -366,6 +458,8 @@ export class AtlasKnownOpponentHandTracker {
   private resetForViewerTransition(capturedAt: string): boolean {
     this.knownIdentityByInstance.clear();
     this.knownSourceByChainEntry.clear();
+    this.observedHands.clear();
+    this.legacyActiveReveal = false;
     return this.commit({
       ...emptyState(),
       roomCode: this.state.roomCode,
@@ -422,6 +516,186 @@ export class AtlasKnownOpponentHandTracker {
           this.knownSourceByChainEntry.set(entryId, sourceInstanceId);
         }
       }
+    }
+  }
+}
+
+function snapshotHandOperations(packet: JsonRecord): JsonRecord[] {
+  const snapshot = readObject(packet.snapshot);
+  return readArray(snapshot?.players).flatMap((value) => {
+    const player = readObject(value);
+    const playerId = readRealPlayerId(player?.id);
+    const board = readObject(player?.board);
+    return playerId && Array.isArray(board?.hand)
+      ? [{ op: "observed_hand_snapshot", playerId, cards: board.hand }]
+      : [];
+  });
+}
+
+function observedReveals(
+  hands: Map<string, ObservedHand>, capturedAt: string
+): Map<string, AtlasKnownOpponentHandCard[]> {
+  return new Map([...hands].map(([playerId, hand]) => [playerId, hand.cards
+    .filter((card) => card.revealedToOpponent === true)
+    .map((card) => fullRevealedCard(card, capturedAt))
+    .filter((card): card is AtlasKnownOpponentHandCard => Boolean(card))]));
+}
+
+function explicitHandRevealIds(operations: JsonRecord[]): Map<string, Set<string>> {
+  const revealed = new Map<string, Set<string>>();
+  for (const operation of operations) {
+    const op = readString(operation.op);
+    const to = readObject(operation.to);
+    const playerId = readRealPlayerId(op === "zone_move" ? to?.playerId : operation.playerId);
+    if (!playerId || !isHandZone(op === "zone_move" ? to?.zone : operation.zone)) continue;
+    const values = op === "zone_insert" ? readArray(operation.cards)
+      : op === "zone_move" ? [operation.card]
+        : op === "patch_card_fields" ? [{ ...readObject(operation.fields), id: operation.cardId }] : [];
+    for (const value of values) {
+      const card = readObject(value);
+      const id = exactCardInstanceId(card);
+      if (!id || card?.revealedToOpponent !== true) continue;
+      const ids = revealed.get(playerId) ?? new Set<string>();
+      ids.add(id);
+      revealed.set(playerId, ids);
+    }
+  }
+  return revealed;
+}
+
+function finalHandArrivals(operations: JsonRecord[], playerId: string): Set<string> {
+  const arrivals = new Set<string>();
+  for (const operation of operations) {
+    const op = readString(operation.op);
+    if (op === "zone_insert" && readRealPlayerId(operation.playerId) === playerId) {
+      for (const card of readArray(operation.cards)) {
+        const id = exactCardInstanceId(card);
+        if (isHandZone(operation.zone)) arrivals.add(id);
+        else arrivals.delete(id);
+      }
+    } else if (op === "zone_remove" && readRealPlayerId(operation.playerId) === playerId && isHandZone(operation.zone)) {
+      for (const id of [operation.cardId, ...readArray(operation.cardIds), readObject(operation.card)?.id,
+        ...readArray(operation.cards).map((card) => readObject(card)?.id)].map(readString)) arrivals.delete(id);
+    } else if (op === "zone_move") {
+      const to = readObject(operation.to);
+      const id = exactCardInstanceId(operation.card) || readExactInstanceId(operation.cardId);
+      if (readRealPlayerId(to?.playerId) === playerId && isHandZone(to?.zone)) arrivals.add(id);
+      else arrivals.delete(id);
+    } else if (op === "chain_insert") {
+      for (const entry of readArray(operation.entries).map(readObject)) {
+        arrivals.delete(readExactInstanceId(entry?.sourceCardId) || exactCardInstanceId(entry?.card));
+      }
+    }
+  }
+  return arrivals;
+}
+
+// Retain only the identity and explicit reveal flag needed to interpret a later
+// patch_card_fields. Named cards alone are never evidence of a public reveal.
+function observedCard(value: unknown, playerId: string): JsonRecord | null {
+  const card = readObject(value);
+  const id = readString(card?.id) || readString(card?.instanceId);
+  if (!card || !id || (card.ownerPlayerId !== undefined && card.ownerPlayerId !== playerId)) {
+    return null;
+  }
+  return {
+    id,
+    ownerPlayerId: playerId,
+    name: card.name ?? card.title,
+    cardCode: card.cardCode ?? card.code,
+    definitionId: card.definitionId ?? card.cardId,
+    isPlaceholder: card.isPlaceholder,
+    revealedToOpponent: card.revealedToOpponent
+  };
+}
+
+function observeHandOperations(hands: Map<string, ObservedHand>, operations: JsonRecord[]): void {
+  const getHand = (playerId: string) => {
+    let hand = hands.get(playerId);
+    if (!hand) {
+      hand = { cards: [], complete: false };
+      hands.set(playerId, hand);
+    }
+    return hand;
+  };
+  const insert = (playerId: string, values: unknown[], indexValue: unknown) => {
+    if (!playerId) return;
+    const hand = getHand(playerId);
+    const cards = values.map((value) => observedCard(value, playerId));
+    if (cards.some((card) => !card)) hand.complete = false;
+    const index = typeof indexValue === "number" && Number.isInteger(indexValue) && indexValue >= 0
+      ? Math.min(indexValue, hand.cards.length) : hand.cards.length;
+    const validCards = cards.filter((card): card is JsonRecord => Boolean(card));
+    // Retransmitted replacements must not duplicate an exact instance.
+    hand.cards = hand.cards.filter((card) => !validCards.some((value) => value.id === card.id));
+    hand.cards.splice(index, 0, ...validCards);
+  };
+  const remove = (playerId: string, operation: JsonRecord): JsonRecord | undefined => {
+    const hand = hands.get(playerId);
+    if (!hand) return undefined;
+    const ids = uniqueStrings([
+      operation.cardId, ...readArray(operation.cardIds),
+      readObject(operation.card)?.id, ...readArray(operation.cards).map((value) => readObject(value)?.id)
+    ].map(readString));
+    if (ids.length) {
+      const removed = hand.cards.find((card) => ids.includes(readString(card.id)));
+      hand.cards = hand.cards.filter((card) => !ids.includes(readString(card.id)));
+      return removed;
+    }
+    if (Number.isInteger(operation.index) && Number(operation.index) >= 0) {
+      return hand.cards.splice(Number(operation.index), operationCardCount(operation))[0];
+    }
+    // Without an exact ID or index, do not attribute later flags to stale cards.
+    hand.cards = [];
+    hand.complete = false;
+    return undefined;
+  };
+
+  for (const operation of operations) {
+    const op = readString(operation.op);
+    const playerId = readRealPlayerId(operation.playerId);
+    if (op === "observed_hand_snapshot" && playerId) {
+      hands.set(playerId, { cards: [], complete: true });
+      insert(playerId, readArray(operation.cards), 0);
+    } else if (op === "zone_insert" && isHandZone(operation.zone)) {
+      insert(playerId, readArray(operation.cards), operation.index);
+    } else if (op === "zone_remove" && isHandZone(operation.zone)) {
+      remove(playerId, operation);
+    } else if (op === "zone_move") {
+      const from = readObject(operation.from);
+      const to = readObject(operation.to);
+      const previous = isHandZone(from?.zone)
+        ? remove(readRealPlayerId(from?.playerId), { ...operation, index: from?.index }) : undefined;
+      if (isHandZone(to?.zone)) {
+        const destinationPlayer = readRealPlayerId(to?.playerId);
+        const value = readObject(operation.card) ?? (isHandZone(from?.zone) ? previous : undefined);
+        if (value) insert(destinationPlayer, [value], to?.index);
+        else if (destinationPlayer) getHand(destinationPlayer).complete = false;
+      }
+    } else if ((op === "patch_card_fields" || op === "unset_card_fields") && isHandZone(operation.zone) && playerId) {
+      const hand = getHand(playerId);
+      const cardId = readExactInstanceId(operation.cardId);
+      if (!cardId) continue;
+      const index = hand.cards.findIndex((card) => card.id === cardId);
+      const current = index >= 0 ? hand.cards[index]! : { id: cardId, ownerPlayerId: playerId };
+      const next = { ...current };
+      if (op === "patch_card_fields") {
+        Object.assign(next, readObject(operation.fields) ?? {});
+      } else {
+        for (const key of readArray(operation.fields).map(readString)) delete next[key];
+      }
+      // Patches cannot change the instance or owner to borrow another card's identity.
+      const card = next.id === cardId ? observedCard(next, playerId) : null;
+      if (index >= 0) {
+        if (card) hand.cards[index] = card;
+        else hand.cards.splice(index, 1);
+      } else if (card) {
+        hand.cards.push(card);
+        hand.complete = false;
+      }
+    } else if (op === "set_board_fields" && readObject(operation.fields)?.handRevealToOpponent === false) {
+      const hand = hands.get(playerId);
+      if (hand) hand.cards = hand.cards.map((card) => ({ ...card, revealedToOpponent: false }));
     }
   }
 }
@@ -573,7 +847,10 @@ function knownDepartures(
 
     if (op === "zone_insert") {
       const ownerPlayerId = readRealPlayerId(operation.playerId);
-      if (ownerPlayerId !== opponentPlayerId || !isPublicOpponentZone(operation.zone)) {
+      if (ownerPlayerId !== opponentPlayerId || !(
+        isPublicOpponentZone(operation.zone)
+        || ["deck", "maindeck", "runedeck", "sideboard"].includes(normalizeZone(operation.zone))
+      )) {
         continue;
       }
       for (const cardValue of readArray(operation.cards)) {

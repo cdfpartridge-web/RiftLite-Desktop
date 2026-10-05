@@ -12,7 +12,7 @@ const cards = registry.cards.filter(card => card.setCode === "RAD");
 describe("Radiance preview capture and artwork", () => {
   it("resolves every revealed print from collector codes and available Riot image hashes", async () => {
     const resolver = new TcgaResolver(resolve("resources/tcga_card_lookup.json"));
-    expect(cards).toHaveLength(110);
+    expect(cards).toHaveLength(150);
     for (const card of cards) {
       await expect(resolver.resolveCard(card.printId)).resolves.toBe(card.name);
       if (card.imageHash) await expect(resolver.resolveCard(card.imageHash)).resolves.toBe(card.name);
@@ -48,7 +48,7 @@ describe("Radiance preview capture and artwork", () => {
     }
     expect(resolveBundledCardImage("RAD-168")).not.toBe(resolveBundledCardImage("RAD-168*"));
     expect(resolveBundledCardImage("RAD-R04A")).not.toBe(resolveBundledCardImage("OGN-126"));
-    expect(registry.stats.bySet.RAD.uniquePrints).toBe(110);
+    expect(registry.stats.bySet.RAD.uniquePrints).toBe(150);
   });
 
   it("supports newly revealed champion costs, setup cards and the corrected printed title", () => {
@@ -60,6 +60,14 @@ describe("Radiance preview capture and artwork", () => {
     expect(card("RAD-152")).toMatchObject({ name: "Encore", type: "Spell", supertype: "Signature", costEnergy: 3, costPower: 1 });
     expect(legendFromImageUrl(`${legendImageUrl("Mordekaiser")}?width=400`)).toBe("Mordekaiser");
     expect(homeDeckThemeForLegend("Mordekaiser, Iron Revenant")?.domains).toEqual(["Fury", "Order"]);
+    expect(homeDeckThemeForLegend("Evelynn, Agony's Embrace")?.domains).toEqual(["Body", "Chaos"]);
+    expect(card("RAD-153")).toMatchObject({ name: "Evelynn, Agony's Embrace", type: "Legend", champion: "Evelynn" });
+    expect(card("RAD-175")).toMatchObject({ name: "Evelynn, Agony's Embrace", variants: { overnumbered: true } });
+    expect(card("RAD-170*")).toMatchObject({ name: "Mordekaiser, Iron Revenant", variants: { signature: true } });
+    expect(resolveBundledCardImage("RAD-170*")).not.toBe(resolveBundledCardImage("RAD-170"));
+    expect(resolveBundledCardImage("RAD-175")).not.toBe(resolveBundledCardImage("RAD-153"));
+    expect(resolveBundledCardImage("RAD-184")).not.toBe(resolveBundledCardImage("RAD-165"));
+    expect(card("RAD-163")).toMatchObject({ name: "Hunters' Circle", aliases: ["Hunter's Circle"] });
   });
 
   it("recognises preview images with no collector code in their filename", async () => {

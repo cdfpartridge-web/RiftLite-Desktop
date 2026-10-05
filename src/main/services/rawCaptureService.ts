@@ -113,6 +113,7 @@ const RAW_CAPTURE_UPLOAD_LANE_FIELDS = [
   "statusEndpoint",
   "uploadedAt",
   "processingStatus",
+  "pendingVisibility",
   "checksumSha256",
   "compressedBytes",
   "error",
@@ -1954,7 +1955,7 @@ export class RawCaptureService {
             replay.rawCapture?.processingStatus === "failed" ||
             rawCaptureRemoteStatusCheckReady(replay.rawCapture!) ||
             rawCaptureStaleProcessingReady(replay.rawCapture!, forceRetry) ||
-            rawCaptureReadyVisibilityNeedsReconciliation(replay.rawCapture!, settings) ||
+            rawCaptureReadyVisibilityNeedsReconciliation(replay.rawCapture!) ||
             (rawCaptureDiscordShareNeedsRetry(replay.rawCapture!, settings, forceRetry, reviewedResults.get(replay.matchId)) &&
               (!replay.rawCapture!.discordResultReviewRequired || reviewedResults.has(replay.matchId)))
           ));
@@ -2013,7 +2014,7 @@ export class RawCaptureService {
           manifest.metadata.processingStatus === "failed" ||
           rawCaptureRemoteStatusCheckReady(manifest.metadata) ||
           rawCaptureStaleProcessingReady(manifest.metadata, forceRetry) ||
-          rawCaptureReadyVisibilityNeedsReconciliation(manifest.metadata, settings) ||
+          rawCaptureReadyVisibilityNeedsReconciliation(manifest.metadata) ||
           (rawCaptureDiscordShareNeedsRetry(manifest.metadata, settings, forceRetry, reviewedResults.get(manifest.localMatchId || manifest.identity.localMatchId || "")) &&
             (!manifest.metadata.discordResultReviewRequired || reviewedResults.has(manifest.localMatchId || manifest.identity.localMatchId || "")))
         ))
@@ -2154,7 +2155,7 @@ export class RawCaptureService {
     return {
       replayId: uploaded.metadata.uploadId || "",
       url: uploaded.metadata.uploadUrl || "",
-      visibility,
+      visibility: normalizeRawCaptureVisibility(uploaded.metadata.visibility),
       status: uploaded.metadata.processingStatus
     };
   }
@@ -2567,7 +2568,8 @@ export class RawCaptureService {
         settings,
         options.automatic === true,
         undefined,
-        options.forceRetry === true
+        options.forceRetry === true,
+        true
       );
     }
     if (
@@ -3147,7 +3149,8 @@ export class RawCaptureService {
     settings: UserSettings,
     automatic: boolean,
     authenticatedReplayAuth?: { idToken: string; settings: UserSettings },
-    retryDelivery = false
+    retryDelivery = false,
+    alreadyReady = false
   ): Promise<PersistedRawCaptureManifest> {
     const replayId = manifest.metadata.uploadId || "";
     if (!replayId || manifest.metadata.processingStatus !== "ready") {
@@ -3155,9 +3158,14 @@ export class RawCaptureService {
     }
     const currentSettings = automatic ? await this.store.getSettings() : settings;
     const discordEligible = automatic && rawCaptureDiscordShareEligible(manifest.metadata, currentSettings);
-    const targetVisibility: RawCaptureVisibility = automatic
-      ? rawCaptureAutomaticTargetVisibility(manifest.metadata, currentSettings)
-      : requestedVisibility;
+    // Reopening or retrying a completed replay must not apply the setting for
+    // future games. Only an unfinished visibility operation owns a retry target.
+    const pendingVisibility = rawCapturePendingVisibility(manifest.metadata);
+    const targetVisibility: RawCaptureVisibility = pendingVisibility ?? (alreadyReady
+      ? normalizeRawCaptureVisibility(manifest.metadata.visibility)
+      : automatic
+        ? rawCaptureAutomaticTargetVisibility(manifest.metadata, currentSettings)
+        : requestedVisibility);
     let replayAuth: { idToken: string; settings: UserSettings } | null = authenticatedReplayAuth ?? null;
     const authenticate = async () => {
       if (!replayAuth) {
@@ -3178,19 +3186,21 @@ export class RawCaptureService {
       return replayAuth;
     };
 
-    if (normalizeRawCaptureVisibility(manifest.metadata.visibility) !== targetVisibility) {
-      let confirmedVisibility: RawCaptureVisibility;
-      try {
-        const authenticated = await authenticate();
-        confirmedVisibility = await updateRiftLiteReplayV2Visibility(
-          replayId,
-          targetVisibility,
-          authenticated.idToken,
-          async () => { await authenticate(); }
-        );
-      } catch (error) {
-        await this.saveReadyVisibilityReconciliationFailure(manifest, targetVisibility, error);
-        throw error;
+    if (pendingVisibility || normalizeRawCaptureVisibility(manifest.metadata.visibility) !== targetVisibility) {
+      let confirmedVisibility = normalizeRawCaptureVisibility(manifest.metadata.visibility);
+      if (confirmedVisibility !== targetVisibility) {
+        try {
+          const authenticated = await authenticate();
+          confirmedVisibility = await updateRiftLiteReplayV2Visibility(
+            replayId,
+            targetVisibility,
+            authenticated.idToken,
+            async () => { await authenticate(); }
+          );
+        } catch (error) {
+          await this.saveReadyVisibilityReconciliationFailure(manifest, targetVisibility, error);
+          throw error;
+        }
       }
       const updatedAt = new Date().toISOString();
       manifest = {
@@ -3203,6 +3213,7 @@ export class RawCaptureService {
           processingUpdatedAt: updatedAt,
           deliveryStage: "ready",
           visibility: confirmedVisibility,
+          pendingVisibility: undefined,
           nextRetryAt: undefined,
           lastHttpStatus: undefined,
           lastErrorCode: undefined,
@@ -3270,6 +3281,7 @@ export class RawCaptureService {
         processingStatus: "ready",
         processingUpdatedAt: updatedAt,
         deliveryStage: "paused",
+        pendingVisibility: targetVisibility,
         attemptCount,
         nextRetryAt: retryDelayMs !== undefined
           ? new Date(Date.now() + retryDelayMs).toISOString()
@@ -3557,6 +3569,7 @@ export class RawCaptureService {
         body: JSON.stringify({
           hubIds,
           ...(extended ? {
+            ...(!selectedHubIds ? { automatic: true } : {}),
             ...(selectedHubIds || retryDelivery ? { retryDelivery: true } : {}),
             reviewedResult: { captureSessionId: manifest.metadata.captureSessionId, match: manifest.match }
           } : {}),
@@ -3569,6 +3582,9 @@ export class RawCaptureService {
       let body = parseJsonObject(text);
       const validationCode = readStringDeep(readObject(body?.error), ["code"]) || readStringDeep(body, ["code"]);
       if (response.status === 400 && validationCode === "invalid_hubs") {
+        // A website predating the automatic-share guard cannot safely honor a
+        // newer per-replay privacy choice. Never strip this safety discriminator.
+        if (!selectedHubIds) throw replayV2ApiError("Discord replay share", response, body, text);
         // Older websites reject unknown fields before performing any delivery.
         // Retry their strict request shape once, only if its immutable source
         // already contains the result this user has reviewed and saved.
@@ -3622,6 +3638,27 @@ export class RawCaptureService {
       }
       await this.assertActiveManifestParent(manifest);
       const failure = replayDeliveryFailureDetails(error);
+      if (!selectedHubIds && failure.code === "replay_visibility_changed") {
+        const stoppedAt = new Date().toISOString();
+        const stopped: PersistedRawCaptureManifest = {
+          ...manifest,
+          updatedAt: stoppedAt,
+          metadata: {
+            ...manifest.metadata,
+            visibility: "private",
+            webReplayDiscordShareEligible: false,
+            webReplayDiscordShareHubIds: undefined,
+            discordShareStatus: undefined,
+            discordShareError: undefined,
+            discordResultReviewRequired: undefined,
+            discordShareStoppedAt: stoppedAt,
+            discordShareBlockedReason: undefined,
+            discordShareBlockedResult: undefined
+          }
+        };
+        await writeRawCaptureManifest(stopped);
+        return stopped;
+      }
       const blockedReason = discordShareFailureBlockedReason(failure.status, failure.code, failure.message);
       const updated: PersistedRawCaptureManifest = {
         ...manifest,
@@ -5875,14 +5912,23 @@ function rawCaptureAutomaticTargetVisibility(
     : normalizeRawCaptureVisibility(settings.rawCapture.visibility);
 }
 
-function rawCaptureReadyVisibilityNeedsReconciliation(
-  metadata: RawCaptureReplayMetadata,
-  settings: UserSettings
-): boolean {
+function rawCapturePendingVisibility(metadata: RawCaptureReplayMetadata): RawCaptureVisibility | undefined {
+  const pending = rawCaptureVisibilityFromValue(metadata.pendingVisibility);
+  if (pending) return pending;
+  // Older builds persisted the failed target in this exact diagnostic message.
+  // Preserve that operation after restart without treating any new default as
+  // consent to change a healthy, already-uploaded replay.
+  const legacyTarget = metadata.deliveryStage === "paused"
+    ? metadata.error?.match(/^Replay is online, but RiftLite could not set its visibility to (private|unlisted|public): /)?.[1]
+    : undefined;
+  return rawCaptureVisibilityFromValue(legacyTarget) ?? undefined;
+}
+
+function rawCaptureReadyVisibilityNeedsReconciliation(metadata: RawCaptureReplayMetadata): boolean {
   return metadata.provider === "riftlite-v2" &&
     metadata.processingStatus === "ready" &&
     Boolean(metadata.uploadId) &&
-    normalizeRawCaptureVisibility(metadata.visibility) !== rawCaptureAutomaticTargetVisibility(metadata, settings);
+    Boolean(rawCapturePendingVisibility(metadata));
 }
 
 function normalizeRiftLiteAccountUid(value: unknown): string {

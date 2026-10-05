@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-10-01T16:42:48.807Z",
+  "generatedAt": "2026-10-05T11:19:14.308Z",
   "source": {
     "provider": "RiftCodex",
     "endpoint": "https://api.riftcodex.com/cards",
@@ -34,19 +34,35 @@
         ],
         "prints": 110,
         "notes": "Full 3-page Piltover scan (107 entries) unioned with 84 Riot gallery prints. Added 22 print identities covering 18 previously unsupported card names; includes Mordekaiser and three battlefields. All new printed images checked. Corrected Lost to the Sands, retaining its former name alias and artwork. Existing identities retained."
+      },
+      {
+        "provider": "Piltover Archive + Riot Card Gallery",
+        "auditedAt": "2026-10-05T11:19:14.308Z",
+        "urls": [
+          "https://piltoverarchive.com/cards",
+          "https://playriftbound.com/en-us/card-gallery/"
+        ],
+        "addedPrints": 66,
+        "notes": "Full 29-page Piltover library and official gallery audit. Added 40 Radiance previews plus 26 verified historical alternate/promo/Arcane/token prints. Printed collectors, costs and new artwork checked. Placeholder artwork and 18 misleading rune reprint IDs excluded. Existing images retained; current source URLs and Riot hash aliases added for recognition. Corrected Hunters' Circle with its former spelling retained as an alias."
       }
-    ]
+    ],
+    "baseRegistryGeneratedAt": "2026-10-01T16:42:48.807Z",
+    "baseRegistryNote": "Preserved last validated normalized base. Current RiftCodex refresh timed out at UNL page 2; no partial response imported. Current full Piltover/Riot audit supplies the additions and image aliases."
   },
   "stats": {
     "rawRecords": 1302,
     "uniqueSourcePrints": 1171,
-    "uniquePrints": 1299,
-    "uniqueImageHashes": 1275,
-    "localOverlayCards": 129,
+    "uniquePrints": 1365,
+    "uniqueImageHashes": 1326,
+    "localOverlayCards": 313,
     "bySet": {
+      "ARC": {
+        "rawRecords": 0,
+        "uniquePrints": 6
+      },
       "OGN": {
         "rawRecords": 352,
-        "uniquePrints": 352
+        "uniquePrints": 360
       },
       "OGS": {
         "rawRecords": 24,
@@ -54,23 +70,199 @@
       },
       "RAD": {
         "rawRecords": 0,
-        "uniquePrints": 110
+        "uniquePrints": 150
       },
       "SFD": {
         "rawRecords": 288,
-        "uniquePrints": 288
+        "uniquePrints": 290
       },
       "UNL": {
         "rawRecords": 280,
-        "uniquePrints": 288
+        "uniquePrints": 294
       },
       "VEN": {
         "rawRecords": 358,
-        "uniquePrints": 237
+        "uniquePrints": 241
       }
     }
   },
   "cards": [
+    {
+      "printId": "ARC-001",
+      "basePrintId": "ARC-001",
+      "setCode": "ARC",
+      "collectorCode": "001",
+      "name": "Vi, Destructive",
+      "type": "Unit",
+      "supertype": "Champion",
+      "costEnergy": 2,
+      "costPower": 1,
+      "tags": [
+        "Vi",
+        "Piltover"
+      ],
+      "champion": "Vi",
+      "imageUrl": "https://piltoverarchive.b-cdn.net/temporary/1760416626325-f3zxpz5s8g7.webp",
+      "imageHash": null,
+      "artist": "Fortiche Production",
+      "updatedAt": "2026-10-05T11:19:14.308Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:a60d2063-be1a-4ee5-a745-784eef4ed8b1"
+      ]
+    },
+    {
+      "printId": "ARC-002",
+      "basePrintId": "ARC-002",
+      "setCode": "ARC",
+      "collectorCode": "002",
+      "name": "Caitlyn, Patrolling",
+      "type": "Unit",
+      "supertype": "Champion",
+      "costEnergy": 3,
+      "costPower": 1,
+      "tags": [
+        "Piltover",
+        "Caitlyn"
+      ],
+      "champion": "Caitlyn",
+      "imageUrl": "https://piltoverarchive.b-cdn.net/temporary/1760416743034-mjx1r8rnhhi.webp",
+      "imageHash": null,
+      "artist": "Fortiche Production",
+      "updatedAt": "2026-10-05T11:19:14.308Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:011e4599-3894-4b09-8782-008e8d3728ef"
+      ]
+    },
+    {
+      "printId": "ARC-003",
+      "basePrintId": "ARC-003",
+      "setCode": "ARC",
+      "collectorCode": "003",
+      "name": "Heimerdinger, Inventor",
+      "type": "Unit",
+      "supertype": "Champion",
+      "costEnergy": 3,
+      "costPower": 1,
+      "tags": [
+        "Heimerdinger",
+        "Piltover",
+        "Yordle"
+      ],
+      "champion": "Heimerdinger",
+      "imageUrl": "https://piltoverarchive.b-cdn.net/temporary/1760416827138-ytd8qmfc3v.webp",
+      "imageHash": null,
+      "artist": "Fortiche Production",
+      "updatedAt": "2026-10-05T11:19:14.308Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:622d93dc-8d02-4671-b6a8-13d44ca55213"
+      ]
+    },
+    {
+      "printId": "ARC-004",
+      "basePrintId": "ARC-004",
+      "setCode": "ARC",
+      "collectorCode": "004",
+      "name": "Warwick, Hunter",
+      "type": "Unit",
+      "supertype": "Champion",
+      "costEnergy": 6,
+      "costPower": 1,
+      "tags": [
+        "Warwick",
+        "Zaun",
+        "Dog"
+      ],
+      "champion": "Warwick",
+      "imageUrl": "https://piltoverarchive.b-cdn.net/temporary/1760416787235-exutfmhlgxf.webp",
+      "imageHash": null,
+      "artist": "Fortiche Production",
+      "updatedAt": "2026-10-05T11:19:14.308Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:f3a282e9-3108-483c-8e05-80f1f30154b5"
+      ]
+    },
+    {
+      "printId": "ARC-005",
+      "basePrintId": "ARC-005",
+      "setCode": "ARC",
+      "collectorCode": "005",
+      "name": "Jinx, Rebel",
+      "type": "Unit",
+      "supertype": "Champion",
+      "costEnergy": 5,
+      "costPower": 1,
+      "tags": [
+        "Jinx",
+        "Zaun"
+      ],
+      "champion": "Jinx",
+      "imageUrl": "https://piltoverarchive.b-cdn.net/temporary/1760416716990-we9v5u8rbb.webp",
+      "imageHash": null,
+      "artist": "Fortiche Production",
+      "updatedAt": "2026-10-05T11:19:14.308Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:ab51cfad-c823-4ed9-9e1d-bceffdfda95b"
+      ]
+    },
+    {
+      "printId": "ARC-006",
+      "basePrintId": "ARC-006",
+      "setCode": "ARC",
+      "collectorCode": "006",
+      "name": "Viktor, Leader",
+      "type": "Unit",
+      "supertype": "Champion",
+      "costEnergy": 4,
+      "costPower": 1,
+      "tags": [
+        "Viktor",
+        "Zaun"
+      ],
+      "champion": "Viktor",
+      "imageUrl": "https://piltoverarchive.b-cdn.net/temporary/1760416556879-01whuib9pmfi.webp",
+      "imageHash": null,
+      "artist": "Fortiche Production",
+      "updatedAt": "2026-10-05T11:19:14.308Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:5ae35048-a4a8-4e80-87a5-01900da8a78c"
+      ]
+    },
     {
       "printId": "OGN-001",
       "basePrintId": "OGN-001",
@@ -287,6 +479,32 @@
       "aliases": [],
       "sourceIds": [
         "69bc5bc7d308c64675ca86bd"
+      ]
+    },
+    {
+      "printId": "OGN-007B",
+      "basePrintId": "OGN-007",
+      "setCode": "OGN",
+      "collectorCode": "007B",
+      "name": "Fury Rune",
+      "type": "Rune",
+      "supertype": "Basic",
+      "costEnergy": null,
+      "costPower": null,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cdn.piltoverarchive.com/cards/OGN-007b.webp",
+      "imageHash": null,
+      "artist": "Greg Ghielmetti & Leah Chen",
+      "updatedAt": "2026-10-05T11:19:14.308Z",
+      "variants": {
+        "alternateArt": true,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:9ca1ee11-f9c4-4bea-991c-859148fc03f2"
       ]
     },
     {
@@ -1424,6 +1642,32 @@
       "aliases": [],
       "sourceIds": [
         "69bc5bc9d308c64675ca86e5"
+      ]
+    },
+    {
+      "printId": "OGN-042B",
+      "basePrintId": "OGN-042",
+      "setCode": "OGN",
+      "collectorCode": "042B",
+      "name": "Calm Rune",
+      "type": "Rune",
+      "supertype": "Basic",
+      "costEnergy": null,
+      "costPower": null,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cdn.piltoverarchive.com/cards/OGN-042b.webp",
+      "imageHash": null,
+      "artist": "-",
+      "updatedAt": "2026-10-05T11:19:14.308Z",
+      "variants": {
+        "alternateArt": true,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:e758de40-61df-4b72-bd86-57a44a27fdce"
       ]
     },
     {
@@ -2881,6 +3125,32 @@
       ]
     },
     {
+      "printId": "OGN-089B",
+      "basePrintId": "OGN-089",
+      "setCode": "OGN",
+      "collectorCode": "089B",
+      "name": "Mind Rune",
+      "type": "Rune",
+      "supertype": "Basic",
+      "costEnergy": null,
+      "costPower": null,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cdn.piltoverarchive.com/cards/OGN-089b.webp",
+      "imageHash": null,
+      "artist": "-",
+      "updatedAt": "2026-10-05T11:19:14.308Z",
+      "variants": {
+        "alternateArt": true,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:9147e4fc-f912-480b-bd39-3ba0df54186b"
+      ]
+    },
+    {
       "printId": "OGN-090",
       "basePrintId": "OGN-090",
       "setCode": "OGN",
@@ -4061,6 +4331,32 @@
       ]
     },
     {
+      "printId": "OGN-126B",
+      "basePrintId": "OGN-126",
+      "setCode": "OGN",
+      "collectorCode": "126B",
+      "name": "Body Rune",
+      "type": "Rune",
+      "supertype": "Basic",
+      "costEnergy": null,
+      "costPower": null,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cdn.piltoverarchive.com/cards/OGN-126b.webp",
+      "imageHash": null,
+      "artist": "-",
+      "updatedAt": "2026-10-05T11:19:14.308Z",
+      "variants": {
+        "alternateArt": true,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:299b3409-274e-475c-86b2-8d26c4caf05c"
+      ]
+    },
+    {
       "printId": "OGN-127",
       "basePrintId": "OGN-127",
       "setCode": "OGN",
@@ -4785,6 +5081,35 @@
       ]
     },
     {
+      "printId": "OGN-151B",
+      "basePrintId": "OGN-151",
+      "setCode": "OGN",
+      "collectorCode": "151B",
+      "name": "Lee Sin, Centered",
+      "type": "Unit",
+      "supertype": "Champion",
+      "costEnergy": 6,
+      "costPower": 0,
+      "tags": [
+        "Lee Sin",
+        "Ionia"
+      ],
+      "champion": "Lee Sin",
+      "imageUrl": "https://cdn.piltoverarchive.com/temporary/1780803602466-0tqzyobe1zq.webp",
+      "imageHash": null,
+      "artist": "League Splash Team",
+      "updatedAt": "2026-10-05T11:19:14.308Z",
+      "variants": {
+        "alternateArt": true,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:118a0f2c-d16a-43ac-a9ad-d27088430fc3"
+      ]
+    },
+    {
       "printId": "OGN-152",
       "basePrintId": "OGN-152",
       "setCode": "OGN",
@@ -5329,6 +5654,32 @@
       "aliases": [],
       "sourceIds": [
         "69bc5bd0d308c64675ca876e"
+      ]
+    },
+    {
+      "printId": "OGN-166B",
+      "basePrintId": "OGN-166",
+      "setCode": "OGN",
+      "collectorCode": "166B",
+      "name": "Chaos Rune",
+      "type": "Rune",
+      "supertype": "Basic",
+      "costEnergy": null,
+      "costPower": null,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cdn.piltoverarchive.com/cards/OGN-166b.webp",
+      "imageHash": null,
+      "artist": "-",
+      "updatedAt": "2026-10-05T11:19:14.308Z",
+      "variants": {
+        "alternateArt": true,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:08befb56-c54d-452e-8b49-164a0917db4c"
       ]
     },
     {
@@ -6258,6 +6609,36 @@
       ]
     },
     {
+      "printId": "OGN-197B",
+      "basePrintId": "OGN-197",
+      "setCode": "OGN",
+      "collectorCode": "197B",
+      "name": "Teemo, Scout",
+      "type": "Unit",
+      "supertype": "Champion",
+      "costEnergy": 2,
+      "costPower": 0,
+      "tags": [
+        "Teemo",
+        "Bandle City",
+        "Yordle"
+      ],
+      "champion": "Teemo",
+      "imageUrl": "https://cdn.piltoverarchive.com/cards/OGN-197b.webp",
+      "imageHash": null,
+      "artist": "Alsie Lau",
+      "updatedAt": "2026-10-05T11:19:14.308Z",
+      "variants": {
+        "alternateArt": true,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:cc87786d-9a48-4a22-9dbd-8756cb4a45c9"
+      ]
+    },
+    {
       "printId": "OGN-198",
       "basePrintId": "OGN-198",
       "setCode": "OGN",
@@ -6808,6 +7189,32 @@
       "aliases": [],
       "sourceIds": [
         "69bc5bd2d308c64675ca87a3"
+      ]
+    },
+    {
+      "printId": "OGN-214B",
+      "basePrintId": "OGN-214",
+      "setCode": "OGN",
+      "collectorCode": "214B",
+      "name": "Order Rune",
+      "type": "Rune",
+      "supertype": "Basic",
+      "costEnergy": null,
+      "costPower": null,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cdn.piltoverarchive.com/cards/OGN-214b.webp",
+      "imageHash": null,
+      "artist": "-",
+      "updatedAt": "2026-10-05T11:19:14.308Z",
+      "variants": {
+        "alternateArt": true,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:19c2c30d-5a73-4d29-843b-071c9e4dd8d2"
       ]
     },
     {
@@ -7872,6 +8279,13 @@
       ],
       "sourceIds": [
         "69bc5bd4d308c64675ca87c8"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/OGN-247.webp",
+        "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/3ea826277086945a2cdfda4e41b771075aa8b15b-744x1039.png?accountingTag=RB"
+      ],
+      "imageHashAliases": [
+        "3ea826277086945a2cdfda4e41b771075aa8b15b"
       ]
     },
     {
@@ -7930,6 +8344,13 @@
       ],
       "sourceIds": [
         "69bc5bd4d308c64675ca87ca"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/OGN-249.webp",
+        "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/8ef9c1827ccbba313d4591275e831854afffa5b1-744x1039.png?accountingTag=RB"
+      ],
+      "imageHashAliases": [
+        "8ef9c1827ccbba313d4591275e831854afffa5b1"
       ]
     },
     {
@@ -7988,6 +8409,9 @@
       ],
       "sourceIds": [
         "69bc5bd4d308c64675ca87cc"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/OGN-251.webp"
       ]
     },
     {
@@ -8046,6 +8470,9 @@
       ],
       "sourceIds": [
         "69bc5bd5d308c64675ca87ce"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/OGN-253.webp"
       ]
     },
     {
@@ -8104,6 +8531,13 @@
       ],
       "sourceIds": [
         "69bc5bd5d308c64675ca87d0"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/OGN-255.webp",
+        "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/56457c7986d3f140b7123a988149cc30a83493a7-744x1039.png?accountingTag=RB"
+      ],
+      "imageHashAliases": [
+        "56457c7986d3f140b7123a988149cc30a83493a7"
       ]
     },
     {
@@ -8162,6 +8596,9 @@
       ],
       "sourceIds": [
         "69bc5bd5d308c64675ca87d2"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/OGN-257.webp"
       ]
     },
     {
@@ -8220,6 +8657,13 @@
       ],
       "sourceIds": [
         "69bc5bd5d308c64675ca87d4"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/OGN-259.webp",
+        "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/33e3d5596de0f560087d40414d62b8245d1dbb0d-744x1039.png?accountingTag=RB"
+      ],
+      "imageHashAliases": [
+        "33e3d5596de0f560087d40414d62b8245d1dbb0d"
       ]
     },
     {
@@ -8278,6 +8722,9 @@
       ],
       "sourceIds": [
         "69bc5bd5d308c64675ca87d6"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/OGN-261.webp"
       ]
     },
     {
@@ -8336,6 +8783,9 @@
       ],
       "sourceIds": [
         "69bc5bd5d308c64675ca87d8"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/OGN-263.webp"
       ]
     },
     {
@@ -8394,6 +8844,9 @@
       ],
       "sourceIds": [
         "69bc5bd5d308c64675ca87da"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/OGN-265.webp"
       ]
     },
     {
@@ -8452,6 +8905,13 @@
       ],
       "sourceIds": [
         "69bc5bd5d308c64675ca87dc"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/OGN-267.webp",
+        "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/e0635cebc3dd8ee5355dbbc090ca27ebeacebad7-744x1039.png?accountingTag=RB"
+      ],
+      "imageHashAliases": [
+        "e0635cebc3dd8ee5355dbbc090ca27ebeacebad7"
       ]
     },
     {
@@ -8510,6 +8970,9 @@
       ],
       "sourceIds": [
         "69bc5bd5d308c64675ca87de"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/OGN-269.webp"
       ]
     },
     {
@@ -9304,6 +9767,9 @@
       ],
       "sourceIds": [
         "69bc5bd7d308c64675ca87f8"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/OGN-299.webp"
       ]
     },
     {
@@ -9334,6 +9800,9 @@
       ],
       "sourceIds": [
         "69bc5bd7d308c64675ca87f9"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/OGN-299s.webp"
       ]
     },
     {
@@ -9364,6 +9833,9 @@
       ],
       "sourceIds": [
         "69bc5bd7d308c64675ca87fa"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/OGN-300.webp"
       ]
     },
     {
@@ -9394,6 +9866,9 @@
       ],
       "sourceIds": [
         "69bc5bd7d308c64675ca87fb"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/OGN-300s.webp"
       ]
     },
     {
@@ -9424,6 +9899,9 @@
       ],
       "sourceIds": [
         "69bc5bd7d308c64675ca87fc"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/OGN-301.webp"
       ]
     },
     {
@@ -9454,6 +9932,9 @@
       ],
       "sourceIds": [
         "69bc5bd7d308c64675ca87fd"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/OGN-301s.webp"
       ]
     },
     {
@@ -9484,6 +9965,9 @@
       ],
       "sourceIds": [
         "69bc5bd7d308c64675ca87fe"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/OGN-302.webp"
       ]
     },
     {
@@ -9514,6 +9998,9 @@
       ],
       "sourceIds": [
         "69bc5bd7d308c64675ca87ff"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/OGN-302s.webp"
       ]
     },
     {
@@ -9544,6 +10031,9 @@
       ],
       "sourceIds": [
         "69bc5bd7d308c64675ca8800"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/OGN-303.webp"
       ]
     },
     {
@@ -9574,6 +10064,9 @@
       ],
       "sourceIds": [
         "69bc5bd7d308c64675ca8801"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/OGN-303s.webp"
       ]
     },
     {
@@ -9604,6 +10097,9 @@
       ],
       "sourceIds": [
         "69bc5bd7d308c64675ca8802"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/OGN-304.webp"
       ]
     },
     {
@@ -9634,6 +10130,9 @@
       ],
       "sourceIds": [
         "69bc5bd7d308c64675ca8803"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/OGN-304s.webp"
       ]
     },
     {
@@ -9664,6 +10163,9 @@
       ],
       "sourceIds": [
         "69bc5bd7d308c64675ca8804"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/OGN-305.webp"
       ]
     },
     {
@@ -9694,6 +10196,9 @@
       ],
       "sourceIds": [
         "69bc5bd7d308c64675ca8805"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/OGN-305s.webp"
       ]
     },
     {
@@ -9724,6 +10229,9 @@
       ],
       "sourceIds": [
         "69bc5bd7d308c64675ca8806"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/OGN-306.webp"
       ]
     },
     {
@@ -9754,6 +10262,9 @@
       ],
       "sourceIds": [
         "69bc5bd7d308c64675ca8807"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/OGN-306s.webp"
       ]
     },
     {
@@ -9784,6 +10295,9 @@
       ],
       "sourceIds": [
         "69bc5bd7d308c64675ca8808"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/OGN-307.webp"
       ]
     },
     {
@@ -9814,6 +10328,9 @@
       ],
       "sourceIds": [
         "69bc5bd8d308c64675ca8809"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/OGN-307s.webp"
       ]
     },
     {
@@ -9844,6 +10361,9 @@
       ],
       "sourceIds": [
         "69bc5bd8d308c64675ca880a"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/OGN-308.webp"
       ]
     },
     {
@@ -9874,6 +10394,9 @@
       ],
       "sourceIds": [
         "69bc5bd8d308c64675ca880b"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/OGN-308s.webp"
       ]
     },
     {
@@ -9904,6 +10427,9 @@
       ],
       "sourceIds": [
         "69bc5bd8d308c64675ca880c"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/OGN-309.webp"
       ]
     },
     {
@@ -9934,6 +10460,9 @@
       ],
       "sourceIds": [
         "69bc5bd8d308c64675ca880d"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/OGN-309s.webp"
       ]
     },
     {
@@ -9964,6 +10493,9 @@
       ],
       "sourceIds": [
         "69bc5bd8d308c64675ca880e"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/OGN-310.webp"
       ]
     },
     {
@@ -9994,6 +10526,9 @@
       ],
       "sourceIds": [
         "69bc5bd8d308c64675ca880f"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/OGN-310s.webp"
       ]
     },
     {
@@ -10488,6 +11023,9 @@
       ],
       "sourceIds": [
         "69bc5bd9d308c64675ca8826"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/OGS-017.webp"
       ]
     },
     {
@@ -10546,6 +11084,9 @@
       ],
       "sourceIds": [
         "69bc5bd9d308c64675ca8828"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/OGS-019.webp"
       ]
     },
     {
@@ -10604,6 +11145,9 @@
       ],
       "sourceIds": [
         "69bc5bd9d308c64675ca882a"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/OGS-021.webp"
       ]
     },
     {
@@ -10662,6 +11206,9 @@
       ],
       "sourceIds": [
         "69bc5bd9d308c64675ca882c"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/OGS-023.webp"
       ]
     },
     {
@@ -10720,6 +11267,9 @@
       "sourceIds": [
         "piltover-archive:39603e08-2d31-4785-8d4f-963323a326af",
         "riot-gallery:rad-001-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-001.webp"
       ]
     },
     {
@@ -10749,6 +11299,9 @@
       "sourceIds": [
         "piltover-archive:48aae390-c69b-48da-9ea6-a62818ead3e2",
         "riot-gallery:rad-002-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-002.webp"
       ]
     },
     {
@@ -10778,6 +11331,9 @@
       "sourceIds": [
         "piltover-archive:a14ef14e-a51c-4559-8d2c-db47236aaae6",
         "riot-gallery:rad-003-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-003.webp"
       ]
     },
     {
@@ -10804,6 +11360,42 @@
       "aliases": [],
       "sourceIds": [
         "piltover-archive:7712de9c-c5b7-464e-970c-b0a133868f59"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-004.webp",
+        "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/38fd13c7522bb47dcc5ce1596aeb6a638087ee09-744x1039.png?accountingTag=RB"
+      ],
+      "imageHashAliases": [
+        "38fd13c7522bb47dcc5ce1596aeb6a638087ee09"
+      ]
+    },
+    {
+      "printId": "RAD-005",
+      "basePrintId": "RAD-005",
+      "setCode": "RAD",
+      "collectorCode": "005",
+      "name": "Lingering Animus",
+      "type": "Unit",
+      "supertype": null,
+      "costEnergy": 2,
+      "costPower": 0,
+      "tags": [
+        "Shadow Isles",
+        "Spirit"
+      ],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/5453008d27b3bb4f00941cb5a0d9ca52e4eb0245-744x1039.png?accountingTag=RB",
+      "imageHash": "5453008d27b3bb4f00941cb5a0d9ca52e4eb0245",
+      "artist": "Six More Vodka",
+      "updatedAt": "2026-10-05T11:19:14.308Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "riot-gallery:rad-005-167"
       ]
     },
     {
@@ -10831,6 +11423,9 @@
       "sourceIds": [
         "piltover-archive:5644fb12-6ad6-4361-93a5-5eac1a024597",
         "riot-gallery:rad-012-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-012.webp"
       ]
     },
     {
@@ -10860,6 +11455,41 @@
       "sourceIds": [
         "piltover-archive:dc8f56b5-1f57-4b48-a445-033a1f686023",
         "riot-gallery:rad-013-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-013.webp"
+      ]
+    },
+    {
+      "printId": "RAD-014",
+      "basePrintId": "RAD-014",
+      "setCode": "RAD",
+      "collectorCode": "014",
+      "name": "Shimmering Swimmer",
+      "type": "Unit",
+      "supertype": null,
+      "costEnergy": 3,
+      "costPower": 0,
+      "tags": [
+        "Bilgewater"
+      ],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/02ef2a5c93cf60048bb932a709d3a5b17b93bb1d-744x1039.png?accountingTag=RB",
+      "imageHash": "02ef2a5c93cf60048bb932a709d3a5b17b93bb1d",
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-014.webp"
+      ],
+      "artist": "Kudos Productions",
+      "updatedAt": "2026-10-05T11:19:14.308Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:c19d4c47-c149-4146-bad7-92f9cb177dd5",
+        "riot-gallery:rad-014-167"
       ]
     },
     {
@@ -10889,6 +11519,99 @@
       "aliases": [],
       "sourceIds": [
         "piltover-archive:76a52107-8185-47e7-99d7-8876aea8a71f"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-015.webp",
+        "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/20997ddaef2cd714c36e5473c156faf331b80b7b-744x1039.png?accountingTag=RB"
+      ],
+      "imageHashAliases": [
+        "20997ddaef2cd714c36e5473c156faf331b80b7b"
+      ]
+    },
+    {
+      "printId": "RAD-016",
+      "basePrintId": "RAD-016",
+      "setCode": "RAD",
+      "collectorCode": "016",
+      "name": "Coalesced Energy",
+      "type": "Unit",
+      "supertype": null,
+      "costEnergy": 4,
+      "costPower": 2,
+      "tags": [
+        "Shurima"
+      ],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/59e551045ca75d932ff76c4820d873d4a2cde9e8-744x1039.png?accountingTag=RB",
+      "imageHash": "59e551045ca75d932ff76c4820d873d4a2cde9e8",
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-016.webp"
+      ],
+      "artist": "Michal Ivan",
+      "updatedAt": "2026-10-05T11:19:14.308Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:a0e07f99-cc54-4a54-a6c5-4adc6eca93f1",
+        "riot-gallery:rad-016-167"
+      ]
+    },
+    {
+      "printId": "RAD-017",
+      "basePrintId": "RAD-017",
+      "setCode": "RAD",
+      "collectorCode": "017",
+      "name": "Detonation Amplifier",
+      "type": "Gear",
+      "supertype": null,
+      "costEnergy": 4,
+      "costPower": 1,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cdn.piltoverarchive.com/temporary/1790980936078-urbkq0os81.png",
+      "imageHash": null,
+      "artist": "Fish Art Studio",
+      "updatedAt": "2026-10-05T11:19:14.308Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:0e246999-ce99-45de-b74d-4e4132446289"
+      ]
+    },
+    {
+      "printId": "RAD-018",
+      "basePrintId": "RAD-018",
+      "setCode": "RAD",
+      "collectorCode": "018",
+      "name": "Drakehound Packmaster",
+      "type": "Unit",
+      "supertype": null,
+      "costEnergy": 9,
+      "costPower": 2,
+      "tags": [
+        "Noxus"
+      ],
+      "champion": null,
+      "imageUrl": "https://cdn.piltoverarchive.com/temporary/1791184494505-0urxj4bx7i6d.png",
+      "imageHash": null,
+      "artist": "Six More Vodka",
+      "updatedAt": "2026-10-05T11:19:14.308Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:0d84c23a-e735-43fd-89ed-354ee6e773a6"
       ]
     },
     {
@@ -10920,6 +11643,9 @@
       "sourceIds": [
         "piltover-archive:4c7fd59e-4cf5-492c-a998-652ab1802227",
         "riot-gallery:rad-023-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-023.webp"
       ]
     },
     {
@@ -10951,6 +11677,9 @@
       "sourceIds": [
         "piltover-archive:443d93a7-00dc-403b-9fa7-b89f401f999a",
         "riot-gallery:rad-023a-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-023a.webp"
       ]
     },
     {
@@ -10980,6 +11709,9 @@
       "sourceIds": [
         "piltover-archive:07e8f196-55aa-43fc-bb63-5ac51d83aa7a",
         "riot-gallery:rad-024-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-024.webp"
       ]
     },
     {
@@ -11006,6 +11738,74 @@
       "aliases": [],
       "sourceIds": [
         "piltover-archive:8b080312-49ec-4fb6-9490-59205bc6ed9c"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-025.webp",
+        "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/120b20ee26d221cea31f510090cef037e74c023f-744x1039.png?accountingTag=RB"
+      ],
+      "imageHashAliases": [
+        "120b20ee26d221cea31f510090cef037e74c023f"
+      ]
+    },
+    {
+      "printId": "RAD-026",
+      "basePrintId": "RAD-026",
+      "setCode": "RAD",
+      "collectorCode": "026",
+      "name": "Entrenched Boar",
+      "type": "Unit",
+      "supertype": null,
+      "costEnergy": 2,
+      "costPower": 0,
+      "tags": [
+        "Freljord"
+      ],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/8d8688f43e219f7f4b5f5fd17cff204dcebc3bdc-744x1039.png?accountingTag=RB",
+      "imageHash": "8d8688f43e219f7f4b5f5fd17cff204dcebc3bdc",
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-026.webp"
+      ],
+      "artist": "Kudos Productions",
+      "updatedAt": "2026-10-05T11:19:14.308Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:02910879-2397-457a-8a44-66728c0a80d7",
+        "riot-gallery:rad-026-167"
+      ]
+    },
+    {
+      "printId": "RAD-027",
+      "basePrintId": "RAD-027",
+      "setCode": "RAD",
+      "collectorCode": "027",
+      "name": "Iridescent Avian",
+      "type": "Unit",
+      "supertype": null,
+      "costEnergy": 3,
+      "costPower": 0,
+      "tags": [
+        "Ixtal",
+        "Bird"
+      ],
+      "champion": null,
+      "imageUrl": "https://cdn.piltoverarchive.com/temporary/1790943510236-bx7m617wsk.png",
+      "imageHash": null,
+      "artist": "Envar Studio",
+      "updatedAt": "2026-10-05T11:19:14.308Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:186c4914-9d82-4eaf-a0e4-7bd5f5ce54fe"
       ]
     },
     {
@@ -11033,6 +11833,9 @@
       "sourceIds": [
         "piltover-archive:392a81da-2e06-4075-b76d-1d07b09b66d2",
         "riot-gallery:rad-033-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-033.webp"
       ]
     },
     {
@@ -11060,6 +11863,9 @@
       "sourceIds": [
         "piltover-archive:c88469c9-3dd4-4f5b-ba3e-1b7c97e7f3f0",
         "riot-gallery:rad-034-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-034.webp"
       ]
     },
     {
@@ -11087,6 +11893,74 @@
       "sourceIds": [
         "piltover-archive:c45be633-93be-49c6-88c7-49f2b4bc1423",
         "riot-gallery:rad-035-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-035.webp"
+      ]
+    },
+    {
+      "printId": "RAD-036",
+      "basePrintId": "RAD-036",
+      "setCode": "RAD",
+      "collectorCode": "036",
+      "name": "Storm Raptor",
+      "type": "Unit",
+      "supertype": null,
+      "costEnergy": 6,
+      "costPower": 0,
+      "tags": [
+        "Freljord",
+        "Bird"
+      ],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/fc59661dfc70a1fdb393d795c90779a2b5661609-744x1039.png?accountingTag=RB",
+      "imageHash": "fc59661dfc70a1fdb393d795c90779a2b5661609",
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-036.webp"
+      ],
+      "artist": "Bubble Cat Studio",
+      "updatedAt": "2026-10-05T11:19:14.308Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:efdf70ef-3fdb-407f-9253-7a67b58380df",
+        "riot-gallery:rad-036-167"
+      ]
+    },
+    {
+      "printId": "RAD-037",
+      "basePrintId": "RAD-037",
+      "setCode": "RAD",
+      "collectorCode": "037",
+      "name": "Watchful Curator",
+      "type": "Unit",
+      "supertype": null,
+      "costEnergy": 3,
+      "costPower": 1,
+      "tags": [
+        "Piltover"
+      ],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/5081f81341bb02dfd26c970c09651fcf64a18a04-744x1039.png?accountingTag=RB",
+      "imageHash": "5081f81341bb02dfd26c970c09651fcf64a18a04",
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-037.webp"
+      ],
+      "artist": "Envar Studio",
+      "updatedAt": "2026-10-05T11:19:14.308Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:6025bcec-0d2f-4761-aea3-c4ae948f1985",
+        "riot-gallery:rad-037-167"
       ]
     },
     {
@@ -11108,7 +11982,8 @@
       "imageHash": "cf3c6a5963ad27976960977b0a51ea185f551696",
       "imageUrlAliases": [
         "https://cdn.piltoverarchive.com/temporary/1790379856360-1cbp857fr3y.jpg",
-        "https://cdn.piltoverarchive.com/temporary/1790379906737-nco9pod88y.jpg"
+        "https://cdn.piltoverarchive.com/temporary/1790379906737-nco9pod88y.jpg",
+        "https://cdn.piltoverarchive.com/cards/RAD-038.webp"
       ],
       "artist": "Naifan Zhang",
       "updatedAt": "2026-09-30T10:00:00.000Z",
@@ -11121,6 +11996,64 @@
       "sourceIds": [
         "piltover-archive:ab19eef7-682a-4f54-b64e-cbdd8152d07a",
         "riot-gallery:rad-038-167"
+      ]
+    },
+    {
+      "printId": "RAD-043",
+      "basePrintId": "RAD-043",
+      "setCode": "RAD",
+      "collectorCode": "043",
+      "name": "Riven, Broken Blade",
+      "type": "Unit",
+      "supertype": "Champion",
+      "costEnergy": 4,
+      "costPower": 0,
+      "tags": [
+        "Riven",
+        "Noxus"
+      ],
+      "champion": "Riven",
+      "imageUrl": "https://cdn.piltoverarchive.com/temporary/1791184313325-x07jtspx45.png",
+      "imageHash": null,
+      "artist": "JunHaan",
+      "updatedAt": "2026-10-05T11:19:14.308Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:b37f84b7-4ed4-4539-80d7-a28ef05aa27d"
+      ]
+    },
+    {
+      "printId": "RAD-043A",
+      "basePrintId": "RAD-043",
+      "setCode": "RAD",
+      "collectorCode": "043A",
+      "name": "Riven, Broken Blade",
+      "type": "Unit",
+      "supertype": "Champion",
+      "costEnergy": 4,
+      "costPower": 0,
+      "tags": [
+        "Riven",
+        "Noxus"
+      ],
+      "champion": "Riven",
+      "imageUrl": "https://cdn.piltoverarchive.com/temporary/1791184333664-e7b2swa9uvp.png",
+      "imageHash": null,
+      "artist": "Ziyan Lin",
+      "updatedAt": "2026-10-05T11:19:14.308Z",
+      "variants": {
+        "alternateArt": true,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:37a1e1cd-999a-4303-aa34-547a90d7ad8c"
       ]
     },
     {
@@ -11151,6 +12084,9 @@
       "sourceIds": [
         "piltover-archive:43a54dc6-05d6-4869-8806-d5dee5098ec3",
         "riot-gallery:rad-045-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-045.webp"
       ]
     },
     {
@@ -11181,6 +12117,9 @@
       "sourceIds": [
         "piltover-archive:e24a3abe-7664-4010-ad33-895746c84ce8",
         "riot-gallery:rad-045a-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-045a.webp"
       ]
     },
     {
@@ -11208,6 +12147,9 @@
       "sourceIds": [
         "piltover-archive:15a9ee17-fecf-4b33-ba58-4804e369c708",
         "riot-gallery:rad-046-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-046.webp"
       ]
     },
     {
@@ -11234,6 +12176,13 @@
       "aliases": [],
       "sourceIds": [
         "piltover-archive:18faa145-a164-43d4-80f3-8a4611d9d383"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-047.webp",
+        "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/75a3d8fbfd8caeabfd5be38513a6624c61f5230f-744x1039.png?accountingTag=RB"
+      ],
+      "imageHashAliases": [
+        "75a3d8fbfd8caeabfd5be38513a6624c61f5230f"
       ]
     },
     {
@@ -11260,6 +12209,13 @@
       "aliases": [],
       "sourceIds": [
         "piltover-archive:065b1973-f883-4478-9b1a-11b4840f8ec0"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-048.webp",
+        "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/afba3669ea1063dafb0e4c2c766694e00540eb13-744x1039.png?accountingTag=RB"
+      ],
+      "imageHashAliases": [
+        "afba3669ea1063dafb0e4c2c766694e00540eb13"
       ]
     },
     {
@@ -11290,6 +12246,9 @@
       "sourceIds": [
         "piltover-archive:8ebdb1be-3a29-4b30-b49d-8e4556495e89",
         "riot-gallery:rad-055-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-055.webp"
       ]
     },
     {
@@ -11317,6 +12276,9 @@
       "sourceIds": [
         "piltover-archive:d4a3db66-3f95-43b7-a3e3-be09502ad314",
         "riot-gallery:rad-056-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-056.webp"
       ]
     },
     {
@@ -11346,6 +12308,45 @@
       "aliases": [],
       "sourceIds": [
         "piltover-archive:4ace6c29-ea07-4378-9c59-9777bb22d1e1"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-057.webp",
+        "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/9558ced7593f5a26911eb6e1393aae3289842e20-744x1039.png?accountingTag=RB"
+      ],
+      "imageHashAliases": [
+        "9558ced7593f5a26911eb6e1393aae3289842e20"
+      ]
+    },
+    {
+      "printId": "RAD-058",
+      "basePrintId": "RAD-058",
+      "setCode": "RAD",
+      "collectorCode": "058",
+      "name": "Riptide Mage",
+      "type": "Unit",
+      "supertype": null,
+      "costEnergy": 4,
+      "costPower": 1,
+      "tags": [
+        "Bilgewater"
+      ],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/4e3c24c1c315656772d0bfd8d100bc7893e94994-744x1039.png?accountingTag=RB",
+      "imageHash": "4e3c24c1c315656772d0bfd8d100bc7893e94994",
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-058.webp"
+      ],
+      "artist": "Kudos Productions",
+      "updatedAt": "2026-10-05T11:19:14.308Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:765cb586-fda9-4029-9d51-75ea230f4fa7",
+        "riot-gallery:rad-058-167"
       ]
     },
     {
@@ -11373,6 +12374,9 @@
       "sourceIds": [
         "piltover-archive:ea6fd5ee-ee92-478f-b278-5d79824c6b05",
         "riot-gallery:rad-059-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-059.webp"
       ]
     },
     {
@@ -11403,6 +12407,9 @@
       "sourceIds": [
         "piltover-archive:44931a4a-c7a2-46cb-abec-fddde90307ab",
         "riot-gallery:rad-061-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-061.webp"
       ]
     },
     {
@@ -11433,6 +12440,9 @@
       "sourceIds": [
         "piltover-archive:24592476-fcc9-452f-9946-fa8669f7b09c",
         "riot-gallery:rad-061a-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-061a.webp"
       ]
     },
     {
@@ -11463,6 +12473,9 @@
       "sourceIds": [
         "piltover-archive:2be8858a-6002-4414-93b9-c8286e1d5a8d",
         "riot-gallery:rad-063-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-063.webp"
       ]
     },
     {
@@ -11492,6 +12505,9 @@
       "sourceIds": [
         "piltover-archive:84994247-767d-4631-b7f0-ad1c14d9d4b5",
         "riot-gallery:rad-067-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-067.webp"
       ]
     },
     {
@@ -11522,6 +12538,9 @@
       "sourceIds": [
         "piltover-archive:b2e9050a-aa72-4c38-96c5-7bdc7f47298e",
         "riot-gallery:rad-068-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-068.webp"
       ]
     },
     {
@@ -11552,6 +12571,9 @@
       "sourceIds": [
         "piltover-archive:dfe0c24a-4542-4af9-91a5-5421b786d871",
         "riot-gallery:rad-068a-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-068a.webp"
       ]
     },
     {
@@ -11579,6 +12601,9 @@
       "sourceIds": [
         "piltover-archive:a562b781-9563-4e88-acb3-9661946b2b89",
         "riot-gallery:rad-069-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-069.webp"
       ]
     },
     {
@@ -11606,6 +12631,9 @@
       "sourceIds": [
         "piltover-archive:8be99f1b-8ac6-4511-acf4-4ccb36bb0e5d",
         "riot-gallery:rad-070-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-070.webp"
       ]
     },
     {
@@ -11634,6 +12662,46 @@
       "aliases": [],
       "sourceIds": [
         "piltover-archive:1fac49d3-d06a-4967-8fe6-ea739eddef3c"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-071.webp",
+        "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/9d518a6db3ae174096b09cf80cece2997f685ede-744x1039.png?accountingTag=RB"
+      ],
+      "imageHashAliases": [
+        "9d518a6db3ae174096b09cf80cece2997f685ede"
+      ]
+    },
+    {
+      "printId": "RAD-072",
+      "basePrintId": "RAD-072",
+      "setCode": "RAD",
+      "collectorCode": "072",
+      "name": "Overloaded Traveler",
+      "type": "Unit",
+      "supertype": null,
+      "costEnergy": 2,
+      "costPower": 0,
+      "tags": [
+        "Bandle City",
+        "Yordle"
+      ],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/6db2839d8702b15ab62413028c0321c75e87801c-744x1039.png?accountingTag=RB",
+      "imageHash": "6db2839d8702b15ab62413028c0321c75e87801c",
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-072.webp"
+      ],
+      "artist": "Kudos Porductions",
+      "updatedAt": "2026-10-05T11:19:14.308Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:3185fcd0-0dcb-4589-8cf5-d5c5cb746f45",
+        "riot-gallery:rad-072-167"
       ]
     },
     {
@@ -11663,6 +12731,9 @@
       "sourceIds": [
         "piltover-archive:60667149-f8f2-45e4-af8b-0e63f9fcb8fc",
         "riot-gallery:rad-073-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-073.webp"
       ]
     },
     {
@@ -11689,6 +12760,13 @@
       "aliases": [],
       "sourceIds": [
         "piltover-archive:b457acd0-7dee-4ee6-bcfe-f95bbea56939"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-079.webp",
+        "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/7b2103352935061e19cf90036a6aa4cd35ad5922-744x1039.png?accountingTag=RB"
+      ],
+      "imageHashAliases": [
+        "7b2103352935061e19cf90036a6aa4cd35ad5922"
       ]
     },
     {
@@ -11718,6 +12796,9 @@
       "sourceIds": [
         "piltover-archive:99570b95-11ec-4b40-9869-88488de1b8ad",
         "riot-gallery:rad-081-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-081.webp"
       ]
     },
     {
@@ -11745,6 +12826,9 @@
       "sourceIds": [
         "piltover-archive:e59985c5-0f5f-4bc2-a196-ef88ae6d194c",
         "riot-gallery:rad-082-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-082.webp"
       ]
     },
     {
@@ -11774,6 +12858,9 @@
       "sourceIds": [
         "piltover-archive:f870537c-d4bd-4530-bb0d-fe74ad1bbe88",
         "riot-gallery:rad-083-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-083.webp"
       ]
     },
     {
@@ -11800,6 +12887,13 @@
       "aliases": [],
       "sourceIds": [
         "piltover-archive:f02d62a7-3ca1-42dc-9649-746327bdb922"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-084.webp",
+        "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/dc551ece6cf007c76a3a16feba5f26fb7dd4ed65-744x1039.png?accountingTag=RB"
+      ],
+      "imageHashAliases": [
+        "dc551ece6cf007c76a3a16feba5f26fb7dd4ed65"
       ]
     },
     {
@@ -11829,6 +12923,13 @@
       "aliases": [],
       "sourceIds": [
         "piltover-archive:a4396349-a4bc-48d4-9c89-c5f93fc75ea9"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-085.webp",
+        "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/5bc0671f9f78630e2932052bb9f7f42ef2742c86-744x1039.png?accountingTag=RB"
+      ],
+      "imageHashAliases": [
+        "5bc0671f9f78630e2932052bb9f7f42ef2742c86"
       ]
     },
     {
@@ -11859,6 +12960,9 @@
       "sourceIds": [
         "piltover-archive:2866450b-e512-4187-8bbe-a0ccd371c8ec",
         "riot-gallery:rad-086-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-086.webp"
       ]
     },
     {
@@ -11888,6 +12992,35 @@
       "aliases": [],
       "sourceIds": [
         "riot-gallery:rad-086a-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-086a.webp"
+      ]
+    },
+    {
+      "printId": "RAD-087",
+      "basePrintId": "RAD-087",
+      "setCode": "RAD",
+      "collectorCode": "087",
+      "name": "Portable Portal",
+      "type": "Gear",
+      "supertype": null,
+      "costEnergy": 2,
+      "costPower": 0,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cdn.piltoverarchive.com/temporary/1790916764470-eh42cpbtx54.jpg",
+      "imageHash": null,
+      "artist": "Yeon Art Studio",
+      "updatedAt": "2026-10-05T11:19:14.308Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:fdcbfae8-7b64-4357-8ee5-7d48a59adc3a"
       ]
     },
     {
@@ -11918,6 +13051,9 @@
       "sourceIds": [
         "piltover-archive:972c623b-2b02-4c67-9a11-c22b66511e4d",
         "riot-gallery:rad-090-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-090.webp"
       ]
     },
     {
@@ -11948,6 +13084,75 @@
       "sourceIds": [
         "piltover-archive:8d2abd31-7ac7-404f-89d4-fff66ea1bfbb",
         "riot-gallery:rad-090a-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-090a.webp"
+      ]
+    },
+    {
+      "printId": "RAD-091",
+      "basePrintId": "RAD-091",
+      "setCode": "RAD",
+      "collectorCode": "091",
+      "name": "Jarvan IV, Martial Paragon",
+      "type": "Unit",
+      "supertype": "Champion",
+      "costEnergy": 4,
+      "costPower": 1,
+      "tags": [
+        "Jarvan IV",
+        "Demacia"
+      ],
+      "champion": "Jarvan IV",
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/8edacba51db193506e13e1afb6a8509256cdf55c-744x1039.png?accountingTag=RB",
+      "imageHash": "8edacba51db193506e13e1afb6a8509256cdf55c",
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-091.webp"
+      ],
+      "artist": "JunHuan",
+      "updatedAt": "2026-10-05T11:19:14.308Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:a20ec5a2-4e48-43fe-9659-51a96aef29fc",
+        "riot-gallery:rad-091-167"
+      ]
+    },
+    {
+      "printId": "RAD-091A",
+      "basePrintId": "RAD-091",
+      "setCode": "RAD",
+      "collectorCode": "091A",
+      "name": "Jarvan IV, Martial Paragon",
+      "type": "Unit",
+      "supertype": "Champion",
+      "costEnergy": 4,
+      "costPower": 1,
+      "tags": [
+        "Jarvan IV",
+        "Demacia"
+      ],
+      "champion": "Jarvan IV",
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/574638f1c7e64e642f8259c8d981a0e4af973b07-744x1039.png?accountingTag=RB",
+      "imageHash": "574638f1c7e64e642f8259c8d981a0e4af973b07",
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-091a.webp"
+      ],
+      "artist": "JunHuan",
+      "updatedAt": "2026-10-05T11:19:14.308Z",
+      "variants": {
+        "alternateArt": true,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:8bdd23e7-4b84-4c79-be0c-e2532004f969",
+        "riot-gallery:rad-091a-167"
       ]
     },
     {
@@ -11978,6 +13183,9 @@
       "sourceIds": [
         "piltover-archive:dee2155c-4dfe-4348-b033-fe8dbfd9dc13",
         "riot-gallery:rad-093-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-093.webp"
       ]
     },
     {
@@ -12008,6 +13216,9 @@
       "sourceIds": [
         "piltover-archive:cf74e569-65f6-476d-b093-274eaba70d1c",
         "riot-gallery:rad-095-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-095.webp"
       ]
     },
     {
@@ -12035,6 +13246,69 @@
       "sourceIds": [
         "piltover-archive:37294f49-dd64-430a-8c02-0dd8671f28bf",
         "riot-gallery:rad-096-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-096.webp"
+      ]
+    },
+    {
+      "printId": "RAD-097",
+      "basePrintId": "RAD-097",
+      "setCode": "RAD",
+      "collectorCode": "097",
+      "name": "Siren of the Shallows",
+      "type": "Unit",
+      "supertype": null,
+      "costEnergy": 2,
+      "costPower": 0,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/e666029dcebc507cc80435eee17db435305d1361-744x1039.png?accountingTag=RB",
+      "imageHash": "e666029dcebc507cc80435eee17db435305d1361",
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-097.webp"
+      ],
+      "artist": "Wild Blue Studio",
+      "updatedAt": "2026-10-05T11:19:14.308Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:bf37a032-b7e4-4d15-b454-23862c841c52",
+        "riot-gallery:rad-097-167"
+      ]
+    },
+    {
+      "printId": "RAD-098",
+      "basePrintId": "RAD-098",
+      "setCode": "RAD",
+      "collectorCode": "098",
+      "name": "Siren's Song",
+      "type": "Spell",
+      "supertype": null,
+      "costEnergy": 2,
+      "costPower": 0,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/742967b3e85f51b242fc04b8db4c4e3cd7b88672-744x1039.png?accountingTag=RB",
+      "imageHash": "742967b3e85f51b242fc04b8db4c4e3cd7b88672",
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-098.webp"
+      ],
+      "artist": "Kudos Productions",
+      "updatedAt": "2026-10-05T11:19:14.308Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:3866e3a8-95a6-4bbf-8c74-cea178c66641",
+        "riot-gallery:rad-098-167"
       ]
     },
     {
@@ -12064,6 +13338,9 @@
       "sourceIds": [
         "piltover-archive:d52c45c7-c354-4cd1-80d0-179a198a7375",
         "riot-gallery:rad-105-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-105.webp"
       ]
     },
     {
@@ -12093,6 +13370,9 @@
       "sourceIds": [
         "piltover-archive:d9edf485-847b-4f4b-9d14-bc669e20cc40",
         "riot-gallery:rad-106-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-106.webp"
       ]
     },
     {
@@ -12122,6 +13402,113 @@
       "aliases": [],
       "sourceIds": [
         "piltover-archive:9bd52f21-f932-4168-ac3e-a7a5a2212b11"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-107.webp",
+        "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/d112a706fe957e5cea58ea1e4366ac02e3ba292b-744x1039.png?accountingTag=RB"
+      ],
+      "imageHashAliases": [
+        "d112a706fe957e5cea58ea1e4366ac02e3ba292b"
+      ]
+    },
+    {
+      "printId": "RAD-109",
+      "basePrintId": "RAD-109",
+      "setCode": "RAD",
+      "collectorCode": "109",
+      "name": "Evelynn, In Control",
+      "type": "Unit",
+      "supertype": "Champion",
+      "costEnergy": 4,
+      "costPower": 1,
+      "tags": [
+        "Evelynn",
+        "Demon"
+      ],
+      "champion": "Evelynn",
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/8c17158e6153eddb4b56abd8a09cbbd20600b049-744x1039.png?accountingTag=RB",
+      "imageHash": "8c17158e6153eddb4b56abd8a09cbbd20600b049",
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-109.webp"
+      ],
+      "artist": "Luscinia Studio",
+      "updatedAt": "2026-10-05T11:19:14.308Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:c3a14ff4-590c-4ef5-a5bd-cd23bbf5af08",
+        "riot-gallery:rad-109-167"
+      ]
+    },
+    {
+      "printId": "RAD-109A",
+      "basePrintId": "RAD-109",
+      "setCode": "RAD",
+      "collectorCode": "109A",
+      "name": "Evelynn, In Control",
+      "type": "Unit",
+      "supertype": "Champion",
+      "costEnergy": 4,
+      "costPower": 1,
+      "tags": [
+        "Evelynn",
+        "Demon"
+      ],
+      "champion": "Evelynn",
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/fc73c433c11c858f936a0ee4acf19dd5861d1fee-744x1039.png?accountingTag=RB",
+      "imageHash": "fc73c433c11c858f936a0ee4acf19dd5861d1fee",
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-109a.webp"
+      ],
+      "artist": "HCuu",
+      "updatedAt": "2026-10-05T11:19:14.308Z",
+      "variants": {
+        "alternateArt": true,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:09b3ca22-70f2-4f1e-aa5e-fc2b21397671",
+        "riot-gallery:rad-109a-167"
+      ]
+    },
+    {
+      "printId": "RAD-110",
+      "basePrintId": "RAD-110",
+      "setCode": "RAD",
+      "collectorCode": "110",
+      "name": "Lulu, Whimsical",
+      "type": "Unit",
+      "supertype": "Champion",
+      "costEnergy": 3,
+      "costPower": 0,
+      "tags": [
+        "Lulu",
+        "Bandle City",
+        "Yordle"
+      ],
+      "champion": "Lulu",
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/defd09480671a1e394725f21b6c3448ebec77913-744x1039.png?accountingTag=RB",
+      "imageHash": "defd09480671a1e394725f21b6c3448ebec77913",
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-110.webp"
+      ],
+      "artist": "Polar Engine Studio",
+      "updatedAt": "2026-10-05T11:19:14.308Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:2add6f24-624e-452a-95a3-22519d9804f0",
+        "riot-gallery:rad-110-167"
       ]
     },
     {
@@ -12151,6 +13538,9 @@
       "sourceIds": [
         "piltover-archive:26593b62-19c1-4155-b2a2-65ffc42313e2",
         "riot-gallery:rad-115-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-115.webp"
       ]
     },
     {
@@ -12180,6 +13570,9 @@
       "sourceIds": [
         "piltover-archive:bd0e160b-992e-4b22-8d5f-2ea345d7dc58",
         "riot-gallery:rad-116-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-116.webp"
       ]
     },
     {
@@ -12206,6 +13599,74 @@
       "aliases": [],
       "sourceIds": [
         "piltover-archive:33c981d3-472f-4517-9512-5935ed8651b2"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-117.webp",
+        "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/5d119653fcba423c150815de3a412922c4e481e8-744x1039.png?accountingTag=RB"
+      ],
+      "imageHashAliases": [
+        "5d119653fcba423c150815de3a412922c4e481e8"
+      ]
+    },
+    {
+      "printId": "RAD-118",
+      "basePrintId": "RAD-118",
+      "setCode": "RAD",
+      "collectorCode": "118",
+      "name": "Herald of the Emperor",
+      "type": "Unit",
+      "supertype": null,
+      "costEnergy": 5,
+      "costPower": 0,
+      "tags": [
+        "Shurima"
+      ],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/a168856002994f7ac67150d991e65152e6434ab6-744x1039.png?accountingTag=RB",
+      "imageHash": "a168856002994f7ac67150d991e65152e6434ab6",
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-118.webp"
+      ],
+      "artist": "Kudos Productions",
+      "updatedAt": "2026-10-05T11:19:14.308Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:54092f74-40e3-41f3-bdbb-343fb21faaf8",
+        "riot-gallery:rad-118-167"
+      ]
+    },
+    {
+      "printId": "RAD-119",
+      "basePrintId": "RAD-119",
+      "setCode": "RAD",
+      "collectorCode": "119",
+      "name": "Hunting Dog",
+      "type": "Unit",
+      "supertype": null,
+      "costEnergy": 3,
+      "costPower": 0,
+      "tags": [
+        "Demacia",
+        "Dog"
+      ],
+      "champion": null,
+      "imageUrl": "https://cdn.piltoverarchive.com/temporary/1790898736232-cr9lsvqsa2m.png",
+      "imageHash": null,
+      "artist": "Kudos Productions",
+      "updatedAt": "2026-10-05T11:19:14.308Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:88bf5c50-e14d-4b1d-9e0d-5b63350712a6"
       ]
     },
     {
@@ -12235,6 +13696,9 @@
       "sourceIds": [
         "piltover-archive:80d4af74-e515-4e1f-b444-de0ac8b46026",
         "riot-gallery:rad-125-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-125.webp"
       ]
     },
     {
@@ -12265,6 +13729,9 @@
       "sourceIds": [
         "piltover-archive:b1c3cc56-fb26-41d6-af75-2aafeb09ee00",
         "riot-gallery:rad-126-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-126.webp"
       ]
     },
     {
@@ -12292,6 +13759,102 @@
       "sourceIds": [
         "piltover-archive:b4c670fa-8a35-463b-ab27-d897dca3d317",
         "riot-gallery:rad-127-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-127.webp"
+      ]
+    },
+    {
+      "printId": "RAD-128",
+      "basePrintId": "RAD-128",
+      "setCode": "RAD",
+      "collectorCode": "128",
+      "name": "Steadfast Outrider",
+      "type": "Unit",
+      "supertype": null,
+      "costEnergy": 4,
+      "costPower": 0,
+      "tags": [
+        "Demacia"
+      ],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/efa8d58e65b1b1f804d37bb51bb67ea52e0b3205-744x1039.png?accountingTag=RB",
+      "imageHash": "efa8d58e65b1b1f804d37bb51bb67ea52e0b3205",
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-128.webp"
+      ],
+      "artist": "Kudos Productions",
+      "updatedAt": "2026-10-05T11:19:14.308Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:b39085d1-c84a-4177-8694-c4e0c528418f",
+        "riot-gallery:rad-128-167"
+      ]
+    },
+    {
+      "printId": "RAD-129",
+      "basePrintId": "RAD-129",
+      "setCode": "RAD",
+      "collectorCode": "129",
+      "name": "Trifarian Captain",
+      "type": "Unit",
+      "supertype": null,
+      "costEnergy": 2,
+      "costPower": 0,
+      "tags": [
+        "Noxus",
+        "Trifarian"
+      ],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/914ced10400826a878ed5cf7294207a4e7b542b1-744x1039.png?accountingTag=RB",
+      "imageHash": "914ced10400826a878ed5cf7294207a4e7b542b1",
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-129.webp"
+      ],
+      "artist": "Six More Vodka",
+      "updatedAt": "2026-10-05T11:19:14.308Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:be61aa7d-293d-4f76-af0c-06dd7b41646e",
+        "riot-gallery:rad-129-167"
+      ]
+    },
+    {
+      "printId": "RAD-130",
+      "basePrintId": "RAD-130",
+      "setCode": "RAD",
+      "collectorCode": "130",
+      "name": "Battlefield Armorer",
+      "type": "Unit",
+      "supertype": null,
+      "costEnergy": 3,
+      "costPower": 0,
+      "tags": [
+        "Demacia"
+      ],
+      "champion": null,
+      "imageUrl": "https://cdn.piltoverarchive.com/temporary/1790934179743-fiangvnwvig.png",
+      "imageHash": null,
+      "artist": "Six More Vodka",
+      "updatedAt": "2026-10-05T11:19:14.308Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:a3af4043-ddf6-4835-866e-3ca6733abef7"
       ]
     },
     {
@@ -12325,6 +13888,9 @@
       "sourceIds": [
         "piltover-archive:7d45f4e1-fecd-4aa8-93b7-f0e9f67ab35c",
         "riot-gallery:rad-132-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-132.webp"
       ]
     },
     {
@@ -12354,6 +13920,9 @@
       "sourceIds": [
         "piltover-archive:ef08f68c-dcc5-4edb-aa95-0d9d0b51c016",
         "riot-gallery:rad-136-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-136.webp"
       ]
     },
     {
@@ -12385,6 +13954,9 @@
       "sourceIds": [
         "piltover-archive:54fb8e54-55b3-41d6-a709-d619d2db1e06",
         "riot-gallery:rad-137-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-137.webp"
       ]
     },
     {
@@ -12416,6 +13988,9 @@
       "sourceIds": [
         "piltover-archive:a011560b-d369-4554-b558-2b56f5c02c2f",
         "riot-gallery:rad-137a-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-137a.webp"
       ]
     },
     {
@@ -12446,6 +14021,9 @@
       "sourceIds": [
         "piltover-archive:a9c92625-a171-4618-b8f4-0ee9e58d8290",
         "riot-gallery:rad-138-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-138.webp"
       ]
     },
     {
@@ -12476,6 +14054,9 @@
       "sourceIds": [
         "piltover-archive:dd888873-cb06-415e-ab78-86f6c165d5a6",
         "riot-gallery:rad-138a-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-138a.webp"
       ]
     },
     {
@@ -12505,6 +14086,9 @@
       "sourceIds": [
         "piltover-archive:8154d2d7-f37b-4594-ac99-f36829d0c55c",
         "riot-gallery:rad-139-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-139.webp"
       ]
     },
     {
@@ -12534,6 +14118,9 @@
       "sourceIds": [
         "piltover-archive:02a6713c-e0f3-4c48-907a-744588df305b",
         "riot-gallery:rad-140-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-140.webp"
       ]
     },
     {
@@ -12563,6 +14150,9 @@
       "sourceIds": [
         "piltover-archive:c0112bfe-4bb9-42ea-bcfe-3e216f8f2432",
         "riot-gallery:rad-141-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-141.webp"
       ]
     },
     {
@@ -12592,6 +14182,9 @@
       "sourceIds": [
         "piltover-archive:fb6f03c0-4e4d-44d0-acd3-40fc24ee55c4",
         "riot-gallery:rad-142-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-142.webp"
       ]
     },
     {
@@ -12620,6 +14213,41 @@
       "aliases": [],
       "sourceIds": [
         "piltover-archive:1f12122b-e2de-48fe-9c5b-86668e6984b8"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-143.webp",
+        "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/90ec3319518771820909592eee963d34dab037bc-744x1039.png?accountingTag=RB"
+      ],
+      "imageHashAliases": [
+        "90ec3319518771820909592eee963d34dab037bc"
+      ]
+    },
+    {
+      "printId": "RAD-144",
+      "basePrintId": "RAD-144",
+      "setCode": "RAD",
+      "collectorCode": "144",
+      "name": "Realm of Death",
+      "type": "Spell",
+      "supertype": "Signature",
+      "costEnergy": 2,
+      "costPower": 1,
+      "tags": [
+        "Mordekaiser"
+      ],
+      "champion": null,
+      "imageUrl": "https://cdn.piltoverarchive.com/temporary/1790980702633-o5aq7ngqyuc.webp",
+      "imageHash": null,
+      "artist": "Pixelverse",
+      "updatedAt": "2026-10-05T11:19:14.308Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:d3d5b39e-ba98-4de8-aaaf-53ac4f260d4d"
       ]
     },
     {
@@ -12649,6 +14277,9 @@
       "sourceIds": [
         "piltover-archive:d6437fd5-aa59-4891-93d3-a61147c0a650",
         "riot-gallery:rad-145-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-145.webp"
       ]
     },
     {
@@ -12680,6 +14311,9 @@
       "sourceIds": [
         "piltover-archive:86244980-8d1b-428e-b41a-56ce74f8715b",
         "riot-gallery:rad-147-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-147.webp"
       ]
     },
     {
@@ -12709,6 +14343,9 @@
       "sourceIds": [
         "piltover-archive:886a6f3e-a00e-4cd8-8279-2b9767beae83",
         "riot-gallery:rad-148-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-148.webp"
       ]
     },
     {
@@ -12738,6 +14375,9 @@
       "sourceIds": [
         "piltover-archive:09ccd8a8-8bdf-4b05-a8b4-8fe1831039df",
         "riot-gallery:rad-150-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-150.webp"
       ]
     },
     {
@@ -12767,6 +14407,9 @@
       "sourceIds": [
         "piltover-archive:556c5b5a-ed1b-4e46-8e54-668778be33a9",
         "riot-gallery:rad-151-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-151.webp"
       ]
     },
     {
@@ -12795,6 +14438,45 @@
       "aliases": [],
       "sourceIds": [
         "piltover-archive:fefbee75-1c71-4bb5-9417-2ce90788388a"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-152.webp",
+        "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/0200aeca5d0a1cca4b8ab5b3f3910207118ee4e4-744x1040.png?accountingTag=RB"
+      ],
+      "imageHashAliases": [
+        "0200aeca5d0a1cca4b8ab5b3f3910207118ee4e4"
+      ]
+    },
+    {
+      "printId": "RAD-153",
+      "basePrintId": "RAD-153",
+      "setCode": "RAD",
+      "collectorCode": "153",
+      "name": "Evelynn, Agony's Embrace",
+      "type": "Legend",
+      "supertype": null,
+      "costEnergy": null,
+      "costPower": null,
+      "tags": [
+        "Evelynn"
+      ],
+      "champion": "Evelynn",
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/ca217b57d0e8d2e04e7a35105deaa6be17e854f0-744x1039.png?accountingTag=RB",
+      "imageHash": "ca217b57d0e8d2e04e7a35105deaa6be17e854f0",
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-153.webp"
+      ],
+      "artist": "Envar Studio",
+      "updatedAt": "2026-10-05T11:19:14.308Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:206b8698-fc2d-4467-b2f9-e327cded1c45",
+        "riot-gallery:rad-153-167"
       ]
     },
     {
@@ -12824,6 +14506,9 @@
       "sourceIds": [
         "piltover-archive:ce76a6bf-42e6-4dee-a774-57a5e7abf6e6",
         "riot-gallery:rad-155-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-155.webp"
       ]
     },
     {
@@ -12853,6 +14538,9 @@
       "sourceIds": [
         "piltover-archive:2476fc2d-5d07-43f9-bbd4-135128138780",
         "riot-gallery:rad-156-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-156.webp"
       ]
     },
     {
@@ -12879,6 +14567,13 @@
       "aliases": [],
       "sourceIds": [
         "piltover-archive:0d9823d4-cd71-43d0-8fcc-281211779d37"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-157.webp",
+        "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/f5bb93e1ad9005fd42a9129b91f72877f1dedbe1-1039x744.png?accountingTag=RB"
+      ],
+      "imageHashAliases": [
+        "f5bb93e1ad9005fd42a9129b91f72877f1dedbe1"
       ]
     },
     {
@@ -12905,6 +14600,39 @@
       "aliases": [],
       "sourceIds": [
         "piltover-archive:a775d3e4-2505-4928-81e2-88202d7c0181"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-158.webp",
+        "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/9a02ae108f32a8b88be47a94b5f0d39b5a06a6a1-1039x744.png?accountingTag=RB"
+      ],
+      "imageHashAliases": [
+        "9a02ae108f32a8b88be47a94b5f0d39b5a06a6a1"
+      ]
+    },
+    {
+      "printId": "RAD-159",
+      "basePrintId": "RAD-159",
+      "setCode": "RAD",
+      "collectorCode": "159",
+      "name": "Black Rose Sanctum",
+      "type": "Battlefield",
+      "supertype": null,
+      "costEnergy": null,
+      "costPower": null,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cdn.piltoverarchive.com/temporary/1790980813364-6f0gyyr8982.jpg",
+      "imageHash": null,
+      "artist": "Grafit Studio",
+      "updatedAt": "2026-10-05T11:19:14.308Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:a77ebd83-4750-4b2b-94cb-d070da8c5949"
       ]
     },
     {
@@ -12932,6 +14660,9 @@
       "sourceIds": [
         "piltover-archive:841036e9-c465-4786-adc5-e4649e4619bc",
         "riot-gallery:rad-160-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-160.webp"
       ]
     },
     {
@@ -12959,6 +14690,39 @@
       "sourceIds": [
         "piltover-archive:f4332096-25bc-412d-93c0-5a0ec0dcf9b5",
         "riot-gallery:rad-161-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-161.webp"
+      ]
+    },
+    {
+      "printId": "RAD-162",
+      "basePrintId": "RAD-162",
+      "setCode": "RAD",
+      "collectorCode": "162",
+      "name": "Firelights' Hideout",
+      "type": "Battlefield",
+      "supertype": null,
+      "costEnergy": null,
+      "costPower": null,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/f8e2d555ff0dc250de38a1c8924a199dc121f036-1039x744.png?accountingTag=RB",
+      "imageHash": "f8e2d555ff0dc250de38a1c8924a199dc121f036",
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-162.webp"
+      ],
+      "artist": "Grafit Studio",
+      "updatedAt": "2026-10-05T11:19:14.308Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:a1ada46f-285a-4614-9067-b3f2800fa2e7",
+        "riot-gallery:rad-162-167"
       ]
     },
     {
@@ -12966,7 +14730,7 @@
       "basePrintId": "RAD-163",
       "setCode": "RAD",
       "collectorCode": "163",
-      "name": "Hunter's Circle",
+      "name": "Hunters' Circle",
       "type": "Battlefield",
       "supertype": null,
       "costEnergy": null,
@@ -12982,9 +14746,18 @@
         "overnumbered": false,
         "signature": false
       },
-      "aliases": [],
+      "aliases": [
+        "Hunter's Circle"
+      ],
       "sourceIds": [
         "piltover-archive:6dce197e-3af8-4d61-b0c2-4342e605eb57"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-163.webp",
+        "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/e7e25d90506d805f1996e7f751cb5b6baa8ec305-1039x744.png?accountingTag=RB"
+      ],
+      "imageHashAliases": [
+        "e7e25d90506d805f1996e7f751cb5b6baa8ec305"
       ]
     },
     {
@@ -13012,6 +14785,9 @@
       "sourceIds": [
         "piltover-archive:0ea985be-67bb-4dba-8770-1a4bb8c52945",
         "riot-gallery:rad-164-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-164.webp"
       ]
     },
     {
@@ -13039,6 +14815,9 @@
       "sourceIds": [
         "piltover-archive:e1b1f5ac-b51d-439f-a7ef-f48b6e23a0ca",
         "riot-gallery:rad-165-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-165.webp"
       ]
     },
     {
@@ -13066,6 +14845,9 @@
       "sourceIds": [
         "piltover-archive:b3c14d60-6e99-4230-8c09-b934c8b00318",
         "riot-gallery:rad-166-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-166.webp"
       ]
     },
     {
@@ -13096,6 +14878,9 @@
       "sourceIds": [
         "piltover-archive:0f783ac5-09c6-4ac3-b306-551846c2f14f",
         "riot-gallery:rad-167-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-167.webp"
       ]
     },
     {
@@ -13124,6 +14909,13 @@
       "aliases": [],
       "sourceIds": [
         "piltover-archive:07464866-dbaa-45d1-835a-a0be43b2cd6b"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-168.webp",
+        "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/0a921eca1acad149fd4bcb13244e3af25feac488-744x1039.png?accountingTag=RB"
+      ],
+      "imageHashAliases": [
+        "0a921eca1acad149fd4bcb13244e3af25feac488"
       ]
     },
     {
@@ -13183,6 +14975,9 @@
       ],
       "sourceIds": [
         "riot-gallery:rad-169-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-169.webp"
       ]
     },
     {
@@ -13229,7 +15024,7 @@
       "champion": "Mordekaiser",
       "imageUrl": "https://cdn.piltoverarchive.com/temporary/1790861929849-r5d1gj52nae.png",
       "imageHash": null,
-      "artist": "Taylor Jenson",
+      "artist": "Taylor Jansen",
       "updatedAt": "2026-10-01T16:38:00.000Z",
       "variants": {
         "alternateArt": false,
@@ -13239,6 +15034,41 @@
       "aliases": [],
       "sourceIds": [
         "piltover-archive:c2d1aad0-555b-4c41-9a8b-8604c0b0758c"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-170.webp",
+        "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/57ad15a4a09ffc2038e1b8548d861eb74d46d4f7-744x1039.png?accountingTag=RB"
+      ],
+      "imageHashAliases": [
+        "57ad15a4a09ffc2038e1b8548d861eb74d46d4f7"
+      ]
+    },
+    {
+      "printId": "RAD-170*",
+      "basePrintId": "RAD-170",
+      "setCode": "RAD",
+      "collectorCode": "170*",
+      "name": "Mordekaiser, Iron Revenant",
+      "type": "Legend",
+      "supertype": null,
+      "costEnergy": null,
+      "costPower": null,
+      "tags": [
+        "Mordekaiser"
+      ],
+      "champion": "Mordekaiser",
+      "imageUrl": "https://cdn.piltoverarchive.com/temporary/1790878027612-3kd4kppd5il.png",
+      "imageHash": null,
+      "artist": "Taylor Jansen",
+      "updatedAt": "2026-10-05T11:19:14.308Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": true,
+        "signature": true
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:c71a6fca-4f74-4492-b267-f1cf43bf2fac"
       ]
     },
     {
@@ -13268,6 +15098,9 @@
       "sourceIds": [
         "piltover-archive:e26f6c6f-87ac-41b5-8f06-d0130065da33",
         "riot-gallery:rad-171-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-171.webp"
       ]
     },
     {
@@ -13327,6 +15160,9 @@
       "sourceIds": [
         "piltover-archive:dda8c401-0490-416b-ac87-942f18c1f5a1",
         "riot-gallery:rad-172-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-172.webp"
       ]
     },
     {
@@ -13356,6 +15192,9 @@
       "sourceIds": [
         "piltover-archive:3ec78e4c-0a3f-4616-a715-a0a19008e196",
         "riot-gallery:rad-174-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-174.webp"
       ]
     },
     {
@@ -13387,6 +15226,38 @@
       ]
     },
     {
+      "printId": "RAD-175",
+      "basePrintId": "RAD-175",
+      "setCode": "RAD",
+      "collectorCode": "175",
+      "name": "Evelynn, Agony's Embrace",
+      "type": "Legend",
+      "supertype": null,
+      "costEnergy": null,
+      "costPower": null,
+      "tags": [
+        "Evelynn"
+      ],
+      "champion": "Evelynn",
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/37ac535445b224fa28f6e27b0d733474a38e369c-744x1039.png?accountingTag=RB",
+      "imageHash": "37ac535445b224fa28f6e27b0d733474a38e369c",
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-175.webp"
+      ],
+      "artist": "Suzaki",
+      "updatedAt": "2026-10-05T11:19:14.308Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": true,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:7c9e3769-9a04-41f1-955c-663827c667f3",
+        "riot-gallery:rad-175-167"
+      ]
+    },
+    {
       "printId": "RAD-176",
       "basePrintId": "RAD-176",
       "setCode": "RAD",
@@ -13413,6 +15284,9 @@
       "sourceIds": [
         "piltover-archive:6f00c302-2057-4dfb-88a2-2eaa8995af79",
         "riot-gallery:rad-176-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-176.webp"
       ]
     },
     {
@@ -13443,6 +15317,9 @@
       "sourceIds": [
         "piltover-archive:60639d1a-7b33-435d-932e-7b8bae55e6b7",
         "riot-gallery:rad-178-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-178.webp"
       ]
     },
     {
@@ -13473,6 +15350,9 @@
       "sourceIds": [
         "piltover-archive:25745fdd-f908-409c-9daf-43e3366fc1c5",
         "riot-gallery:rad-179-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-179.webp"
       ]
     },
     {
@@ -13503,6 +15383,9 @@
       "sourceIds": [
         "piltover-archive:40f4ea95-37aa-41bb-b9d0-dbef00e81f85",
         "riot-gallery:rad-180-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-180.webp"
       ]
     },
     {
@@ -13534,6 +15417,9 @@
       "sourceIds": [
         "piltover-archive:064da776-0357-4666-9b9f-1e3aa7f7a169",
         "riot-gallery:rad-181-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-181.webp"
       ]
     },
     {
@@ -13564,6 +15450,9 @@
       "sourceIds": [
         "piltover-archive:44818b19-04c9-4b98-8b4d-e59fb72aa098",
         "riot-gallery:rad-182-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-182.webp"
       ]
     },
     {
@@ -13594,6 +15483,61 @@
       "sourceIds": [
         "piltover-archive:406f0b43-0d73-4a27-9a7d-538e414a1192",
         "riot-gallery:rad-183-167"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-183.webp"
+      ]
+    },
+    {
+      "printId": "RAD-184",
+      "basePrintId": "RAD-184",
+      "setCode": "RAD",
+      "collectorCode": "184",
+      "name": "Packed Amphitheater",
+      "type": "Battlefield",
+      "supertype": null,
+      "costEnergy": null,
+      "costPower": null,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cdn.piltoverarchive.com/temporary/1790985089947-5pfquixslw.png",
+      "imageHash": null,
+      "artist": "Fish Art Studio",
+      "updatedAt": "2026-10-05T11:19:14.308Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": true,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:4c82e2bc-4e31-441b-9d31-c3d15de577ca"
+      ]
+    },
+    {
+      "printId": "RAD-R01A",
+      "basePrintId": "RAD-R01",
+      "setCode": "RAD",
+      "collectorCode": "R01A",
+      "name": "Fury Rune",
+      "type": "Rune",
+      "supertype": "Basic",
+      "costEnergy": null,
+      "costPower": null,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cdn.piltoverarchive.com/temporary/1790981076013-en4kanormmk.png",
+      "imageHash": null,
+      "artist": "Yeon Art Studio",
+      "updatedAt": "2026-10-05T11:19:14.308Z",
+      "variants": {
+        "alternateArt": true,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:07b41e17-653d-49e2-bf29-ae03690c4a2b"
       ]
     },
     {
@@ -13646,6 +15590,9 @@
       "aliases": [],
       "sourceIds": [
         "riot-gallery:rad-r02a"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-R02a.webp"
       ]
     },
     {
@@ -13698,6 +15645,35 @@
       "aliases": [],
       "sourceIds": [
         "riot-gallery:rad-r03a"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-R03a.webp"
+      ]
+    },
+    {
+      "printId": "RAD-R04",
+      "basePrintId": "RAD-R04",
+      "setCode": "RAD",
+      "collectorCode": "R04",
+      "name": "Body Rune",
+      "type": "Rune",
+      "supertype": "Basic",
+      "costEnergy": null,
+      "costPower": null,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/6d78f8e8cf237cc19a8546184501d4be97df29fd-744x1039.png?accountingTag=RB",
+      "imageHash": "6d78f8e8cf237cc19a8546184501d4be97df29fd",
+      "artist": "Greg Ghielmetti & Leah Chen",
+      "updatedAt": "2026-10-05T11:19:14.308Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "riot-gallery:rad-r04"
       ]
     },
     {
@@ -13724,6 +15700,157 @@
       "aliases": [],
       "sourceIds": [
         "piltover-archive:acaff6e4-d16b-4e60-a134-fef0ce559138"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-R04a.webp",
+        "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/90b2706af9f1eaf167065087a09a8451f303ffe1-744x1039.png?accountingTag=RB"
+      ],
+      "imageHashAliases": [
+        "90b2706af9f1eaf167065087a09a8451f303ffe1"
+      ]
+    },
+    {
+      "printId": "RAD-R05",
+      "basePrintId": "RAD-R05",
+      "setCode": "RAD",
+      "collectorCode": "R05",
+      "name": "Chaos Rune",
+      "type": "Rune",
+      "supertype": "Basic",
+      "costEnergy": null,
+      "costPower": null,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/f420625850dc43c96e29b6d85b6581c7ccb6126c-744x1039.png?accountingTag=RB",
+      "imageHash": "f420625850dc43c96e29b6d85b6581c7ccb6126c",
+      "artist": "Greg Ghielmetti & Leah Chen",
+      "updatedAt": "2026-10-05T11:19:14.308Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "riot-gallery:rad-r05"
+      ]
+    },
+    {
+      "printId": "RAD-R05A",
+      "basePrintId": "RAD-R05",
+      "setCode": "RAD",
+      "collectorCode": "R05A",
+      "name": "Chaos Rune",
+      "type": "Rune",
+      "supertype": "Basic",
+      "costEnergy": null,
+      "costPower": null,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/a8ad4d5345a7316ba76689988bcd211d63f66098-744x1039.png?accountingTag=RB",
+      "imageHash": "a8ad4d5345a7316ba76689988bcd211d63f66098",
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-R05a.webp"
+      ],
+      "artist": "Yeon Art Studio",
+      "updatedAt": "2026-10-05T11:19:14.308Z",
+      "variants": {
+        "alternateArt": true,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:fdd5c2ef-c962-438e-bcc4-7dcf2add1c2f",
+        "riot-gallery:rad-r05a"
+      ]
+    },
+    {
+      "printId": "RAD-R06A",
+      "basePrintId": "RAD-R06",
+      "setCode": "RAD",
+      "collectorCode": "R06A",
+      "name": "Order Rune",
+      "type": "Rune",
+      "supertype": "Basic",
+      "costEnergy": null,
+      "costPower": null,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cdn.piltoverarchive.com/temporary/1790981006735-own1y6pz5fa.png",
+      "imageHash": null,
+      "artist": "Yeon Art Studio",
+      "updatedAt": "2026-10-05T11:19:14.308Z",
+      "variants": {
+        "alternateArt": true,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:797dc7fd-2b5b-4d6b-981d-6856e9c0aa36"
+      ]
+    },
+    {
+      "printId": "RAD-SP1",
+      "basePrintId": "RAD-SP1",
+      "setCode": "RAD",
+      "collectorCode": "SP1",
+      "name": "Ahri, Confident",
+      "type": "Unit",
+      "supertype": "Champion",
+      "costEnergy": 4,
+      "costPower": 1,
+      "tags": [
+        "Ahri",
+        "Ionia"
+      ],
+      "champion": "Ahri",
+      "imageUrl": "https://cdn.piltoverarchive.com/temporary/1790987694408-134qeoalrdi.png",
+      "imageHash": null,
+      "artist": "HCuu",
+      "updatedAt": "2026-10-05T11:19:14.308Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:a102731d-d3e8-4f9c-ae0d-7b32115b1cae"
+      ]
+    },
+    {
+      "printId": "RAD-SP2",
+      "basePrintId": "RAD-SP2",
+      "setCode": "RAD",
+      "collectorCode": "SP2",
+      "name": "Akali, Brash",
+      "type": "Unit",
+      "supertype": "Champion",
+      "costEnergy": 5,
+      "costPower": 1,
+      "tags": [
+        "Akali",
+        "Ionia"
+      ],
+      "champion": "Akali",
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/f19416576af7d609b525d72884ca42cf8795bf74-744x1039.png?accountingTag=RB",
+      "imageHash": "f19416576af7d609b525d72884ca42cf8795bf74",
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-SP2.webp"
+      ],
+      "artist": "Bullet lin",
+      "updatedAt": "2026-10-05T11:19:14.308Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:82378dd4-8e27-48fe-99ed-b01a171b1d05",
+        "riot-gallery:rad-sp2-005"
       ]
     },
     {
@@ -13753,6 +15880,13 @@
       "aliases": [],
       "sourceIds": [
         "piltover-archive:ae110919-6d9c-41d1-9436-b88ed3718f6b"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-SP3.webp",
+        "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/f79b82a0a56c2e4af641beb84762abcd6b058195-744x1039.png?accountingTag=RB"
+      ],
+      "imageHashAliases": [
+        "f79b82a0a56c2e4af641beb84762abcd6b058195"
       ]
     },
     {
@@ -13782,6 +15916,9 @@
       "aliases": [],
       "sourceIds": [
         "riot-gallery:rad-sp4-005"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-SP4.webp"
       ]
     },
     {
@@ -13812,6 +15949,9 @@
       "sourceIds": [
         "piltover-archive:b79a2ce3-2d58-4e8b-9d64-03b718fa464e",
         "riot-gallery:rad-sp5-005"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-SP5.webp"
       ]
     },
     {
@@ -19728,6 +21868,9 @@
       ],
       "sourceIds": [
         "69bc5bdbd308c64675ca884c"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/SFD-181.webp"
       ]
     },
     {
@@ -19786,6 +21929,9 @@
       ],
       "sourceIds": [
         "69bc5bdbd308c64675ca884e"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/SFD-183.webp"
       ]
     },
     {
@@ -19844,6 +21990,9 @@
       ],
       "sourceIds": [
         "69bc5bdad308c64675ca883a"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/SFD-185.webp"
       ]
     },
     {
@@ -19903,6 +22052,9 @@
       ],
       "sourceIds": [
         "69bc5bdbd308c64675ca8850"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/SFD-187.webp"
       ]
     },
     {
@@ -19961,6 +22113,9 @@
       ],
       "sourceIds": [
         "69bc5bdcd308c64675ca8852"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/SFD-189.webp"
       ]
     },
     {
@@ -20078,6 +22233,9 @@
       ],
       "sourceIds": [
         "69bc5bdcd308c64675ca8853"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/SFD-193.webp"
       ]
     },
     {
@@ -20136,6 +22294,9 @@
       ],
       "sourceIds": [
         "69bc5bdad308c64675ca8839"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/SFD-195.webp"
       ]
     },
     {
@@ -20194,6 +22355,9 @@
       ],
       "sourceIds": [
         "69bc5bdad308c64675ca8838"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/SFD-197.webp"
       ]
     },
     {
@@ -20252,6 +22416,9 @@
       ],
       "sourceIds": [
         "69bc5bdcd308c64675ca8855"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/SFD-199.webp"
       ]
     },
     {
@@ -20310,6 +22477,9 @@
       ],
       "sourceIds": [
         "69bc5bdad308c64675ca8837"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/SFD-201.webp"
       ]
     },
     {
@@ -20368,6 +22538,9 @@
       ],
       "sourceIds": [
         "69bc5bdad308c64675ca8836"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/SFD-203.webp"
       ]
     },
     {
@@ -20426,6 +22599,9 @@
       ],
       "sourceIds": [
         "69bc5bdcd308c64675ca8856"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/SFD-205.webp"
       ]
     },
     {
@@ -21768,6 +23944,9 @@
       ],
       "sourceIds": [
         "69bc5bdcd308c64675ca885a"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/SFD-240.webp"
       ]
     },
     {
@@ -21798,6 +23977,9 @@
       ],
       "sourceIds": [
         "69bc5be1d308c64675ca88b0"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/SFD-241.webp"
       ]
     },
     {
@@ -21828,6 +24010,9 @@
       ],
       "sourceIds": [
         "69bc5bded308c64675ca8884"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/SFD-242.webp"
       ]
     },
     {
@@ -21858,6 +24043,9 @@
       ],
       "sourceIds": [
         "69bc5be0d308c64675ca88af"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/SFD-243.webp"
       ]
     },
     {
@@ -21888,6 +24076,9 @@
       ],
       "sourceIds": [
         "69bc5bdcd308c64675ca885b"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/SFD-244.webp"
       ]
     },
     {
@@ -21918,6 +24109,9 @@
       ],
       "sourceIds": [
         "69bc5be3d308c64675ca88e6"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/SFD-245.webp"
       ]
     },
     {
@@ -21948,6 +24142,9 @@
       ],
       "sourceIds": [
         "69bc5bdbd308c64675ca8840"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/SFD-246.webp"
       ]
     },
     {
@@ -21978,6 +24175,9 @@
       ],
       "sourceIds": [
         "69bc5be3d308c64675ca88e5"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/SFD-247.webp"
       ]
     },
     {
@@ -22008,6 +24208,9 @@
       ],
       "sourceIds": [
         "69bc5be3d308c64675ca88e4"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/SFD-248.webp"
       ]
     },
     {
@@ -22038,6 +24241,9 @@
       ],
       "sourceIds": [
         "69bc5bdbd308c64675ca8841"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/SFD-249.webp"
       ]
     },
     {
@@ -22068,6 +24274,9 @@
       ],
       "sourceIds": [
         "69bc5be3d308c64675ca88e3"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/SFD-250.webp"
       ]
     },
     {
@@ -22098,6 +24307,65 @@
       ],
       "sourceIds": [
         "69bc5bded308c64675ca8885"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/SFD-251.webp"
+      ]
+    },
+    {
+      "printId": "SFD-T01",
+      "basePrintId": "SFD-T01",
+      "setCode": "SFD",
+      "collectorCode": "T01",
+      "name": "Mech",
+      "type": "Unit",
+      "supertype": "Token",
+      "costEnergy": null,
+      "costPower": null,
+      "tags": [
+        "Mech"
+      ],
+      "champion": null,
+      "imageUrl": "https://cdn.piltoverarchive.com/cards/SFD-T01.webp",
+      "imageHash": null,
+      "artist": "Dao Trong Le",
+      "updatedAt": "2026-10-05T11:19:14.308Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:0c6acb12-e977-49a2-89b5-a3a4bcab66d1"
+      ]
+    },
+    {
+      "printId": "SFD-T02",
+      "basePrintId": "SFD-T02",
+      "setCode": "SFD",
+      "collectorCode": "T02",
+      "name": "Sand Soldier",
+      "type": "Unit",
+      "supertype": "Token",
+      "costEnergy": null,
+      "costPower": null,
+      "tags": [
+        "Shurima"
+      ],
+      "champion": null,
+      "imageUrl": "https://cdn.piltoverarchive.com/cards/SFD-T02.webp",
+      "imageHash": null,
+      "artist": "Kudos Productions",
+      "updatedAt": "2026-10-05T11:19:14.308Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:ef1320a9-6752-485a-a77f-5786f7e4bfed"
       ]
     },
     {
@@ -28149,6 +30417,9 @@
       ],
       "sourceIds": [
         "69bc5bebd308c64675ca8980"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/UNL-181.webp"
       ]
     },
     {
@@ -28207,6 +30478,9 @@
       ],
       "sourceIds": [
         "69bc5beed308c64675ca89b1"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/UNL-183.webp"
       ]
     },
     {
@@ -28265,6 +30539,9 @@
       ],
       "sourceIds": [
         "69bc5beed308c64675ca89b2"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/UNL-185.webp"
       ]
     },
     {
@@ -28323,6 +30600,9 @@
       ],
       "sourceIds": [
         "69bc5bead308c64675ca8967"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/UNL-187.webp"
       ]
     },
     {
@@ -28382,6 +30662,9 @@
       ],
       "sourceIds": [
         "69bc5be9d308c64675ca894e"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/UNL-189.webp"
       ]
     },
     {
@@ -28440,6 +30723,9 @@
       ],
       "sourceIds": [
         "69bc5beed308c64675ca89b3"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/UNL-191.webp"
       ]
     },
     {
@@ -28498,6 +30784,9 @@
       ],
       "sourceIds": [
         "69bc5bead308c64675ca8963"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/UNL-193.webp"
       ]
     },
     {
@@ -28557,6 +30846,9 @@
       ],
       "sourceIds": [
         "69bc5be9d308c64675ca8951"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/UNL-195.webp"
       ]
     },
     {
@@ -28616,6 +30908,9 @@
       ],
       "sourceIds": [
         "69bc5be9d308c64675ca894f"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/UNL-197.webp"
       ]
     },
     {
@@ -28674,6 +30969,9 @@
       ],
       "sourceIds": [
         "69bc5be9d308c64675ca895d"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/UNL-199.webp"
       ]
     },
     {
@@ -28732,6 +31030,9 @@
       ],
       "sourceIds": [
         "69bc5be9d308c64675ca8950"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/UNL-201.webp"
       ]
     },
     {
@@ -28790,6 +31091,9 @@
       ],
       "sourceIds": [
         "69bc5becd308c64675ca898e"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/UNL-203.webp"
       ]
     },
     {
@@ -29410,6 +31714,9 @@
       ],
       "sourceIds": [
         "69c4407d9288b1e85d94de9f"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/UNL-226.webp"
       ]
     },
     {
@@ -29440,6 +31747,9 @@
       ],
       "sourceIds": [
         "69c43cd2c2f7428c5d24b4e5"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/UNL-226*.webp"
       ]
     },
     {
@@ -29470,6 +31780,9 @@
       ],
       "sourceIds": [
         "69c4407d9288b1e85d94dea0"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/UNL-227.webp"
       ]
     },
     {
@@ -29500,6 +31813,9 @@
       ],
       "sourceIds": [
         "69c43cd2c2f7428c5d24b4e7"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/UNL-227*.webp"
       ]
     },
     {
@@ -29530,6 +31846,9 @@
       ],
       "sourceIds": [
         "69c4407d9288b1e85d94dea1"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/UNL-228.webp"
       ]
     },
     {
@@ -29560,6 +31879,9 @@
       ],
       "sourceIds": [
         "69c43cd2c2f7428c5d24b4e6"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/UNL-228*.webp"
       ]
     },
     {
@@ -29590,6 +31912,9 @@
       ],
       "sourceIds": [
         "69c4407c9288b1e85d94de89"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/UNL-229.webp"
       ]
     },
     {
@@ -29620,6 +31945,9 @@
       ],
       "sourceIds": [
         "69c4407c9288b1e85d94de8a"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/UNL-229*.webp"
       ]
     },
     {
@@ -29650,6 +31978,9 @@
       ],
       "sourceIds": [
         "69bc5bebd308c64675ca8981"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/UNL-230.webp"
       ]
     },
     {
@@ -29680,6 +32011,9 @@
       ],
       "sourceIds": [
         "69bc5bebd308c64675ca8982"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/UNL-230*.webp"
       ]
     },
     {
@@ -29710,6 +32044,9 @@
       ],
       "sourceIds": [
         "69c43cd3c2f7428c5d24b4e8"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/UNL-231.webp"
       ]
     },
     {
@@ -29740,6 +32077,9 @@
       ],
       "sourceIds": [
         "69c4407e9288b1e85d94dea2"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/UNL-231*.webp"
       ]
     },
     {
@@ -29770,6 +32110,9 @@
       ],
       "sourceIds": [
         "69c4407e9288b1e85d94dea3"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/UNL-232.webp"
       ]
     },
     {
@@ -29800,6 +32143,9 @@
       ],
       "sourceIds": [
         "69c4407e9288b1e85d94dea4"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/UNL-232*.webp"
       ]
     },
     {
@@ -29830,6 +32176,9 @@
       ],
       "sourceIds": [
         "69bc5bebd308c64675ca8983"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/UNL-233.webp"
       ]
     },
     {
@@ -29860,6 +32209,9 @@
       ],
       "sourceIds": [
         "69bc5becd308c64675ca8984"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/UNL-233*.webp"
       ]
     },
     {
@@ -29890,6 +32242,9 @@
       ],
       "sourceIds": [
         "69bc5becd308c64675ca8985"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/UNL-234.webp"
       ]
     },
     {
@@ -29920,6 +32275,9 @@
       ],
       "sourceIds": [
         "69bc5becd308c64675ca8986"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/UNL-234*.webp"
       ]
     },
     {
@@ -29950,6 +32308,9 @@
       ],
       "sourceIds": [
         "69c4407e9288b1e85d94dea5"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/UNL-235.webp"
       ]
     },
     {
@@ -29980,6 +32341,9 @@
       ],
       "sourceIds": [
         "69c4407e9288b1e85d94dea6"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/UNL-235*.webp"
       ]
     },
     {
@@ -30010,6 +32374,9 @@
       ],
       "sourceIds": [
         "69bc5becd308c64675ca8987"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/UNL-236.webp"
       ]
     },
     {
@@ -30040,6 +32407,9 @@
       ],
       "sourceIds": [
         "69bc5bead308c64675ca895f"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/UNL-236*.webp"
       ]
     },
     {
@@ -30070,6 +32440,9 @@
       ],
       "sourceIds": [
         "69bc5becd308c64675ca898c"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/UNL-237.webp"
       ]
     },
     {
@@ -30100,6 +32473,9 @@
       ],
       "sourceIds": [
         "69bc5becd308c64675ca898d"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/UNL-237*.webp"
       ]
     },
     {
@@ -30128,6 +32504,162 @@
       "aliases": [],
       "sourceIds": [
         "69c5be69bf82ff7cb69f428b"
+      ]
+    },
+    {
+      "printId": "UNL-R01A",
+      "basePrintId": "UNL-R01",
+      "setCode": "UNL",
+      "collectorCode": "R01A",
+      "name": "Fury Rune",
+      "type": "Rune",
+      "supertype": "Basic",
+      "costEnergy": null,
+      "costPower": null,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://piltoverarchive.b-cdn.net/temporary/1772489366582-j850d8b51vc.png",
+      "imageHash": null,
+      "artist": "Envar Studio",
+      "updatedAt": "2026-10-05T11:19:14.308Z",
+      "variants": {
+        "alternateArt": true,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:2bb1820d-89e0-4ac8-9611-9d96c9042836"
+      ]
+    },
+    {
+      "printId": "UNL-R02A",
+      "basePrintId": "UNL-R02",
+      "setCode": "UNL",
+      "collectorCode": "R02A",
+      "name": "Calm Rune",
+      "type": "Rune",
+      "supertype": "Basic",
+      "costEnergy": null,
+      "costPower": null,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://piltoverarchive.b-cdn.net/temporary/1772489327958-x4rjerafcx.png",
+      "imageHash": null,
+      "artist": "Envar Studio",
+      "updatedAt": "2026-10-05T11:19:14.308Z",
+      "variants": {
+        "alternateArt": true,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:1ebea5b4-27b1-416a-8478-699983b4ac06"
+      ]
+    },
+    {
+      "printId": "UNL-R03A",
+      "basePrintId": "UNL-R03",
+      "setCode": "UNL",
+      "collectorCode": "R03A",
+      "name": "Mind Rune",
+      "type": "Rune",
+      "supertype": "Basic",
+      "costEnergy": null,
+      "costPower": null,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://piltoverarchive.b-cdn.net/temporary/1772489382491-gffpct65jgb.png",
+      "imageHash": null,
+      "artist": "Envar Studio",
+      "updatedAt": "2026-10-05T11:19:14.308Z",
+      "variants": {
+        "alternateArt": true,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:8541c57e-7035-4fb0-99e5-0c047220c350"
+      ]
+    },
+    {
+      "printId": "UNL-R04A",
+      "basePrintId": "UNL-R04",
+      "setCode": "UNL",
+      "collectorCode": "R04A",
+      "name": "Body Rune",
+      "type": "Rune",
+      "supertype": "Basic",
+      "costEnergy": null,
+      "costPower": null,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://piltoverarchive.b-cdn.net/temporary/1772489304316-2thnys211eo.png",
+      "imageHash": null,
+      "artist": "Envar Studio",
+      "updatedAt": "2026-10-05T11:19:14.308Z",
+      "variants": {
+        "alternateArt": true,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:9c75fc77-be12-4ffc-9582-f6e0d3fe8b69"
+      ]
+    },
+    {
+      "printId": "UNL-R05A",
+      "basePrintId": "UNL-R05",
+      "setCode": "UNL",
+      "collectorCode": "R05A",
+      "name": "Chaos Rune",
+      "type": "Rune",
+      "supertype": "Basic",
+      "costEnergy": null,
+      "costPower": null,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://piltoverarchive.b-cdn.net/temporary/1772489349570-60fm8rfv2nl.png",
+      "imageHash": null,
+      "artist": "Envar Studio",
+      "updatedAt": "2026-10-05T11:19:14.308Z",
+      "variants": {
+        "alternateArt": true,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:271c8b43-5111-4c17-9aef-590bb8b9d013"
+      ]
+    },
+    {
+      "printId": "UNL-R06A",
+      "basePrintId": "UNL-R06",
+      "setCode": "UNL",
+      "collectorCode": "R06A",
+      "name": "Order Rune",
+      "type": "Rune",
+      "supertype": "Basic",
+      "costEnergy": null,
+      "costPower": null,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://piltoverarchive.b-cdn.net/temporary/1772489400276-1xifka38ob4.png",
+      "imageHash": null,
+      "artist": "Envar Studio",
+      "updatedAt": "2026-10-05T11:19:14.308Z",
+      "variants": {
+        "alternateArt": true,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:ae1df7b4-f30f-4675-a960-c41ff5dfd11f"
       ]
     },
     {
@@ -31598,6 +34130,35 @@
       "sourceIds": [
         "6a517607ad64d2d80a4f03c0",
         "6a56ab99ff602fd324f47659"
+      ]
+    },
+    {
+      "printId": "VEN-041A",
+      "basePrintId": "VEN-041",
+      "setCode": "VEN",
+      "collectorCode": "041A",
+      "name": "Riven, Shattered",
+      "type": "Unit",
+      "supertype": "Champion",
+      "costEnergy": 3,
+      "costPower": 1,
+      "tags": [
+        "Riven",
+        "Noxus"
+      ],
+      "champion": "Riven",
+      "imageUrl": "https://cdn.piltoverarchive.com/temporary/1784307810372-cx0ignwgqkr.jpg",
+      "imageHash": null,
+      "artist": "League Splash Team",
+      "updatedAt": "2026-10-05T11:19:14.308Z",
+      "variants": {
+        "alternateArt": true,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:3e519810-da92-406d-a9b2-3ff0604b341a"
       ]
     },
     {
@@ -34790,6 +37351,9 @@
       "sourceIds": [
         "6a517607ad64d2d80a4f03c1",
         "6a56ab99ff602fd324f4765a"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/VEN-139.webp"
       ]
     },
     {
@@ -34851,6 +37415,9 @@
       "sourceIds": [
         "6a517604ad64d2d80a4f037c",
         "6a56ab95ff602fd324f47604"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/VEN-141.webp"
       ]
     },
     {
@@ -34912,6 +37479,9 @@
       "sourceIds": [
         "6a517606ad64d2d80a4f03a5",
         "6a56ab97ff602fd324f47636"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/VEN-143.webp"
       ]
     },
     {
@@ -34973,6 +37543,9 @@
       "sourceIds": [
         "6a517604ad64d2d80a4f0383",
         "6a56ab95ff602fd324f4760b"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/VEN-145.webp"
       ]
     },
     {
@@ -35034,6 +37607,9 @@
       "sourceIds": [
         "6a517605ad64d2d80a4f038a",
         "6a56ab95ff602fd324f47615"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/VEN-147.webp"
       ]
     },
     {
@@ -35094,6 +37670,9 @@
       "sourceIds": [
         "6a518b2537f518eaadf8baff",
         "6a56ab95ff602fd324f47610"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/VEN-149.webp"
       ]
     },
     {
@@ -35154,6 +37733,9 @@
       "sourceIds": [
         "6a517608ad64d2d80a4f03cf",
         "6a56ab9aff602fd324f4766c"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/VEN-151.webp"
       ]
     },
     {
@@ -35215,6 +37797,9 @@
       "sourceIds": [
         "6a517606ad64d2d80a4f03a7",
         "6a56ab97ff602fd324f47638"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/VEN-153.webp"
       ]
     },
     {
@@ -35277,6 +37862,9 @@
       "sourceIds": [
         "6a517605ad64d2d80a4f0392",
         "6a56ab96ff602fd324f4761e"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/VEN-155.webp"
       ]
     },
     {
@@ -36237,6 +38825,9 @@
       "sourceIds": [
         "6a518b2837f518eaadf8bb0f",
         "6a56ab99ff602fd324f4765b"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/VEN-189.webp"
       ]
     },
     {
@@ -36268,6 +38859,9 @@
       ],
       "sourceIds": [
         "official-gallery:ven-189-star-166"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/VEN-189*.webp"
       ]
     },
     {
@@ -36300,6 +38894,9 @@
       "sourceIds": [
         "6a517604ad64d2d80a4f037d",
         "6a56ab95ff602fd324f47605"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/VEN-190.webp"
       ]
     },
     {
@@ -36331,6 +38928,9 @@
       ],
       "sourceIds": [
         "official-gallery:ven-190-star-166"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/VEN-190*.webp"
       ]
     },
     {
@@ -36363,6 +38963,9 @@
       "sourceIds": [
         "6a517606ad64d2d80a4f03a6",
         "6a56ab97ff602fd324f47637"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/VEN-191.webp"
       ]
     },
     {
@@ -36394,6 +38997,9 @@
       ],
       "sourceIds": [
         "official-gallery:ven-191-star-166"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/VEN-191*.webp"
       ]
     },
     {
@@ -36426,6 +39032,9 @@
       "sourceIds": [
         "6a517604ad64d2d80a4f0382",
         "6a56ab95ff602fd324f4760a"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/VEN-192.webp"
       ]
     },
     {
@@ -36457,6 +39066,9 @@
       ],
       "sourceIds": [
         "official-gallery:ven-192-star-166"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/VEN-192*.webp"
       ]
     },
     {
@@ -36489,6 +39101,9 @@
       "sourceIds": [
         "6a517605ad64d2d80a4f038b",
         "6a56ab95ff602fd324f47614"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/VEN-193.webp"
       ]
     },
     {
@@ -36520,6 +39135,9 @@
       ],
       "sourceIds": [
         "official-gallery:ven-193-star-166"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/VEN-193*.webp"
       ]
     },
     {
@@ -36550,6 +39168,9 @@
       ],
       "sourceIds": [
         "6a56aba0ff602fd324f47681"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/VEN-194.webp"
       ]
     },
     {
@@ -36580,6 +39201,9 @@
       ],
       "sourceIds": [
         "official-gallery:ven-194-star-166"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/VEN-194*.webp"
       ]
     },
     {
@@ -36612,6 +39236,9 @@
       "sourceIds": [
         "6a518b2837f518eaadf8bb12",
         "6a56ab9aff602fd324f4766b"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/VEN-195.webp"
       ]
     },
     {
@@ -36643,6 +39270,9 @@
       ],
       "sourceIds": [
         "official-gallery:ven-195-star-166"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/VEN-195*.webp"
       ]
     },
     {
@@ -36675,6 +39305,9 @@
       "sourceIds": [
         "6a518b2637f518eaadf8bb07",
         "6a56ab98ff602fd324f47639"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/VEN-196.webp"
       ]
     },
     {
@@ -36706,6 +39339,9 @@
       ],
       "sourceIds": [
         "official-gallery:ven-196-star-166"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/VEN-196*.webp"
       ]
     },
     {
@@ -36740,6 +39376,9 @@
       "sourceIds": [
         "6a517605ad64d2d80a4f0391",
         "6a56ab96ff602fd324f4761d"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/VEN-197.webp"
       ]
     },
     {
@@ -36773,6 +39412,9 @@
       ],
       "sourceIds": [
         "official-gallery:ven-197-star-166"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/VEN-197*.webp"
       ]
     },
     {
@@ -37113,6 +39755,32 @@
       ]
     },
     {
+      "printId": "VEN-T01",
+      "basePrintId": "VEN-T01",
+      "setCode": "VEN",
+      "collectorCode": "T01",
+      "name": "Empowered",
+      "type": "Card",
+      "supertype": "Token",
+      "costEnergy": null,
+      "costPower": null,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cdn.piltoverarchive.com/cards/VEN-T01.webp",
+      "imageHash": null,
+      "artist": "Six More Vodka",
+      "updatedAt": "2026-10-05T11:19:14.308Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:ceaa8632-6c6b-4a55-b487-a7cf97649e4d"
+      ]
+    },
+    {
       "printId": "VEN-T04",
       "basePrintId": "VEN-T04",
       "setCode": "VEN",
@@ -37136,6 +39804,60 @@
       "aliases": [],
       "sourceIds": [
         "official-gallery:ven-t04"
+      ]
+    },
+    {
+      "printId": "VEN-T05",
+      "basePrintId": "VEN-T05",
+      "setCode": "VEN",
+      "collectorCode": "T05",
+      "name": "Shadow Clone",
+      "type": "Unit",
+      "supertype": "Token",
+      "costEnergy": null,
+      "costPower": null,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cdn.piltoverarchive.com/cards/VEN-T05.webp",
+      "imageHash": null,
+      "artist": "Six More Vodka",
+      "updatedAt": "2026-10-05T11:19:14.308Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:326fd754-340a-45a0-858c-87beb92653b0"
+      ]
+    },
+    {
+      "printId": "VEN-T06",
+      "basePrintId": "VEN-T06",
+      "setCode": "VEN",
+      "collectorCode": "T06",
+      "name": "Tentacle",
+      "type": "Unit",
+      "supertype": "Token",
+      "costEnergy": null,
+      "costPower": null,
+      "tags": [
+        "Bilgewater"
+      ],
+      "champion": null,
+      "imageUrl": "https://cdn.piltoverarchive.com/cards/VEN-T06.webp",
+      "imageHash": null,
+      "artist": "Michal Ivan",
+      "updatedAt": "2026-10-05T11:19:14.308Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:ac3d9184-4c1f-4267-96dc-619cccaa8d45"
       ]
     }
   ],

@@ -11,6 +11,7 @@ export const CANONICAL_LEGEND_NAMES = [
   "Diana",
   "Draven",
   "Ekko",
+  "Evelynn",
   "Ezreal",
   "Fiora",
   "Garen",
@@ -62,6 +63,7 @@ export const CANONICAL_LEGEND_NAMES = [
 ];
 
 const LEGEND_ALIAS_MAP: Record<string, string> = {
+  "agony's embrace": "Evelynn",
   "iron revenant": "Mordekaiser",
   "boy who shattered time": "Ekko",
   "hexplosives expert": "Ziggs",

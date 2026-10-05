@@ -437,6 +437,113 @@ async function readyDiscordQueueHarness() {
 }
 
 describe("RawCaptureService", () => {
+  it.each(["private", "unlisted", "public"] as const)("keeps a healthy finished %s replay out of the queue when future defaults change", async (visibility) => {
+    const harness = await readyDiscordQueueHarness();
+    const entry = await harness.add("finished-privacy", { visibility, webReplayDiscordShareEligible: false, discordShareStatus: undefined });
+    await harness.store.saveSettings({ rawCapture: { ...harness.initialSettings.rawCapture,
+      visibility: visibility === "public" ? "private" : "public", webReplayDiscordShareEnabled: false } });
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    const restarted = new RawCaptureService(harness.store, async () => "id-token");
+
+    expect(await restarted.uploadPendingRawCaptures()).toBe(0);
+    expect(await restarted.uploadPendingRawCaptures(5, true)).toBe(0);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect((await harness.store.getReplays())[0].rawCapture?.visibility).toBe(visibility);
+    expect(JSON.parse(await readFile(entry.indexPath, "utf8")).metadata.visibility).toBe(visibility);
+  });
+
+  it("does not use a foreground upload retry to rewrite a completed replay with the new default", async () => {
+    const harness = await readyDiscordQueueHarness();
+    const entry = await harness.add("foreground-privacy", { visibility: "unlisted", webReplayDiscordShareEligible: false });
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    await expect(harness.service.uploadRawCaptureToRiftLite(entry.replay.id, "public", { forceRetry: true }))
+      .resolves.toMatchObject({ visibility: "unlisted" });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect((await harness.store.getReplays())[0].rawCapture?.visibility).toBe("unlisted");
+  });
+
+  it.each(["current", "legacy"] as const)("resumes a %s failed visibility change after restart using its saved target", async (receipt) => {
+    const harness = await readyDiscordQueueHarness();
+    const entry = await harness.add("pending-privacy", { visibility: "unlisted", webReplayDiscordShareEligible: false,
+      discordShareStatus: undefined, deliveryStage: "paused", nextRetryAt: "2026-07-10T10:00:00.000Z",
+      pendingVisibility: receipt === "current" ? "private" : undefined,
+      error: "Replay is online, but RiftLite could not set its visibility to private: Temporary service error." });
+    await harness.store.saveSettings({ rawCapture: { ...harness.initialSettings.rawCapture, visibility: "public", webReplayDiscordShareEnabled: false } });
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(new Response(JSON.stringify({
+      replay: { replayId: "rl2_pending-privacy", status: "ready", visibility: "private" }
+    }), { status: 200 }));
+    const restarted = new RawCaptureService(harness.store, async () => "id-token");
+
+    expect(await restarted.uploadPendingRawCaptures()).toBe(1);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: "PATCH", body: JSON.stringify({ visibility: "private" }) });
+    const metadata = (await harness.store.getReplays())[0].rawCapture!;
+    expect(metadata).toMatchObject({ visibility: "private", processingStatus: "ready", deliveryStage: "ready" });
+    expect(metadata.pendingVisibility).toBeUndefined();
+    expect(metadata.error).toBeUndefined();
+    expect(JSON.parse(await readFile(entry.indexPath, "utf8")).metadata.pendingVisibility).toBeUndefined();
+    expect(await restarted.uploadPendingRawCaptures(5, true)).toBe(0);
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("does not treat an unrelated paused error as consent to change a finished replay", async () => {
+    const harness = await readyDiscordQueueHarness();
+    await harness.add("unrelated-error", { visibility: "unlisted", webReplayDiscordShareEligible: false,
+      discordShareStatus: undefined, deliveryStage: "paused", error: "Temporary replay service error." });
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    expect(await harness.service.uploadPendingRawCaptures(5, true)).toBe(0);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("marks background Discord retries as automatic and respects a server-side Private choice after restart", async () => {
+    const harness = await readyDiscordQueueHarness();
+    const entry = await harness.add("private-on-website");
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(new Response(JSON.stringify({
+      error: { code: "replay_visibility_changed", message: "This replay is now Private. Automatic Discord sharing has stopped." }
+    }), { status: 403 }));
+
+    expect(await harness.service.uploadPendingRawCaptures(5, true)).toBe(1);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toMatchObject({ automatic: true, retryDelivery: true, hubIds: ["hub-1"] });
+    const stopped = (await harness.store.getReplays())[0].rawCapture!;
+    expect(stopped).toMatchObject({ visibility: "private", processingStatus: "ready", uploadStatus: "uploaded",
+      webReplayDiscordShareEligible: false, discordShareStoppedAt: expect.any(String) });
+    expect(stopped.discordShareStatus).toBeUndefined();
+    expect(JSON.parse(await readFile(entry.indexPath, "utf8")).metadata.visibility).toBe("private");
+    const restarted = new RawCaptureService(harness.store, async () => "id-token");
+    expect(await restarted.uploadPendingRawCaptures(5, true)).toBe(0);
+    expect(fetchMock).toHaveBeenCalledOnce();
+
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ ok: true, visibility: "unlisted", results: [{ hubId: "hub-1", status: "shared" }] }), { status: 200 }));
+    await expect(restarted.shareRawCaptureToDiscord(entry.replay.id, ["hub-1"])).resolves.toMatchObject({ status: "shared", visibility: "unlisted" });
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).not.toHaveProperty("automatic");
+  });
+
+  it("keeps a Public replay Public when an automatic Discord retry confirms that choice", async () => {
+    const harness = await readyDiscordQueueHarness();
+    await harness.add("public-on-website", { visibility: "public" });
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(new Response(JSON.stringify({ ok: true,
+      visibility: "public", results: [{ hubId: "hub-1", status: "shared" }] }), { status: 200 }));
+    expect(await harness.service.uploadPendingRawCaptures(5, true)).toBe(1);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock.mock.calls[0][0]).toContain("/share-discord");
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body)).automatic).toBe(true);
+    expect((await harness.store.getReplays())[0].rawCapture?.visibility).toBe("public");
+  });
+
+  it("does not remove the automatic privacy guard to retry an older website's strict request schema", async () => {
+    const harness = await readyDiscordQueueHarness();
+    await harness.add("old-website-auto");
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(new Response(JSON.stringify({
+      error: { code: "invalid_hubs", message: "Choose one or more valid private hubs." }
+    }), { status: 400 }));
+    expect(await harness.service.uploadPendingRawCaptures()).toBe(1);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect((await harness.store.getReplays())[0].rawCapture).toMatchObject({ processingStatus: "ready", discordShareBlockedReason: "setup" });
+    expect(await harness.service.uploadPendingRawCaptures()).toBe(0);
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
   it("stops only this ready capture's Discord retries across aliases and restart without changing privacy or past posts", async () => {
     const harness = await readyDiscordQueueHarness();
     const entry = await harness.add("stop-share", { discordShareStatus: "partial", discordSharedHubIds: ["prior-hub"], discordSharedAt: "2026-07-10T10:01:00.000Z", discordShareError: "One destination failed." });
