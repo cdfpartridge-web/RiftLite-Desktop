@@ -8,6 +8,7 @@ import type {
   ReplayInsightCardReport,
   ReplayInsightsReport
 } from "../src/shared/replayInsights.js";
+import { RADIANCE_PRESEASON_START_AT } from "../src/shared/statSeasons.js";
 
 const NOW = "2026-08-25T12:00:00.000Z";
 
@@ -33,7 +34,7 @@ function insight(patch: Partial<ReplayInsight> = {}): ReplayInsight {
       playCaptureStatus: "complete-enough",
       linkedReplays: 1,
       deckFingerprints: ["private-deck-hash"],
-      periods: ["current-season"],
+      periods: ["vendetta-launch"],
       observedFrom: "2026-08-24T10:00:00.000Z",
       observedThrough: "2026-08-24T10:00:00.000Z"
     },
@@ -115,8 +116,9 @@ function report(insights: ReplayInsight[], cards: ReplayInsightCardReport[] = []
     },
     scopeReceipt: {
       currentSeasonStartedOn: "2026-07-31",
-      periods: ["current-season"],
-      periodGameCounts: { preseason: 0, "current-season": 12, unknown: 0 },
+      currentSeasonStartedAt: RADIANCE_PRESEASON_START_AT,
+      periods: ["vendetta-launch"],
+      periodGameCounts: { "radiance-preseason": 0, "vendetta-launch": 12, "vendetta-preview": 0, "pre-vendetta": 0, unknown: 0 },
       deckVersions: [{ fingerprint: "private-deck-hash", games: 12 }],
       unknownDeckGames: 0,
       observedFrom: "2026-08-01T00:00:00.000Z",
@@ -147,7 +149,7 @@ function lateKeepPattern(patch: Partial<ReplayInsight> = {}): ReplayInsight {
       playCaptureStatus: "complete-enough",
       linkedReplays: 8,
       deckFingerprints: ["private-deck-hash"],
-      periods: ["preseason", "current-season"],
+      periods: ["pre-vendetta", "vendetta-launch"],
       observedFrom: "2026-07-01T10:00:00.000Z",
       observedThrough: "2026-08-24T10:00:00.000Z"
     },
@@ -203,7 +205,7 @@ describe("Replay coaching quest model", () => {
       insightScope: "pattern",
       observations: 8,
       games: 8,
-      periods: ["preseason", "current-season"]
+      periods: ["pre-vendetta", "vendetta-launch"]
     });
     expect(board.primary?.evidence).toEqual(source.evidence);
     expect(board.primary?.evidence).not.toBe(source.evidence);

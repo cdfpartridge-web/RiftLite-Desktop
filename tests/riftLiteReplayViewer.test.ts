@@ -21,6 +21,19 @@ function modelForCard(patch: Partial<RiftLiteReplayCard>): RiftLiteReplayModel {
 }
 
 describe("RiftLiteReplayViewer card artwork", () => {
+  it("resolves historical Chinese names to their current English card artwork", () => {
+    for (const [name, code] of [["圣所保管员", "RAD-030"], ["资源开采器", "RAD-052"], ["弗雷尔卓德之怒", "RAD-077"], ["伏击陷阱", "RAD-108"]]) {
+      const markup = renderToStaticMarkup(createElement(RiftLiteReplayViewer, { model: modelForCard({ name }) }));
+      expect(markup).toContain(`src="${resolveBundledReplayCardImage(code)}"`);
+    }
+    for (const name of ["未知卡牌", "?!"]) {
+      const markup = renderToStaticMarkup(createElement(RiftLiteReplayViewer, { model: modelForCard({ name }) }));
+      for (const code of ["RAD-030", "RAD-052", "RAD-077", "RAD-108"]) {
+        expect(markup).not.toContain(`src="${resolveBundledReplayCardImage(code)}"`);
+      }
+    }
+  });
+
   it("uses canonical artwork for set-specific Rune identities", () => {
     const images = new Map([
       ["OGN-089", "mind-rune.webp"],

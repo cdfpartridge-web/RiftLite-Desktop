@@ -94,7 +94,7 @@ export function TrainingLabsIntro({ onOpenMulligan, onOpenSideboard, onDismiss }
         </header>
 
         <p id="training-labs-intro-description" className="training-labs-intro-lead">
-          Mulligan Lab and Sideboard Lab are quick, game-like challenges built from anonymised community Web Replays across indexed pre-season and current-season history.
+          Mulligan Lab and Sideboard Lab are quick, game-like challenges built from anonymised community Web Replays across all available indexed history.
         </p>
 
         <div className="training-labs-intro-options">

@@ -147,7 +147,7 @@ describe("learner-first Insights surface", () => {
       "report.scopeReceipt.periodGameCounts",
       "report.scopeReceipt.deckVersions",
       "report.scopeReceipt.unknownDeckGames",
-      "Pre-season + current season",
+      "STAT_SEASONS.map",
       "complete-enough play capture",
       "deck version unknown",
       "Observation mode"
@@ -232,7 +232,7 @@ describe("learner-first Insights surface", () => {
       "deckMatchesFor",
       "localMatchesEligibleForStats",
       'type DeckInsightsSection = "overview" | "cards" | "matchups"',
-      "Pre-season + current",
+      "STAT_SEASONS.map",
       "Energy curve",
       "Recent form",
       "Which cards are worth reviewing?",

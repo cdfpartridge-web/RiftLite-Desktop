@@ -66,7 +66,7 @@ export function createDefaultSettings(): UserSettings {
       uploadEnabled: false,
       endpoint: DEFAULT_RAW_CAPTURE_ENDPOINT,
       apiKey: "",
-      visibility: "private"
+      visibility: "public"
     },
     deckTrackerEnabled: false,
     deckTrackerAutoStart: false,
@@ -74,6 +74,7 @@ export function createDefaultSettings(): UserSettings {
     deckTrackerPerformanceMode: "balanced",
     deckTrackerPinnedCards: {},
     matchupPrepWidgetEnabled: true,
+    showPlayToolbarInFullscreen: false,
     microphoneDeviceId: "",
     gameZoomFactor: 1,
     autoSaveAfterSeconds: 45,

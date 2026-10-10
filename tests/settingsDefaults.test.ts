@@ -39,7 +39,7 @@ describe("device settings defaults", () => {
       webReplayDiscordShareEnabled: false,
       uploadEnabled: false,
       apiKey: "",
-      visibility: "private"
+      visibility: "public"
     });
   });
 });

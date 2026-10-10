@@ -1,4 +1,5 @@
 import type { CaptureEvent, MatchDraft, ReplayRecord } from "./types.js";
+import { isAtlasGameLogText } from "./atlasLogRows.js";
 
 export interface AtlasGameLogEntry {
   id: string;
@@ -227,7 +228,7 @@ function capturedGameLog(replay?: ReplayRecord, match?: MatchDraft): AtlasGameLo
   for (const event of structured) {
     const gameNumber = positiveInteger(event.gameNumber) ?? 1;
     const text = string(event.text);
-    if (!text) continue;
+    if (!isAtlasGameLogText(text)) continue;
     const key = `${gameNumber}:${event.id}`;
     if (seenKeys.has(key)) continue;
     seenKeys.add(key);
@@ -246,7 +247,7 @@ function capturedGameLog(replay?: ReplayRecord, match?: MatchDraft): AtlasGameLo
       const row = record(value);
       const raw = string(row?.text).replace(/[\u21ba\u21bb]/g, "").trim();
       // Chat has a separate surface in Atlas. This feature exposes game logs.
-      if (!raw || /\bat\s+\d{1,2}:\d{2}\s*:/i.test(raw)) continue;
+      if (!isAtlasGameLogText(raw)) continue;
       const matchTime = raw.match(/^(\d{1,2}:\d{2}(?::\d{2})?)\s*(.+)$/);
       const text = matchTime ? matchTime[2] : raw;
       const time = matchTime?.[1] ?? "";
@@ -272,7 +273,8 @@ function capturedGameLog(replay?: ReplayRecord, match?: MatchDraft): AtlasGameLo
 }
 
 function publicChronologicalEntries(entries: StoredEntry[]): AtlasGameLogEntry[] {
-  return entries.sort((a, b) => (a.at !== undefined && b.at !== undefined ? a.at - b.at : 0) || (a.order ?? 0) - (b.order ?? 0))
+  return entries.filter((entry) => isAtlasGameLogText(entry.text))
+    .sort((a, b) => (a.at !== undefined && b.at !== undefined ? a.at - b.at : 0) || (a.order ?? 0) - (b.order ?? 0))
     .map(({ at: _at, order: _order, ...entry }) => entry);
 }
 

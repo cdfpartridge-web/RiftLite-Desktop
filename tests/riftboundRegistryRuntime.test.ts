@@ -27,6 +27,23 @@ function resolver(): TcgaResolver {
 }
 
 describe("packaged Riftbound registry", () => {
+  it("resolves the additional Atlas promo and alternate prints without inventing source-only collector ids", async () => {
+    const cardResolver = resolver();
+    for (const id of ["OGN-036A", "OGN-068A", "OGN-111A", "OGN-159A", "OGN-202B", "OGN-246B", "OGN-303A", "SFD-195A", "SGN-001", "SGN-002", "VEN-069B", "VEN-155A"]) {
+      const card = cards.find(c => c.printId === id)!;
+      expect(card, id).toBeDefined();
+      await expect(cardResolver.resolveCard(id)).resolves.toBe(card.name);
+      await expect(cardResolver.resolveCard(card.imageUrl)).resolves.toBe(card.name);
+      expect(resolveBundledCardImage(id)).toBe(card.imageUrl);
+    }
+    expect(cards.some(c => c.printId === "VEN-041P" || c.printId === "OGN-999")).toBe(false);
+    await expect(cardResolver.resolveLegend("SGN-001")).resolves.toBe("Lillia");
+    await expect(cardResolver.resolveLegend("SGN-002")).resolves.toBe("Ivern");
+    expect(cards.find(c => c.printId === "OGN-303A")).toMatchObject({
+      name: "Ahri, Nine-Tailed Fox", artist: "Allen Song", variants: { alternateArt: true, signature: true }
+    });
+  });
+
   it("recognizes the newly audited historical promos, alternate runes and tokens without replacing their exact artwork", async () => {
     const cardResolver = resolver();
     const printIds = [

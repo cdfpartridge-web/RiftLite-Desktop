@@ -3,6 +3,7 @@ import { runInNewContext } from "node:vm";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
 import * as dateFilters from "../src/shared/dateFilter";
+import * as statSeasons from "../src/shared/statSeasons";
 import { canonicalLegendName, normalizeLegendName } from "../src/shared/legendNames";
 import { normalizePrivateHubWebReplayId } from "../src/shared/privateHubs";
 import { isCombinedOriginal, isCombinedRepairMatch } from "../src/shared/matchCombine";
@@ -34,12 +35,12 @@ function loadFilters() {
     }
     visit(declaration);
   }
-  const names = ["filterLocalMatches", "filterLeaderboardMatches", "filterMatrixMatches", "localMatchStats", "communityMatchDate", "communityToAnalytics", "DEFAULT_MATCH_HISTORY_FILTERS", "DEFAULT_LEADERBOARD_FILTERS", "DEFAULT_MATRIX_FILTERS"];
+  const names = ["matrixEffectiveFilters", "replayLibraryTimestamp", "matchInCommunitySeason", "filterCommunityDeckMatches", "filterLocalMatches", "filterLeaderboardMatches", "filterMatrixMatches", "localMatchStats", "communityMatchDate", "communityToAnalytics", "DEFAULT_MATCH_HISTORY_FILTERS", "DEFAULT_LEADERBOARD_FILTERS", "DEFAULT_MATRIX_FILTERS"];
   names.forEach(include);
   const code = source.statements.filter((statement) => included.has(statement)).map((statement) => statement.getText(source)).join("\n");
   const compiled = ts.transpileModule(code, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }).outputText;
   return runInNewContext(`${compiled}\n({${names.join(",")}});`, {
-    ...dateFilters, canonicalLegendName, normalizeLegendName, normalizePrivateHubWebReplayId, isCombinedOriginal, isCombinedRepairMatch, localMatchesEligibleForStats, matchNeedsReview
+    ...dateFilters, ...statSeasons, canonicalLegendName, normalizeLegendName, normalizePrivateHubWebReplayId, isCombinedOriginal, isCombinedRepairMatch, localMatchesEligibleForStats, matchNeedsReview
   }, { timeout: 1_000 });
 }
 
@@ -59,6 +60,49 @@ function match(id: string, day: number, patch: Partial<MatchDraft> = {}): MatchD
 }
 
 describe("desktop reporting date filters", () => {
+  it("does not silently remove archived rows from embedded community, hub and deck matrices", () => {
+    const source = [match("archived", 18)];
+    const hidden = filters.matrixEffectiveFilters(undefined, filters.DEFAULT_MATRIX_FILTERS, false);
+    const visible = filters.matrixEffectiveFilters(undefined, filters.DEFAULT_MATRIX_FILTERS, true);
+    expect(filters.filterMatrixMatches(source, hidden).map((row: MatchDraft) => row.id)).toEqual(["archived"]);
+    expect(filters.filterMatrixMatches(source, visible)).toEqual([]);
+    const explicit = { ...filters.DEFAULT_MATRIX_FILTERS, season: "vendetta-launch" };
+    expect(filters.matrixEffectiveFilters(explicit, filters.DEFAULT_MATRIX_FILTERS, false)).toBe(explicit);
+    expect(filters.filterMatrixMatches(source, explicit).map((row: MatchDraft) => row.id)).toEqual(["archived"]);
+  });
+
+  it("uses played dates for replay seasons even when replays are uploaded later", () => {
+    const uploaded = { capturedAt: "", createdAt: statSeasons.RADIANCE_PRESEASON_START_AT };
+    const olderMatch = { capturedAt: "2026-10-09T18:00:00Z" };
+    expect(statSeasons.statSeasonForTimestamp(filters.replayLibraryTimestamp(uploaded, olderMatch))).toBe("vendetta-launch");
+    expect(statSeasons.statSeasonForTimestamp(filters.replayLibraryTimestamp(uploaded))).toBe("radiance-preseason");
+    expect(filters.replayLibraryTimestamp(uploaded, { capturedAt: "invalid" })).toBeUndefined();
+    expect(statSeasons.statSeasonForTimestamp(filters.replayLibraryTimestamp({ capturedAt: olderMatch.capturedAt, createdAt: uploaded.createdAt }))).toBe("vendetta-launch");
+  });
+
+  it("does not promote a bad recorded match date into the new season using its upload date", () => {
+    const record = { date: "invalid", createdAt: statSeasons.RADIANCE_PRESEASON_START_MS };
+    expect(filters.matchInCommunitySeason(record, "radiance-preseason")).toBe(false);
+    expect(filters.matchInCommunitySeason(record, "")).toBe(true);
+  });
+
+  it("keeps the exact Radiance cutoff consistent across history, stats and archived views", () => {
+    const cutoff = statSeasons.RADIANCE_PRESEASON_START_MS;
+    const source = [
+      match("before", 18, { capturedAt: new Date(cutoff - 1).toISOString(), result: "Loss" }),
+      match("at", 18, { capturedAt: new Date(cutoff).toISOString() }),
+      match("after", 18, { capturedAt: new Date(cutoff + 1).toISOString() }),
+    ];
+    const before = JSON.stringify(source);
+    const current = filters.filterLocalMatches(source, filters.DEFAULT_MATCH_HISTORY_FILTERS);
+    expect(current.map((row: MatchDraft) => row.id)).toEqual(["at", "after"]);
+    expect(filters.localMatchStats(current)).toMatchObject({ record: "2-0", winRate: "100%" });
+    expect(filters.filterMatrixMatches(source, filters.DEFAULT_MATRIX_FILTERS).map((row: MatchDraft) => row.id)).toEqual(["at", "after"]);
+    expect(filters.filterLocalMatches(source, { ...filters.DEFAULT_MATCH_HISTORY_FILTERS, season: "vendetta-launch" }).map((row: MatchDraft) => row.id)).toEqual(["before"]);
+    expect(filters.filterLocalMatches(source, { ...filters.DEFAULT_MATCH_HISTORY_FILTERS, season: "" })).toHaveLength(3);
+    expect(JSON.stringify(source)).toBe(before);
+  });
+
   it("keeps seconds and milliseconds community timestamps in the same date cohort when dates are missing", () => {
     const timestamp = new Date(2026, 8, 18, 12).getTime();
     const row = (id: string, createdAt: number): CommunityMatch => ({

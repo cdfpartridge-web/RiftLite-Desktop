@@ -18,6 +18,7 @@ import {
   compareAtlasPlayerIdentityCandidates
 } from "../shared/atlasPlayerIdentity.js";
 import { AtlasLogRowObservationTracker } from "../shared/atlasLogRowObservations.js";
+import { selectAtlasLogRows } from "../shared/atlasLogRows.js";
 import { readAtlasLobbyPlayerField } from "../shared/atlasLobbyPlayerField.js";
 import {
   ATLAS_EMPTY_SHELL_MIN_AGE_MS,
@@ -1392,7 +1393,8 @@ function readAtlasSnapshot(): Record<string, unknown> {
 
 function readAtlasLogRows(roomCode: string): Array<{ key: string; text: string; observedAt: string; side?: string; actor?: string }> {
   const observationRoom = atlasLogObservationRoom(roomCode);
-  const candidates = Array.from(document.querySelectorAll("ul li, [role='log'] li, [class*='log' i] li, [class*='matchLog' i] li"))
+  const candidates = selectAtlasLogRows(document)
+    .filter(isVisibleAtlasElement)
     .map((row) => {
       const text = textOf(row);
       const explicitKey = attr(row, "data-log-id") || attr(row, "id");

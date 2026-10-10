@@ -26,6 +26,7 @@ for (const key of [
   "RIFTLITE_SMOKE_USER_DATA_PATH",
   "RIFTLITE_UI_DEV_USER_DATA_PATH",
   "RIFTLITE_UI_SNAPSHOT_PATH",
+  "RIFTLITE_UI_SNAPSHOT_SETUP_ACTION",
   "RIFTLITE_UI_SNAPSHOT_TOUR_ACTION",
   "RIFTLITE_UI_SNAPSHOT_VIEW",
   "RIFTLITE_UI_SNAPSHOT_PLATFORM",
@@ -41,6 +42,8 @@ Object.assign(smokeEnvironment, {
   NODE_ENV: development ? "development" : "production",
   RIFTLITE_SMOKE_ROOT_PATH: smokeRoot,
   RIFTLITE_UI_SNAPSHOT_PATH: snapshotPath,
+  RIFTLITE_UI_SNAPSHOT_SETUP_ACTION: "finish",
+  // Keep isolated checks compatible with candidates built before first-run setup.
   RIFTLITE_UI_SNAPSHOT_TOUR_ACTION: "finish",
   RIFTLITE_UI_SNAPSHOT_VIEW: "home"
 });

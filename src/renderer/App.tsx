@@ -16,6 +16,8 @@ import { AccountDisclosure, AccountIdentityCard } from "./AccountOverview";
 import { accountOverview } from "../shared/accountOverview";
 import { installRendererCrashLogging, reportRendererCrash } from "./rendererCrashLogging";
 import { DateFilter } from "./DateFilter";
+import { RadianceSeasonNotice, StatSeasonFilter } from "./RadianceSeasonNotice";
+import { STAT_SEASONS, CURRENT_STAT_SEASON, isInStatSeason, statMatchTimestamp, type StatSeasonId } from "../shared/statSeasons";
 import { TeamInvitationInbox, TeamInvitationManager } from "./TeamInvitations";
 import { selectGroupTeams } from "../shared/yourGroups";
 import { DEFAULT_DATE_FILTER, dateFilterLabel, isInDateFilter, type DateFilterValue } from "../shared/dateFilter";
@@ -415,18 +417,18 @@ import {
   loadAccountRestoreLocalData
 } from "./accountRestoreRefresh";
 import {
-  GUIDED_TOUR_LOCAL_STORAGE_KEY,
-  initialGuidedTourState,
-  parseGuidedTourState,
-  replayGuidedTour,
-  serializeGuidedTourState,
-  type GuidedTourState
-} from "../shared/guidedTour";
+  FIRST_RUN_SETUP_LOCAL_STORAGE_KEY,
+  initialFirstRunSetupState,
+  parseFirstRunSetupState,
+  serializeFirstRunSetupState,
+  shouldStartFirstRunSetup,
+  type FirstRunSetupState,
+  type FirstRunSetupStep
+} from "../shared/firstRunSetup";
 import {
   FIRST_MATCH_ONBOARDING_LOCAL_STORAGE_KEY,
   dismissFirstMatchOnboarding,
   firstMatchOnboardingAfterSavedMatch,
-  firstMatchOnboardingAfterTour,
   parseFirstMatchOnboardingState,
   reconcileFirstMatchOnboarding,
   serializeFirstMatchOnboardingState,
@@ -441,7 +443,7 @@ import {
   type NavigationDisclosureId,
   type NavigationTarget
 } from "../shared/navigationModel";
-import { GuidedTour } from "./GuidedTour";
+import { FirstRunSetup } from "./FirstRunSetup";
 import { DeckShareCardDialog, type DeckShareCardViewModel } from "./DeckShareCard";
 import { HomeDeckThemeIntro } from "./HomeDeckThemeIntro";
 import { InsightsHubView } from "./InsightsHubView";
@@ -494,6 +496,7 @@ import "./styles/review-replays.css";
 
 type DeckFocusTarget = "library" | "saved" | "prep" | "notebook" | "performance";
 type MatchFocusTarget = {
+  season?: StatSeasonId;
   myLegend?: string;
   opponentLegend?: string;
   search?: string;
@@ -551,16 +554,9 @@ const FALLBACK_BOOT_SETTINGS: UserSettings = {
 };
 
 const APP_VERSION_META = RIFTLITE_BUILD_IDENTITY.displayVersion;
-const VENDETTA_PREVIEW_START_MS = Date.UTC(2026, 6, 6);
-const VENDETTA_LAUNCH_START_MS = Date.UTC(2026, 6, 31);
-const COMMUNITY_SEASONS = [
-  { id: "vendetta-launch", label: "Vendetta season" },
-  { id: "vendetta-preview", label: "Vendetta Preview season" },
-  { id: "pre-vendetta", label: "Pre-Vendetta archive" },
-  { id: "", label: "All tracked seasons" }
-] as const;
-type CommunitySeasonId = (typeof COMMUNITY_SEASONS)[number]["id"];
-const CURRENT_COMMUNITY_SEASON: CommunitySeasonId = "vendetta-launch";
+const COMMUNITY_SEASONS = STAT_SEASONS;
+type CommunitySeasonId = StatSeasonId;
+const CURRENT_COMMUNITY_SEASON: CommunitySeasonId = CURRENT_STAT_SEASON;
 type HomeFeaturedPartner = {
   title: string;
   eyebrow: string;
@@ -590,13 +586,14 @@ const LAB_TRAINING_LEGEND_NAMES = new Set(LAB_TRAINING_LEGEND_NAME_BY_CANONICAL.
 const RELEASE_NOTES = {
   version: APP_VERSION_META,
   title: `RiftLite v${APP_VERSION_META}`,
-  intro: "Clearer replay visibility, restored hand reveals, and the latest card artwork.",
+  intro: "Radiance pre-season stats, a simpler first-run setup, and replay improvements.",
   items: [
-    "Choose Change visibility on a saved game or in My replays to make it Public, Unlisted or Private.",
-    "Recording & sharing keeps your future-upload default separate from completed replays, and automatic Discord delivery respects a later Private choice.",
-    "Known opponent hand now picks up modern Atlas reveal effects and remembers revealed cards while keeping unknown draws hidden.",
-    "Added 66 card prints: 40 Radiance previews and 26 older alternate arts, promos and tokens, including Evelynn and signed Mordekaiser.",
-    "Alternate and signed legends retain their artwork and are recognised correctly in captures and replays."
+    "Radiance pre-season stats start on 10 October at 17:35 UK time. Use the Season filter across personal and community stats to explore earlier results.",
+    "Quick setup replaces the guided tour with player, simulator, account, replay and deck setup, including a Play toolbar guide. Reopen it from Settings.",
+    "Sign up with Discord, set replay visibility inside setup, and use a public Piltover Archive link to import your deck.",
+    "Keep the top bar visible in fullscreen from Settings, and copy the Atlas Game log directly from the desktop app.",
+    "Faster replay saving, corrected MP4 duration checks, clearer upload errors, and the latest Atlas status indicators in Web Replays.",
+    "Added 80 card prints since v0.9.81, including 68 Radiance prints, plus updated names and artwork. The catalog now includes 1,445 prints."
   ]
 };
 const RIOT_LEGAL_NOTICE = `RiftLite was created under Riot Games' "Legal Jibber Jabber" policy using assets owned by Riot Games. Riot Games does not endorse or sponsor this project.`;
@@ -757,27 +754,19 @@ function writeAutomaticReplayTimelineMarkers(enabled: boolean): void {
   }
 }
 
-function readGuidedTourState(): GuidedTourState {
+function readFirstRunSetupState(): FirstRunSetupState | null {
   try {
-    return parseGuidedTourState(window.localStorage.getItem(GUIDED_TOUR_LOCAL_STORAGE_KEY));
+    return parseFirstRunSetupState(window.localStorage.getItem(FIRST_RUN_SETUP_LOCAL_STORAGE_KEY));
   } catch {
-    return initialGuidedTourState();
+    return null;
   }
 }
 
-function writeGuidedTourState(state: GuidedTourState) {
+function readLegacyTourState(): unknown {
   try {
-    window.localStorage.setItem(GUIDED_TOUR_LOCAL_STORAGE_KEY, serializeGuidedTourState(state));
+    return window.localStorage.getItem("riftlite.ui.guided-tour");
   } catch {
-    // The tour remains usable for this session if local presentation state cannot be persisted.
-  }
-}
-
-function clearGuidedTourState() {
-  try {
-    window.localStorage.removeItem(GUIDED_TOUR_LOCAL_STORAGE_KEY);
-  } catch {
-    // Resetting help should never block the rest of the app.
+    return null;
   }
 }
 
@@ -3197,7 +3186,10 @@ function App() {
   const [atlasRecoveryBusy, setAtlasRecoveryBusy] = useState(false);
   const [updatePromptDismissedFor, setUpdatePromptDismissedFor] = useState("");
   const [releaseNotesOpen, setReleaseNotesOpen] = useState(false);
-  const [guidedTourState, setGuidedTourState] = useState<GuidedTourState | null>(null);
+  const [firstRunSetupState, setFirstRunSetupState] = useState<FirstRunSetupState | null>(null);
+  const [firstRunSetupOpen, setFirstRunSetupOpen] = useState(false);
+  const firstRunSetupOpenRef = useRef(false);
+  firstRunSetupOpenRef.current = firstRunSetupOpen;
   const [homeThemeIntroState, setHomeThemeIntroState] = useState<HomeThemeIntroState | null>(null);
   const [trainingLabsIntroState, setTrainingLabsIntroState] = useState<TrainingLabsIntroState | null>(null);
   const [homeThemeIntroBusy, setHomeThemeIntroBusy] = useState(false);
@@ -3218,16 +3210,10 @@ function App() {
   const [focusedReplayId, setFocusedReplayId] = useState("");
   const [focusedReplayTimeMs, setFocusedReplayTimeMs] = useState<number | null>(null);
   const [focusedReplayEvidenceId, setFocusedReplayEvidenceId] = useState("");
-  const guidedTourInitializedRef = useRef(false);
+  const firstRunSetupInitializedRef = useRef(false);
   const homeThemeIntroInitializedRef = useRef(false);
   const trainingLabsIntroInitializedRef = useRef(false);
   const firstMatchOnboardingInitializedRef = useRef(false);
-  const guidedTourReplayRef = useRef(false);
-  const guidedTourRestoreRef = useRef<{
-    view: ActiveView;
-    sidebarCollapsed: boolean;
-    expandedNavGroup: NavigationDisclosureId | null;
-  } | null>(null);
   const gameRef = useRef<Electron.WebviewTag | null>(null);
   const platformSwitchRequestRef = useRef(0);
   const defaultPlatformSaveRequestRef = useRef(0);
@@ -3549,33 +3535,47 @@ function App() {
     });
   }
 
-  function navigateGuidedTour(target: NavigationTarget) {
-    setSidebarCollapsed(false);
+  function persistFirstRunSetup(next: FirstRunSetupState) {
+    try {
+      window.localStorage.setItem(FIRST_RUN_SETUP_LOCAL_STORAGE_KEY, serializeFirstRunSetupState(next));
+    } catch {
+      // Durable completion is saved in settings; setup remains usable without localStorage.
+    }
+    setFirstRunSetupState(next);
+  }
+
+  function startFirstRunSetup() {
+    persistFirstRunSetup(initialFirstRunSetupState());
+    setReleaseNotesOpen(false);
+    setFirstRunSetupOpen(true);
+  }
+
+  function changeFirstRunSetupStep(step: FirstRunSetupStep) {
+    persistFirstRunSetup({ ...initialFirstRunSetupState(), step });
+  }
+
+  function openFirstRunSetupDestination(target: NavigationTarget) {
+    setFirstRunSetupOpen(false);
     openNavigationTarget(target);
   }
 
-  function startGuidedTourReplay() {
-    guidedTourRestoreRef.current = {
-      view: activeView,
-      sidebarCollapsed,
-      expandedNavGroup
-    };
-    guidedTourReplayRef.current = true;
-    setReleaseNotesOpen(false);
-    setSidebarCollapsed(false);
-    setGuidedTourState(replayGuidedTour(readGuidedTourState()));
-  }
-
-  function resetGuidedTourForNextLaunch() {
-    clearGuidedTourState();
-    try {
-      window.localStorage.removeItem(FIRST_MATCH_ONBOARDING_LOCAL_STORAGE_KEY);
-    } catch {
-      // Resetting help should never block the rest of the app.
+  async function finishFirstRunSetup(target: NavigationTarget = { view: "play" }, skipped = false) {
+    // A failed disk save must leave the screen open and retryable.
+    await saveSettings({ firstRunComplete: true });
+    persistFirstRunSetup({
+      ...initialFirstRunSetupState(),
+      step: firstRunSetupState?.step ?? "ready",
+      status: skipped ? "dismissed" : "completed"
+    });
+    finishTrainingLabsIntro();
+    finishHomeThemeIntro();
+    setFirstRunSetupOpen(false);
+    if (target.view === "play") {
+      await chooseGamePlatform(settingsRef.current?.defaultGamePlatform ?? "tcga", true);
+    } else {
+      openNavigationTarget(target);
     }
-    setFirstMatchOnboarding(null);
-    firstMatchOnboardingInitializedRef.current = false;
-    showActionFeedback("The first-launch tour will open the next time RiftLite starts.");
+    if (skipped) showActionFeedback("You can reopen Quick setup from Settings → Getting started.");
   }
 
   function finishHomeThemeIntro() {
@@ -3619,6 +3619,8 @@ function App() {
     openView("settings");
     window.setTimeout(() => {
       const card = document.getElementById("home-theme-settings");
+      const section = card?.closest("details");
+      if (section) section.open = true;
       card?.scrollIntoView({ behavior: "smooth", block: "center" });
       card?.querySelector<HTMLElement>('input[type="checkbox"]')?.focus({ preventScroll: true });
     }, 120);
@@ -3627,33 +3629,6 @@ function App() {
   function persistFirstMatchOnboarding(next: FirstMatchOnboardingState) {
     writeFirstMatchOnboardingState(next);
     setFirstMatchOnboarding(next);
-  }
-
-  function updateGuidedTour(next: GuidedTourState) {
-    if (!guidedTourReplayRef.current) {
-      writeGuidedTourState(next);
-    }
-    setGuidedTourState(next.status === "active" ? next : null);
-  }
-
-  function finishGuidedTour(next: GuidedTourState) {
-    if (!guidedTourReplayRef.current) {
-      writeGuidedTourState(next);
-      persistFirstMatchOnboarding(firstMatchOnboardingAfterTour(firstMatchOnboarding, next.status, matches));
-    }
-    setGuidedTourState(null);
-    const restore = guidedTourRestoreRef.current;
-    if (guidedTourReplayRef.current && restore) {
-      openView(restore.view);
-      setSidebarCollapsed(restore.sidebarCollapsed);
-      setExpandedNavGroup(restore.expandedNavGroup);
-    } else {
-      openView("home");
-      setExpandedNavGroup(null);
-    }
-    guidedTourReplayRef.current = false;
-    guidedTourRestoreRef.current = null;
-    showActionFeedback(next.status === "completed" ? "Guided tour complete." : "Guided tour skipped. You can replay it from Settings.");
   }
 
   useEffect(() => {
@@ -3824,20 +3799,18 @@ function App() {
   }, [refreshWebReplayDiagnostics]);
 
   useEffect(() => {
-    if (!settings || guidedTourInitializedRef.current) {
-      return;
-    }
-    guidedTourInitializedRef.current = true;
-    const stored = readGuidedTourState();
-    if (stored.status !== "active") {
-      return;
-    }
-    guidedTourReplayRef.current = false;
-    guidedTourRestoreRef.current = null;
+    if (!settings || firstRunSetupInitializedRef.current) return;
+    firstRunSetupInitializedRef.current = true;
+    const stored = readFirstRunSetupState();
+    if (!shouldStartFirstRunSetup(settings, {
+      setupState: stored,
+      legacyTourState: readLegacyTourState(),
+      hasLocalData: Boolean(matches.length || decks.length || replays.length || deletedMatches.length || deletedReplays.length)
+    })) return;
+    persistFirstRunSetup(stored?.status === "active" ? stored : initialFirstRunSetupState());
     setReleaseNotesOpen(false);
-    setSidebarCollapsed(false);
-    setGuidedTourState(stored);
-  }, [settings]);
+    setFirstRunSetupOpen(true);
+  }, [settings, matches, decks, replays, deletedMatches, deletedReplays]);
 
   useEffect(() => {
     if (!settings || homeThemeIntroInitializedRef.current) {
@@ -3878,7 +3851,7 @@ function App() {
     firstMatchOnboardingInitializedRef.current = true;
     const next = reconcileFirstMatchOnboarding(
       readFirstMatchOnboardingState(),
-      readGuidedTourState().status,
+      readFirstRunSetupState()?.status === "completed" ? "completed" : "skipped",
       matches
     );
     writeFirstMatchOnboardingState(next);
@@ -4297,7 +4270,7 @@ function App() {
   ]);
 
   useEffect(() => {
-    const hostInputBlocked = Boolean(reviewDraft || rulesSearchOpen);
+    const hostInputBlocked = Boolean(reviewDraft || rulesSearchOpen || firstRunSetupOpen);
     const hostInputWasBlocked = gameHostInputWasBlockedRef.current;
     gameHostInputWasBlockedRef.current = hostInputBlocked;
     if (!shouldRestoreGameWebviewFocus(
@@ -4314,7 +4287,7 @@ function App() {
       focusGameWebviewInput("atlas");
     }, delay));
     return () => timers.forEach((timer) => window.clearTimeout(timer));
-  }, [activePlatform, activeView, mountedGamePlatform, preloadUrl, reviewDraft, rulesSearchOpen]);
+  }, [activePlatform, activeView, mountedGamePlatform, preloadUrl, reviewDraft, rulesSearchOpen, firstRunSetupOpen]);
 
   useEffect(() => {
     if (!shouldFocusGameWebviewInput(
@@ -4322,7 +4295,7 @@ function App() {
       mountedGamePlatform,
       preloadUrl,
       activeView === "play",
-      Boolean(reviewDraft || rulesSearchOpen)
+      Boolean(reviewDraft || rulesSearchOpen || firstRunSetupOpen)
     )) {
       return;
     }
@@ -4369,7 +4342,7 @@ function App() {
       document.removeEventListener("visibilitychange", handleVisibilityChange);
       pendingTimers.forEach((timer) => window.clearTimeout(timer));
     };
-  }, [activePlatform, activeView, mountedGamePlatform, preloadUrl, reviewDraft, rulesSearchOpen]);
+  }, [activePlatform, activeView, mountedGamePlatform, preloadUrl, reviewDraft, rulesSearchOpen, firstRunSetupOpen]);
 
   useEffect(() => {
     if (!DECK_TRACKER_FEATURE_ENABLED) {
@@ -5052,20 +5025,22 @@ function App() {
 
   async function saveSettings(patch: Partial<UserSettings>) {
     const { rawCapture, ...topLevelPatch } = patch;
+    const replaySettingsAccountUid = settingsRef.current?.accountUid ?? "";
+    const baseline = settingsRef.current?.rawCapture;
     let next = Object.keys(topLevelPatch).length
       ? await window.riftlite.saveSettings(topLevelPatch)
       : await window.riftlite.getSettings();
     if (rawCapture) {
-      const baseline = settingsRef.current?.rawCapture;
       const rawCapturePatch = Object.fromEntries(
         (Object.keys(rawCapture) as Array<keyof UserSettings["rawCapture"]>)
           .filter((key) => JSON.stringify(rawCapture[key]) !== JSON.stringify(baseline?.[key]))
           .map((key) => [key, rawCapture[key]])
       ) as Partial<UserSettings["rawCapture"]>;
       if (Object.keys(rawCapturePatch).length) {
-        next = await window.riftlite.updateRawCaptureSettings(rawCapturePatch);
+        next = await window.riftlite.updateRawCaptureSettings(rawCapturePatch, replaySettingsAccountUid);
       }
     }
+    settingsRef.current = next;
     setSettings(next);
     if (patch.activeHubs || patch.activeTeams || typeof patch.communitySyncEnabled === "boolean" || patch.syncMode) {
       communityLoadedRef.current = false;
@@ -5818,7 +5793,7 @@ function App() {
       void webview.offsetWidth;
     }));
     try {
-      webview.focus();
+      if (!firstRunSetupOpenRef.current) webview.focus();
     } catch {
       // A navigation can replace the guest between the size check and focus.
     }
@@ -5833,6 +5808,7 @@ function App() {
       document.visibilityState === "hidden" ||
       reviewDraftRef.current ||
       rulesSearchOpenRef.current ||
+      firstRunSetupOpenRef.current ||
       activeViewRef.current !== "play" ||
       platform !== activePlatformRef.current ||
       platform !== mountedGamePlatformRef.current
@@ -5849,6 +5825,7 @@ function App() {
       document.visibilityState === "hidden" ||
       reviewDraftRef.current ||
       rulesSearchOpenRef.current ||
+      firstRunSetupOpenRef.current ||
       activeViewRef.current !== "play" ||
       platform !== activePlatformRef.current ||
       platform !== mountedGamePlatformRef.current
@@ -7433,7 +7410,7 @@ function App() {
     && !settings.homeDeckThemeEnabled
     && trainingLabsIntroState?.status !== "pending"
     && !releaseNotesOpen
-    && guidedTourState?.status !== "active"
+    && firstRunSetupState?.status !== "active"
     && !showUpdatePrompt
     && !reviewDraft
     && !atlasRecoverySuggested
@@ -7441,7 +7418,7 @@ function App() {
   const showTrainingLabsIntro = trainingLabsIntroState?.status === "pending"
     && activeView === "home"
     && !releaseNotesOpen
-    && guidedTourState?.status !== "active"
+    && firstRunSetupState?.status !== "active"
     && !showUpdatePrompt
     && !reviewDraft
     && !atlasRecoverySuggested
@@ -7492,10 +7469,11 @@ function App() {
     <main
       className={`app-shell ui-dev-modern ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}
       data-play-fullscreen={windowFullscreen && activeView === "play"}
+      data-show-play-toolbar-in-fullscreen={settings.showPlayToolbarInFullscreen}
       data-home-deck-theme={activeHomeDeckTheme?.id}
       style={homeDeckThemeStyle}
       onPointerDownCapture={() => {
-        if (activeViewRef.current === "play") {
+        if (activeViewRef.current === "play" && !firstRunSetupOpen) {
           void armReplayVideoSource(activePlatform, true);
         }
       }}
@@ -7503,13 +7481,14 @@ function App() {
       <button
         type="button"
         className="sidebar-float-toggle"
+        inert={firstRunSetupOpen}
         title={sidebarCollapsed ? "Show navigation" : "Hide navigation"}
         aria-label={sidebarCollapsed ? "Show navigation" : "Hide navigation"}
         onClick={() => setSidebarCollapsed((current) => !current)}
       >
         {sidebarCollapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}
       </button>
-      <aside className="sidebar" data-tour-target="navigation">
+      <aside className="sidebar" inert={firstRunSetupOpen} data-tour-target="navigation">
         <div className="brand">
           {logoUrl ? <img src={logoUrl} alt="RiftLite" /> : <div className="brand-mark" />}
           <div>
@@ -7595,7 +7574,13 @@ function App() {
         </div>
       </aside>
 
-      <section className="workspace">
+      <section className="workspace" inert={firstRunSetupOpen}>
+        {firstRunSetupState?.status === "active" && !firstRunSetupOpen ? (
+          <aside className="first-run-setup-return" aria-label="Quick setup in progress">
+            <div><strong>Quick setup</strong><span>Finish here, then return to your setup. You can skip any step.</span></div>
+            <button type="button" className="primary" onClick={() => setFirstRunSetupOpen(true)}><ChevronLeft size={16} /> Back to setup</button>
+          </aside>
+        ) : null}
         <header className={`topbar ${activeView === "play" ? "play-topbar" : ""}`}>
           <div>
             <h1>{viewTitle}</h1>
@@ -7726,10 +7711,6 @@ function App() {
             </button>
           </div>
         </header>
-
-        {!settings.firstRunComplete && activeView === "play" ? (
-          <FirstRun settings={settings} onSave={saveSettings} browsers={browsers} />
-        ) : null}
 
         <section className={`play-grid ${activeView === "play" ? "" : "background-play-grid"}`} aria-hidden={activeView !== "play"}>
           <div className="game-frame">
@@ -7862,8 +7843,7 @@ function App() {
             screenshotStatus={screenshotStatus}
             onSaveSettings={saveSettings}
             onSettingsChanged={setSettings}
-            onStartGuidedTour={startGuidedTourReplay}
-            onResetGuidedTour={resetGuidedTourForNextLaunch}
+            onOpenFirstRunSetup={startFirstRunSetup}
             onNavigate={openView}
             onPlayPlatform={(platform) => void chooseGamePlatform(platform, true)}
             onSetDefaultGamePlatform={saveDefaultGamePlatform}
@@ -7939,7 +7919,7 @@ function App() {
         ) : null}
       </section>
 
-      {gameDetailsTarget ? <GameDetailsDialog
+      {gameDetailsTarget && !firstRunSetupOpen ? <GameDetailsDialog
         key={`${gameDetailsTarget.kind}:${gameDetailsTarget.id}:${gameDetailsTarget.accountUid || "local"}`}
         target={gameDetailsTarget} matches={matches} replays={replays} settings={settings} decks={decks}
         onClose={() => setGameDetailsTarget(null)}
@@ -7950,11 +7930,11 @@ function App() {
         mp4ExportActive={Boolean(mp4ExportProgress && mp4ExportProgress.stage !== "completed" && mp4ExportProgress.stage !== "failed")}
       /> : null}
 
-      {RULES_SEARCH_FEATURE_VISIBLE && rulesSearchOpen ? (
+      {RULES_SEARCH_FEATURE_VISIBLE && rulesSearchOpen && !firstRunSetupOpen ? (
         <RulesSearchDrawer onClose={() => setRulesSearchOpen(false)} />
       ) : null}
 
-          {reviewDraft ? (
+          {reviewDraft && !firstRunSetupOpen ? (
             <MatchReviewModal
               key={reviewDraft.id}
               draft={reviewDraft}
@@ -7968,7 +7948,7 @@ function App() {
           onChange={setReviewDraft}
         />
       ) : null}
-      {showUpdatePrompt ? (
+      {showUpdatePrompt && !firstRunSetupOpen ? (
         <UpdatePrompt
           status={updateStatus}
           onDownload={downloadUpdate}
@@ -7976,8 +7956,8 @@ function App() {
           onDismiss={() => setUpdatePromptDismissedFor(updatePromptKey)}
         />
       ) : null}
-      {releaseNotesOpen ? <ReleaseNotesModal onClose={() => void dismissReleaseNotes()} /> : null}
-      {mp4ExportProgress ? (
+      {releaseNotesOpen && !firstRunSetupOpen ? <ReleaseNotesModal onClose={() => void dismissReleaseNotes()} /> : null}
+      {mp4ExportProgress && !firstRunSetupOpen ? (
         <ReplayMp4ExportProgressDialog
           progress={mp4ExportProgress}
           onOpenFolder={() => void window.riftlite.revealLastReplayMp4Export().catch((error) => {
@@ -7986,12 +7966,19 @@ function App() {
           onDismiss={() => setMp4ExportProgress(null)}
         />
       ) : null}
-      {guidedTourState?.status === "active" ? (
-        <GuidedTour
-          state={guidedTourState}
-          onNavigate={navigateGuidedTour}
-          onStateChange={updateGuidedTour}
-          onFinish={finishGuidedTour}
+      {firstRunSetupOpen && firstRunSetupState ? (
+        <FirstRunSetup
+          settings={settings}
+          decks={decks}
+          logoUrl={logoUrl}
+          step={firstRunSetupState.step}
+          accountVerified={hasVerifiedRiftLiteAccount(settings) && getRiftLiteAccountState(settings) === "ready" && webReplayDiagnostics?.accountVerified !== false}
+          onStepChange={changeFirstRunSetupStep}
+          onSave={saveSettings}
+          onOpenDestination={openFirstRunSetupDestination}
+          onOpenWebsite={() => window.riftlite.openExternalResource(RIFT_REPLAY_WEB_URL)}
+          onFinish={finishFirstRunSetup}
+          onSkip={() => finishFirstRunSetup({ view: "home" }, true)}
         />
       ) : null}
       {showTrainingLabsIntro ? (
@@ -8011,7 +7998,7 @@ function App() {
             onDismiss={finishHomeThemeIntro}
           />
         ) : null}
-      {atlasRecoverySuggested && activePlatform === "atlas" ? (
+      {atlasRecoverySuggested && activePlatform === "atlas" && !firstRunSetupOpen ? (
         <div className="atlas-recovery-prompt" role="alert" data-atlas-recovery-prompt>
           <AlertTriangle size={20} />
           <div>
@@ -8046,12 +8033,12 @@ function App() {
           </div>
         </div>
       ) : null}
-      {firstMatchOnboarding?.status === "pending" && guidedTourState?.status !== "active" && !showTrainingLabsIntro && !showHomeThemeIntro ? (
+      {firstMatchOnboarding?.status === "pending" && firstRunSetupState?.status !== "active" && !showTrainingLabsIntro && !showHomeThemeIntro ? (
         <aside className="first-match-onboarding" role="status" aria-live="polite" data-view={activeView}>
           <span className="first-match-onboarding-icon" aria-hidden="true"><Sparkles size={19} /></span>
           <div>
-            <strong>One last setup step: save your first match</strong>
-            <span>Play normally, review the captured result, then choose Save match. RiftLite will confirm when onboarding is complete.</span>
+            <strong>Save your first match</strong>
+            <span>After playing, review the captured result and choose Save match. Find it again under Review.</span>
           </div>
           <button type="button" className="primary" onClick={() => openView("play")}><Play size={15} /> Open Play</button>
           <button
@@ -8604,40 +8591,6 @@ function CaptureHealthPanel({ health }: { health: CaptureHealth }) {
         <span>{health.message}</span>
       </div>
     </div>
-  );
-}
-
-function FirstRun({ settings, onSave, browsers }: { settings: UserSettings; onSave: (patch: Partial<UserSettings>) => Promise<void>; browsers: BrowserInfo[] }) {
-  const [username, setUsername] = useState(settings.username);
-  const installed = browsers.filter((browser) => browser.installed).map((browser) => browser.name).join(", ") || "none detected";
-
-  return (
-    <section className="first-run">
-      <div>
-        <h2>Quick setup</h2>
-        <p>Pick your RiftLite username and default sync mode. You can change both later.</p>
-      </div>
-      <label>
-        Username
-        <input value={username} onChange={(event) => setUsername(event.target.value)} placeholder="Usually your TCGA / Atlas name" />
-      </label>
-      <label>
-        Sync mode
-        <select
-          value={settings.syncMode}
-          onChange={(event) => void onSave(syncModePatch(event.target.value as UserSettings["syncMode"]))}
-        >
-          <option value="community-and-hubs">Community + private hubs</option>
-          <option value="community-only">Community only</option>
-          <option value="private-hubs-only">Private hubs only</option>
-          <option value="local-only">Local only</option>
-        </select>
-      </label>
-      <div className="setup-note"><Shield size={16} /> Installed browsers: {installed}</div>
-      <button className="primary" onClick={() => void onSave({ username, firstRunComplete: true })}>
-        <Check size={16} /> Start tracking
-      </button>
-    </section>
   );
 }
 
@@ -9760,8 +9713,9 @@ function HomeView({
   onOpenGameDetails: (target: GameDetailsTarget) => void;
 }) {
   const [dateFilter, setDateFilter] = useState<DateFilterValue>(DEFAULT_DATE_FILTER);
-  const datedMatches = useMemo(() => matches.filter((match) => isInDateFilter(match.capturedAt, dateFilter)), [matches, dateFilter]);
-  const datedCommunityMatches = useMemo(() => communityMatches.filter((match) => isInDateFilter(communityMatchDate(match), dateFilter)), [communityMatches, dateFilter]);
+  const [seasonFilter, setSeasonFilter] = useState<CommunitySeasonId>(CURRENT_COMMUNITY_SEASON);
+  const datedMatches = useMemo(() => matches.filter((match) => matchInCommunitySeason(match, seasonFilter) && isInDateFilter(match.capturedAt, dateFilter)), [matches, seasonFilter, dateFilter]);
+  const datedCommunityMatches = useMemo(() => communityMatches.filter((match) => matchInCommunitySeason(match, seasonFilter) && isInDateFilter(communityMatchDate(match), dateFilter)), [communityMatches, seasonFilter, dateFilter]);
   const activeDeck = settings.activeDeckId ? decks.find((deck) => deck.id === settings.activeDeckId) ?? null : null;
   const recentMatches = useMemo(
     () => [...datedMatches].sort((a, b) => b.capturedAt.localeCompare(a.capturedAt)).slice(0, 3),
@@ -9807,7 +9761,7 @@ function HomeView({
     ? {
         deckTitle: featuredDeck.title || `${featuredDeckLegend} deck`,
         legend: featuredDeckLegend,
-        sourceLabel: dateFilter.preset === "all" ? featuredDeckSource : `${featuredDeckSource} · ${dateFilterLabel(dateFilter)}`,
+        sourceLabel: `${featuredDeckSource} · ${COMMUNITY_SEASONS.find((season) => season.id === seasonFilter)?.label}${dateFilter.preset === "all" ? "" : ` · ${dateFilterLabel(dateFilter)}`}`,
         totalGames: featuredDeckPerformance.overview.total,
         decisiveGames: featuredDeckPerformance.overview.decisive,
         winRateLabel: featuredDeckPerformance.overview.winRateLabel,
@@ -10196,6 +10150,7 @@ function HomeView({
 
   return (
     <section className="dashboard-page home-page modern-home">
+      <RadianceSeasonNotice />
       <section className="modern-readiness-strip" aria-label="RiftLite readiness" data-tour-target="home">
         <div className="modern-status-item">
           <span className="modern-status-icon"><Globe2 size={20} /></span>
@@ -10215,7 +10170,7 @@ function HomeView({
         </button>
       </section>
 
-      <div className="data-date-toolbar"><DateFilter label="Stats dates" value={dateFilter} onChange={setDateFilter} /><span className="muted">Deck performance, recent matches and community deck data.</span></div>
+      <div className="data-date-toolbar"><StatSeasonFilter value={seasonFilter} onChange={setSeasonFilter} /><DateFilter label="Stats dates" value={dateFilter} onChange={setDateFilter} /><span className="muted">Deck performance, recent matches and community deck data.</span></div>
       <section className="modern-home-layout" data-live-takeover={Boolean(activeLiveTakeover)}>
         <div className="modern-home-main">
           <section className="modern-home-feature-row" aria-label="Deck tools">
@@ -11055,8 +11010,8 @@ function MulliganLabView({ decks, settings, onNavigate }: {
   const hasAllHistoryPolicy = readyPack?.coveragePolicy === "all-available-history";
   const allHistoryComplete = hasAllHistoryPolicy && includesBothSeasonPeriods && readyPack?.backfillComplete === true && !readyPack.coverageTruncated;
   const coveragePeriodLabel = seasonCoverage
-    ? `Pre-season ${seasonCoverage.preseasonFacts.toLocaleString()} · current season ${seasonCoverage.currentSeasonFacts.toLocaleString()}`
-    : "Season split unavailable for this older pack";
+    ? `Before 31 July 2026: ${seasonCoverage.preseasonFacts.toLocaleString()} · Since 31 July 2026: ${seasonCoverage.currentSeasonFacts.toLocaleString()}`
+    : "Historical split unavailable for this older pack";
 
   return (
     <section className="dashboard-page mulligan-lab-page">
@@ -11066,7 +11021,7 @@ function MulliganLabView({ decks, settings, onNavigate }: {
           <h2>Mulligan Lab</h2>
           <p>{deckPracticeMode
             ? "Practise opening hands and mulligans with your saved deck. Deal new hands as often as you like."
-            : "Train the decision before turn one with matchup-wide patterns from anonymous community Web Replays across the available pre-season and current-season history."}</p>
+            : "Train the decision before turn one with matchup-wide patterns from anonymous community Web Replays across all available history."}</p>
         </div>
         <div className="mulligan-lab-hero-actions">
           <div className="mulligan-lab-freshness" data-state={deckPracticeMode ? "ready" : effectiveLoadState}>
@@ -11136,7 +11091,7 @@ function MulliganLabView({ decks, settings, onNavigate }: {
           </select>
         </label>
         <div className="mulligan-lab-source-note">
-          <Shield size={15} /> {deckPracticeMode ? "Generated practice hands · your saved deck only · ungraded" : <>Real observed hand · {hasAllHistoryPolicy ? "pre-season + current-season corpus" : "verified replay corpus"} · {readyPack?.targetQuery?.resolved.scope === "exact-deck" ? "exact-deck hand filter · card guidance scope shown separately" : readyPack?.targetQuery?.resolved.scope === "matchup" ? "full-corpus matchup hand filter" : readyPack?.targetQuery ? "legend-wide hand fallback · not graded" : "daily hand rotation · card guidance scope shown per card"}</>}
+          <Shield size={15} /> {deckPracticeMode ? "Generated practice hands · your saved deck only · ungraded" : <>Real observed hand · {hasAllHistoryPolicy ? "all available history" : "verified replay corpus"} · {readyPack?.targetQuery?.resolved.scope === "exact-deck" ? "exact-deck hand filter · card guidance scope shown separately" : readyPack?.targetQuery?.resolved.scope === "matchup" ? "full-corpus matchup hand filter" : readyPack?.targetQuery ? "legend-wide hand fallback · not graded" : "daily hand rotation · card guidance scope shown per card"}</>}
         </div>
       </section>
 
@@ -11328,7 +11283,7 @@ function MulliganLabView({ decks, settings, onNavigate }: {
                 ? `${coveragePeriodLabel} · ${readyPack.includedFacts.toLocaleString()} eligible observations indexed from ${observedFromLabel} through ${observedThroughLabel}.`
                 : `Observed from ${observedFromLabel} through ${observedThroughLabel}.`}</small>
               <small>Daily hands rotate, but every shown percentage is rebuilt from the full indexed corpus—not only today’s exercises.</small>
-              {!allHistoryComplete && hasAllHistoryPolicy ? <small>RiftLite will keep adding older eligible replays automatically until the complete pre-season and current-season corpus is indexed.</small> : null}
+              {!allHistoryComplete && hasAllHistoryPolicy ? <small>RiftLite will keep adding older eligible replays automatically until all available history is indexed.</small> : null}
               {!hasAllHistoryPolicy && readyPack?.coverageTruncated ? <small>Historical coverage is still being backfilled; this pack contains {readyPack.includedFacts.toLocaleString()} eligible observations.</small> : null}
               <small>Names, replay IDs, and exact timestamps are not shown in the trainer.</small>
             </section>
@@ -11576,7 +11531,7 @@ function MulliganLabCardChoice({ card, index, selected, submitted, playerLegendN
             <div className="mulligan-lab-context-slices">
               {card.stats.slices.matchingCurve ? <span><small>Same curve shape</small><strong>{Math.round(card.stats.slices.matchingCurve.guidanceKeepRate * 100)}% keep</strong><em>{card.stats.slices.matchingCurve.guidancePlayers} players · {card.stats.slices.matchingCurve.evidenceStatus}</em></span> : null}
               {card.stats.slices.matchingInitiative ? <span><small>Same initiative</small><strong>{Math.round(card.stats.slices.matchingInitiative.guidanceKeepRate * 100)}% keep</strong><em>{card.stats.slices.matchingInitiative.guidancePlayers} players · {card.stats.slices.matchingInitiative.evidenceStatus}</em></span> : null}
-              {periodShift !== null ? <span data-shift={Math.abs(periodShift) >= 15}><small>Meta movement</small><strong>{periodShift > 0 ? "+" : ""}{periodShift} pts keep</strong><em>current season vs pre-season</em></span> : null}
+              {periodShift !== null ? <span data-shift={Math.abs(periodShift) >= 15}><small>Historical movement</small><strong>{periodShift > 0 ? "+" : ""}{periodShift} pts keep</strong><em>Since 31 July 2026 vs before 31 July 2026</em></span> : null}
             </div>
           ) : null}
           {card.stats.outcomeStatus === "comparable" ? (
@@ -11710,8 +11665,9 @@ function MatchupLabView({
   onRefreshCommunity: () => Promise<void>;
 }) {
   const [dateFilter, setDateFilter] = useState<DateFilterValue>(DEFAULT_DATE_FILTER);
-  const datedMatches = useMemo(() => matches.filter((match) => isInDateFilter(match.capturedAt, dateFilter)), [matches, dateFilter]);
-  const datedCommunityMatches = useMemo(() => communityMatches.filter((match) => isInDateFilter(communityMatchDate(match), dateFilter)), [communityMatches, dateFilter]);
+  const [seasonFilter, setSeasonFilter] = useState<CommunitySeasonId>(CURRENT_COMMUNITY_SEASON);
+  const datedMatches = useMemo(() => matches.filter((match) => matchInCommunitySeason(match, seasonFilter) && isInDateFilter(match.capturedAt, dateFilter)), [matches, seasonFilter, dateFilter]);
+  const datedCommunityMatches = useMemo(() => communityMatches.filter((match) => matchInCommunitySeason(match, seasonFilter) && isInDateFilter(communityMatchDate(match), dateFilter)), [communityMatches, seasonFilter, dateFilter]);
   const activeDeck = settings.activeDeckId ? decks.find((deck) => deck.id === settings.activeDeckId) ?? null : null;
   const [comparisonLeftKey, setComparisonLeftKey] = useState("");
   const [comparisonRightKey, setComparisonRightKey] = useState("");
@@ -11938,7 +11894,7 @@ function MatchupLabView({
 
   return (
     <section className="dashboard-page home-page matchup-lab-page">
-      <div className="data-date-toolbar"><DateFilter value={dateFilter} onChange={setDateFilter} /><span className="muted">Applies to personal and community matchup data.</span></div>
+      <div className="data-date-toolbar"><StatSeasonFilter value={seasonFilter} onChange={setSeasonFilter} /><DateFilter value={dateFilter} onChange={setDateFilter} /><span className="muted">Applies to personal and community matchup data.</span></div>
       <section className="home-hero matchup-lab-hero">
         <div>
           <span className="eyebrow">RiftLite lab</span>
@@ -12011,7 +11967,7 @@ function MatchupLabView({
                   <button
                     className="matchup-lab-matchup-card"
                     key={`${row.mine}-${row.opponent}`}
-                    onClick={() => onNavigate("matches", { matchFocus: { myLegend: row.mine, opponentLegend: row.opponent } })}
+                    onClick={() => onNavigate("matches", { matchFocus: { season: seasonFilter, myLegend: row.mine, opponentLegend: row.opponent } })}
                   >
                     <div className="matchup-lab-legend-pair">
                       <LegendAvatar legend={row.mine} />
@@ -12341,8 +12297,7 @@ function DashboardView({
   screenshotStatus,
   onSaveSettings,
   onSettingsChanged,
-  onStartGuidedTour,
-  onResetGuidedTour,
+  onOpenFirstRunSetup,
   onNavigate,
   onPlayPlatform,
   onSetDefaultGamePlatform,
@@ -12435,8 +12390,7 @@ function DashboardView({
   screenshotStatus: string;
   onSaveSettings: (patch: Partial<UserSettings>) => Promise<void>;
   onSettingsChanged: (settings: UserSettings) => void;
-  onStartGuidedTour: () => void;
-  onResetGuidedTour: () => void;
+  onOpenFirstRunSetup: () => void;
   onNavigate: (view: ActiveView, options?: NavigationOptions) => void;
   onPlayPlatform: (platform: GamePlatform) => void;
   onSetDefaultGamePlatform: (platform: GameProvider) => Promise<void>;
@@ -12689,8 +12643,7 @@ function DashboardView({
         deletedMatches={deletedMatches}
         deletedReplays={deletedReplays}
         onSave={onSaveSettings}
-        onStartGuidedTour={onStartGuidedTour}
-        onResetGuidedTour={onResetGuidedTour}
+        onOpenFirstRunSetup={onOpenFirstRunSetup}
         importSummary={importSummary}
         onImportLegacy={onImportLegacy}
         onTakeScreenshot={onTakeScreenshot}
@@ -15030,7 +14983,7 @@ function TeamsPanel({
             {canManage && teamRows.length ? (
               <div className="rail-card stack">
                 <h2>Team match controls</h2>
-                {teamRows.filter((match) => isInDateFilter(communityMatchDate(match), teamFilters.date)).slice(0, 12).map((match) => (
+                {teamRows.filter((match) => matchInCommunitySeason(match, teamFilters.season) && isInDateFilter(communityMatchDate(match), teamFilters.date)).slice(0, 12).map((match) => (
                   <div className="social-row" key={match.id}>
                     <span>{match.myChampion || "Unknown"} vs {match.opponentChampion || "Unknown"} - {match.result} {match.score}</span>
                     <button type="button" className="danger-lite" onClick={() => void removeTeamSyncedMatch(match.id)} disabled={busy}>
@@ -16061,7 +16014,7 @@ function AccountView({
       setShowPostLinkSyncChoice(false);
       setShowPostLinkWebReplayChoice(false);
       linkStartedAsFirstConnection.current = false;
-      setStatus("The previous account is safely unlinked. Choose Google, email, or a previously linked Discord account above, then explicitly confirm the account on RiftLite.com.");
+      setStatus("The previous account is safely unlinked. Choose Google, email, or Discord above, then explicitly confirm the account on RiftLite.com.");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Could not start the account switch.");
     }
@@ -16082,7 +16035,7 @@ function AccountView({
               <Mail size={16} /> Continue with email
             </button>
             <button type="button" className="secondary account-provider-button" disabled={linkBusy} onClick={() => void startLink("discord")}>
-              <MessageCircle size={16} /> Recover with Discord
+              <MessageCircle size={16} /> Continue with Discord
             </button>
           </> : null}
           {overview.action === "finish-profile" ? <button type="button" className="primary" onClick={() => openAccountSection("profile")}><Users size={16} /> Choose my name</button> : null}
@@ -16090,7 +16043,7 @@ function AccountView({
           {overview.action === "troubleshooting" ? <button type="button" className="primary" onClick={() => openAccountSection("troubleshooting")}><Shield size={16} /> Review connection</button> : null}
           {accountReady && !showPostLinkWebReplayChoice ? <button type="button" className="secondary" onClick={onOpenWebReplays}><Film size={16} /> Recording &amp; sharing</button> : null}
         </div>
-        {showAccountSignInActions ? <p className="muted account-provider-help">Use the same Google or email method that created your account. Discord only recovers an account you previously connected to Discord; a profile handle is not a sign-in method.</p> : null}
+        {showAccountSignInActions ? <p className="muted account-provider-help">Create an account with Google, email or Discord. To return to an existing account, use its original sign-in method or a Discord identity you already linked. Your profile handle is not a sign-in method.</p> : null}
         {linkSession ? (
           <div className="account-link-box account-link-waiting">
             <span className="account-link-status-icon" aria-hidden="true"><RefreshCw size={24} /></span>
@@ -17474,6 +17427,7 @@ function MatchesView({
     }
     setFilters({
       ...DEFAULT_MATCH_HISTORY_FILTERS,
+      season: focusTarget.season ?? CURRENT_COMMUNITY_SEASON,
       myLegend: focusTarget.myLegend ?? "",
       opponentLegend: focusTarget.opponentLegend ?? "",
       search: focusTarget.search ?? ""
@@ -17617,6 +17571,7 @@ function MatchesView({
 
   return (
     <section className="dashboard-page matches-page review-workspace review-matches" data-tour-target="review">
+      <RadianceSeasonNotice />
       <div className="review-page-heading">
         <div>
           <span className="review-kicker">Review / Matches</span>
@@ -18396,23 +18351,7 @@ function filterAnalyticsByCommunitySeason(matches: AnalyticsMatch[], seasonFilte
 }
 
 function matchInCommunitySeason(match: { capturedAt?: string; date?: string; createdAt?: number | string }, seasonFilter: string): boolean {
-  if (!seasonFilter) {
-    return true;
-  }
-  const capturedAtMs = communitySeasonTimestamp(match);
-  if (!capturedAtMs) {
-    return false;
-  }
-  if (seasonFilter === "vendetta-preview") {
-    return capturedAtMs >= VENDETTA_PREVIEW_START_MS && capturedAtMs < VENDETTA_LAUNCH_START_MS;
-  }
-  if (seasonFilter === "vendetta-launch") {
-    return capturedAtMs >= VENDETTA_LAUNCH_START_MS;
-  }
-  if (seasonFilter === "pre-vendetta") {
-    return capturedAtMs < VENDETTA_PREVIEW_START_MS;
-  }
-  return true;
+  return isInStatSeason(statMatchTimestamp(match), seasonFilter);
 }
 
 function communityMatchDate(match: CommunityMatch): string | number | undefined {
@@ -18422,27 +18361,7 @@ function communityMatchDate(match: CommunityMatch): string | number | undefined 
 }
 
 function communitySeasonTimestamp(match: { capturedAt?: string; date?: string; createdAt?: number | string }): number {
-  const dated = match.capturedAt || match.date || "";
-  if (dated) {
-    const parsed = Date.parse(dated);
-    if (Number.isFinite(parsed)) {
-      return parsed;
-    }
-  }
-  if (typeof match.createdAt === "number") {
-    return match.createdAt > 10_000_000_000 ? match.createdAt : match.createdAt * 1000;
-  }
-  if (typeof match.createdAt === "string" && match.createdAt.trim()) {
-    const parsed = Date.parse(match.createdAt);
-    if (Number.isFinite(parsed)) {
-      return parsed;
-    }
-    const numeric = Number(match.createdAt);
-    if (Number.isFinite(numeric)) {
-      return numeric > 10_000_000_000 ? numeric : numeric * 1000;
-    }
-  }
-  return 0;
+  return statMatchTimestamp(match) ?? 0;
 }
 
 function filterLocalMatches(matches: MatchDraft[], filters: MatchHistoryFilters): MatchDraft[] {
@@ -18619,6 +18538,7 @@ function StatsView({ matches, onOpenGameDetails }: { matches: MatchDraft[]; onOp
   return (
     <GameDetailsNavigationContext.Provider value={(id) => onOpenGameDetails({ kind: "match", id })}>
     <section className="dashboard-page analytics-page">
+      <RadianceSeasonNotice />
       <section className="metric-grid">
         <Metric
           label="Matches"
@@ -19528,7 +19448,8 @@ function DeckDetail({ deck, focusTarget, onFocusChange, matches, active, onSetAc
   const snapshot = parseDeckSnapshot(deck.snapshotJson);
   const needsRefresh = deckNeedsRefresh(snapshot);
   const [dateFilter, setDateFilter] = useState<DateFilterValue>(DEFAULT_DATE_FILTER);
-  const datedMatches = useMemo(() => matches.filter((match) => isInDateFilter(match.capturedAt, dateFilter)), [matches, dateFilter]);
+  const [seasonFilter, setSeasonFilter] = useState<CommunitySeasonId>(CURRENT_COMMUNITY_SEASON);
+  const datedMatches = useMemo(() => matches.filter((match) => matchInCommunitySeason(match, seasonFilter) && isInDateFilter(match.capturedAt, dateFilter)), [matches, seasonFilter, dateFilter]);
   const performance = useMemo(() => buildDeckPerformance(deck, datedMatches), [deck, datedMatches]);
   const [notebook, setNotebook] = useState<DeckNotebook>(() => emptyDeckNotebook(deck.id));
   const [notebookStatus, setNotebookStatus] = useState("");
@@ -19687,7 +19608,7 @@ function DeckDetail({ deck, focusTarget, onFocusChange, matches, active, onSetAc
           </button>
         ))}
       </nav>
-      <div className="data-date-toolbar"><DateFilter label="Match data dates" value={dateFilter} onChange={setDateFilter} /><span className="muted">Filters performance, version results and match notes.</span></div>
+      <div className="data-date-toolbar"><StatSeasonFilter value={seasonFilter} onChange={setSeasonFilter} /><DateFilter label="Match data dates" value={dateFilter} onChange={setDateFilter} /><span className="muted">Filters performance, version results and match notes.</span></div>
       <div className="prepare-pane" hidden={focusTarget !== "library" && focusTarget !== "saved"}>
         <details className="prepare-manage prepare-deck-code">
           <summary>Deck code & source <span>Copy or view the imported list</span></summary>
@@ -19722,7 +19643,7 @@ function DeckDetail({ deck, focusTarget, onFocusChange, matches, active, onSetAc
         />
       </div>
       <div className="prepare-pane" id={`deck-performance-${deck.id}`} hidden={focusTarget !== "performance"}>
-        <DeckPerformancePanel key={JSON.stringify(dateFilter)} performance={performance} />
+        <DeckPerformancePanel key={`${seasonFilter}:${JSON.stringify(dateFilter)}`} performance={performance} />
       </div>
     </>
   );
@@ -19806,7 +19727,7 @@ function DeckPerformancePanel({ performance }: { performance: DeckPerformanceSta
         {selectedMatch ? <MatchDetailPanel match={selectedMatch} /> : null}
       </section>
 
-      <MatchupMatrixPanel showDate={false} matches={analytics} emptyText="Deck matchups appear after this deck has completed matches with both legends recorded." showFlags={false} showSeason />
+      <MatchupMatrixPanel showDate={false} matches={analytics} emptyText="Deck matchups appear after this deck has completed matches with both legends recorded." showFlags={false} />
     </section>
   );
 }
@@ -21326,6 +21247,7 @@ function ReplayView({
   const [platformFilter, setPlatformFilter] = useState<"all" | GamePlatform>("all");
   const [mediaFilter, setMediaFilter] = useState("all");
   const [rangeFilter, setRangeFilter] = useState<DateFilterValue>(DEFAULT_DATE_FILTER);
+  const [seasonFilter, setSeasonFilter] = useState<CommunitySeasonId>(CURRENT_COMMUNITY_SEASON);
   const [flagFilter, setFlagFilter] = useState("all");
   const [folderFilter, setFolderFilter] = useState("all");
   const [creatingFolder, setCreatingFolder] = useState(false);
@@ -21367,12 +21289,14 @@ function ReplayView({
   const extraEntries = mergedLibrary.filter((entry) => !entry.replay);
   const visibleExtraEntries = extraEntries.filter((entry) => {
     const cloud = entry.cloudReplay; const match = entry.match;
+    const playedAt = replayLibraryTimestamp(cloud, match);
     const title = cloud?.title || `${match?.myChampion || "Player"} vs ${match?.opponentChampion || "Opponent"}`;
     return (!deferredSearch.trim() || [title, match?.myName, match?.opponentName, cloud?.listing?.playerName, cloud?.listing?.opponentName, cloud?.listing?.playerLegend, cloud?.listing?.opponentLegend].filter(Boolean).join(" ").toLowerCase().includes(deferredSearch.trim().toLowerCase()))
       && (platformFilter === "all" || (cloud?.platform || match?.platform) === platformFilter)
       && (mediaFilter === "all" || (mediaFilter === "web" && (cloud?.status === "ready" || match?.webReplayId)))
       && flagFilter === "all" && (folderFilter === "all" || folderFilter === "unfiled")
-      && isInDateFilter(cloud?.capturedAt || cloud?.createdAt || match?.capturedAt || "", rangeFilter);
+      && isInStatSeason(playedAt, seasonFilter)
+      && isInDateFilter(playedAt, rangeFilter);
   });
 
   const asCloudAsset = (cloud: typeof extraEntries[number]["cloudReplay"]): GameCloudReplay | undefined => cloud ? { id: cloud.replayId, url: cloud.url, status: cloud.status, partialWarnings: cloud.warnings } : undefined;
@@ -21396,7 +21320,8 @@ function ReplayView({
         ) {
           return false;
         }
-        if (!isInDateFilter(item.capturedAt, rangeFilter)) {
+        const playedAt = replayLibraryTimestamp(item.replay, item.match);
+        if (!isInStatSeason(playedAt, seasonFilter) || !isInDateFilter(playedAt, rangeFilter)) {
           return false;
         }
         if (flagFilter === "flagged" && !(item.replay.flags?.length)) {
@@ -21423,7 +21348,7 @@ function ReplayView({
         return !needle || item.searchText.includes(needle);
       });
     },
-    [mergedLibrary, deferredSearch, flagFilter, folderFilter, mediaFilter, platformFilter, rangeFilter, replayFolderIds, replayItems]
+    [mergedLibrary, deferredSearch, flagFilter, folderFilter, mediaFilter, platformFilter, rangeFilter, seasonFilter, replayFolderIds, replayItems]
   );
   const selectedItem = filteredItems.find((item) => item.replay.id === selectedReplayId) ?? filteredItems[0] ?? null;
   const selectedIndex = selectedItem ? filteredItems.findIndex((item) => item.replay.id === selectedItem.replay.id) : -1;
@@ -21439,12 +21364,12 @@ function ReplayView({
   const allFilteredReplaysSelected = filteredItems.length > 0
     && filteredItems.every((item) => selectedReplayIds.has(item.replay.id));
   const activeReplayFilterCount = [platformFilter, mediaFilter, rangeFilter.preset, flagFilter, folderFilter]
-    .filter((filter) => filter !== "all").length;
+    .filter((filter) => filter !== "all").length + (seasonFilter !== CURRENT_COMMUNITY_SEASON ? 1 : 0);
 
   useEffect(() => {
     setVisibleReplayCount(REPLAY_LIST_PAGE_SIZE);
     setSelectedReplayIds(new Set());
-  }, [deferredSearch, flagFilter, folderFilter, mediaFilter, platformFilter, rangeFilter]);
+  }, [deferredSearch, flagFilter, folderFilter, mediaFilter, platformFilter, rangeFilter, seasonFilter]);
 
   useEffect(() => {
     if (!focusReplayId) {
@@ -21686,6 +21611,7 @@ function ReplayView({
 
   return (
     <section className="dashboard-page replay-page review-workspace review-replays">
+      <RadianceSeasonNotice />
       <header className="review-page-heading review-replays-heading">
         <div>
           <span className="review-kicker">Your replay library</span>
@@ -21730,6 +21656,7 @@ function ReplayView({
             </button>
           </div>
         </div>
+        <StatSeasonFilter value={seasonFilter} onChange={setSeasonFilter} />
         <label className="review-replays-search">
           Search replays
           <input
@@ -21859,7 +21786,7 @@ function ReplayView({
             <button className="secondary" onClick={() => void importReplayFolder()}><FolderOpen size={14} /> Import folder</button>
             <button className="secondary" title="Open replay storage folder" aria-label="Open replay storage folder" onClick={() => void window.riftlite.openReplayFolder()}><FolderOpen size={14} /></button>
             {activeReplayFilterCount ? <button type="button" className="secondary" onClick={() => {
-              setPlatformFilter("all"); setMediaFilter("all"); setRangeFilter(DEFAULT_DATE_FILTER); setFlagFilter("all"); setFolderFilter("all");
+              setPlatformFilter("all"); setMediaFilter("all"); setRangeFilter(DEFAULT_DATE_FILTER); setSeasonFilter(CURRENT_COMMUNITY_SEASON); setFlagFilter("all"); setFolderFilter("all");
             }}>Clear filters</button> : null}
           </div>
         </div>
@@ -22847,6 +22774,11 @@ type ReplayListItem = {
   chips: string[];
   searchText: string;
 };
+
+function replayLibraryTimestamp(replay?: { capturedAt?: string; createdAt?: string | number }, match?: { capturedAt?: string }): number | undefined {
+  // A known played date must win over a replay uploaded or imported in a later season.
+  return statMatchTimestamp({ capturedAt: match?.capturedAt || replay?.capturedAt, createdAt: replay?.createdAt }) ?? undefined;
+}
 
 function hasReadyRiftLiteWebReplay(replay: ReplayRecord): boolean {
   return Boolean(
@@ -27713,8 +27645,7 @@ function SettingsView({
   deletedReplays,
   importSummary,
   onSave,
-  onStartGuidedTour,
-  onResetGuidedTour,
+  onOpenFirstRunSetup,
   onImportLegacy,
   onTakeScreenshot,
   onChooseScreenshotDirectory,
@@ -27744,8 +27675,7 @@ function SettingsView({
   deletedReplays: ReplayRecord[];
   importSummary: ImportSummary | null;
   onSave: (patch: Partial<UserSettings>) => Promise<void>;
-  onStartGuidedTour: () => void;
-  onResetGuidedTour: () => void;
+  onOpenFirstRunSetup: () => void;
   onImportLegacy: () => Promise<void>;
   onTakeScreenshot: () => Promise<void>;
   onChooseScreenshotDirectory: () => Promise<void>;
@@ -27904,7 +27834,7 @@ function SettingsView({
         <SettingsAccordionSection
           id="settings-getting-started"
           title="Getting started"
-          description="Guided help, profile, and default sync behaviour"
+          description="Quick setup, player name, and result sharing"
           icon={<Compass size={18} />}
           contentClassName="settings-grid"
           defaultOpen
@@ -27913,12 +27843,11 @@ function SettingsView({
           <div className="onboarding-settings-icon"><Compass size={22} /></div>
           <div>
             <span className="modern-kicker">Help &amp; onboarding</span>
-            <h2>Guided tour</h2>
-            <p className="muted">Walk through Home, Play, Review, Prepare, Community, and the utility tools in the new interface.</p>
+            <h2>Quick setup</h2>
+            <p className="muted">Set your player name, choose a simulator, connect your account, and get replays and a deck ready. Every step is optional.</p>
           </div>
           <div className="row-actions">
-            <button className="primary" type="button" onClick={onStartGuidedTour}><Sparkles size={16} /> Replay tour</button>
-            <button className="secondary" type="button" onClick={onResetGuidedTour}>Show next launch</button>
+            <button className="primary" type="button" onClick={onOpenFirstRunSetup}><Sparkles size={16} /> Open quick setup</button>
           </div>
         </div>
         <div className="rail-card">
@@ -27943,6 +27872,36 @@ function SettingsView({
             />
           </label>
           <p className="muted">Helps measure daily active users, versions, platform, and replay settings. No usernames, emails, match notes, deck lists, or replay files are sent.</p>
+        </div>
+        </SettingsAccordionSection>
+        <SettingsAccordionSection
+          id="settings-appearance-play"
+          title="Appearance & Play"
+          description="Fullscreen top bar, Play widgets, and Home colours"
+          icon={<Maximize2 size={18} />}
+          contentClassName="settings-grid"
+        >
+        <div className="rail-card">
+          <h2>Play screen</h2>
+          <label className="toggle-row">
+            <span><Maximize2 size={16} /> Show top bar in fullscreen</span>
+            <input
+              type="checkbox"
+              checked={settings.showPlayToolbarInFullscreen}
+              aria-describedby="fullscreen-top-bar-help"
+              onChange={(event) => void onSave({ showPlayToolbarInFullscreen: event.target.checked })}
+            />
+          </label>
+          <p className="muted" id="fullscreen-top-bar-help">Keep RiftLite's top bar visible while playing in fullscreen, including the Known opponent hand button on Atlas. Applies immediately and is remembered on this device.</p>
+          <label className="toggle-row">
+            <span><BookOpen size={16} /> Show Prep/Notes widget</span>
+            <input
+              type="checkbox"
+              checked={settings.matchupPrepWidgetEnabled}
+              onChange={(event) => void onSave({ matchupPrepWidgetEnabled: event.target.checked })}
+            />
+          </label>
+          <p className="muted">Shows the active deck's matchup guide and live notes over both Atlas and TCGA. Enabled by default.</p>
         </div>
         <div className="rail-card home-theme-settings-card" id="home-theme-settings">
           <h2>Home appearance</h2>
@@ -27973,18 +27932,6 @@ function SettingsView({
           icon={<Film size={18} />}
           contentClassName="settings-grid"
         >
-        <div className="rail-card">
-          <h2>Play screen</h2>
-          <label className="toggle-row">
-            <span><BookOpen size={16} /> Show Prep/Notes widget</span>
-            <input
-              type="checkbox"
-              checked={settings.matchupPrepWidgetEnabled}
-              onChange={(event) => void onSave({ matchupPrepWidgetEnabled: event.target.checked })}
-            />
-          </label>
-          <p className="muted">Shows the active deck's matchup guide and live notes over both Atlas and TCGA. Enabled by default.</p>
-        </div>
         <div className="rail-card enhanced-insights-settings-card">
           <div className="settings-card-heading-row">
             <div>
@@ -28536,6 +28483,7 @@ function HubsView({ settings, matches, replays, hubMatches, onSave, onHubResult,
   const [hubClaimBusy, setHubClaimBusy] = useState(false);
   const [hubClaimError, setHubClaimError] = useState("");
   const [dateFilter, setDateFilter] = useState<DateFilterValue>(DEFAULT_DATE_FILTER);
+  const [seasonFilter, setSeasonFilter] = useState<CommunitySeasonId>(CURRENT_COMMUNITY_SEASON);
   const [currentHubReplays, setCurrentHubReplays] = useState(replays);
   const activeHubsRef = useRef(settings.activeHubs);
   const localWebReplayIds = useMemo(() => webReplayIdsByLocalMatch(currentHubReplays), [currentHubReplays]);
@@ -28544,15 +28492,15 @@ function HubsView({ settings, matches, replays, hubMatches, onSave, onHubResult,
     [selectedHubId, settings.activeHubs]
   );
   const hubAnalytics = useMemo(
-    () => validAnalytics(filteredHubs.flatMap((hub) => (hubMatches[hub.id] ?? []).filter((match) => isInDateFilter(communityMatchDate(match), dateFilter)).map((match) => communityToAnalytics({
+    () => validAnalytics(filteredHubs.flatMap((hub) => (hubMatches[hub.id] ?? []).filter((match) => matchInCommunitySeason(match, seasonFilter) && isInDateFilter(communityMatchDate(match), dateFilter)).map((match) => communityToAnalytics({
       ...match,
       webReplayId: match.webReplayId || localWebReplayIds.get(match.id)
     })))),
-    [filteredHubs, hubMatches, localWebReplayIds, dateFilter]
+    [filteredHubs, hubMatches, localWebReplayIds, seasonFilter, dateFilter]
   );
   const hubFeedRows = useMemo(
-    () => filteredHubs.flatMap((hub) => (hubMatches[hub.id] ?? []).filter((match) => isInDateFilter(communityMatchDate(match), dateFilter)).slice(0, 12).map((match) => ({ hub, match }))),
-    [filteredHubs, hubMatches, dateFilter]
+    () => filteredHubs.flatMap((hub) => (hubMatches[hub.id] ?? []).filter((match) => matchInCommunitySeason(match, seasonFilter) && isInDateFilter(communityMatchDate(match), dateFilter)).slice(0, 12).map((match) => ({ hub, match }))),
+    [filteredHubs, hubMatches, seasonFilter, dateFilter]
   );
   const savedMatchCount = useMemo(() => matches.filter((match) => match.status === "saved" && match.result !== "Incomplete").length, [matches]);
   const enabledHubCount = useMemo(() => settings.activeHubs.filter((hub) => hub.sync).length, [settings.activeHubs]);
@@ -28964,7 +28912,7 @@ function HubsView({ settings, matches, replays, hubMatches, onSave, onHubResult,
   const selectedHub = selectedHubId ? settings.activeHubs.find((hub) => hub.id === selectedHubId) ?? null : null;
   const pendingHubInvites = hubInbox.filter((item) => item.status === "open");
   const visibleHubInvites = pendingHubInvites.length ? pendingHubInvites : hubInbox.slice(0, 5);
-  const selectedHubRows = useMemo(() => selectedHub ? (hubMatches[selectedHub.id] ?? []).filter((match) => isInDateFilter(communityMatchDate(match), dateFilter)) : [], [hubMatches, selectedHub, dateFilter]);
+  const selectedHubRows = useMemo(() => selectedHub ? (hubMatches[selectedHub.id] ?? []).filter((match) => matchInCommunitySeason(match, seasonFilter) && isInDateFilter(communityMatchDate(match), dateFilter)) : [], [hubMatches, selectedHub, seasonFilter, dateFilter]);
   const selectedHubAnalytics = useMemo(
     () => selectedHub ? validAnalytics(selectedHubRows.map((match) => communityToAnalytics({
       ...match,
@@ -29222,7 +29170,7 @@ function HubsView({ settings, matches, replays, hubMatches, onSave, onHubResult,
           <p>{hubRoleLabel(selectedHub)} - {(hubMatches[selectedHub.id] ?? []).length} private hub match{(hubMatches[selectedHub.id] ?? []).length === 1 ? "" : "es"}</p>
         </div>
       </div>
-      <div className="wide-panel data-date-toolbar"><DateFilter label="Hub data dates" value={dateFilter} onChange={setDateFilter} /></div>
+      <div className="wide-panel data-date-toolbar"><StatSeasonFilter value={seasonFilter} onChange={setSeasonFilter} /><DateFilter label="Hub data dates" value={dateFilter} onChange={setDateFilter} /></div>
       <section className="wide-panel metric-grid hub-detail-metrics">
         <Metric label="Hub matches" value={String(selectedHubRows.length)} />
         <Metric label="Record" value={`${selectedHubWins}-${selectedHubLosses}${selectedHubDraws ? `-${selectedHubDraws}` : ""}`} />
@@ -29505,6 +29453,7 @@ function CommunityView({ matches, communityMatches, hubMatches, settings, status
 
   return (
     <section ref={communityRef} className={`dashboard-page community-dashboard ${activeTab === "match-matrix" ? "matrix-focus" : ""}`}>
+      <RadianceSeasonNotice />
       <div className="community-toolbar">
         <div>
           <h2>Community submitted matches</h2>
@@ -29602,7 +29551,7 @@ function HubStatsPanel({ matches }: { matches: AnalyticsMatch[] }) {
       </div>
       <LeaderboardPanel showDate={false} matches={filteredMatches} showFlags={false} />
       <LegendMetaPanel matches={filteredMatches} expanded showFlags={false} />
-      <MatchupMatrixPanel showDate={false} matches={filteredMatches} emptyText="Private hub match data appears here after joined hubs sync." showFlags={false} showSeason />
+      <MatchupMatrixPanel showDate={false} matches={filteredMatches} emptyText="Private hub match data appears here after joined hubs sync." showFlags={false} />
     </section>
   );
 }
@@ -30301,6 +30250,11 @@ function MetaAlertsPanel({ matches, showFlags = true }: { matches: AnalyticsMatc
   );
 }
 
+function matrixEffectiveFilters(filters: MatrixFilters | undefined, internalFilters: MatrixFilters, showSeason: boolean): MatrixFilters {
+  // Embedded matrices inherit their parent cohort when they have no season selector.
+  return filters ?? (showSeason ? internalFilters : { ...internalFilters, season: "" });
+}
+
 function MatchupMatrixPanel({
   matches,
   filteredMatches,
@@ -30326,7 +30280,7 @@ function MatchupMatrixPanel({
 }) {
   const [selectedKey, setSelectedKey] = useState("");
   const [internalFilters, setInternalFilters] = useState<MatrixFilters>(DEFAULT_MATRIX_FILTERS);
-  const activeFilters = filters ?? internalFilters;
+  const activeFilters = useMemo(() => matrixEffectiveFilters(filters, internalFilters, showSeason), [filters, internalFilters, showSeason]);
   const internalFilteredMatches = useMemo(() => filterMatrixMatches(matches, activeFilters, showFlags), [matches, activeFilters, showFlags]);
   const visibleMatches = filteredMatches ?? internalFilteredMatches;
   const matrix = useMemo(

@@ -6703,15 +6703,18 @@ textarea {
   border: 0;
 }
 
-/* Native fullscreen gives Play the entire viewport without remounting its
-   guest or changing the user's normal navigation/zoom preferences. F11 exits. */
+/* Native fullscreen keeps the game mounted and normal navigation/zoom intact.
+   The optional top bar keeps Play tools accessible. F11 exits. */
 .app-shell.ui-dev-modern[data-play-fullscreen="true"] {
   grid-template-columns: minmax(0, 1fr);
 }
 
 .app-shell.ui-dev-modern[data-play-fullscreen="true"] > .sidebar,
-.app-shell.ui-dev-modern[data-play-fullscreen="true"] > .sidebar-float-toggle,
-.app-shell.ui-dev-modern[data-play-fullscreen="true"] > .workspace > .topbar {
+.app-shell.ui-dev-modern[data-play-fullscreen="true"] > .sidebar-float-toggle {
+  display: none;
+}
+
+.app-shell.ui-dev-modern[data-play-fullscreen="true"]:not([data-show-play-toolbar-in-fullscreen="true"]) > .workspace > .topbar {
   display: none;
 }
 

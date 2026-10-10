@@ -332,7 +332,7 @@ export class RiftLiteStore {
     }
     const legacyHubSecretWasPresent = Array.isArray(parsed.activeHubs) &&
       parsed.activeHubs.some((hub) => Boolean(hub?.passwordHash));
-    const normalized = this.normalizeSettings(parsed);
+    const normalized = this.normalizeSettings(parsed, typeof row !== "string");
     const protectedSettings = this.credentialVault
       ? await this.credentialVault.reconcile(normalized)
       : {
@@ -354,13 +354,17 @@ export class RiftLiteStore {
     return this.settingsCache;
   }
 
-  private normalizeSettings(parsed: Partial<UserSettings>): UserSettings {
+  private normalizeSettings(parsed: Partial<UserSettings>, newProfile = false): UserSettings {
     const defaults = createDefaultSettings();
+    // New installations start with Public selected, while old settings without
+    // a visibility choice retain the original Private fallback.
+    const rawCaptureFallback: UserSettings["rawCapture"] = { ...defaults.rawCapture, visibility: newProfile ? "public" : "private" };
     return {
       ...defaults,
       ...parsed,
       defaultGamePlatform: normalizeDefaultGamePlatform((parsed as { defaultGamePlatform?: unknown }).defaultGamePlatform),
       homeDeckThemeEnabled: normalizeHomeDeckThemeEnabled((parsed as { homeDeckThemeEnabled?: unknown }).homeDeckThemeEnabled),
+      showPlayToolbarInFullscreen: parsed.showPlayToolbarInFullscreen === true,
       replayVideoMode: normalizeReplayVideoMode((parsed as { replayVideoMode?: unknown }).replayVideoMode),
       replayFramePreset: normalizeReplayFramePreset((parsed as { replayFramePreset?: unknown }).replayFramePreset),
       overlayDisplay: { ...defaults.overlayDisplay, ...parsed.overlayDisplay },
@@ -368,14 +372,14 @@ export class RiftLiteStore {
         ? uniqueReplayCustomFlagTypes(parsed.replayCustomFlagTypes)
         : defaults.replayCustomFlagTypes,
       replayFolders: normalizeReplayFolders(parsed.replayFolders),
-      rawCapture: normalizeRawCaptureSettings((parsed as { rawCapture?: unknown }).rawCapture),
+      rawCapture: normalizeRawCaptureSettings((parsed as { rawCapture?: unknown }).rawCapture, rawCaptureFallback),
       deckTrackerPinnedCards: parsed.deckTrackerPinnedCards && typeof parsed.deckTrackerPinnedCards === "object" && !Array.isArray(parsed.deckTrackerPinnedCards)
         ? parsed.deckTrackerPinnedCards
         : {},
       activeHubs: stripLegacyHubSecrets({
         ...defaults,
         ...parsed,
-        rawCapture: normalizeRawCaptureSettings((parsed as { rawCapture?: unknown }).rawCapture),
+        rawCapture: normalizeRawCaptureSettings((parsed as { rawCapture?: unknown }).rawCapture, rawCaptureFallback),
         activeHubs: Array.isArray(parsed.activeHubs) ? parsed.activeHubs : [],
         activeTeams: Array.isArray(parsed.activeTeams) ? parsed.activeTeams : []
       }).activeHubs,
@@ -484,6 +488,9 @@ export class RiftLiteStore {
       firebaseCredentialGeneration: current.firebaseCredentialGeneration,
       defaultGamePlatform,
       homeDeckThemeEnabled,
+      showPlayToolbarInFullscreen: typeof patch.showPlayToolbarInFullscreen === "boolean"
+        ? patch.showPlayToolbarInFullscreen
+        : current.showPlayToolbarInFullscreen,
       replayVideoMode,
       replayFramePreset,
       replayCustomFlagTypes: Object.prototype.hasOwnProperty.call(patch, "replayCustomFlagTypes")
@@ -1305,7 +1312,7 @@ export class RiftLiteStore {
       const persisted = await this.prepareStoredReplayUpdate(stored, next, payloadUnchanged);
       db.run("UPDATE replays SET data_json=? WHERE id=?", [JSON.stringify(persisted), id]);
       return next;
-    }, { invalidateReplays: true });
+    }, { onCommitted: (replay) => this.replaceCachedReplay(replay) });
   }
 
   async updateReplay(
@@ -1331,7 +1338,7 @@ export class RiftLiteStore {
       const persisted = await this.prepareStoredReplayUpdate(stored, next, payloadUnchanged);
       db.run("UPDATE replays SET data_json=? WHERE id=?", [JSON.stringify(persisted), id]);
       return next;
-    }, { invalidateReplays: true });
+    }, { onCommitted: (replay) => this.replaceCachedReplay(replay) });
   }
 
   async deleteReplay(id: string): Promise<void> {
@@ -1455,6 +1462,17 @@ export class RiftLiteStore {
     this.replaysCacheGeneration += 1;
     this.replaysCache = null;
     this.replaysLoadPromise = null;
+  }
+
+  /** Existing-row updates preserve id/date ordering and all unrelated payloads.
+   * Publish only after the database commit, fencing off any older loader. */
+  private replaceCachedReplay(replay: ReplayRecord | null): void {
+    if (!replay) return;
+    const cached = this.replaysCache;
+    this.invalidateReplayCache();
+    if (cached?.some((current) => current.id === replay.id)) {
+      this.replaysCache = cached.map((current) => current.id === replay.id ? replay : current);
+    }
   }
 
   async exportBackupData(
@@ -1903,7 +1921,7 @@ export class RiftLiteStore {
       const raw = await readFile(this.legacyJsonPath, "utf8");
       const parsed = JSON.parse(raw) as PersistedState;
       if (parsed.settings) {
-        const migratedSettings = { ...createDefaultSettings(), ...parsed.settings };
+        const migratedSettings = this.normalizeSettings(parsed.settings);
         db.run("INSERT OR REPLACE INTO settings (key, value_json, updated_at) VALUES (?, ?, ?)", [
           "settings",
           JSON.stringify(migratedSettings),
@@ -2174,7 +2192,7 @@ export class RiftLiteStore {
     try {
       const result = await action(candidateDb);
       const candidateBytes = candidateDb.export();
-      if (Buffer.from(candidateBytes).equals(Buffer.from(activeBytes))) {
+      if (Buffer.compare(candidateBytes, activeBytes) === 0) {
         candidateDb.close();
         candidateDb = null;
         options.onCommitted?.(result);
@@ -2275,7 +2293,7 @@ export class RiftLiteStore {
     const tempPath = `${this.dbPath}.tmp-${process.pid}-${Date.now()}-${randomUUID()}`;
     this.activeDatabaseStagingPaths.add(tempPath);
     try {
-      await writeFile(tempPath, Buffer.from(bytes));
+      await writeFile(tempPath, bytes);
       return tempPath;
     } catch (error) {
       this.activeDatabaseStagingPaths.delete(tempPath);

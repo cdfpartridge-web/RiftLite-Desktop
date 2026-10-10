@@ -1,0 +1,46 @@
+.radiance-season-notice {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid rgba(230, 197, 113, 0.38);
+  border-radius: 12px;
+  background: linear-gradient(110deg, rgba(169, 128, 38, 0.16), rgba(18, 44, 63, 0.8));
+  color: #f5dca2;
+}
+
+.radiance-season-notice > svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+
+.radiance-season-notice > div {
+  flex: 1;
+  min-width: 0;
+}
+
+.radiance-season-notice strong {
+  font-size: 14px;
+}
+
+.radiance-season-notice p {
+  margin: 4px 0 0;
+  color: #d0dae3;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.radiance-season-notice .radiance-season-dismiss {
+  flex: 0 0 auto;
+  min-width: 32px;
+  min-height: 32px;
+  padding: 7px;
+}
+
+.stat-season-filter {
+  display: grid;
+  gap: 5px;
+  min-width: 170px;
+  font-size: 12px;
+}

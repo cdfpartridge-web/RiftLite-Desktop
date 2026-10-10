@@ -906,8 +906,15 @@
       "champion": "Ahri",
       "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/cf3c6a5963ad27976960977b0a51ea185f551696-744x1039.png?accountingTag=RB",
       "imageHash": "cf3c6a5963ad27976960977b0a51ea185f551696",
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/temporary/1790379856360-1cbp857fr3y.jpg",
+        "https://cdn.piltoverarchive.com/temporary/1790379906737-nco9pod88y.jpg",
+        "https://cdn.piltoverarchive.com/cards/RAD-038.webp",
+        "https://assets.riftatlas-workers.com/riftbound/cards/original/RAD-038C.webp",
+        "https://assets.riftatlas-workers.com/riftbound/cards/original/RAD-038P.webp"
+      ],
       "artist": "Naifan Zhang",
-      "updatedAt": "2026-09-30T10:00:00.000Z",
+      "updatedAt": "2026-10-10T13:15:41.613Z",
       "variants": {
         "alternateArt": false,
         "overnumbered": false,
@@ -916,12 +923,9 @@
       "aliases": [],
       "sourceIds": [
         "piltover-archive:ab19eef7-682a-4f54-b64e-cbdd8152d07a",
-        "riot-gallery:rad-038-167"
-      ],
-      "imageUrlAliases": [
-        "https://cdn.piltoverarchive.com/temporary/1790379856360-1cbp857fr3y.jpg",
-        "https://cdn.piltoverarchive.com/temporary/1790379906737-nco9pod88y.jpg",
-        "https://cdn.piltoverarchive.com/cards/RAD-038.webp"
+        "riot-gallery:rad-038-167",
+        "riftatlas:RAD-038C",
+        "riftatlas:RAD-038P"
       ]
     },
     {
@@ -3383,7 +3387,7 @@
       "imageUrl": "https://cdn.piltoverarchive.com/temporary/1790807820855-obaxe2xxu6n.png",
       "imageHash": null,
       "artist": "Luscinia Studio",
-      "updatedAt": "2026-10-01T16:38:00.000Z",
+      "updatedAt": "2026-10-10T13:15:41.613Z",
       "variants": {
         "alternateArt": false,
         "overnumbered": false,
@@ -3391,11 +3395,18 @@
       },
       "aliases": [],
       "sourceIds": [
-        "piltover-archive:76a52107-8185-47e7-99d7-8876aea8a71f"
+        "piltover-archive:76a52107-8185-47e7-99d7-8876aea8a71f",
+        "riftatlas:RAD-015C",
+        "riftatlas:RAD-015P"
       ],
       "imageUrlAliases": [
         "https://cdn.piltoverarchive.com/cards/RAD-015.webp",
-        "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/20997ddaef2cd714c36e5473c156faf331b80b7b-744x1039.png?accountingTag=RB"
+        "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/20997ddaef2cd714c36e5473c156faf331b80b7b-744x1039.png?accountingTag=RB",
+        "https://assets.riftatlas-workers.com/riftbound/cards/original/RAD-015C.webp",
+        "https://assets.riftatlas-workers.com/riftbound/cards/original/RAD-015P.webp"
+      ],
+      "imageHashAliases": [
+        "20997ddaef2cd714c36e5473c156faf331b80b7b"
       ]
     },
     {
@@ -3631,7 +3642,7 @@
       "imageUrl": "https://cdn.piltoverarchive.com/temporary/1790851040006-yrpizl19cyk.png",
       "imageHash": null,
       "artist": "Yeon Art Studio",
-      "updatedAt": "2026-10-01T16:38:00.000Z",
+      "updatedAt": "2026-10-10T13:15:41.613Z",
       "variants": {
         "alternateArt": false,
         "overnumbered": false,
@@ -3639,11 +3650,16 @@
       },
       "aliases": [],
       "sourceIds": [
-        "piltover-archive:a4396349-a4bc-48d4-9c89-c5f93fc75ea9"
+        "piltover-archive:a4396349-a4bc-48d4-9c89-c5f93fc75ea9",
+        "riftatlas:RAD-085P"
       ],
       "imageUrlAliases": [
         "https://cdn.piltoverarchive.com/cards/RAD-085.webp",
-        "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/5bc0671f9f78630e2932052bb9f7f42ef2742c86-744x1039.png?accountingTag=RB"
+        "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/5bc0671f9f78630e2932052bb9f7f42ef2742c86-744x1039.png?accountingTag=RB",
+        "https://assets.riftatlas-workers.com/riftbound/cards/original/RAD-085P.webp"
+      ],
+      "imageHashAliases": [
+        "5bc0671f9f78630e2932052bb9f7f42ef2742c86"
       ]
     },
     {
@@ -4808,8 +4824,12 @@
       "champion": "Lulu",
       "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/defd09480671a1e394725f21b6c3448ebec77913-744x1039.png?accountingTag=RB",
       "imageHash": "defd09480671a1e394725f21b6c3448ebec77913",
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-110.webp",
+        "https://assets.riftatlas-workers.com/riftbound/cards/original/RAD-110P.webp"
+      ],
       "artist": "Polar Engine Studio",
-      "updatedAt": "2026-10-05T11:19:14.308Z",
+      "updatedAt": "2026-10-10T13:15:41.613Z",
       "variants": {
         "alternateArt": false,
         "overnumbered": false,
@@ -4818,10 +4838,8 @@
       "aliases": [],
       "sourceIds": [
         "piltover-archive:2add6f24-624e-452a-95a3-22519d9804f0",
-        "riot-gallery:rad-110-167"
-      ],
-      "imageUrlAliases": [
-        "https://cdn.piltoverarchive.com/cards/RAD-110.webp"
+        "riot-gallery:rad-110-167",
+        "riftatlas:RAD-110P"
       ]
     },
     {
@@ -9868,6 +9886,2569 @@
       "imageUrlAliases": [
         "https://cdn.piltoverarchive.com/cards/VEN-197.webp"
       ]
+    },
+    {
+      "printId": "OGN-036A",
+      "basePrintId": "OGN-036",
+      "setCode": "OGN",
+      "collectorCode": "036A",
+      "name": "Vi, Destructive",
+      "type": "Unit",
+      "supertype": "Champion",
+      "costEnergy": 2,
+      "costPower": 1,
+      "tags": [
+        "Vi",
+        "Piltover"
+      ],
+      "champion": "Vi",
+      "imageUrl": "https://assets.riftatlas-workers.com/riftbound/cards/original/OGN-036A.webp",
+      "imageHash": null,
+      "artist": "Fortiche Production",
+      "updatedAt": "2026-10-08T15:32:14.979Z",
+      "variants": {
+        "alternateArt": true,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "riftatlas:OGN-036A"
+      ]
+    },
+    {
+      "printId": "OGN-068A",
+      "basePrintId": "OGN-068",
+      "setCode": "OGN",
+      "collectorCode": "068A",
+      "name": "Caitlyn, Patrolling",
+      "type": "Unit",
+      "supertype": "Champion",
+      "costEnergy": 3,
+      "costPower": 1,
+      "tags": [
+        "Piltover",
+        "Caitlyn"
+      ],
+      "champion": "Caitlyn",
+      "imageUrl": "https://assets.riftatlas-workers.com/riftbound/cards/original/OGN-068A.webp",
+      "imageHash": null,
+      "artist": "Fortiche Production",
+      "updatedAt": "2026-10-08T15:32:14.979Z",
+      "variants": {
+        "alternateArt": true,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "riftatlas:OGN-068A"
+      ]
+    },
+    {
+      "printId": "OGN-111A",
+      "basePrintId": "OGN-111",
+      "setCode": "OGN",
+      "collectorCode": "111A",
+      "name": "Heimerdinger, Inventor",
+      "type": "Unit",
+      "supertype": "Champion",
+      "costEnergy": 3,
+      "costPower": 1,
+      "tags": [
+        "Heimerdinger",
+        "Piltover",
+        "Yordle"
+      ],
+      "champion": "Heimerdinger",
+      "imageUrl": "https://assets.riftatlas-workers.com/riftbound/cards/original/OGN-111A.webp",
+      "imageHash": null,
+      "artist": "Fortiche Production",
+      "updatedAt": "2026-10-08T15:32:14.979Z",
+      "variants": {
+        "alternateArt": true,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "riftatlas:OGN-111A"
+      ]
+    },
+    {
+      "printId": "OGN-159A",
+      "basePrintId": "OGN-159",
+      "setCode": "OGN",
+      "collectorCode": "159A",
+      "name": "Warwick, Hunter",
+      "type": "Unit",
+      "supertype": "Champion",
+      "costEnergy": 6,
+      "costPower": 1,
+      "tags": [
+        "Warwick",
+        "Zaun",
+        "Dog"
+      ],
+      "champion": "Warwick",
+      "imageUrl": "https://assets.riftatlas-workers.com/riftbound/cards/original/OGN-159A.webp",
+      "imageHash": null,
+      "artist": "Fortiche Production",
+      "updatedAt": "2026-10-08T15:32:14.979Z",
+      "variants": {
+        "alternateArt": true,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "riftatlas:OGN-159A"
+      ]
+    },
+    {
+      "printId": "OGN-202B",
+      "basePrintId": "OGN-202",
+      "setCode": "OGN",
+      "collectorCode": "202B",
+      "name": "Jinx, Rebel",
+      "type": "Unit",
+      "supertype": "Champion",
+      "costEnergy": 5,
+      "costPower": 1,
+      "tags": [
+        "Jinx",
+        "Zaun"
+      ],
+      "champion": "Jinx",
+      "imageUrl": "https://assets.riftatlas-workers.com/riftbound/cards/original/OGN-202B.webp",
+      "imageHash": null,
+      "artist": "Fortiche Production",
+      "updatedAt": "2026-10-08T15:32:14.979Z",
+      "variants": {
+        "alternateArt": true,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "riftatlas:OGN-202B"
+      ]
+    },
+    {
+      "printId": "OGN-246B",
+      "basePrintId": "OGN-246",
+      "setCode": "OGN",
+      "collectorCode": "246B",
+      "name": "Viktor, Leader",
+      "type": "Unit",
+      "supertype": "Champion",
+      "costEnergy": 4,
+      "costPower": 1,
+      "tags": [
+        "Viktor",
+        "Zaun"
+      ],
+      "champion": "Viktor",
+      "imageUrl": "https://assets.riftatlas-workers.com/riftbound/cards/original/OGN-246B.webp",
+      "imageHash": null,
+      "artist": "Fortiche Production",
+      "updatedAt": "2026-10-08T15:32:14.979Z",
+      "variants": {
+        "alternateArt": true,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "riftatlas:OGN-246B"
+      ]
+    },
+    {
+      "printId": "RAD-006",
+      "basePrintId": "RAD-006",
+      "setCode": "RAD",
+      "collectorCode": "006",
+      "name": "Scorched Earth",
+      "type": "Spell",
+      "supertype": null,
+      "costEnergy": 4,
+      "costPower": 1,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/e646f9850571e20eca22e07af5d4dd68813fdd19-744x1039.png?accountingTag=RB",
+      "imageHash": "e646f9850571e20eca22e07af5d4dd68813fdd19",
+      "artist": "Kudos Productions",
+      "updatedAt": "2026-10-08T15:32:14.979Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:cae61e82-6402-4bfa-ab47-33745585ecd1",
+        "riot-gallery:rad-006-167",
+        "riftatlas:RAD-006"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-006.webp",
+        "https://assets.riftatlas-workers.com/riftbound/cards/original/RAD-006.webp"
+      ]
+    },
+    {
+      "printId": "RAD-007",
+      "basePrintId": "RAD-007",
+      "setCode": "RAD",
+      "collectorCode": "007",
+      "name": "Rally for War",
+      "type": "Spell",
+      "supertype": null,
+      "costEnergy": 3,
+      "costPower": 1,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/09c0fc35d8f4b72f58a95d1745b99c4133d02513-744x1039.png?accountingTag=RB",
+      "imageHash": "09c0fc35d8f4b72f58a95d1745b99c4133d02513",
+      "artist": "wild Blue Studios",
+      "updatedAt": "2026-10-08T15:32:14.979Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:e294ec0b-fa25-4430-b3cd-41a39c7a6ead",
+        "riot-gallery:rad-007-167",
+        "riftatlas:RAD-007"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-007.webp",
+        "https://assets.riftatlas-workers.com/riftbound/cards/original/RAD-007.webp"
+      ]
+    },
+    {
+      "printId": "RAD-008",
+      "basePrintId": "RAD-008",
+      "setCode": "RAD",
+      "collectorCode": "008",
+      "name": "War Scout",
+      "type": "Unit",
+      "supertype": null,
+      "costEnergy": 3,
+      "costPower": 0,
+      "tags": [
+        "Demacia",
+        "Yordle"
+      ],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/3adae96f4731752074cf2145507a175dee800411-744x1039.png?accountingTag=RB",
+      "imageHash": "3adae96f4731752074cf2145507a175dee800411",
+      "artist": "Six More Vodka",
+      "updatedAt": "2026-10-08T15:32:14.979Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:17922e53-1467-42ac-9f00-f53ec9b7d974",
+        "riot-gallery:rad-008-167",
+        "riftatlas:RAD-008"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-008.webp",
+        "https://assets.riftatlas-workers.com/riftbound/cards/original/RAD-008.webp"
+      ]
+    },
+    {
+      "printId": "RAD-019",
+      "basePrintId": "RAD-019",
+      "setCode": "RAD",
+      "collectorCode": "019",
+      "name": "Firebrand Raider",
+      "type": "Unit",
+      "supertype": null,
+      "costEnergy": 6,
+      "costPower": 1,
+      "tags": [
+        "Freljord"
+      ],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/922ef5a266378fa8ebd7e75bf83435bacd1a75d8-744x1039.png?accountingTag=RB",
+      "imageHash": "922ef5a266378fa8ebd7e75bf83435bacd1a75d8",
+      "artist": "Six More Vodka",
+      "updatedAt": "2026-10-08T15:32:14.979Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:609d8ec8-537b-424b-9693-cdc88721acaa",
+        "riot-gallery:rad-019-167",
+        "riftatlas:RAD-019"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-019.webp",
+        "https://assets.riftatlas-workers.com/riftbound/cards/original/RAD-019.webp"
+      ]
+    },
+    {
+      "printId": "RAD-020",
+      "basePrintId": "RAD-020",
+      "setCode": "RAD",
+      "collectorCode": "020",
+      "name": "Mordekaiser, Twice Slain",
+      "type": "Unit",
+      "supertype": "Champion",
+      "costEnergy": 7,
+      "costPower": 1,
+      "tags": [
+        "Mordekaiser",
+        "Noxus",
+        "Spirit"
+      ],
+      "champion": "Mordekaiser",
+      "imageUrl": "https://cdn.piltoverarchive.com/temporary/1791383641289-6fvwzgcnvex.png",
+      "imageHash": null,
+      "artist": "Pixelverse",
+      "updatedAt": "2026-10-08T15:32:14.979Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:2ae44269-18b8-4537-aeb8-71ee36aff54e",
+        "riftatlas:RAD-020"
+      ],
+      "imageUrlAliases": [
+        "https://assets.riftatlas-workers.com/riftbound/cards/original/RAD-020.webp"
+      ]
+    },
+    {
+      "printId": "RAD-020A",
+      "basePrintId": "RAD-020",
+      "setCode": "RAD",
+      "collectorCode": "020A",
+      "name": "Mordekaiser, Twice Slain",
+      "type": "Unit",
+      "supertype": "Champion",
+      "costEnergy": 7,
+      "costPower": 1,
+      "tags": [
+        "Mordekaiser",
+        "Noxus",
+        "Spirit"
+      ],
+      "champion": "Mordekaiser",
+      "imageUrl": "https://cdn.piltoverarchive.com/temporary/1791383669670-ialltyx3c9.png",
+      "imageHash": null,
+      "artist": "Danvergiting",
+      "updatedAt": "2026-10-08T15:32:14.979Z",
+      "variants": {
+        "alternateArt": true,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:d9126af0-9d51-4f5b-9b86-370b2916cfe1",
+        "riftatlas:RAD-020A"
+      ],
+      "imageUrlAliases": [
+        "https://assets.riftatlas-workers.com/riftbound/cards/original/RAD-020A.webp"
+      ]
+    },
+    {
+      "printId": "RAD-021",
+      "basePrintId": "RAD-021",
+      "setCode": "RAD",
+      "collectorCode": "021",
+      "name": "Ekko, Revolutionary",
+      "type": "Unit",
+      "supertype": "Champion",
+      "costEnergy": 5,
+      "costPower": 1,
+      "tags": [
+        "Ekko",
+        "Zaun"
+      ],
+      "champion": "Ekko",
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/d13964c46506f9f36430dfe91ee02d258a304908-744x1039.png?accountingTag=RB",
+      "imageHash": "d13964c46506f9f36430dfe91ee02d258a304908",
+      "artist": "Yeon Art Studio",
+      "updatedAt": "2026-10-08T15:32:14.979Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:3a7b2781-b076-42f5-9940-f7277cead035",
+        "riot-gallery:rad-021-167",
+        "riftatlas:RAD-021"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-021.webp",
+        "https://assets.riftatlas-workers.com/riftbound/cards/original/RAD-021.webp"
+      ]
+    },
+    {
+      "printId": "RAD-021A",
+      "basePrintId": "RAD-021",
+      "setCode": "RAD",
+      "collectorCode": "021A",
+      "name": "Ekko, Revolutionary",
+      "type": "Unit",
+      "supertype": "Champion",
+      "costEnergy": 5,
+      "costPower": 1,
+      "tags": [
+        "Ekko",
+        "Zaun"
+      ],
+      "champion": "Ekko",
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/b4e49d03e297db4593a6ebc0d7e6c165dff6dcfe-744x1039.png?accountingTag=RB",
+      "imageHash": "b4e49d03e297db4593a6ebc0d7e6c165dff6dcfe",
+      "artist": "黯荧岛Dark Glow",
+      "updatedAt": "2026-10-08T15:32:14.979Z",
+      "variants": {
+        "alternateArt": true,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:26c5a495-bc28-4426-9821-5f8a91771581",
+        "riot-gallery:rad-021a-167",
+        "riftatlas:RAD-021A"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-021a.webp",
+        "https://assets.riftatlas-workers.com/riftbound/cards/original/RAD-021A.webp"
+      ]
+    },
+    {
+      "printId": "RAD-028",
+      "basePrintId": "RAD-028",
+      "setCode": "RAD",
+      "collectorCode": "028",
+      "name": "Ki Burst",
+      "type": "Spell",
+      "supertype": null,
+      "costEnergy": 1,
+      "costPower": 0,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/33af916b50007c01b33e78aef3dc99b757edc3f2-744x1039.png?accountingTag=RB",
+      "imageHash": "33af916b50007c01b33e78aef3dc99b757edc3f2",
+      "artist": "Yeon Art Studio",
+      "updatedAt": "2026-10-08T15:32:14.979Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:12c7abfc-2327-4810-87ce-68f22d703f55",
+        "riot-gallery:rad-028-167",
+        "riftatlas:RAD-028"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-028.webp",
+        "https://assets.riftatlas-workers.com/riftbound/cards/original/RAD-028.webp"
+      ]
+    },
+    {
+      "printId": "RAD-029",
+      "basePrintId": "RAD-029",
+      "setCode": "RAD",
+      "collectorCode": "029",
+      "name": "Life from Stone",
+      "type": "Spell",
+      "supertype": null,
+      "costEnergy": 1,
+      "costPower": 0,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/6a849c0425f0fecb8d00e1b9494e975c4dbbba75-744x1039.png?accountingTag=RB",
+      "imageHash": "6a849c0425f0fecb8d00e1b9494e975c4dbbba75",
+      "artist": "Kudos Productions",
+      "updatedAt": "2026-10-08T15:32:14.979Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:baffd9b4-ae1f-48ef-8160-71f87ca37206",
+        "riot-gallery:rad-029-167",
+        "riftatlas:RAD-029"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-029.webp",
+        "https://assets.riftatlas-workers.com/riftbound/cards/original/RAD-029.webp"
+      ]
+    },
+    {
+      "printId": "RAD-030",
+      "basePrintId": "RAD-030",
+      "setCode": "RAD",
+      "collectorCode": "030",
+      "name": "Sanctum Conservator",
+      "type": "Unit",
+      "supertype": null,
+      "costEnergy": 5,
+      "costPower": 0,
+      "tags": [
+        "Shurima"
+      ],
+      "champion": null,
+      "imageUrl": "https://cdn.piltoverarchive.com/cards/RAD-030.webp",
+      "imageHash": null,
+      "artist": "Kudos Productions",
+      "updatedAt": "2026-10-10T13:15:41.613Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [
+        "圣所保管员"
+      ],
+      "sourceIds": [
+        "riftatlas:RAD-030",
+        "piltover-archive:cc2d7c00-363d-437b-bf7d-9e0bd4bae6ee"
+      ],
+      "imageUrlAliases": [
+        "https://assets.riftatlas-workers.com/riftbound/cards/original/RAD-030.webp"
+      ]
+    },
+    {
+      "printId": "RAD-039",
+      "basePrintId": "RAD-039",
+      "setCode": "RAD",
+      "collectorCode": "039",
+      "name": "Ephemeral Ward",
+      "type": "Gear",
+      "supertype": null,
+      "costEnergy": 4,
+      "costPower": 2,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/d2e562a1b69a42ebd9c8f95a9420750f45aca5dc-744x1039.png?accountingTag=RB",
+      "imageHash": "d2e562a1b69a42ebd9c8f95a9420750f45aca5dc",
+      "artist": "Wild Blue Studios",
+      "updatedAt": "2026-10-08T15:32:14.979Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:c0f64c91-d540-4e52-a8c1-30512e3b4201",
+        "riot-gallery:rad-039-167",
+        "riftatlas:RAD-039"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-039.webp",
+        "https://assets.riftatlas-workers.com/riftbound/cards/original/RAD-039.webp"
+      ]
+    },
+    {
+      "printId": "RAD-040",
+      "basePrintId": "RAD-040",
+      "setCode": "RAD",
+      "collectorCode": "040",
+      "name": "Heartening Soul",
+      "type": "Unit",
+      "supertype": null,
+      "costEnergy": 7,
+      "costPower": 1,
+      "tags": [
+        "Shadow Isles",
+        "Spirit"
+      ],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/0a5f9ab3216462356f6ddf8f172284dca6be21e9-744x1039.png?accountingTag=RB",
+      "imageHash": "0a5f9ab3216462356f6ddf8f172284dca6be21e9",
+      "artist": "Dao Trong Le",
+      "updatedAt": "2026-10-08T15:32:14.979Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:c138e25e-f843-4598-98f0-4297bb868803",
+        "riot-gallery:rad-040-167",
+        "riftatlas:RAD-040"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-040.webp",
+        "https://assets.riftatlas-workers.com/riftbound/cards/original/RAD-040.webp"
+      ]
+    },
+    {
+      "printId": "RAD-041",
+      "basePrintId": "RAD-041",
+      "setCode": "RAD",
+      "collectorCode": "041",
+      "name": "Hush",
+      "type": "Spell",
+      "supertype": null,
+      "costEnergy": 1,
+      "costPower": 2,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cdn.piltoverarchive.com/temporary/1791432129130-9cd3i945j6.jpg",
+      "imageHash": null,
+      "artist": "Kudos Productions",
+      "updatedAt": "2026-10-08T15:32:14.979Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:6df22069-8011-43f2-adcf-ea3cabf3c0ad"
+      ]
+    },
+    {
+      "printId": "RAD-042",
+      "basePrintId": "RAD-042",
+      "setCode": "RAD",
+      "collectorCode": "042",
+      "name": "Orianna, Exquisite",
+      "type": "Unit",
+      "supertype": "Champion",
+      "costEnergy": 3,
+      "costPower": 0,
+      "tags": [
+        "Orianna",
+        "Piltover"
+      ],
+      "champion": "Orianna",
+      "imageUrl": "https://cdn.piltoverarchive.com/temporary/1791449408909-w6f7263hio.png",
+      "imageHash": null,
+      "artist": "Pixelverse",
+      "updatedAt": "2026-10-08T15:32:14.979Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:d1faf460-3280-419c-be21-af04225ee7c8",
+        "riftatlas:RAD-042"
+      ],
+      "imageUrlAliases": [
+        "https://assets.riftatlas-workers.com/riftbound/cards/original/RAD-042.webp"
+      ]
+    },
+    {
+      "printId": "RAD-042A",
+      "basePrintId": "RAD-042",
+      "setCode": "RAD",
+      "collectorCode": "042A",
+      "name": "Orianna, Exquisite",
+      "type": "Unit",
+      "supertype": "Champion",
+      "costEnergy": 3,
+      "costPower": 0,
+      "tags": [
+        "Orianna",
+        "Piltover"
+      ],
+      "champion": "Orianna",
+      "imageUrl": "https://cdn.piltoverarchive.com/temporary/1791449423640-myx8t5tpge.png",
+      "imageHash": null,
+      "artist": "ALSO YIQI",
+      "updatedAt": "2026-10-08T15:32:14.979Z",
+      "variants": {
+        "alternateArt": true,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:a931d677-e77c-491f-8fc8-2f4f8cb8811b",
+        "riftatlas:RAD-042A"
+      ],
+      "imageUrlAliases": [
+        "https://assets.riftatlas-workers.com/riftbound/cards/original/RAD-042A.webp"
+      ]
+    },
+    {
+      "printId": "RAD-049",
+      "basePrintId": "RAD-049",
+      "setCode": "RAD",
+      "collectorCode": "049",
+      "name": "Industrious Mechsmith",
+      "type": "Unit",
+      "supertype": null,
+      "costEnergy": 4,
+      "costPower": 0,
+      "tags": [
+        "Zaun"
+      ],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/c8f6b4191874f23b522566f8ebeeb6e5ee18eb7f-744x1039.png?accountingTag=RB",
+      "imageHash": "c8f6b4191874f23b522566f8ebeeb6e5ee18eb7f",
+      "artist": "Six More Vodka",
+      "updatedAt": "2026-10-08T15:32:14.979Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:b5552013-7628-4392-8eb2-b884ae04f329",
+        "riot-gallery:rad-049-167",
+        "riftatlas:RAD-049"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-049.webp",
+        "https://assets.riftatlas-workers.com/riftbound/cards/original/RAD-049.webp"
+      ]
+    },
+    {
+      "printId": "RAD-050",
+      "basePrintId": "RAD-050",
+      "setCode": "RAD",
+      "collectorCode": "050",
+      "name": "Mysterious Chronomancer",
+      "type": "Unit",
+      "supertype": null,
+      "costEnergy": 5,
+      "costPower": 0,
+      "tags": [
+        "Shurima"
+      ],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/72828b0fe019b2e03069510f781dfa8f5759ac12-744x1039.png?accountingTag=RB",
+      "imageHash": "72828b0fe019b2e03069510f781dfa8f5759ac12",
+      "artist": "Envar Studio",
+      "updatedAt": "2026-10-08T15:32:14.979Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:23b4951d-f66c-41fe-8bff-7851517241c6",
+        "riot-gallery:rad-050-167",
+        "riftatlas:RAD-050"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-050.webp",
+        "https://assets.riftatlas-workers.com/riftbound/cards/original/RAD-050.webp"
+      ]
+    },
+    {
+      "printId": "RAD-051",
+      "basePrintId": "RAD-051",
+      "setCode": "RAD",
+      "collectorCode": "051",
+      "name": "Parallel Convergence",
+      "type": "Spell",
+      "supertype": null,
+      "costEnergy": 2,
+      "costPower": 1,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/55e382346c6fa890936a1cf14abaf57b8ee0b8f2-744x1039.png?accountingTag=RB",
+      "imageHash": "55e382346c6fa890936a1cf14abaf57b8ee0b8f2",
+      "artist": "Kudos Productions",
+      "updatedAt": "2026-10-08T15:32:14.979Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:acb4cea4-5bab-4b07-9cf5-556858706c58",
+        "riot-gallery:rad-051-167",
+        "riftatlas:RAD-051"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-051.webp",
+        "https://assets.riftatlas-workers.com/riftbound/cards/original/RAD-051.webp"
+      ]
+    },
+    {
+      "printId": "RAD-052",
+      "basePrintId": "RAD-052",
+      "setCode": "RAD",
+      "collectorCode": "052",
+      "name": "Resource Extractor",
+      "type": "Gear",
+      "supertype": null,
+      "costEnergy": 1,
+      "costPower": 0,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cdn.piltoverarchive.com/cards/RAD-052.webp",
+      "imageHash": null,
+      "artist": "Fish Art Studio",
+      "updatedAt": "2026-10-10T13:15:41.613Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [
+        "资源开采器"
+      ],
+      "sourceIds": [
+        "riftatlas:RAD-052",
+        "piltover-archive:32e5137f-ff43-4546-824e-bfbadbe0bd65"
+      ],
+      "imageUrlAliases": [
+        "https://assets.riftatlas-workers.com/riftbound/cards/original/RAD-052.webp"
+      ]
+    },
+    {
+      "printId": "RAD-060",
+      "basePrintId": "RAD-060",
+      "setCode": "RAD",
+      "collectorCode": "060",
+      "name": "The Empyrean",
+      "type": "Unit",
+      "supertype": null,
+      "costEnergy": 8,
+      "costPower": 0,
+      "tags": [
+        "Ionia",
+        "Dragon"
+      ],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/b7cd2e475834863bf4e66994118a835ba4377d16-744x1039.png?accountingTag=RB",
+      "imageHash": "b7cd2e475834863bf4e66994118a835ba4377d16",
+      "artist": "Six More Vodka",
+      "updatedAt": "2026-10-08T15:32:14.979Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:443a4aff-5f86-46fb-9412-0cc971316d27",
+        "riot-gallery:rad-060-167",
+        "riftatlas:RAD-060"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-060.webp",
+        "https://assets.riftatlas-workers.com/riftbound/cards/original/RAD-060.webp"
+      ]
+    },
+    {
+      "printId": "RAD-062",
+      "basePrintId": "RAD-062",
+      "setCode": "RAD",
+      "collectorCode": "062",
+      "name": "Gravity Field",
+      "type": "Gear",
+      "supertype": null,
+      "costEnergy": 5,
+      "costPower": 1,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/51f589e5ed0f7316b6cb64ebc93c4ef3e75b7f46-744x1039.png?accountingTag=RB",
+      "imageHash": "51f589e5ed0f7316b6cb64ebc93c4ef3e75b7f46",
+      "artist": "Fish Art Studio",
+      "updatedAt": "2026-10-08T15:32:14.979Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:7ade7340-77f6-4319-973c-1725f4176972",
+        "riot-gallery:rad-062-167",
+        "riftatlas:RAD-062"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-062.webp",
+        "https://assets.riftatlas-workers.com/riftbound/cards/original/RAD-062.webp"
+      ]
+    },
+    {
+      "printId": "RAD-064",
+      "basePrintId": "RAD-064",
+      "setCode": "RAD",
+      "collectorCode": "064",
+      "name": "Scrutinizing Scope",
+      "type": "Gear",
+      "supertype": null,
+      "costEnergy": 2,
+      "costPower": 0,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cdn.piltoverarchive.com/temporary/1791411303945-adng6twczh.png",
+      "imageHash": null,
+      "artist": "Kudos Productions",
+      "updatedAt": "2026-10-08T15:32:14.979Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:8dfa4425-0db7-4b21-af50-9eebb2975277",
+        "riftatlas:RAD-064"
+      ],
+      "imageUrlAliases": [
+        "https://assets.riftatlas-workers.com/riftbound/cards/original/RAD-064.webp"
+      ]
+    },
+    {
+      "printId": "RAD-074",
+      "basePrintId": "RAD-074",
+      "setCode": "RAD",
+      "collectorCode": "074",
+      "name": "Raving Witness",
+      "type": "Unit",
+      "supertype": null,
+      "costEnergy": 3,
+      "costPower": 0,
+      "tags": [
+        "Freljord"
+      ],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/778e70b353d7f28eae9b54b1a37af3853238ba04-744x1039.png?accountingTag=RB",
+      "imageHash": "778e70b353d7f28eae9b54b1a37af3853238ba04",
+      "artist": "Six More Vodka",
+      "updatedAt": "2026-10-08T15:32:14.979Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:d4c9e7f8-8f05-44f1-b8ee-c5e36667ea60",
+        "riot-gallery:rad-074-167",
+        "riftatlas:RAD-074"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-074.webp",
+        "https://assets.riftatlas-workers.com/riftbound/cards/original/RAD-074.webp"
+      ]
+    },
+    {
+      "printId": "RAD-075",
+      "basePrintId": "RAD-075",
+      "setCode": "RAD",
+      "collectorCode": "075",
+      "name": "Skystrike Squadron",
+      "type": "Unit",
+      "supertype": null,
+      "costEnergy": 5,
+      "costPower": 0,
+      "tags": [
+        "Demacia",
+        "Elite",
+        "Bird"
+      ],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/694a362579d3f2e9805cac0da4814ea911423033-744x1039.png?accountingTag=RB",
+      "imageHash": "694a362579d3f2e9805cac0da4814ea911423033",
+      "artist": "Six More Vodka",
+      "updatedAt": "2026-10-08T15:32:14.979Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:2b482b9d-ee60-41b3-bdc6-d23ab4b87f5f",
+        "riot-gallery:rad-075-167",
+        "riftatlas:RAD-075"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-075.webp",
+        "https://assets.riftatlas-workers.com/riftbound/cards/original/RAD-075.webp"
+      ]
+    },
+    {
+      "printId": "RAD-076",
+      "basePrintId": "RAD-076",
+      "setCode": "RAD",
+      "collectorCode": "076",
+      "name": "Sneaky Zeebles",
+      "type": "Unit",
+      "supertype": null,
+      "costEnergy": 2,
+      "costPower": 0,
+      "tags": [
+        "Mount Targon"
+      ],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/c04963c90ab2b338883c980ac947b8c9d80a7427-744x1039.png?accountingTag=RB",
+      "imageHash": "c04963c90ab2b338883c980ac947b8c9d80a7427",
+      "artist": "Dao Trong Le",
+      "updatedAt": "2026-10-08T15:32:14.979Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:9971e0be-3307-43b6-8abf-292b01bad5ff",
+        "riot-gallery:rad-076-167",
+        "riftatlas:RAD-076"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/temporary/1791413062115-rqpz47onwe.webp",
+        "https://assets.riftatlas-workers.com/riftbound/cards/original/RAD-076.webp"
+      ]
+    },
+    {
+      "printId": "RAD-077",
+      "basePrintId": "RAD-077",
+      "setCode": "RAD",
+      "collectorCode": "077",
+      "name": "Wrath of the Freljord",
+      "type": "Unit",
+      "supertype": null,
+      "costEnergy": 9,
+      "costPower": 0,
+      "tags": [
+        "Freljord",
+        "Spirit"
+      ],
+      "champion": null,
+      "imageUrl": "https://cdn.piltoverarchive.com/cards/RAD-077.webp",
+      "imageHash": null,
+      "artist": "Kudos Productions",
+      "updatedAt": "2026-10-10T13:15:41.613Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [
+        "弗雷尔卓德之怒"
+      ],
+      "sourceIds": [
+        "riftatlas:RAD-077",
+        "piltover-archive:3ccefea5-06ea-4b12-af6a-b0c9bd700f84"
+      ],
+      "imageUrlAliases": [
+        "https://assets.riftatlas-workers.com/riftbound/cards/original/RAD-077.webp"
+      ]
+    },
+    {
+      "printId": "RAD-088",
+      "basePrintId": "RAD-088",
+      "setCode": "RAD",
+      "collectorCode": "088",
+      "name": "Staunch Survivor",
+      "type": "Unit",
+      "supertype": null,
+      "costEnergy": 2,
+      "costPower": 1,
+      "tags": [
+        "Freljord"
+      ],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/91c4670531d7773cae9e7b4bfd5ac4e259602162-744x1039.png?accountingTag=RB",
+      "imageHash": "91c4670531d7773cae9e7b4bfd5ac4e259602162",
+      "artist": "Kudos Productions",
+      "updatedAt": "2026-10-08T15:32:14.979Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:f4cfeb38-b99f-4679-9461-cbe4138c5a58",
+        "riot-gallery:rad-088-167",
+        "riftatlas:RAD-088"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-088.webp",
+        "https://assets.riftatlas-workers.com/riftbound/cards/original/RAD-088.webp"
+      ]
+    },
+    {
+      "printId": "RAD-089",
+      "basePrintId": "RAD-089",
+      "setCode": "RAD",
+      "collectorCode": "089",
+      "name": "Titanic Shrine",
+      "type": "Gear",
+      "supertype": null,
+      "costEnergy": 3,
+      "costPower": 0,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/7d027f4e30df4f7141799709f9fb785835adefed-744x1039.png?accountingTag=RB",
+      "imageHash": "7d027f4e30df4f7141799709f9fb785835adefed",
+      "artist": "Kudos Productions",
+      "updatedAt": "2026-10-08T15:32:14.979Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:3e90f373-c786-476f-a543-b1b6741d2ba4",
+        "riot-gallery:rad-089-167",
+        "riftatlas:RAD-089"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-089.webp",
+        "https://assets.riftatlas-workers.com/riftbound/cards/original/RAD-089.webp"
+      ]
+    },
+    {
+      "printId": "RAD-099",
+      "basePrintId": "RAD-099",
+      "setCode": "RAD",
+      "collectorCode": "099",
+      "name": "Suave Negotiator",
+      "type": "Unit",
+      "supertype": null,
+      "costEnergy": 3,
+      "costPower": 0,
+      "tags": [
+        "Bilgewater",
+        "Demon"
+      ],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/20e2752ddf0af274d26a3c25c737ccea2c353e39-744x1039.png?accountingTag=RB",
+      "imageHash": "20e2752ddf0af274d26a3c25c737ccea2c353e39",
+      "artist": "Kudos Productions",
+      "updatedAt": "2026-10-08T15:32:14.979Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:f78b9063-28bd-48d4-ad3e-4baed5f5ba08",
+        "riot-gallery:rad-099-167",
+        "riftatlas:RAD-099"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-099.webp",
+        "https://assets.riftatlas-workers.com/riftbound/cards/original/RAD-099.webp"
+      ]
+    },
+    {
+      "printId": "RAD-100",
+      "basePrintId": "RAD-100",
+      "setCode": "RAD",
+      "collectorCode": "100",
+      "name": "The Waters' Wage",
+      "type": "Spell",
+      "supertype": null,
+      "costEnergy": 1,
+      "costPower": 0,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/0552932562db1dd48f14c74779999a645d62cc0d-744x1039.png?accountingTag=RB",
+      "imageHash": "0552932562db1dd48f14c74779999a645d62cc0d",
+      "artist": "Polar Engine Studio",
+      "updatedAt": "2026-10-08T15:32:14.979Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:42504b00-5c73-476f-974a-2027cc803fc3",
+        "riot-gallery:rad-100-167",
+        "riftatlas:RAD-100"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-100.webp",
+        "https://assets.riftatlas-workers.com/riftbound/cards/original/RAD-100.webp"
+      ]
+    },
+    {
+      "printId": "RAD-101",
+      "basePrintId": "RAD-101",
+      "setCode": "RAD",
+      "collectorCode": "101",
+      "name": "An Offer You Can't Refuse",
+      "type": "Spell",
+      "supertype": null,
+      "costEnergy": 2,
+      "costPower": 0,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/f724f95257abeacee82c774eff64973b56035357-744x1039.png?accountingTag=RB",
+      "imageHash": "f724f95257abeacee82c774eff64973b56035357",
+      "artist": "Kudos Productions",
+      "updatedAt": "2026-10-08T15:32:14.979Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:bd297f48-2730-40f9-9022-59641bfd1dbe",
+        "riot-gallery:rad-101-167",
+        "riftatlas:RAD-101"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-101.webp",
+        "https://assets.riftatlas-workers.com/riftbound/cards/original/RAD-101.webp"
+      ]
+    },
+    {
+      "printId": "RAD-102",
+      "basePrintId": "RAD-102",
+      "setCode": "RAD",
+      "collectorCode": "102",
+      "name": "Demon Shade",
+      "type": "Spell",
+      "supertype": null,
+      "costEnergy": 3,
+      "costPower": 0,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cdn.piltoverarchive.com/temporary/1791432041671-vb5cj7ridl.jpg",
+      "imageHash": null,
+      "artist": "Luscinia Studio",
+      "updatedAt": "2026-10-08T15:32:14.979Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:b22440a7-453e-4842-b41b-f9456e8f0cb0"
+      ]
+    },
+    {
+      "printId": "RAD-103",
+      "basePrintId": "RAD-103",
+      "setCode": "RAD",
+      "collectorCode": "103",
+      "name": "Gutter Guardian",
+      "type": "Unit",
+      "supertype": null,
+      "costEnergy": 3,
+      "costPower": 0,
+      "tags": [
+        "Zaun"
+      ],
+      "champion": null,
+      "imageUrl": "https://cdn.piltoverarchive.com/temporary/1791461200615-uv18g83l6jl.png",
+      "imageHash": null,
+      "artist": "Kudos Productions",
+      "updatedAt": "2026-10-08T15:32:14.979Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:e216d914-606a-4cf4-8b39-2e25024c3520"
+      ]
+    },
+    {
+      "printId": "RAD-108",
+      "basePrintId": "RAD-108",
+      "setCode": "RAD",
+      "collectorCode": "108",
+      "name": "Bushwhack Trap",
+      "type": "Gear",
+      "supertype": null,
+      "costEnergy": 1,
+      "costPower": 0,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cdn.piltoverarchive.com/cards/RAD-108.webp",
+      "imageHash": null,
+      "artist": "Fish Art Studio",
+      "updatedAt": "2026-10-10T13:15:41.613Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [
+        "伏击陷阱"
+      ],
+      "sourceIds": [
+        "riftatlas:RAD-108",
+        "piltover-archive:74cdd7ed-cd86-4635-9dba-8bae2ee68acf"
+      ],
+      "imageUrlAliases": [
+        "https://assets.riftatlas-workers.com/riftbound/cards/original/RAD-108.webp"
+      ]
+    },
+    {
+      "printId": "RAD-111",
+      "basePrintId": "RAD-111",
+      "setCode": "RAD",
+      "collectorCode": "111",
+      "name": "Mechanical Bandit",
+      "type": "Gear",
+      "supertype": null,
+      "costEnergy": 4,
+      "costPower": 1,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/cb2a419b61b6f1e6d138c3c3b07b393a4037237b-744x1039.png?accountingTag=RB",
+      "imageHash": "cb2a419b61b6f1e6d138c3c3b07b393a4037237b",
+      "artist": "Kudos Productions",
+      "updatedAt": "2026-10-08T15:32:14.979Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:efde6726-0599-4894-8ce4-13fa14b976a2",
+        "riot-gallery:rad-111-167",
+        "riftatlas:RAD-111"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-111.webp",
+        "https://assets.riftatlas-workers.com/riftbound/cards/original/RAD-111.webp"
+      ]
+    },
+    {
+      "printId": "RAD-112",
+      "basePrintId": "RAD-112",
+      "setCode": "RAD",
+      "collectorCode": "112",
+      "name": "Ziggs, Explosive",
+      "type": "Unit",
+      "supertype": "Champion",
+      "costEnergy": 4,
+      "costPower": 0,
+      "tags": [
+        "Ziggs",
+        "Zaun",
+        "Yordle"
+      ],
+      "champion": "Ziggs",
+      "imageUrl": "https://cdn.piltoverarchive.com/temporary/1791399179686-tqy6a3i5pek.webp",
+      "imageHash": null,
+      "artist": "Yeon Art Studio",
+      "updatedAt": "2026-10-08T15:32:14.979Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:e77740aa-eff0-429b-b084-0c3ed3b8081a",
+        "riftatlas:RAD-112"
+      ],
+      "imageUrlAliases": [
+        "https://assets.riftatlas-workers.com/riftbound/cards/original/RAD-112.webp"
+      ]
+    },
+    {
+      "printId": "RAD-112A",
+      "basePrintId": "RAD-112",
+      "setCode": "RAD",
+      "collectorCode": "112A",
+      "name": "Ziggs, Explosive",
+      "type": "Unit",
+      "supertype": "Champion",
+      "costEnergy": 4,
+      "costPower": 0,
+      "tags": [
+        "Ziggs",
+        "Zaun",
+        "Yordle"
+      ],
+      "champion": "Ziggs",
+      "imageUrl": "https://cdn.piltoverarchive.com/temporary/1791399346609-rpf4neuoir.jpg",
+      "imageHash": null,
+      "artist": "TUTU",
+      "updatedAt": "2026-10-08T15:32:14.979Z",
+      "variants": {
+        "alternateArt": true,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:3d16a491-a52c-4f01-bf7f-141fda134470",
+        "riftatlas:RAD-112A"
+      ],
+      "imageUrlAliases": [
+        "https://assets.riftatlas-workers.com/riftbound/cards/original/RAD-112A.webp"
+      ]
+    },
+    {
+      "printId": "RAD-114",
+      "basePrintId": "RAD-114",
+      "setCode": "RAD",
+      "collectorCode": "114",
+      "name": "Riven, Deserter",
+      "type": "Unit",
+      "supertype": "Champion",
+      "costEnergy": 5,
+      "costPower": 1,
+      "tags": [
+        "Riven",
+        "Noxus"
+      ],
+      "champion": "Riven",
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/59c080321a697164c9eeb6f0ad297ff0d0b85808-744x1039.png?accountingTag=RB",
+      "imageHash": "59c080321a697164c9eeb6f0ad297ff0d0b85808",
+      "artist": "Neon Art Studio",
+      "updatedAt": "2026-10-08T15:32:14.979Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [
+        "Riven Deserter"
+      ],
+      "sourceIds": [
+        "piltover-archive:c2e67462-8fb9-42af-aa7f-26fa2873fe75",
+        "riot-gallery:rad-114-167",
+        "riftatlas:RAD-114"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-114.webp",
+        "https://assets.riftatlas-workers.com/riftbound/cards/original/RAD-114.webp"
+      ]
+    },
+    {
+      "printId": "RAD-114A",
+      "basePrintId": "RAD-114",
+      "setCode": "RAD",
+      "collectorCode": "114A",
+      "name": "Riven, Deserter",
+      "type": "Unit",
+      "supertype": "Champion",
+      "costEnergy": 5,
+      "costPower": 1,
+      "tags": [
+        "Riven",
+        "Noxus"
+      ],
+      "champion": "Riven",
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/91c0933495342ab5c1a86c8809316f736feb0629-744x1039.png?accountingTag=RB",
+      "imageHash": "91c0933495342ab5c1a86c8809316f736feb0629",
+      "artist": "HCuu",
+      "updatedAt": "2026-10-08T15:32:14.979Z",
+      "variants": {
+        "alternateArt": true,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [
+        "Riven Deserter"
+      ],
+      "sourceIds": [
+        "piltover-archive:6e925d45-a778-42e2-ac20-3ec2a1a171a9",
+        "riot-gallery:rad-114a-167",
+        "riftatlas:RAD-114A"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-114a.webp",
+        "https://assets.riftatlas-workers.com/riftbound/cards/original/RAD-114A.webp"
+      ]
+    },
+    {
+      "printId": "RAD-120",
+      "basePrintId": "RAD-120",
+      "setCode": "RAD",
+      "collectorCode": "120",
+      "name": "Meticulous Restorationist",
+      "type": "Unit",
+      "supertype": null,
+      "costEnergy": 2,
+      "costPower": 0,
+      "tags": [
+        "Piltover"
+      ],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/ee50fbf5e902e7109a3d54b417edc440b5a37198-744x1039.png?accountingTag=RB",
+      "imageHash": "ee50fbf5e902e7109a3d54b417edc440b5a37198",
+      "artist": "Envar Studio",
+      "updatedAt": "2026-10-08T15:32:14.979Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:ffa3c1ef-f997-4a4e-b5a9-f548bfa8f627",
+        "riot-gallery:rad-120-167",
+        "riftatlas:RAD-120"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-120.webp",
+        "https://assets.riftatlas-workers.com/riftbound/cards/original/RAD-120.webp"
+      ]
+    },
+    {
+      "printId": "RAD-121",
+      "basePrintId": "RAD-121",
+      "setCode": "RAD",
+      "collectorCode": "121",
+      "name": "One-Two Punch",
+      "type": "Spell",
+      "supertype": null,
+      "costEnergy": 3,
+      "costPower": 0,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/1f246286c658d44dc4e7d51c158b2f822da39825-744x1039.png?accountingTag=RB",
+      "imageHash": "1f246286c658d44dc4e7d51c158b2f822da39825",
+      "artist": "Kudos Productions",
+      "updatedAt": "2026-10-08T15:32:14.979Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:05f8f7b1-692b-4327-96b1-f4c5add294ec",
+        "riot-gallery:rad-121-167",
+        "riftatlas:RAD-121"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-121.webp",
+        "https://assets.riftatlas-workers.com/riftbound/cards/original/RAD-121.webp"
+      ]
+    },
+    {
+      "printId": "RAD-122",
+      "basePrintId": "RAD-122",
+      "setCode": "RAD",
+      "collectorCode": "122",
+      "name": "Party Crasher",
+      "type": "Unit",
+      "supertype": null,
+      "costEnergy": 9,
+      "costPower": 1,
+      "tags": [
+        "Zaun"
+      ],
+      "champion": null,
+      "imageUrl": "https://cdn.piltoverarchive.com/temporary/1791374197047-l7hbgt0d0mb.png",
+      "imageHash": null,
+      "artist": "Kudos Productions",
+      "updatedAt": "2026-10-08T15:32:14.979Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:d3e2e756-3ba6-4144-9e4e-06fde49738c4",
+        "riftatlas:RAD-122"
+      ],
+      "imageUrlAliases": [
+        "https://assets.riftatlas-workers.com/riftbound/cards/original/RAD-122.webp"
+      ]
+    },
+    {
+      "printId": "RAD-131",
+      "basePrintId": "RAD-131",
+      "setCode": "RAD",
+      "collectorCode": "131",
+      "name": "Demacian Illuminators",
+      "type": "Unit",
+      "supertype": null,
+      "costEnergy": 3,
+      "costPower": 1,
+      "tags": [
+        "Demacia"
+      ],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/127c2700ee4e2557dfd463ed84c45f4600ad9723-744x1039.png?accountingTag=RB",
+      "imageHash": "127c2700ee4e2557dfd463ed84c45f4600ad9723",
+      "artist": "Six More Vodka",
+      "updatedAt": "2026-10-08T15:32:14.979Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:aa4ce954-35d0-412f-8d40-56d462b94b3c",
+        "riot-gallery:rad-131-167",
+        "riftatlas:RAD-131"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-131.webp",
+        "https://assets.riftatlas-workers.com/riftbound/cards/original/RAD-131.webp"
+      ]
+    },
+    {
+      "printId": "RAD-133A",
+      "basePrintId": "RAD-133",
+      "setCode": "RAD",
+      "collectorCode": "133A",
+      "name": "Jarvan IV, Royal Heir",
+      "type": "Unit",
+      "supertype": "Champion",
+      "costEnergy": 7,
+      "costPower": 1,
+      "tags": [
+        "Jarvan IV",
+        "Demacia"
+      ],
+      "champion": "Jarvan IV",
+      "imageUrl": "https://cdn.piltoverarchive.com/temporary/1791431858808-244lalebepr.jpg",
+      "imageHash": null,
+      "artist": "黯荧岛Dark Glow",
+      "updatedAt": "2026-10-08T15:32:14.979Z",
+      "variants": {
+        "alternateArt": true,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:98ea1a65-b1df-4be8-95c4-a6c3c00fc0b8"
+      ]
+    },
+    {
+      "printId": "RAD-146",
+      "basePrintId": "RAD-146",
+      "setCode": "RAD",
+      "collectorCode": "146",
+      "name": "The Ball",
+      "type": "Gear",
+      "supertype": "Signature",
+      "costEnergy": 5,
+      "costPower": 1,
+      "tags": [
+        "Orianna"
+      ],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/4b11f36bd5ce2b08677959664cda3906a04d234c-744x1040.png?accountingTag=RB",
+      "imageHash": "4b11f36bd5ce2b08677959664cda3906a04d234c",
+      "artist": "Calf Art Studio",
+      "updatedAt": "2026-10-08T15:32:14.979Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:ecd4f4c0-5eb2-4841-8b94-f5ef0cdac8bc",
+        "riot-gallery:rad-146-167",
+        "riftatlas:RAD-146"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-146.webp",
+        "https://assets.riftatlas-workers.com/riftbound/cards/original/RAD-146.webp"
+      ]
+    },
+    {
+      "printId": "RAD-154",
+      "basePrintId": "RAD-154",
+      "setCode": "RAD",
+      "collectorCode": "154",
+      "name": "Last Caress",
+      "type": "Spell",
+      "supertype": "Signature",
+      "costEnergy": 2,
+      "costPower": 0,
+      "tags": [
+        "Evelynn"
+      ],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/c34881b6fe2e63f6345845fe95cfe72eb9d4878c-744x1040.png?accountingTag=RB",
+      "imageHash": "c34881b6fe2e63f6345845fe95cfe72eb9d4878c",
+      "artist": "Polar Engine Studio",
+      "updatedAt": "2026-10-08T15:32:14.979Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:4190c3d2-bfbb-4475-bb2e-a26045e61892",
+        "riot-gallery:rad-154-167",
+        "riftatlas:RAD-154"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-154.webp",
+        "https://assets.riftatlas-workers.com/riftbound/cards/original/RAD-154.webp"
+      ]
+    },
+    {
+      "printId": "RAD-173",
+      "basePrintId": "RAD-173",
+      "setCode": "RAD",
+      "collectorCode": "173",
+      "name": "Riven, The Exile",
+      "type": "Legend",
+      "supertype": null,
+      "costEnergy": null,
+      "costPower": null,
+      "tags": [
+        "Riven"
+      ],
+      "champion": "Riven",
+      "imageUrl": "https://cdn.piltoverarchive.com/cards/RAD-173.webp",
+      "imageHash": null,
+      "artist": "Charles Liu",
+      "updatedAt": "2026-10-10T13:15:41.613Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": true,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "riftatlas:RAD-173",
+        "piltover-archive:ac7db475-501b-49f4-b60f-f7a8472d575a"
+      ],
+      "imageUrlAliases": [
+        "https://assets.riftatlas-workers.com/riftbound/cards/original/RAD-173.webp"
+      ]
+    },
+    {
+      "printId": "RAD-R01",
+      "basePrintId": "RAD-R01",
+      "setCode": "RAD",
+      "collectorCode": "R01",
+      "name": "Fury Rune",
+      "type": "Rune",
+      "supertype": "Basic",
+      "costEnergy": null,
+      "costPower": null,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/e0337944fa56c357ab3b9a822064a8f58ead8315-744x1039.png?accountingTag=RB",
+      "imageHash": "e0337944fa56c357ab3b9a822064a8f58ead8315",
+      "artist": "Greg Ghielmetti & Leah Chen",
+      "updatedAt": "2026-10-08T15:32:14.979Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "riot-gallery:rad-r01",
+        "riftatlas:RAD-R01"
+      ],
+      "imageUrlAliases": [
+        "https://assets.riftatlas-workers.com/riftbound/cards/original/RAD-R01.webp"
+      ]
+    },
+    {
+      "printId": "RAD-R06",
+      "basePrintId": "RAD-R06",
+      "setCode": "RAD",
+      "collectorCode": "R06",
+      "name": "Order Rune",
+      "type": "Rune",
+      "supertype": "Basic",
+      "costEnergy": null,
+      "costPower": null,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/402fa10965dbee64aa1ddef654e4b9d9a5ccd28e-744x1039.png?accountingTag=RB",
+      "imageHash": "402fa10965dbee64aa1ddef654e4b9d9a5ccd28e",
+      "artist": "Greg Ghielmetti & Leah Chen",
+      "updatedAt": "2026-10-08T15:32:14.979Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "riot-gallery:rad-r06",
+        "riftatlas:RAD-R06"
+      ],
+      "imageUrlAliases": [
+        "https://assets.riftatlas-workers.com/riftbound/cards/original/RAD-R06.webp"
+      ]
+    },
+    {
+      "printId": "SFD-195A",
+      "basePrintId": "SFD-195",
+      "setCode": "SFD",
+      "collectorCode": "195A",
+      "name": "Irelia, Blade Dancer",
+      "type": "Legend",
+      "supertype": null,
+      "costEnergy": null,
+      "costPower": null,
+      "tags": [
+        "Irelia"
+      ],
+      "champion": "Irelia",
+      "imageUrl": "https://assets.riftatlas-workers.com/riftbound/cards/original/SFD-195A.webp",
+      "imageHash": null,
+      "artist": "Naifan Zhang",
+      "updatedAt": "2026-10-08T15:32:14.979Z",
+      "variants": {
+        "alternateArt": true,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "riftatlas:SFD-195A"
+      ]
+    },
+    {
+      "printId": "SGN-001",
+      "basePrintId": "SGN-001",
+      "setCode": "SGN",
+      "collectorCode": "001",
+      "name": "Lillia, Bashful Bloom",
+      "type": "Legend",
+      "supertype": null,
+      "costEnergy": null,
+      "costPower": null,
+      "tags": [
+        "Lillia"
+      ],
+      "champion": "Lillia",
+      "imageUrl": "https://assets.riftatlas-workers.com/riftbound/cards/original/SGN-001.webp",
+      "imageHash": null,
+      "artist": "Fireball Studio",
+      "updatedAt": "2026-10-08T15:32:14.979Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "riftatlas:SGN-001"
+      ]
+    },
+    {
+      "printId": "SGN-002",
+      "basePrintId": "SGN-002",
+      "setCode": "SGN",
+      "collectorCode": "002",
+      "name": "Ivern, Green Father",
+      "type": "Legend",
+      "supertype": null,
+      "costEnergy": null,
+      "costPower": null,
+      "tags": [
+        "Ivern"
+      ],
+      "champion": "Ivern",
+      "imageUrl": "https://assets.riftatlas-workers.com/riftbound/cards/original/SGN-002.webp",
+      "imageHash": null,
+      "artist": "Fireball Studio",
+      "updatedAt": "2026-10-08T15:32:14.979Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "riftatlas:SGN-002"
+      ]
+    },
+    {
+      "printId": "VEN-069B",
+      "basePrintId": "VEN-069",
+      "setCode": "VEN",
+      "collectorCode": "069B",
+      "name": "Mel, Newly Awakened",
+      "type": "Unit",
+      "supertype": "Champion",
+      "costEnergy": 4,
+      "costPower": 1,
+      "tags": [
+        "Mel",
+        "Noxus"
+      ],
+      "champion": "Mel",
+      "imageUrl": "https://assets.riftatlas-workers.com/riftbound/cards/original/VEN-069B.webp",
+      "imageHash": null,
+      "artist": "Anna Nikonova",
+      "updatedAt": "2026-10-08T15:32:14.979Z",
+      "variants": {
+        "alternateArt": true,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "riftatlas:VEN-069B"
+      ]
+    },
+    {
+      "printId": "VEN-155A",
+      "basePrintId": "VEN-155",
+      "setCode": "VEN",
+      "collectorCode": "155A",
+      "name": "Kennen, Heart of the Tempest",
+      "type": "Legend",
+      "supertype": null,
+      "costEnergy": null,
+      "costPower": null,
+      "tags": [
+        "Kennen"
+      ],
+      "champion": "Kennen",
+      "imageUrl": "https://assets.riftatlas-workers.com/riftbound/cards/original/VEN-155A.webp",
+      "imageHash": null,
+      "artist": "Zhongli Li",
+      "updatedAt": "2026-10-08T15:32:14.979Z",
+      "variants": {
+        "alternateArt": true,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "riftatlas:VEN-155A"
+      ]
+    },
+    {
+      "printId": "OGN-303A",
+      "basePrintId": "OGN-303",
+      "setCode": "OGN",
+      "collectorCode": "303A",
+      "name": "Ahri, Nine-Tailed Fox",
+      "type": "Legend",
+      "supertype": null,
+      "costEnergy": null,
+      "costPower": null,
+      "tags": [
+        "Ahri"
+      ],
+      "champion": "Ahri",
+      "imageUrl": "https://assets.riftatlas-workers.com/riftbound/cards/original/OGN-303A.webp",
+      "imageHash": null,
+      "artist": "Allen Song",
+      "updatedAt": "2026-10-10T13:15:41.613Z",
+      "variants": {
+        "alternateArt": true,
+        "overnumbered": true,
+        "signature": true
+      },
+      "aliases": [],
+      "sourceIds": [
+        "riftatlas:OGN-303A"
+      ]
+    },
+    {
+      "printId": "RAD-009",
+      "basePrintId": "RAD-009",
+      "setCode": "RAD",
+      "collectorCode": "009",
+      "name": "Antagonistic Apparatus",
+      "type": "Unit",
+      "supertype": null,
+      "costEnergy": 6,
+      "costPower": 1,
+      "tags": [
+        "Bandle City",
+        "Yordle",
+        "Mech"
+      ],
+      "champion": null,
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/5be775464c8b897501317c6d32fd60c8b962b5c2-744x1039.png?accountingTag=RB",
+      "imageHash": "5be775464c8b897501317c6d32fd60c8b962b5c2",
+      "artist": "Caravan Studio",
+      "updatedAt": "2026-10-10T13:15:41.613Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:d9488174-7e5d-4501-9099-47f0e02fed90",
+        "riot-gallery:rad-009-167",
+        "riftatlas:RAD-009"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-009.webp",
+        "https://assets.riftatlas-workers.com/riftbound/cards/original/RAD-009.webp"
+      ]
+    },
+    {
+      "printId": "RAD-010",
+      "basePrintId": "RAD-010",
+      "setCode": "RAD",
+      "collectorCode": "010",
+      "name": "Forbidden Technique",
+      "type": "Spell",
+      "supertype": null,
+      "costEnergy": 2,
+      "costPower": 0,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cdn.piltoverarchive.com/cards/RAD-010.webp",
+      "imageHash": null,
+      "artist": "Kudos Productions",
+      "updatedAt": "2026-10-10T13:15:41.613Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:4023efe1-fd3c-4b59-8ca4-c545044d9678",
+        "riftatlas:RAD-010"
+      ],
+      "imageUrlAliases": [
+        "https://assets.riftatlas-workers.com/riftbound/cards/original/RAD-010.webp"
+      ]
+    },
+    {
+      "printId": "RAD-031",
+      "basePrintId": "RAD-031",
+      "setCode": "RAD",
+      "collectorCode": "031",
+      "name": "Stoic Ferryman",
+      "type": "Unit",
+      "supertype": null,
+      "costEnergy": 4,
+      "costPower": 0,
+      "tags": [
+        "Bilgewater",
+        "Sentinel"
+      ],
+      "champion": null,
+      "imageUrl": "https://cdn.piltoverarchive.com/cards/RAD-031.webp",
+      "imageHash": null,
+      "artist": "Six More Vodka",
+      "updatedAt": "2026-10-10T13:15:41.613Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:28b0a227-34fa-473c-8c93-77a3b3dac717",
+        "riftatlas:RAD-031"
+      ],
+      "imageUrlAliases": [
+        "https://assets.riftatlas-workers.com/riftbound/cards/original/RAD-031.webp"
+      ]
+    },
+    {
+      "printId": "RAD-053",
+      "basePrintId": "RAD-053",
+      "setCode": "RAD",
+      "collectorCode": "053",
+      "name": "Strigian Oracle",
+      "type": "Unit",
+      "supertype": null,
+      "costEnergy": 2,
+      "costPower": 0,
+      "tags": [
+        "Freljord",
+        "Bird"
+      ],
+      "champion": null,
+      "imageUrl": "https://cdn.piltoverarchive.com/cards/RAD-053.webp",
+      "imageHash": null,
+      "artist": "Six More Vodka",
+      "updatedAt": "2026-10-10T13:15:41.613Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:d6dfefd4-bb08-4012-a572-21b78dd28261",
+        "riftatlas:RAD-053"
+      ],
+      "imageUrlAliases": [
+        "https://assets.riftatlas-workers.com/riftbound/cards/original/RAD-053.webp"
+      ]
+    },
+    {
+      "printId": "RAD-054",
+      "basePrintId": "RAD-054",
+      "setCode": "RAD",
+      "collectorCode": "054",
+      "name": "Trinket Peddler",
+      "type": "Unit",
+      "supertype": null,
+      "costEnergy": 3,
+      "costPower": 0,
+      "tags": [
+        "Bandle City",
+        "Yordle"
+      ],
+      "champion": null,
+      "imageUrl": "https://cdn.piltoverarchive.com/temporary/1791545467178-38suok1h2zd.png",
+      "imageHash": null,
+      "artist": "Alessandro Poli",
+      "updatedAt": "2026-10-10T13:15:41.613Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:0c09a98d-cb74-4ba1-afb6-1461658bbf42",
+        "riftatlas:RAD-054"
+      ],
+      "imageUrlAliases": [
+        "https://assets.riftatlas-workers.com/riftbound/cards/original/RAD-054.webp"
+      ]
+    },
+    {
+      "printId": "RAD-065",
+      "basePrintId": "RAD-065",
+      "setCode": "RAD",
+      "collectorCode": "065",
+      "name": "Seraphine, Inspiring",
+      "type": "Unit",
+      "supertype": "Champion",
+      "costEnergy": 4,
+      "costPower": 1,
+      "tags": [
+        "Seraphine",
+        "Piltover"
+      ],
+      "champion": "Seraphine",
+      "imageUrl": "https://assets.riftatlas-workers.com/riftbound/cards/original/RAD-065.webp",
+      "imageHash": null,
+      "artist": "Luscinia Studio",
+      "updatedAt": "2026-10-10T13:15:41.613Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:6fe8864b-d75b-4bf1-a7ad-7ef3b1eadd33",
+        "riftatlas:RAD-065"
+      ]
+    },
+    {
+      "printId": "RAD-065A",
+      "basePrintId": "RAD-065",
+      "setCode": "RAD",
+      "collectorCode": "065A",
+      "name": "Seraphine, Inspiring",
+      "type": "Unit",
+      "supertype": "Champion",
+      "costEnergy": 4,
+      "costPower": 1,
+      "tags": [
+        "Seraphine",
+        "Piltover"
+      ],
+      "champion": "Seraphine",
+      "imageUrl": "https://cdn.piltoverarchive.com/cards/RAD-065a.webp",
+      "imageHash": null,
+      "artist": "Aling",
+      "updatedAt": "2026-10-10T13:15:41.613Z",
+      "variants": {
+        "alternateArt": true,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:d45e8c28-dcab-45d3-9c44-5b7de60bc352",
+        "riftatlas:RAD-065A"
+      ],
+      "imageUrlAliases": [
+        "https://assets.riftatlas-workers.com/riftbound/cards/original/RAD-065A.webp"
+      ]
+    },
+    {
+      "printId": "RAD-066",
+      "basePrintId": "RAD-066",
+      "setCode": "RAD",
+      "collectorCode": "066",
+      "name": "Spirit of the Forge",
+      "type": "Unit",
+      "supertype": null,
+      "costEnergy": 6,
+      "costPower": 1,
+      "tags": [
+        "Freljord",
+        "Spirit"
+      ],
+      "champion": null,
+      "imageUrl": "https://cdn.piltoverarchive.com/temporary/1791597831855-togpgq64949.webp",
+      "imageHash": null,
+      "artist": "Kudos Productions",
+      "updatedAt": "2026-10-10T13:15:41.613Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:9b07b8b4-8bbe-4ec6-9e56-b6cf4002f426",
+        "riftatlas:RAD-066"
+      ],
+      "imageUrlAliases": [
+        "https://assets.riftatlas-workers.com/riftbound/cards/original/RAD-066.webp"
+      ]
+    },
+    {
+      "printId": "RAD-078",
+      "basePrintId": "RAD-078",
+      "setCode": "RAD",
+      "collectorCode": "078",
+      "name": "Armored Tusker",
+      "type": "Unit",
+      "supertype": null,
+      "costEnergy": 6,
+      "costPower": 1,
+      "tags": [
+        "Noxus"
+      ],
+      "champion": null,
+      "imageUrl": "https://cdn.piltoverarchive.com/cards/RAD-078.webp",
+      "imageHash": null,
+      "artist": "Kudos Productions",
+      "updatedAt": "2026-10-10T13:15:41.613Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:8b098747-286b-4499-b612-b94b91a9e843",
+        "riftatlas:RAD-078"
+      ],
+      "imageUrlAliases": [
+        "https://assets.riftatlas-workers.com/riftbound/cards/original/RAD-078.webp"
+      ]
+    },
+    {
+      "printId": "RAD-080",
+      "basePrintId": "RAD-080",
+      "setCode": "RAD",
+      "collectorCode": "080",
+      "name": "Bloodscent Swarm",
+      "type": "Unit",
+      "supertype": null,
+      "costEnergy": 8,
+      "costPower": 2,
+      "tags": [
+        "Shurima"
+      ],
+      "champion": null,
+      "imageUrl": "https://cdn.piltoverarchive.com/temporary/1791597706495-9o06ruyxm38.jpg",
+      "imageHash": null,
+      "artist": "Kudos Productions",
+      "updatedAt": "2026-10-10T13:15:41.613Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:f43a2dc6-0dd8-455c-b84c-c762a5ee00fd",
+        "riftatlas:RAD-080"
+      ],
+      "imageUrlAliases": [
+        "https://assets.riftatlas-workers.com/riftbound/cards/original/RAD-080.webp"
+      ]
+    },
+    {
+      "printId": "RAD-092",
+      "basePrintId": "RAD-092",
+      "setCode": "RAD",
+      "collectorCode": "092",
+      "name": "Seraphic Wyvern",
+      "type": "Unit",
+      "supertype": null,
+      "costEnergy": 7,
+      "costPower": 0,
+      "tags": [
+        "Mount Targon",
+        "Dragon"
+      ],
+      "champion": null,
+      "imageUrl": "https://cdn.piltoverarchive.com/cards/RAD-092.webp",
+      "imageHash": null,
+      "artist": "Mogi",
+      "updatedAt": "2026-10-10T13:15:41.613Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:865f2375-7fe8-4881-b1aa-e1bf162d105f",
+        "riftatlas:RAD-092"
+      ],
+      "imageUrlAliases": [
+        "https://assets.riftatlas-workers.com/riftbound/cards/original/RAD-092.webp"
+      ]
+    },
+    {
+      "printId": "RAD-113",
+      "basePrintId": "RAD-113",
+      "setCode": "RAD",
+      "collectorCode": "113",
+      "name": "Angler Wyrm",
+      "type": "Unit",
+      "supertype": null,
+      "costEnergy": 8,
+      "costPower": 0,
+      "tags": [
+        "Bilgewater",
+        "Dragon"
+      ],
+      "champion": null,
+      "imageUrl": "https://cdn.piltoverarchive.com/cards/RAD-113.webp",
+      "imageHash": null,
+      "artist": "Envar Studio",
+      "updatedAt": "2026-10-10T13:15:41.613Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:28ad4eaa-1e4d-44f3-aef1-bc0431050ee6",
+        "riftatlas:RAD-113"
+      ],
+      "imageUrlAliases": [
+        "https://assets.riftatlas-workers.com/riftbound/cards/original/RAD-113.webp"
+      ]
+    },
+    {
+      "printId": "RAD-123",
+      "basePrintId": "RAD-123",
+      "setCode": "RAD",
+      "collectorCode": "123",
+      "name": "Protector's Shield",
+      "type": "Gear",
+      "supertype": null,
+      "costEnergy": 2,
+      "costPower": 1,
+      "tags": [
+        "Equipment"
+      ],
+      "champion": null,
+      "imageUrl": "https://cdn.piltoverarchive.com/cards/RAD-123.webp",
+      "imageHash": null,
+      "artist": "Six More Vodka",
+      "updatedAt": "2026-10-10T13:15:41.613Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:5489aa46-0be3-48c2-826e-c9b33798646f",
+        "riftatlas:RAD-123"
+      ],
+      "imageUrlAliases": [
+        "https://assets.riftatlas-workers.com/riftbound/cards/original/RAD-123.webp"
+      ]
+    },
+    {
+      "printId": "RAD-124",
+      "basePrintId": "RAD-124",
+      "setCode": "RAD",
+      "collectorCode": "124",
+      "name": "Burn Away",
+      "type": "Spell",
+      "supertype": null,
+      "costEnergy": 3,
+      "costPower": 1,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cdn.piltoverarchive.com/temporary/1791597623574-c2b4sg8s4sl.webp",
+      "imageHash": null,
+      "artist": "Michael Ivan",
+      "updatedAt": "2026-10-10T13:15:41.613Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:4a4cf9ac-85f7-4806-8461-6a4f9725b7be",
+        "riftatlas:RAD-124"
+      ],
+      "imageUrlAliases": [
+        "https://assets.riftatlas-workers.com/riftbound/cards/original/RAD-124.webp"
+      ]
+    },
+    {
+      "printId": "RAD-133",
+      "basePrintId": "RAD-133",
+      "setCode": "RAD",
+      "collectorCode": "133",
+      "name": "Jarvan IV, Royal Heir",
+      "type": "Unit",
+      "supertype": "Champion",
+      "costEnergy": 7,
+      "costPower": 1,
+      "tags": [
+        "Jarvan IV",
+        "Demacia"
+      ],
+      "champion": "Jarvan IV",
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/967de7aa18d5833896825bfd7d78b234e088ae73-744x1039.png?accountingTag=RB",
+      "imageHash": "967de7aa18d5833896825bfd7d78b234e088ae73",
+      "artist": "黯荧岛Dark Glow",
+      "updatedAt": "2026-10-10T13:15:41.613Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:d88e18f0-1449-45a0-b9a6-5dc615a1d992",
+        "riot-gallery:rad-133-167",
+        "riftatlas:RAD-133"
+      ],
+      "imageUrlAliases": [
+        "https://cdn.piltoverarchive.com/cards/RAD-133.webp",
+        "https://assets.riftatlas-workers.com/riftbound/cards/original/RAD-133.webp"
+      ]
+    },
+    {
+      "printId": "RAD-134",
+      "basePrintId": "RAD-134",
+      "setCode": "RAD",
+      "collectorCode": "134",
+      "name": "Raucous Anthem",
+      "type": "Spell",
+      "supertype": null,
+      "costEnergy": 7,
+      "costPower": 1,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://cdn.piltoverarchive.com/cards/RAD-134.webp",
+      "imageHash": null,
+      "artist": "Kudos Productions",
+      "updatedAt": "2026-10-10T13:15:41.613Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:0867033b-592d-424b-bdbc-5558d50e964d",
+        "riftatlas:RAD-134"
+      ],
+      "imageUrlAliases": [
+        "https://assets.riftatlas-workers.com/riftbound/cards/original/RAD-134.webp"
+      ]
+    },
+    {
+      "printId": "RAD-135",
+      "basePrintId": "RAD-135",
+      "setCode": "RAD",
+      "collectorCode": "135",
+      "name": "Remember the Fallen",
+      "type": "Spell",
+      "supertype": null,
+      "costEnergy": 8,
+      "costPower": 2,
+      "tags": [],
+      "champion": null,
+      "imageUrl": "https://assets.riftatlas-workers.com/riftbound/cards/original/RAD-135.webp",
+      "imageHash": null,
+      "artist": "Original Force",
+      "updatedAt": "2026-10-10T13:15:41.613Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "riftatlas:RAD-135"
+      ]
+    },
+    {
+      "printId": "RAD-149",
+      "basePrintId": "RAD-149",
+      "setCode": "RAD",
+      "collectorCode": "149",
+      "name": "Riven, The Exile",
+      "type": "Legend",
+      "supertype": null,
+      "costEnergy": null,
+      "costPower": null,
+      "tags": [
+        "Riven"
+      ],
+      "champion": "Riven",
+      "imageUrl": "https://cdn.piltoverarchive.com/cards/RAD-149.webp",
+      "imageHash": null,
+      "artist": "Grafit Studio",
+      "updatedAt": "2026-10-10T13:15:41.613Z",
+      "variants": {
+        "alternateArt": false,
+        "overnumbered": false,
+        "signature": false
+      },
+      "aliases": [],
+      "sourceIds": [
+        "piltover-archive:08a4010d-7c99-4ed5-9829-f03b99dc8030",
+        "riftatlas:RAD-149"
+      ],
+      "imageUrlAliases": [
+        "https://assets.riftatlas-workers.com/riftbound/cards/original/RAD-149.webp"
+      ]
     }
   ],
   "specialBattlefields": [
@@ -9946,6 +12527,28 @@
       ],
       "addedPrints": 66,
       "notes": "Full 29-page Piltover library and official gallery audit. Added 40 Radiance previews plus 26 verified historical alternate/promo/Arcane/token prints. Printed collectors, costs and new artwork checked. Placeholder artwork and 18 misleading rune reprint IDs excluded. Existing images retained; current source URLs and Riot hash aliases added for recognition. Corrected Hunters' Circle with its former spelling retained as an alias."
+    },
+    {
+      "provider": "Rift Atlas + Piltover Archive + Riot Card Gallery",
+      "auditedAt": "2026-10-08T15:32:14.979Z",
+      "urls": [
+        "https://play.riftatlas.com/",
+        "https://piltoverarchive.com/cards",
+        "https://playriftbound.com/en-us/card-gallery/"
+      ],
+      "addedPrints": 61,
+      "notes": "Full current Atlas client catalog, all 30 Piltover library pages and Riot gallery compared. Added 61 prints with inspected collector identities, costs, types and artwork. Four Chinese-only Radiance names/artwork retained as supplied by Atlas. Existing catalog entries and canonical artwork preserved. Atlas VEN-041P is a prerelease image of printed VEN-041, not a new collector identity; source rune aliases and unnumbered Buff token excluded."
+    },
+    {
+      "provider": "Rift Atlas + Piltover Archive + Riot Card Gallery",
+      "auditedAt": "2026-10-10T13:15:41.613Z",
+      "urls": [
+        "https://play.riftatlas.com/",
+        "https://piltoverarchive.com/cards",
+        "https://playriftbound.com/en-us/card-gallery/"
+      ],
+      "addedPrints": 19,
+      "notes": "Compared 1481 Atlas rows, all 31 Piltover pages (1451 rows), and 1379 Riot gallery prints. Added 18 Radiance prints and Korean Ahri OGN-303A. Four previous Chinese names and five images updated to verified English, retaining old names/images as aliases. Six stamped Atlas promo images recognized under existing printed identities. Standard Seraphine uses verified Chinese 065 art because Piltover currently points its base row at 065a. Source placeholders/rune aliases/prerelease pseudo-IDs excluded."
     }
   ]
 }

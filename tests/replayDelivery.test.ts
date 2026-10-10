@@ -177,6 +177,33 @@ describe("replayDeliveryStages", () => {
     })).toContain("partial replay");
   });
 
+  it.each([undefined, "replay_capture_missing_mulligan"])("explains a missing-mulligan-only completion with code %s", (code) => {
+    expect(replayDeliveryErrorMessage("RiftLite replay complete 422: Replay capture is incomplete: The replay did not capture the opening mulligan.", {
+      code,
+      errorClass: "capture",
+      httpStatus: 422,
+    })).toContain("can still be uploaded as a partial replay");
+  });
+
+  it.each([undefined, "raw_capture_incomplete", "replay_capture_incomplete"])("does not promise partial upload for the combined missing Game 1, mulligan and legend failure with code %s", (code) => {
+    const error = "RiftLite replay complete 422: Replay capture is incomplete: The replay started after Game 1 had already begun or ended. The replay did not capture the opening mulligan. BMU has no captured legend card. Niko has no captured legend card.";
+    const detail = replayDeliveryErrorMessage(error, { code, errorClass: "capture", httpStatus: 422 });
+    expect(detail).toContain("website cannot publish it");
+    expect(detail).toContain("remains available locally");
+    expect(detail).not.toContain("partial replay");
+    expect(replayDeliveryStages(metadata({
+      uploadStatus: "failed", processingStatus: "failed", error,
+      lastErrorCode: code, lastErrorClass: "capture", lastHttpStatus: 422,
+    })).find((stage) => stage.id === "processing")?.detail).toBe(detail);
+  });
+
+  it("respects a blocking structured code even when the stored message only mentions the mulligan", () => {
+    expect(replayDeliveryErrorMessage("Replay capture is incomplete: The replay did not capture the opening mulligan.", {
+      code: "replay_capture_incomplete",
+      errorClass: "capture",
+    })).toContain("website cannot publish it");
+  });
+
   it("uses the durable delivery stage for upload progress and partial-ready results", () => {
     expect(replayDeliverySummary(metadata({
       webReplayAutoUploadEligible: true,

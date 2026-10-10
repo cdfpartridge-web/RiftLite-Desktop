@@ -252,7 +252,7 @@ describe("TcgaResolver", () => {
     const vendettaLegends = registry.cards.filter((card) => card.setCode === "VEN" && card.type === "Legend");
     const vendettaRunes = registry.cards.filter((card) => card.setCode === "VEN" && card.type === "Rune");
     expect(vendettaBattlefields).toHaveLength(10);
-    expect(vendettaLegends).toHaveLength(27);
+    expect(vendettaLegends).toHaveLength(28);
     expect(vendettaRunes).toHaveLength(6);
     expect(failures).toEqual([]);
   });

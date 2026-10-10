@@ -21,7 +21,7 @@ describe("Training Labs splash surface", () => {
   it("does not compete with higher-priority startup dialogs", () => {
     expect(appSource).toContain('trainingLabsIntroState?.status === "pending"');
     expect(appSource).toContain('activeView === "home"');
-    expect(appSource).toContain('guidedTourState?.status !== "active"');
+    expect(appSource).toContain('firstRunSetupState?.status !== "active"');
     expect(appSource).toContain("!showUpdatePrompt");
     expect(appSource).toContain("!reviewDraft");
     expect(appSource).toContain("!atlasRecoverySuggested");

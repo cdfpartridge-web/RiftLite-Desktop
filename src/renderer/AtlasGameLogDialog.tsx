@@ -2,11 +2,19 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Copy, Search, X } from "lucide-react";
 import type { AtlasGameLog } from "../shared/atlasGameLog";
 import { atlasGameLogActor, atlasGameLogText, loadAtlasMatchGameLog, type AtlasGameLogSegment } from "../shared/atlasMatchGameLog";
-import type { MatchDraft } from "../shared/types";
+import type { MatchDraft, RiftLiteApi } from "../shared/types";
 import "./styles/atlas-game-log.css";
 
 const EMPTY_LOG: AtlasGameLog = { games: [], source: "none", partial: false };
 const PAGE_SIZE = 200;
+
+export async function copyAtlasGameLog(log: AtlasGameLog, bridge: Pick<RiftLiteApi, "writeClipboardText">, gameId = "", search = ""): Promise<boolean> {
+  try {
+    return await bridge.writeClipboardText(atlasGameLogText(log, gameId, search));
+  } catch {
+    return false;
+  }
+}
 
 export function AtlasGameLogDialog({ match, segments, onClose }: {
   match: MatchDraft;
@@ -93,10 +101,10 @@ export function AtlasGameLogContent({ log, loading = false, failed = false }: {
   }, [gameId, query, currentPage]);
   async function copy() {
     const generation = ++copyGeneration.current;
-    try {
-      await navigator.clipboard.writeText(atlasGameLogText(log, gameId, search));
-      if (copyGeneration.current === generation) setCopyStatus("Copied to clipboard.");
-    } catch { if (copyGeneration.current === generation) setCopyStatus("Could not copy. You can select and copy the log text below."); }
+    const copied = await copyAtlasGameLog(log, window.riftlite, gameId, search);
+    if (copyGeneration.current === generation) setCopyStatus(copied
+      ? "Copied to clipboard."
+      : "Could not copy. You can select and copy the log text below.");
   }
   if (loading) return <p className="atlas-game-log-empty" role="status">Loading captured game log…</p>;
   if (failed) return <p className="atlas-game-log-empty" role="alert">The saved game log could not be opened. Close this window and try again.</p>;

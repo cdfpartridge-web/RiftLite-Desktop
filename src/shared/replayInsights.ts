@@ -8,10 +8,15 @@ import {
 import { parseReplayCardActionText } from "./replayCardText.js";
 import { deckSnapshotHash } from "./deckNotebook.js";
 import { riftboundBasePrintCode, riftboundCardCodeAliases } from "./cardIdentity.js";
+import { MULLIGAN_LAB_CURRENT_SEASON_STARTED_ON } from "./mulliganLab.js";
 import {
-  MULLIGAN_LAB_CURRENT_SEASON_STARTED_ON,
-  type MulliganLabCoveragePeriod
-} from "./mulliganLab.js";
+  RADIANCE_PRESEASON_START_AT,
+  STAT_SEASONS,
+  isInStatSeason,
+  statMatchTimestamp,
+  statSeasonForTimestamp,
+  type StatSeasonId
+} from "./statSeasons.js";
 import {
   buildRiftLiteReplayModel,
   type RiftLiteReplayCard,
@@ -44,7 +49,7 @@ export type ReplayInsightPatternStrength =
   | "developing"
   | "reasonably-stable";
 export type ReplayInsightPlayCaptureStatus = "complete-enough" | "mixed" | "limited";
-export type ReplayInsightPeriod = MulliganLabCoveragePeriod | "unknown";
+export type ReplayInsightPeriod = Exclude<StatSeasonId, ""> | "unknown";
 
 export interface ReplayInsightCardCatalogEntry {
   code: string;
@@ -62,8 +67,8 @@ export interface ReplayInsightFilters {
   format?: MatchDraft["format"];
   gameStage?: ReplayInsightGameStage;
   wentFirst?: "1st" | "2nd";
-  /** Defaults to all so pre-season and current-season history remain available. */
-  period?: "all" | MulliganLabCoveragePeriod;
+  /** Callers choose the season; unfiltered single-replay analysis retains all history. */
+  period?: StatSeasonId | "all" | "preseason" | "current-season";
 }
 
 export interface ReplayInsightDataReceipt {
@@ -294,7 +299,9 @@ export interface ReplayInsightsCoverage {
 }
 
 export interface ReplayInsightsScopeReceipt {
+  /** Legacy training boundary retained for saved receipt compatibility. */
   currentSeasonStartedOn: typeof MULLIGAN_LAB_CURRENT_SEASON_STARTED_ON;
+  currentSeasonStartedAt: typeof RADIANCE_PRESEASON_START_AT;
   periods: ReplayInsightPeriod[];
   periodGameCounts: Record<ReplayInsightPeriod, number>;
   deckVersions: Array<{ fingerprint: string; games: number }>;
@@ -2201,12 +2208,18 @@ function replayMatchesFilters(
   filters: ReplayInsightFilters,
   now: Date
 ): boolean {
+  const timestamp = statMatchTimestamp(match ?? replay);
   if (filters.rangeDays && filters.rangeDays > 0) {
-    const capturedAt = Date.parse(replay.capturedAt);
     const cutoff = now.getTime() - filters.rangeDays * 86_400_000;
-    if (!Number.isFinite(capturedAt) || capturedAt < cutoff) return false;
+    if (timestamp === null || timestamp < cutoff) return false;
   }
-  if (filters.period && filters.period !== "all" && replayInsightPeriod(replay.capturedAt) !== filters.period) return false;
+  if (filters.period === "preseason") {
+    const period = statSeasonForTimestamp(timestamp);
+    if (period !== "pre-vendetta" && period !== "vendetta-preview") return false;
+  } else if (filters.period && filters.period !== "all") {
+    const period = filters.period === "current-season" ? "vendetta-launch" : filters.period;
+    if (!isInStatSeason(timestamp, period)) return false;
+  }
   if (filters.deckKey) {
     const deckValues = [match?.deckSourceId, match?.deckSourceKey, match?.deckName].map(normalizeText);
     if (!deckValues.includes(normalizeText(filters.deckKey))) return false;
@@ -2412,22 +2425,25 @@ function buildReportCoverage(analyses: ReplayAnalysis[]): ReplayInsightsCoverage
 
 function buildReplayInsightsScopeReceipt(scopedGames: ReplayInsightEligibleGame[]): ReplayInsightsScopeReceipt {
   const periodGameCounts: Record<ReplayInsightPeriod, number> = {
-    preseason: 0,
-    "current-season": 0,
+    "radiance-preseason": 0,
+    "vendetta-launch": 0,
+    "vendetta-preview": 0,
+    "pre-vendetta": 0,
     unknown: 0
   };
   const deckVersionGames = new Map<string, number>();
   let unknownDeckGames = 0;
   for (const scope of scopedGames) {
-    const period = replayInsightPeriod(scope.analysis.replay.capturedAt);
+    const period = replayInsightPeriod(scope.analysis);
     periodGameCounts[period] += 1;
     const fingerprint = scope.analysis.deckFingerprint;
     if (fingerprint) deckVersionGames.set(fingerprint, (deckVersionGames.get(fingerprint) ?? 0) + 1);
     else unknownDeckGames += 1;
   }
-  const dates = scopedGames.map((scope) => scope.analysis.replay.capturedAt).filter(isValidInsightDate).sort();
+  const dates = replayInsightObservedDates(scopedGames);
   return {
     currentSeasonStartedOn: MULLIGAN_LAB_CURRENT_SEASON_STARTED_ON,
+    currentSeasonStartedAt: RADIANCE_PRESEASON_START_AT,
     periods: orderedReplayInsightPeriods(Object.entries(periodGameCounts)
       .filter(([, count]) => count > 0)
       .map(([period]) => period as ReplayInsightPeriod)),
@@ -2467,12 +2483,12 @@ function finalizeReplayInsight(
     : completePlayCaptureScopeGames > 0
       ? "mixed"
       : "limited";
-  const dates = receiptGames.map((scope) => scope.analysis.replay.capturedAt).filter(isValidInsightDate).sort();
+  const dates = replayInsightObservedDates(receiptGames);
   const deckFingerprints = [...new Set(receiptGames
     .map((scope) => scope.analysis.deckFingerprint)
     .filter((fingerprint): fingerprint is string => Boolean(fingerprint)))].sort();
   const periods = orderedReplayInsightPeriods(receiptGames.map((scope) => (
-    replayInsightPeriod(scope.analysis.replay.capturedAt)
+    replayInsightPeriod(scope.analysis)
   )));
   return {
     ...insight,
@@ -2501,20 +2517,21 @@ function replayInsightPatternStrength(observations: number): ReplayInsightPatter
   return "reasonably-stable";
 }
 
-function replayInsightPeriod(capturedAt: string): ReplayInsightPeriod {
-  const captured = Date.parse(capturedAt);
-  const boundary = Date.parse(`${MULLIGAN_LAB_CURRENT_SEASON_STARTED_ON}T00:00:00.000Z`);
-  if (!Number.isFinite(captured) || !Number.isFinite(boundary)) return "unknown";
-  return captured < boundary ? "preseason" : "current-season";
+function replayInsightPeriod(analysis: ReplayAnalysis): ReplayInsightPeriod {
+  return statSeasonForTimestamp(statMatchTimestamp(analysis.match ?? analysis.replay)) ?? "unknown";
 }
 
 function orderedReplayInsightPeriods(periods: ReplayInsightPeriod[]): ReplayInsightPeriod[] {
   const found = new Set(periods);
-  return (["preseason", "current-season", "unknown"] as ReplayInsightPeriod[]).filter((period) => found.has(period));
+  return ([...STAT_SEASONS.filter((season) => season.id).map((season) => season.id), "unknown"] as ReplayInsightPeriod[])
+    .filter((period) => found.has(period));
 }
 
-function isValidInsightDate(value: string): boolean {
-  return Number.isFinite(Date.parse(value));
+function replayInsightObservedDates(games: ReplayInsightEligibleGame[]): string[] {
+  return games.map((scope) => statMatchTimestamp(scope.analysis.match ?? scope.analysis.replay))
+    .filter((timestamp): timestamp is number => timestamp !== null)
+    .map((timestamp) => new Date(timestamp).toISOString())
+    .sort();
 }
 
 function deduplicateInsights(insights: ReplayInsightDraft[]): ReplayInsightDraft[] {

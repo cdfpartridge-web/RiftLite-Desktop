@@ -9,6 +9,7 @@ import {
 } from "../src/shared/deckInsights";
 import type { MulliganLabRegistryCard } from "../src/shared/mulliganLab";
 import type { ReplayInsightCardReport } from "../src/shared/replayInsights";
+import { RADIANCE_PRESEASON_START_AT, RADIANCE_PRESEASON_START_MS } from "../src/shared/statSeasons";
 import type { MatchDraft, SavedDeck } from "../src/shared/types";
 
 const registry: MulliganLabRegistryCard[] = [
@@ -107,7 +108,7 @@ describe("deck insights", () => {
     ]);
   });
 
-  it("uses only saved completed matches for outcome claims while retaining both seasons", () => {
+  it("uses only saved completed matches for outcome claims while retaining named seasons", () => {
     const report = buildDeckInsightPerformance(deck, [
       match({ id: "pre-win", capturedAt: "2026-07-20T12:00:00.000Z", result: "Win", opponentChampion: "Pyke" }),
       match({ id: "current-loss", capturedAt: "2026-08-02T12:00:00.000Z", result: "Loss", opponentChampion: "Pyke" }),
@@ -118,11 +119,31 @@ describe("deck insights", () => {
     expect(report.performance.overview.record).toBe("1-1-1");
     expect(report.performance.overview.winRateLabel).toBe("50%");
     expect(report.periods).toEqual([
-      expect.objectContaining({ key: "current-season", record: "0-1-1", total: 2 }),
-      expect.objectContaining({ key: "preseason", record: "1-0", total: 1 })
+      expect.objectContaining({ key: "vendetta-launch", record: "0-1-1", total: 2 }),
+      expect.objectContaining({ key: "vendetta-preview", record: "1-0", total: 1 })
     ]);
     expect(report.recentForm.map((point) => point.matchId)).not.toContain("pending-win");
     expect(report.evidenceLabel).toBe("Early");
+  });
+
+  it("splits season performance at the precise Radiance start without moving older records", () => {
+    const matches = [
+      match({ id: "archive", capturedAt: "2026-07-01T10:00:00Z" }),
+      match({ id: "preview", capturedAt: "2026-07-20T10:00:00Z" }),
+      match({ id: "before", capturedAt: new Date(RADIANCE_PRESEASON_START_MS - 1).toISOString(), result: "Loss" }),
+      match({ id: "at", capturedAt: RADIANCE_PRESEASON_START_AT }),
+      match({ id: "after", capturedAt: new Date(RADIANCE_PRESEASON_START_MS + 1).toISOString() }),
+      match({ id: "unknown", capturedAt: "invalid" })
+    ];
+    const original = JSON.stringify(matches);
+    const report = buildDeckInsightPerformance(deck, matches);
+    expect(report.periods).toEqual([
+      expect.objectContaining({ key: "radiance-preseason", label: "Radiance pre-season", record: "2-0", total: 2 }),
+      expect.objectContaining({ key: "vendetta-launch", record: "0-1", total: 1 }),
+      expect.objectContaining({ key: "vendetta-preview", record: "1-0", total: 1 }),
+      expect.objectContaining({ key: "pre-vendetta", record: "1-0", total: 1 })
+    ]);
+    expect(JSON.stringify(matches)).toBe(original);
   });
 
   it("exposes base-print and name identity keys for replay evidence joins", () => {

@@ -1,7 +1,8 @@
 import { riftboundBasePrintCode, riftboundCardCodeAliases } from "./cardIdentity.js";
 import { parseCommunityDeckSnapshot } from "./communityDecks.js";
 import { buildDeckPerformance, type DeckPerformanceStats, type DeckRecordStats } from "./deckPerformance.js";
-import { MULLIGAN_LAB_CURRENT_SEASON_STARTED_ON, type MulliganLabRegistryCard } from "./mulliganLab.js";
+import type { MulliganLabRegistryCard } from "./mulliganLab.js";
+import { STAT_SEASONS, isInStatSeason, statMatchTimestamp } from "./statSeasons.js";
 import type { ReplayInsightCardReport, ReplayInsightGameStage } from "./replayInsights.js";
 import type { DeckEntry, MatchDraft, SavedDeck } from "./types.js";
 
@@ -128,9 +129,6 @@ export function buildDeckInsightComposition(
 export function buildDeckInsightPerformance(deck: SavedDeck, matches: MatchDraft[]): DeckInsightPerformance {
   const performance = buildDeckPerformance(deck, matches);
   const completed = performance.completedMatches;
-  const currentSeasonStart = Date.parse(`${MULLIGAN_LAB_CURRENT_SEASON_STARTED_ON}T00:00:00.000Z`);
-  const preseason = completed.filter((match) => safeTime(match.capturedAt) < currentSeasonStart);
-  const currentSeason = completed.filter((match) => safeTime(match.capturedAt) >= currentSeasonStart);
 
   return {
     performance,
@@ -138,10 +136,11 @@ export function buildDeckInsightPerformance(deck: SavedDeck, matches: MatchDraft
       recordSlice("bo1", "Best of 1", completed.filter((match) => match.format === "Bo1")),
       recordSlice("bo3", "Best of 3", completed.filter((match) => match.format === "Bo3"))
     ].filter((slice) => slice.total > 0),
-    periods: [
-      recordSlice("current-season", "Current season", currentSeason),
-      recordSlice("preseason", "Pre-season", preseason)
-    ].filter((slice) => slice.total > 0),
+    periods: STAT_SEASONS.filter((season) => season.id).map((season) => recordSlice(
+      season.id,
+      season.label,
+      completed.filter((match) => isInStatSeason(statMatchTimestamp(match), season.id))
+    )).filter((slice) => slice.total > 0),
     recentForm: buildRecentForm(completed),
     evidenceLabel: completed.length >= 20 ? "Established" : completed.length >= 8 ? "Growing" : "Early"
   };

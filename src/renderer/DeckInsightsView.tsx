@@ -44,7 +44,7 @@ import { chanceAtLeastOne } from "../shared/deckTracker";
 import { legendImageUrl } from "../shared/legendImages";
 import { normalizeLegendName } from "../shared/legendNames";
 import { localMatchesEligibleForStats } from "../shared/matchList";
-import { MULLIGAN_LAB_CURRENT_SEASON_STARTED_ON } from "../shared/mulliganLab";
+import { CURRENT_STAT_SEASON, STAT_SEASONS, isInStatSeason, statMatchTimestamp, statSeasonForTimestamp, type StatSeasonId } from "../shared/statSeasons";
 import {
   buildReplayInsights,
   replayInsightEventsFromRawPayload,
@@ -90,7 +90,7 @@ export async function copyDeckInsightSummary(
 }
 
 type DeckCardSort = "review" | "reach" | "curve" | "copies" | "name";
-type DeckPeriod = "all" | "preseason" | "current-season";
+type DeckPeriod = StatSeasonId | "all" | "preseason" | "current-season";
 type DeckVersionScope = "all" | "current";
 type DeckInsightsSection = "overview" | "cards" | "matchups" | "results";
 
@@ -132,7 +132,7 @@ export function DeckInsightsView({
 }: DeckInsightsViewProps) {
   const [deckId, setDeckId] = useState(() => activeDeckId || decks[0]?.id || "");
   const [dateFilter, setDateFilter] = useState<DateFilterValue>(DEFAULT_DATE_FILTER);
-  const [period, setPeriod] = useState<DeckPeriod>("all");
+  const [period, setPeriod] = useState<StatSeasonId>(CURRENT_STAT_SEASON);
   const [versionScope, setVersionScope] = useState<DeckVersionScope>("all");
   const [section, setSection] = useState<DeckInsightsSection>("overview");
   const [opponentLegend, setOpponentLegend] = useState("");
@@ -351,7 +351,7 @@ export function DeckInsightsView({
     ? Math.round(chanceAtLeastOne(composition.twoCostCopies, composition.mainDeckCopies, 4) * 100)
     : null;
   const scopeLabel = [
-    period === "current-season" ? "Current season" : period === "preseason" ? "Pre-season" : "All seasons",
+    STAT_SEASONS.find((season) => season.id === period)?.label ?? "All tracked seasons",
     dateFilterLabel(dateFilter),
     opponentLegend || "All matchups",
     versionScope === "current" ? "Current list version" : `All linked versions${linkedVersionHashes.length ? ` (${linkedVersionHashes.length})` : ""}`,
@@ -423,7 +423,7 @@ export function DeckInsightsView({
 
       <section className="deck-insights-scope" aria-label="Deck insight filters">
         <div><Filter size={15} /><span><strong>Evidence scope</strong><small>{scopeLabel}</small></span></div>
-        <label><span>Season</span><select value={period} onChange={(event) => setPeriod(event.target.value as DeckPeriod)}><option value="all">Pre-season + current</option><option value="current-season">Current season</option><option value="preseason">Pre-season</option></select></label>
+        <label><span>Season</span><select value={period} onChange={(event) => setPeriod(event.target.value as StatSeasonId)}>{STAT_SEASONS.map((season) => <option key={season.id} value={season.id}>{season.label}</option>)}</select></label>
         <DateFilter value={dateFilter} onChange={setDateFilter} label="Match dates" presets={["all", "today", "7d", "30d", "90d", "180d", "date", "custom"]} />
         <label><span>Matchup</span><select value={opponentLegend} onChange={(event) => setOpponentLegend(event.target.value)}><option value="">All opponents</option>{matchupOptions.map((legend) => <option value={legend} key={legend}>{legend}</option>)}</select></label>
         <label><span>Deck version</span><select value={versionScope} onChange={(event) => setVersionScope(event.target.value as DeckVersionScope)}><option value="all">All linked versions</option><option value="current">Current list only</option></select></label>
@@ -858,15 +858,16 @@ function eligibleMatchups(rows: ReturnType<typeof buildDeckInsightPerformance>["
   return [...rows].filter((row) => row.decisive >= 2).sort((left, right) => (mode === "best" ? right.winRate - left.winRate : left.winRate - right.winRate) || right.total - left.total);
 }
 
-export function filterDeckInsightMatches(matches: MatchDraft[], dateFilter: DateFilterValue, period: DeckPeriod, now = new Date()): MatchDraft[] {
-  const currentSeason = Date.parse(`${MULLIGAN_LAB_CURRENT_SEASON_STARTED_ON}T00:00:00.000Z`);
+export function filterDeckInsightMatches(matches: MatchDraft[], dateFilter: DateFilterValue, period: DeckPeriod = CURRENT_STAT_SEASON, now = new Date()): MatchDraft[] {
   return matches.filter((match) => {
-    const captured = Date.parse(match.capturedAt);
-    if (!Number.isFinite(captured)) return false;
-    if (!isInDateFilter(match.capturedAt, dateFilter, now)) return false;
-    if (period === "current-season" && captured < currentSeason) return false;
-    if (period === "preseason" && captured >= currentSeason) return false;
-    return true;
+    const timestamp = statMatchTimestamp(match);
+    if (timestamp === null) return false;
+    if (!isInDateFilter(timestamp, dateFilter, now)) return false;
+    if (period === "preseason") {
+      const season = statSeasonForTimestamp(timestamp);
+      return season === "pre-vendetta" || season === "vendetta-preview";
+    }
+    return isInStatSeason(timestamp, period === "all" ? "" : period === "current-season" ? "vendetta-launch" : period);
   });
 }
 

@@ -34,10 +34,10 @@ describe("Home launchpad", () => {
     const releaseNotesSource = appSource.slice(releaseNotesStart, releaseNotesEnd);
 
     expect(releaseNotesSource).toContain("version: APP_VERSION_META");
-    expect(releaseNotesSource).toContain("Recording & sharing");
-    expect(releaseNotesSource).toContain("Change visibility");
-    expect(releaseNotesSource).toContain("Known opponent hand");
-    expect(releaseNotesSource).toContain("Added 66 card prints");
+    expect(releaseNotesSource).toContain("Radiance pre-season stats");
+    expect(releaseNotesSource).toContain("Quick setup");
+    expect(releaseNotesSource).toContain("Sign up with Discord");
+    expect(releaseNotesSource).toContain("Added 80 card prints");
     expect(releaseNotesSource).not.toContain("Search Rules");
     expect(releaseNotesSource).not.toContain("Deck Insights is now the default Insights view");
   });
@@ -122,7 +122,7 @@ describe("Home launchpad", () => {
     expect(appSource).toContain('activeView === "home"');
     expect(appSource).toContain("!settings.homeDeckThemeEnabled");
     expect(appSource).toContain("!releaseNotesOpen");
-    expect(appSource).toContain('guidedTourState?.status !== "active"');
+    expect(appSource).toContain('firstRunSetupState?.status !== "active"');
     expect(appSource).toContain("!showUpdatePrompt");
     expect(appSource).toContain("!reviewDraft");
     expect(appSource).toContain("saveSettings({ homeDeckThemeEnabled: true })");

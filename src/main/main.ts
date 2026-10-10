@@ -106,6 +106,7 @@ import { RIFTLITE_BUILD_IDENTITY } from "../shared/buildIdentity.js";
 import { isAtlasDeckPageUrl } from "../shared/atlasDeckNavigation.js";
 import { handleAtlasDeckBeforeUnload } from "./services/atlasDeckDeparture.js";
 import { hasVerifiedRiftLiteAccount } from "../shared/accountIdentity.js";
+import { rawCaptureSettingsForAccountUpdate } from "../shared/rawCaptureSettingsUpdate.js";
 import {
   embeddedWebviewPolicy,
   gamePlatformForTrustedUrl,
@@ -213,6 +214,7 @@ import {
   type ReplayVideoDisplayTarget
 } from "./services/displayMediaRequest.js";
 import { AtlasFrameDeduper, type AtlasFrameSource } from "./services/atlasFrameDeduper.js";
+import { AtlasRealtimeDiagnostics } from "./services/atlasRealtimeDiagnostics.js";
 import { DeckService } from "./services/deckService.js";
 import { DeckTrackerService } from "./services/deckTrackerService.js";
 import { joinDiscordVoiceChannel } from "./services/discordRpc.js";
@@ -256,6 +258,7 @@ import {
   replayMp4VoiceNoteDelayMs,
 } from "./services/replayMp4RenderPlan.js";
 import { rasterizeReplayMp4Svg } from "./services/replayMp4OverlayRasterizer.js";
+import { ReplayMp4VideoTimeline, replayMp4VideoTimelineArgs } from "./services/replayMp4VideoTimeline.js";
 import {
   replayLocalFileCandidates,
   replayLocalFilePathAllowed,
@@ -302,8 +305,8 @@ const ATLAS_GAME_PARTITION = GAME_WEBVIEW_PARTITIONS.atlas;
 const IS_PACKAGED_SMOKE_TEST = process.argv.includes("--riftlite-smoke-test");
 const SMOKE_PATHS = resolveRiftLiteSmokePaths(IS_PACKAGED_SMOKE_TEST, process.env);
 const UI_SNAPSHOT_PATH = SMOKE_PATHS?.snapshotPath ?? "";
-const UI_SNAPSHOT_TOUR_ACTION = IS_PACKAGED_SMOKE_TEST
-  ? process.env.RIFTLITE_UI_SNAPSHOT_TOUR_ACTION?.trim().toLowerCase() ?? ""
+const UI_SNAPSHOT_SETUP_ACTION = IS_PACKAGED_SMOKE_TEST
+  ? (process.env.RIFTLITE_UI_SNAPSHOT_SETUP_ACTION ?? process.env.RIFTLITE_UI_SNAPSHOT_TOUR_ACTION)?.trim().toLowerCase() ?? ""
   : "";
 const UI_SNAPSHOT_VIEW = IS_PACKAGED_SMOKE_TEST
   ? process.env.RIFTLITE_UI_SNAPSHOT_VIEW?.trim().toLowerCase() ?? ""
@@ -2525,6 +2528,24 @@ function installRawCaptureWebSocketTap(webContents: WebContents): void {
   const socketUrls = new Map<string, string>();
   const battlefieldSeatSockets = new AtlasBattlefieldSeatSocketTracker();
   const authoritativeMatchTracker = new AtlasAuthoritativeMatchTracker();
+  const realtimeDiagnostics = new AtlasRealtimeDiagnostics((event) => {
+    if (!diagnostics) return;
+    // Observe the existing CDP stream only. No raw frames, room/player IDs,
+    // URLs, headers or free-form close reasons enter these diagnostics.
+    void diagnostics.record({
+      id: `atlas-realtime-${randomUUID()}`,
+      platform: "atlas",
+      kind: "debug",
+      capturedAt: new Date().toISOString(),
+      url: "https://play.riftatlas.com/",
+      payload: {
+        reason: `atlas-realtime-${event.type}`,
+        source: "main-debugger",
+        guestId: webContents.id,
+        ...event
+      }
+    }).catch(() => undefined);
+  });
   try {
     if (!webContents.debugger.isAttached()) {
       webContents.debugger.attach("1.3");
@@ -2550,6 +2571,11 @@ function installRawCaptureWebSocketTap(webContents: WebContents): void {
   webContents.debugger.on("message", (_event, method, params) => {
     if (webContents.isDestroyed()) {
       return;
+    }
+    try {
+      realtimeDiagnostics.observe(method, params);
+    } catch {
+      // Optional diagnostics must never interrupt capture or socket handling.
     }
     const payload = params && typeof params === "object" ? params as Record<string, unknown> : {};
     if (method === "Network.webSocketCreated") {
@@ -2607,6 +2633,7 @@ function installRawCaptureWebSocketTap(webContents: WebContents): void {
   });
 
   webContents.once("destroyed", () => {
+    realtimeDiagnostics.clear();
     socketUrls.clear();
     atlasFrameDeduper.forgetStream(String(webContents.id));
     try {
@@ -4632,32 +4659,19 @@ async function replayMp4ProbeMedia(
   const width = Number.parseInt(match?.[1] ?? "", 10);
   const height = Number.parseInt(match?.[2] ?? "", 10);
   const headerDurationMs = replayMediaDurationMsFromFfmpegOutput(output);
-  let scannedDurationMs = 0;
+  const timeline = new ReplayMp4VideoTimeline();
   try {
-    scannedDurationMs = await runReplayMp4Ffmpeg(ffmpegPath, [
-      "-nostdin",
-      "-hide_banner",
-      "-loglevel",
-      "error",
-      "-progress",
-      "pipe:1",
-      "-nostats",
-      "-fflags",
-      "+genpts",
-      "-i",
-      filePath,
-      "-map",
-      "0:v:0",
-      "-c",
-      "copy",
-      "-f",
-      "null",
-      "-"
-    ], replayMp4ExportTimeoutMs(headerDurationMs || fallback.durationMs));
+    await runReplayMp4Ffmpeg(
+      ffmpegPath,
+      replayMp4VideoTimelineArgs(filePath),
+      replayMp4ExportTimeoutMs(headerDurationMs || fallback.durationMs),
+      undefined,
+      (line) => timeline.consumeLine(line)
+    );
   } catch (error) {
     throw new Error(`MP4 export could not scan the source recording: ${replayMp4ExportErrorMessage(error)}`);
   }
-  const durationMs = scannedDurationMs || headerDurationMs;
+  const durationMs = timeline.durationMs;
   if (!Number.isFinite(durationMs) || durationMs <= 0) {
     throw new Error("MP4 export could not determine the source video's duration.");
   }
@@ -4953,7 +4967,8 @@ async function runReplayMp4Ffmpeg(
   ffmpegPath: string,
   args: string[],
   timeoutMs: number,
-  onProgressMs?: (processedMs: number) => void
+  onProgressMs?: (processedMs: number) => void,
+  onOutputLine?: (line: string) => void
 ): Promise<number> {
   return new Promise<number>((resolveProcess, rejectProcess) => {
     const child = spawn(ffmpegPath, args, {
@@ -4977,6 +4992,7 @@ async function runReplayMp4Ffmpeg(
       else resolveProcess(Math.max(0, lastProgressMs));
     };
     const consumeProgressLine = (line: string) => {
+      onOutputLine?.(line);
       const processedMs = replayMp4ProgressTimeMs(line);
       if (processedMs == null) return;
       if (processedMs > lastProgressMs) {
@@ -8560,12 +8576,12 @@ function registerIpc(): void {
       }
     });
   });
-  handleTrustedAppIpc("settings:raw-capture:update", async (_event, patch: Partial<UserSettings["rawCapture"]>) => {
+  handleTrustedAppIpc("settings:raw-capture:update", async (_event, patch: Partial<UserSettings["rawCapture"]>, expectedAccountUid?: string) => {
     if (!patch || typeof patch !== "object" || Array.isArray(patch)) {
       throw new Error("Web Replay settings patch is invalid.");
     }
     const saved = await store.updateSettings((current) => ({
-      rawCapture: { ...current.rawCapture, ...patch }
+      rawCapture: rawCaptureSettingsForAccountUpdate(current, patch, expectedAccountUid)
     }));
     await configureTcgaWebReplayProductCapture();
     if (RIFTREPLAY_CAPTURE_FEATURE_ENABLED) {
@@ -9809,32 +9825,37 @@ app.whenReady().then(async () => {
             `document.querySelector('.release-notes-modal .primary')?.click()`
           ).catch(() => undefined);
           await new Promise((resolveSnapshot) => setTimeout(resolveSnapshot, 250));
-          const dismissTourForRoute = Boolean(UI_SNAPSHOT_VIEW) && (!UI_SNAPSHOT_TOUR_ACTION || UI_SNAPSHOT_TOUR_ACTION === "finish");
-          if (dismissTourForRoute) {
+          const dismissSetupForRoute = Boolean(UI_SNAPSHOT_VIEW) && (!UI_SNAPSHOT_SETUP_ACTION || UI_SNAPSHOT_SETUP_ACTION === "finish" || UI_SNAPSHOT_SETUP_ACTION === "skip");
+          if (dismissSetupForRoute || UI_SNAPSHOT_SETUP_ACTION === "skip") {
             await waitForSnapshotState(`(() => {
-              const tour = document.querySelector('.guided-tour-layer');
-              if (!tour) return true;
-              const button = tour.querySelector('.guided-tour-close');
-              if (button instanceof HTMLButtonElement) button.click();
+              const setup = document.querySelector('.first-run-setup, .guided-tour-layer');
+              if (!setup) return true;
+              const button = setup.querySelector('[data-setup-action="skip"], .guided-tour-close');
+              if (button instanceof HTMLButtonElement && !button.disabled) button.click();
               return false;
-            })()`, "the guided tour to close");
-          } else if (UI_SNAPSHOT_TOUR_ACTION) {
-            const requestedStep = Number.parseInt(UI_SNAPSHOT_TOUR_ACTION, 10);
-            const clickCount = UI_SNAPSHOT_TOUR_ACTION === "finish"
+            })()`, "first-run setup to close");
+          } else if (UI_SNAPSHOT_SETUP_ACTION) {
+            const requestedStep = Number.parseInt(UI_SNAPSHOT_SETUP_ACTION, 10);
+            const clickCount = UI_SNAPSHOT_SETUP_ACTION === "finish"
               ? 10
               : Number.isFinite(requestedStep)
                 ? Math.max(0, Math.min(9, requestedStep - 1))
                 : 0;
+            const setupActionSelector = UI_SNAPSHOT_SETUP_ACTION === "finish"
+              ? '[data-setup-action="next"], [data-setup-action="finish"], [data-tour-action="next"], [data-tour-action="finish"]'
+              : '[data-setup-action="next"], [data-tour-action="next"]';
             for (let index = 0; index < clickCount; index += 1) {
+              await waitForSnapshotState(`!document.querySelector('.first-run-setup[aria-busy="true"], .first-run-setup [aria-busy="true"]')`, "setup changes to save");
               const clicked = await mainWindow.webContents.executeJavaScript(`(() => {
-                const button = document.querySelector('[data-tour-action="next"], [data-tour-action="finish"]');
-                if (!(button instanceof HTMLButtonElement)) return false;
+                const button = document.querySelector(${JSON.stringify(setupActionSelector)});
+                if (!(button instanceof HTMLButtonElement) || button.disabled) return false;
                 button.click();
                 return true;
               })()`);
               if (!clicked) break;
-              await new Promise((resolveTourStep) => setTimeout(resolveTourStep, 320));
+              await new Promise((resolveSetupStep) => setTimeout(resolveSetupStep, 320));
             }
+            await waitForSnapshotState(`!document.querySelector('.first-run-setup[aria-busy="true"], .first-run-setup [aria-busy="true"]')`, "setup changes to save");
           }
           if (UI_SNAPSHOT_PLATFORM === "atlas" || UI_SNAPSHOT_PLATFORM === "tcga") {
             const platformLiteral = JSON.stringify(UI_SNAPSHOT_PLATFORM);
@@ -9888,7 +9909,7 @@ app.whenReady().then(async () => {
               const marker = ${JSON.stringify(snapshotRouteMarker)};
               return document.querySelector('.topbar h1')?.textContent?.trim() === ${snapshotViewTitleLiteral}
                 && (!marker || Boolean(document.querySelector(marker)))
-                && (${dismissTourForRoute} ? !document.querySelector('.guided-tour-layer') : true);
+                && (${dismissSetupForRoute} ? !document.querySelector('.first-run-setup, .guided-tour-layer') : true);
             })()`, `the ${snapshotViewTitle} page`);
             await new Promise((resolveView) => setTimeout(resolveView, 250));
           }
@@ -9912,6 +9933,8 @@ app.whenReady().then(async () => {
             const bodyText = String(document.body?.innerText || '').replace(/\\s+/g, ' ').trim();
             const requestedTitle = ${JSON.stringify(snapshotViewTitle ?? "")};
             const requestedMarker = ${JSON.stringify(snapshotRouteMarker)};
+            const setupVisible = Boolean(document.querySelector('.first-run-setup'));
+            const setupStep = document.querySelector('.first-run-setup')?.getAttribute('data-setup-step') ?? '';
             const tourVisible = Boolean(document.querySelector('.guided-tour-layer'));
             const currentRouteTitle = document.querySelector('.topbar h1')?.textContent?.trim() ?? '';
             return {
@@ -9925,10 +9948,12 @@ app.whenReady().then(async () => {
               bodyTextLength: bodyText.length,
               hasRiftLiteText: bodyText.includes('RiftLite'),
               currentRouteTitle,
+              setupVisible,
+              setupStep,
               tourVisible,
               expectedRouteReady: !requestedTitle || (currentRouteTitle === requestedTitle
                 && (!requestedMarker || Boolean(document.querySelector(requestedMarker)))
-                && (${dismissTourForRoute} ? !tourVisible : true))
+                && (${dismissSetupForRoute} ? !setupVisible && !tourVisible : true))
             };
           })()`, true) as {
             readyState: string;
@@ -9941,6 +9966,8 @@ app.whenReady().then(async () => {
             bodyTextLength: number;
             hasRiftLiteText: boolean;
             currentRouteTitle: string;
+            setupVisible: boolean;
+            setupStep: string;
             tourVisible: boolean;
             expectedRouteReady: boolean;
           };

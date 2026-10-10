@@ -1832,6 +1832,7 @@ export interface UserSettings {
   deckTrackerPerformanceMode: DeckTrackerPerformanceMode;
   deckTrackerPinnedCards: Record<string, string[]>;
   matchupPrepWidgetEnabled: boolean;
+  showPlayToolbarInFullscreen: boolean;
   microphoneDeviceId: string;
   gameZoomFactor: number;
   autoSaveAfterSeconds: number;
@@ -2490,7 +2491,7 @@ export interface RiftLiteApi {
   getSettings(): Promise<UserSettings>;
   saveSettings(settings: Partial<UserSettings>): Promise<UserSettings>;
   clearEnhancedInsightsData(): Promise<{ matchesUpdated: number; replaysUpdated: number }>;
-  updateRawCaptureSettings(settings: Partial<RawCaptureSettings>): Promise<UserSettings>;
+  updateRawCaptureSettings(settings: Partial<RawCaptureSettings>, expectedAccountUid?: string): Promise<UserSettings>;
   setWebReplayDiscordShareHub(hubId: string, selected: boolean): Promise<UserSettings>;
   getCaptureHealth(): Promise<CaptureHealth>;
   getGamePlatformSwitchStatus(): Promise<GamePlatformSwitchStatus>;

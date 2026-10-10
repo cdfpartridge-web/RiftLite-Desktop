@@ -13,6 +13,8 @@ export const MULLIGAN_LAB_SCHEMA_VERSION = 1 as const;
 export const MULLIGAN_LAB_API_SCHEMA_VERSION = 2 as const;
 export const MULLIGAN_LAB_MIN_ELIGIBLE_HANDS = 25;
 export const MULLIGAN_LAB_MIN_UNIQUE_PLAYERS = 10;
+// Fixed v2 training-pack wire boundary. Stats seasons use statSeasons.ts; these
+// anonymised, day-only training observations retain their historical split.
 export const MULLIGAN_LAB_CURRENT_SEASON_STARTED_ON = "2026-07-31" as const;
 export const MULLIGAN_LAB_TRAINING_STORAGE_KEY = "riftlite:mulligan-lab-training:v1" as const;
 export const MULLIGAN_LAB_TRAINING_SCHEMA_VERSION = 2 as const;

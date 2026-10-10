@@ -99,7 +99,7 @@ export function MulliganLabIntro({ onStart, onDismiss }: MulliganLabIntroProps) 
         </header>
 
         <p id="mulligan-lab-intro-description" className="mulligan-lab-intro-lead">
-           My active deck deals practice hands from your saved deck, with no community data needed. Other modes let you compare real opening-hand choices with anonymised community Web Replays from indexed pre-season and current-season history.
+           My active deck deals practice hands from your saved deck, with no community data needed. Other modes let you compare real opening-hand choices with anonymised community Web Replays from all available indexed history.
         </p>
 
         <div className="mulligan-lab-intro-steps">

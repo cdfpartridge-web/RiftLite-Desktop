@@ -830,6 +830,38 @@ describe("RiftLiteStore database recovery", () => {
     }
   });
 
+  it.each([undefined, "true"])("keeps legacy fullscreen behaviour for %s and remembers toolbar choices across restarts", async (legacyValue) => {
+    const directory = await mkdtemp(join(tmpdir(), "riftlite-store-fullscreen-toolbar-"));
+    const dbPath = join(directory, "riftlite-v06.sqlite");
+    const legacyPath = join(directory, "riftlite-v06-store.json");
+    try {
+      await writeFile(legacyPath, JSON.stringify({
+        settings: { username: "Legacy player", showPlayToolbarInFullscreen: legacyValue }
+      }), "utf8");
+      const store = new RiftLiteStore(dbPath, legacyPath);
+      await store.load();
+      expect((await store.getSettings()).showPlayToolbarInFullscreen).toBe(false);
+      await store.saveSettings({ showPlayToolbarInFullscreen: true });
+      await store.saveSettings({ gameZoomFactor: 1.25 });
+
+      const restarted = new RiftLiteStore(dbPath, legacyPath);
+      await restarted.load();
+      expect((await restarted.getSettings()).showPlayToolbarInFullscreen).toBe(true);
+      const validated = await restarted.saveSettings({
+        showPlayToolbarInFullscreen: "false"
+      } as unknown as Parameters<RiftLiteStore["saveSettings"]>[0]);
+      expect(validated.showPlayToolbarInFullscreen).toBe(true);
+      await restarted.saveSettings({ showPlayToolbarInFullscreen: false });
+
+      const optedOut = new RiftLiteStore(dbPath, legacyPath);
+      await optedOut.load();
+      expect((await optedOut.getSettings()).showPlayToolbarInFullscreen).toBe(false);
+      expect((await optedOut.getSettings()).gameZoomFactor).toBe(1.25);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("defaults active-deck Home theming off and persists an explicit opt-in", async () => {
     const directory = await mkdtemp(join(tmpdir(), "riftlite-store-home-theme-"));
     const dbPath = join(directory, "riftlite-v06.sqlite");
@@ -909,6 +941,39 @@ describe("RiftLiteStore database recovery", () => {
         uploadEnabled: false,
         visibility: "private"
       });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("uses Public for a fresh install but preserves a saved Private replay preference after restart", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "riftlite-store-replay-default-"));
+    try {
+      const dbPath = join(directory, "riftlite-v06.sqlite");
+      const legacyPath = join(directory, "riftlite-v06-store.json");
+      const store = new RiftLiteStore(dbPath, legacyPath);
+      await store.load();
+      const fresh = await store.getSettings();
+      expect(fresh.rawCapture).toMatchObject({ visibility: "public", enabled: false, webReplayAutoUploadEnabled: false, tcgaWebReplayAutoUploadEnabled: false });
+      await store.saveSettings({ rawCapture: { ...fresh.rawCapture, visibility: "private" } });
+      const restarted = new RiftLiteStore(dbPath, legacyPath);
+      await restarted.load();
+      const saved = await restarted.getSettings();
+      expect(saved.firstRunComplete).toBe(false);
+      expect(saved.rawCapture).toMatchObject({ visibility: "private", enabled: false, webReplayAutoUploadEnabled: false });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the Private fallback for older settings without replay preferences", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "riftlite-store-legacy-replay-default-"));
+    try {
+      const legacyPath = join(directory, "riftlite-v06-store.json");
+      await writeFile(legacyPath, JSON.stringify({ settings: { username: "Existing player" } }), "utf8");
+      const store = new RiftLiteStore(join(directory, "riftlite-v06.sqlite"), legacyPath);
+      await store.load();
+      expect((await store.getSettings()).rawCapture.visibility).toBe("private");
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

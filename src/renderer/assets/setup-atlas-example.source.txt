@@ -1,0 +1,10 @@
+Asset: setup-atlas-example.webp
+Source page: https://riftatlas.com/play
+Source file: https://riftatlas.com/play/board-chain-20260908.webp
+Retrieved: 2026-10-07
+Unmodified official public example screenshot, 1800 x 1000, 178034 bytes.
+The screenshot depicts an Atlas example board with Kai and Ari, a revealed local hand,
+a face-down opponent hand, and empty chat. It is not from a RiftLite user's profile.
+RiftLite's guide renders separate informational toolbar controls above this image;
+the combined presentation is labelled as a guide, not a captured RiftLite session.
+Rift Atlas and Riot Games retain rights to their respective material.

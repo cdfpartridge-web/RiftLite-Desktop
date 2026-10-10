@@ -25,6 +25,27 @@ const evidence = (rows: unknown[], gameNumber = 1, id = "capture-1"): CaptureEve
 });
 
 describe("Atlas game log", () => {
+  it("hides old DOM and structured marketing/placeholder rows without merging repeated actions", () => {
+    const result = buildAtlasGameLog({ replay: replay({
+      structuredEvents: [rowEvent("capture:row:marketing", "Play Riftbound online with private room codes…"), rowEvent("capture:row:earlier", "Earlier activity…")],
+      events: [evidence([
+        { key: "marketing", text: "Play Riftbound online with private room codes…" },
+        ...Array.from({ length: 60 }, (_, index) => ({ key: `earlier-${index}`, text: "Earlier activity…" })),
+        { key: "pay-1", text: "13:37 Paid 1 Energy." }, { key: "pay-2", text: "13:37 Paid 1 Energy." },
+      ])],
+    }) });
+    expect(texts(result)).toEqual([["Paid 1 Energy.", "Paid 1 Energy."]]);
+  });
+
+  it("filters native placeholders only for display, retaining native insertion positions and undo", () => {
+    const result = buildAtlasGameLog({ payload: { messages: [
+      frame(0, snapshot(1, [entry("noise", "Earlier activity…"), entry("old", "First action")])),
+      frame(1, { type: "authoritative_patch_commit", ops: [{ op: "log_insert", index: 1, entries: [entry("new", "Second action")] }] }),
+      frame(2, { type: "authoritative_patch_commit", action: { type: "rewind_last_action" }, ops: [{ op: "log_remove", entryIds: ["old"] }] }),
+    ] } });
+    expect(texts(result)).toEqual([["Second action"]]);
+  });
+
   it("reads original snapshot rows, resolves actors, and preserves distinct repeated actions", () => {
     const result = buildAtlasGameLog({ payload: { messages: [frame(0, snapshot(1, [
       entry("b", "Paid 1 Energy."), entry("a", "Paid 1 Energy."), entry("turn", "Starting turn 17"),

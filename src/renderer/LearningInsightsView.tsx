@@ -35,7 +35,7 @@ import {
   resolveLabTrainingDeckId,
   storeLabTrainingHandoff
 } from "../shared/labTrainingHandoff";
-import { MULLIGAN_LAB_CURRENT_SEASON_STARTED_ON } from "../shared/mulliganLab";
+import { CURRENT_STAT_SEASON, RADIANCE_PRESEASON_START_AT, STAT_SEASONS, type StatSeasonId } from "../shared/statSeasons";
 import { legendImageUrl } from "../shared/legendImages";
 import type { ActiveView } from "../shared/navigationModel";
 import {
@@ -136,7 +136,7 @@ export function LearningInsightsView({
   const [tab, setTab] = useState<CoachTab>("coach");
   const [showScopeEditor, setShowScopeEditor] = useState(false);
   const [rangeDays, setRangeDays] = useState(0);
-  const [period, setPeriod] = useState<"all" | "preseason" | "current-season">("all");
+  const [period, setPeriod] = useState<StatSeasonId>(CURRENT_STAT_SEASON);
   const [deckKey, setDeckKey] = useState("");
   const [playerLegend, setPlayerLegend] = useState("");
   const [opponentLegend, setOpponentLegend] = useState("");
@@ -370,10 +370,12 @@ export function LearningInsightsView({
   const playerLegendOptions = uniqueOptions(matches.map((match) => match.myChampion));
   const opponentLegendOptions = uniqueOptions(matches.map((match) => match.opponentChampion));
   const deckOptions = uniqueDeckOptions(matches);
-  const activeFilterCount = [period !== "all" ? period : "", deckKey, playerLegend, opponentLegend, format, gameStage !== "all" ? gameStage : "", wentFirst]
+  const activeFilterCount = [period !== CURRENT_STAT_SEASON ? "season" : "", deckKey, playerLegend, opponentLegend, format, gameStage !== "all" ? gameStage : "", wentFirst]
     .filter(Boolean).length + (rangeDays ? 1 : 0);
   const scopeSummary = coachingScopeSummary(filters, report.gamesAnalyzed);
   const periodCounts = report.scopeReceipt.periodGameCounts;
+  const periodCountReceipt = report.scopeReceipt.periods
+    .map((period) => `${periodLabel(period)} ${periodCounts[period]}`).join(" · ") || "No games in this season";
 
   function commitStore(next: ReplayCoachingStore) {
     setCoaching({ ...next, updatedAt: new Date().toISOString() });
@@ -508,7 +510,7 @@ export function LearningInsightsView({
 
   function clearFilters() {
     setRangeDays(0);
-    setPeriod("all");
+    setPeriod(CURRENT_STAT_SEASON);
     setDeckKey("");
     setPlayerLegend("");
     setOpponentLegend("");
@@ -547,15 +549,15 @@ export function LearningInsightsView({
         <div className="insights-coach-scope" title={scopeSummary}>
           <span data-grade={report.coverage.grade}><Activity size={14} /> {captureCoverageLabel(report.coverage.grade)} capture</span>
           <strong>{report.gamesAnalyzed} eligible game{report.gamesAnalyzed === 1 ? "" : "s"}</strong>
-          <small>{rawLoading ? "Indexing uncached local evidence…" : `Pre-season ${periodCounts.preseason} · current ${periodCounts["current-season"]} · ${deckVersionReceipt(report.scopeReceipt.deckVersions.length, report.scopeReceipt.unknownDeckGames)}`}</small>
+          <small>{rawLoading ? "Indexing uncached local evidence…" : `${periodCountReceipt} · ${deckVersionReceipt(report.scopeReceipt.deckVersions.length, report.scopeReceipt.unknownDeckGames)}`}</small>
           <button type="button" className="secondary compact" onClick={() => setShowScopeEditor((current) => !current)} aria-expanded={showScopeEditor}><SlidersHorizontal size={13} /> Change scope <ChevronDown size={12} /></button>
         </div>
       </header>
 
       {showScopeEditor ? <section className="rail-card insights-filter-card insights-scope-editor">
-        <header><div><span>Comparable evidence</span><strong>{activeFilterCount ? `${activeFilterCount} active refinement${activeFilterCount === 1 ? "" : "s"}` : "All available local history"}</strong></div>{activeFilterCount ? <button type="button" className="secondary compact" onClick={clearFilters}><RotateCcw size={13} /> Reset</button> : null}</header>
+        <header><div><span>Comparable evidence</span><strong>{activeFilterCount ? `${activeFilterCount} active refinement${activeFilterCount === 1 ? "" : "s"}` : "Radiance pre-season"}</strong></div>{activeFilterCount ? <button type="button" className="secondary compact" onClick={clearFilters}><RotateCcw size={13} /> Reset</button> : null}</header>
         <div className="insights-filters">
-          <label>History<select value={period} onChange={(event) => setPeriod(event.target.value as typeof period)}><option value="all">Pre-season + current season</option><option value="current-season">Current season only</option><option value="preseason">Pre-season only</option></select></label>
+          <label>Season<select value={period} onChange={(event) => setPeriod(event.target.value as StatSeasonId)}>{STAT_SEASONS.map((season) => <option key={season.id} value={season.id}>{season.label}</option>)}</select></label>
           <label>Period<select value={rangeDays} onChange={(event) => setRangeDays(Number(event.target.value))}><option value={0}>All available dates</option><option value={7}>Last 7 days</option><option value={30}>Last 30 days</option><option value={90}>Last 90 days</option></select></label>
           <label>Deck<select value={deckKey} onChange={(event) => setDeckKey(event.target.value)}><option value="">All deck versions</option>{deckOptions.map((deck) => <option value={deck.key} key={deck.key}>{deck.label}</option>)}</select></label>
           <label>Your Legend<select value={playerLegend} onChange={(event) => setPlayerLegend(event.target.value)}><option value="">All Legends</option>{playerLegendOptions.map((legend) => <option value={legend} key={legend}>{legend}</option>)}</select></label>
@@ -1260,7 +1262,7 @@ function readLegacyDismissed(): Set<string> {
 
 function coachingScopeSummary(filters: ReplayInsightFilters, games: number): string {
   const parts = [
-    filters.period === "current-season" ? "current season" : filters.period === "preseason" ? "pre-season" : "pre-season + current season",
+    periodLabel(filters.period ?? ""),
     filters.deckKey || "all decks",
     filters.opponentLegend ? `vs ${filters.opponentLegend}` : "all opponents",
     filters.gameStage === "preboard" ? "pre-board" : filters.gameStage === "postboard" ? "post-sideboard" : "all game stages",
@@ -1289,10 +1291,11 @@ function captureCoverageLabel(grade: "high" | "medium" | "limited"): string {
   return "Limited";
 }
 
-function periodLabel(period: ReplayInsight["dataReceipt"]["periods"][number]): string {
-  if (period === "current-season") return "current season";
-  if (period === "preseason") return "pre-season";
-  return "unknown period";
+function periodLabel(period: string): string {
+  if (period === "current-season") return "Vendetta season";
+  if (period === "preseason") return "Before Vendetta launch";
+  if (period === "all") return "All tracked seasons";
+  return STAT_SEASONS.find((season) => season.id === period)?.label ?? "Unknown period";
 }
 
 function categoryLabel(category = ""): string {
@@ -1380,4 +1383,4 @@ function moveCoachTab(event: React.KeyboardEvent<HTMLButtonElement>, current: Co
   window.requestAnimationFrame(() => document.getElementById(`coach-tab-${next}`)?.focus());
 }
 
-export const INSIGHTS_CURRENT_SEASON_BOUNDARY = MULLIGAN_LAB_CURRENT_SEASON_STARTED_ON;
+export const INSIGHTS_CURRENT_SEASON_BOUNDARY = RADIANCE_PRESEASON_START_AT;

@@ -3,10 +3,12 @@ import {
   buildReplayInsights,
   replayInsightEventsFromRawPayload,
   replayInsightOpeningHandEventsFromRawPayload,
-  type ReplayInsightCardCatalogEntry
+  type ReplayInsightCardCatalogEntry,
+  type ReplayInsightFilters
 } from "../src/shared/replayInsights.js";
 import { replayWithIntelligence } from "../src/shared/replayIntelligence.js";
 import { parseReplayCardActionText } from "../src/shared/replayCardText.js";
+import { CURRENT_STAT_SEASON, RADIANCE_PRESEASON_START_AT, RADIANCE_PRESEASON_START_MS } from "../src/shared/statSeasons.js";
 import type {
   MatchDraft,
   ReplayIntelligenceCorrection,
@@ -601,13 +603,52 @@ describe("Replay Insights", () => {
     expect(allHistory.analyzedReplayIds).toEqual(["preseason", "current-season"]);
     expect(allHistory.scopeReceipt).toMatchObject({
       currentSeasonStartedOn: "2026-07-31",
-      periods: ["preseason", "current-season"],
-      periodGameCounts: { preseason: 1, "current-season": 1, unknown: 0 },
+      currentSeasonStartedAt: RADIANCE_PRESEASON_START_AT,
+      periods: ["vendetta-launch", "pre-vendetta"],
+      periodGameCounts: { "radiance-preseason": 0, "vendetta-launch": 1, "vendetta-preview": 0, "pre-vendetta": 1, unknown: 0 },
       unknownDeckGames: 0
     });
     expect(allHistory.scopeReceipt.deckVersions).toHaveLength(1);
     expect(allHistory.scopeReceipt.deckVersions[0]?.games).toBe(2);
     expect(currentOnly.analyzedReplayIds).toEqual(["current-season"]);
+  });
+
+  it("starts Radiance at the exact match boundary and retains separate older season cohorts", () => {
+    const capturedTimes = [
+      "2026-07-01T10:00:00.000Z",
+      "2026-07-20T10:00:00.000Z",
+      new Date(RADIANCE_PRESEASON_START_MS - 1).toISOString(),
+      RADIANCE_PRESEASON_START_AT,
+      new Date(RADIANCE_PRESEASON_START_MS + 1).toISOString(),
+      "invalid"
+    ];
+    // Every replay was created after the cutoff; original match time determines its season.
+    const sources = capturedTimes.map((_, index) => ({
+      ...replay(`season-${index}`, lateKeepEvents()),
+      capturedAt: new Date(RADIANCE_PRESEASON_START_MS + 86_400_000).toISOString()
+    }));
+    const matches = capturedTimes.map((capturedAt, index) => ({ ...match(sources[index]!.id), capturedAt }));
+    const original = JSON.stringify({ sources, matches });
+    const reportFor = (period: ReplayInsightFilters["period"]) => buildReplayInsights(sources, matches, {
+      filters: { period }, cardCatalog: CATALOG
+    });
+    const current = reportFor(CURRENT_STAT_SEASON);
+    expect(current.analyzedReplayIds).toEqual(["season-3", "season-4"]);
+    expect(current.scopeReceipt.periodGameCounts["radiance-preseason"]).toBe(2);
+    expect(current.scopeReceipt.periods).toEqual(["radiance-preseason"]);
+    expect(current.scopeReceipt.observedFrom).toBe(RADIANCE_PRESEASON_START_AT);
+    expect(current.scopeReceipt.observedThrough).toBe(new Date(RADIANCE_PRESEASON_START_MS + 1).toISOString());
+    expect(current.insights.every((insight) => insight.dataReceipt.periods.every((period) => period === "radiance-preseason"))).toBe(true);
+    expect(reportFor("vendetta-launch").analyzedReplayIds).toEqual(["season-2"]);
+    expect(reportFor("current-season").analyzedReplayIds).toEqual(["season-2"]);
+    expect(reportFor("vendetta-preview").analyzedReplayIds).toEqual(["season-1"]);
+    expect(reportFor("pre-vendetta").analyzedReplayIds).toEqual(["season-0"]);
+    expect(reportFor("preseason").analyzedReplayIds).toEqual(["season-0", "season-1"]);
+    const all = reportFor("");
+    expect(all.analyzedReplayIds).toEqual(sources.map((source) => source.id));
+    expect(all.scopeReceipt.periodGameCounts.unknown).toBe(1);
+    expect(all.scopeReceipt.observedFrom).toBe(capturedTimes[0]);
+    expect(JSON.stringify({ sources, matches })).toBe(original);
   });
 
   it("skips Explorer aggregation work when requested without disabling coaching insights", () => {

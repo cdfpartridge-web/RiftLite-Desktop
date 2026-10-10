@@ -47,6 +47,7 @@ export const CANONICAL_LEGEND_NAMES = [
   "Renata Glasc",
   "Renekton",
   "Rengar",
+  "Riven",
   "Rumble",
   "Seraphine",
   "Sett",
@@ -63,6 +64,7 @@ export const CANONICAL_LEGEND_NAMES = [
 ];
 
 const LEGEND_ALIAS_MAP: Record<string, string> = {
+  "the exile": "Riven",
   "agony's embrace": "Evelynn",
   "iron revenant": "Mordekaiser",
   "boy who shattered time": "Ekko",

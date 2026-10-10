@@ -1,0 +1,39 @@
+.setup-toolbar-guide { margin: 22px 0; color: #dceaf2; }
+.setup-toolbar-guide__heading h2 { margin: 0; font-size: 16px; font-weight: 600; }
+.setup-toolbar-guide__heading p { margin: 7px 0 13px; color: #9cb3c3; font-size: 11px; line-height: 1.6; }
+.setup-toolbar-guide__shortcut { display: flex; align-items: center; gap: 7px; margin: -3px 0 13px; color: #b9d9e6; font-size: 10px; }
+.setup-toolbar-guide__shortcut kbd { padding: 2px 5px; border: 1px solid #7196aa50; border-radius: 4px; background: #183042; color: #d4eff6; font: inherit; }
+.setup-toolbar-guide__example { margin: 0; border: 1px solid #7397af45; border-radius: 11px; background: #07131e; overflow: hidden; }
+.setup-toolbar-guide__toolbar { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; padding: 10px; background: #091a27; border-bottom: 1px solid #7397af45; }
+.setup-toolbar-guide__control-group { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
+.setup-toolbar-guide .setup-toolbar-guide__control { display: inline-flex; align-items: center; justify-content: center; gap: 5px; flex: 0 0 auto; min-width: 29px; min-height: 31px; padding: 5px 7px; border: 1px solid #537f9b75; border-radius: 7px; background: #0b2031; color: #c5dfef; font-size: 9px; font-weight: 500; line-height: 1.3; box-shadow: none; }
+.setup-toolbar-guide .setup-toolbar-guide__control:hover { border-color: #91dce9; background: #173347; }
+.setup-toolbar-guide .setup-toolbar-guide__control[aria-pressed="true"] { border-color: #99e7f0; background: #256074; color: #effeff; box-shadow: 0 0 0 1px #99e7f036; }
+.setup-toolbar-guide .setup-toolbar-guide__control[data-kind="stop"] { color: #ffdee7; background: #492238; border-color: #b9638475; }
+.setup-toolbar-guide .setup-toolbar-guide__control[data-kind="stop"][aria-pressed="true"] { background: #80364f; border-color: #ffabc4; }
+.setup-toolbar-guide__image-wrap { max-width: 100%; overflow: auto; scrollbar-color: #456579 #0b1d2b; }
+.setup-toolbar-guide__image { display: block; width: 100%; height: auto; max-width: none; }
+.setup-toolbar-guide__image-wrap[data-enlarged="true"] { max-height: 440px; }
+.setup-toolbar-guide__image-wrap[data-enlarged="true"] .setup-toolbar-guide__image { width: 1200px; }
+.setup-toolbar-guide__example figcaption { display: flex; align-items: center; gap: 12px; padding: 9px 11px; border-top: 1px solid #7397af2b; color: #8ca6b8; font-size: 9px; line-height: 1.6; }
+.setup-toolbar-guide__example figcaption > span { flex: 1; }
+.setup-toolbar-guide__example figcaption button { display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto; min-height: 26px; padding: 3px 5px; border: 0; background: transparent; color: #b8e0ec; font-size: 10px; box-shadow: none; }
+.setup-toolbar-guide__detail, .setup-toolbar-guide__fullscreen { display: flex; align-items: flex-start; gap: 12px; margin: 11px 0 0; padding: 13px 14px; border: 1px solid #84b8cf35; border-radius: 10px; background: #1230426b; }
+.setup-toolbar-guide__detail { min-height: 82px; margin: 0; padding: 10px 13px; border: 0; border-bottom: 1px solid #7397af45; border-radius: 0; }
+.setup-toolbar-guide__detail > svg, .setup-toolbar-guide__fullscreen > svg { flex: 0 0 auto; color: #8ad5e5; margin-top: 2px; }
+.setup-toolbar-guide__detail strong, .setup-toolbar-guide__fullscreen strong { color: #def0f8; font-size: 12px; font-weight: 600; }
+.setup-toolbar-guide__detail p, .setup-toolbar-guide__fullscreen p { margin: 6px 0 0; color: #a4bccb; font-size: 11px; line-height: 1.65; }
+.setup-toolbar-guide__fullscreen { background: #172630; border-color: #92afbd26; }
+.setup-toolbar-guide__fullscreen b { color: #c8e0ec; font-weight: 500; }
+.setup-toolbar-guide__extra { margin-top: 13px; font-size: 10px; color: #8faaba; }
+.setup-toolbar-guide__extra summary { cursor: pointer; color: #aac4d3; padding: 3px 0; }
+.setup-toolbar-guide__extra p { display: flex; gap: 8px; margin: 10px 0 0; line-height: 1.65; }
+.setup-toolbar-guide__extra svg { flex: 0 0 auto; margin-top: 1px; }
+.setup-toolbar-guide__extra strong { color: #d1e3ee; font-weight: 500; }
+.setup-toolbar-guide button:focus-visible, .setup-toolbar-guide summary:focus-visible, .setup-toolbar-guide__image-wrap:focus-visible { outline: 2px solid #91e4ee; outline-offset: 3px; }
+@media (max-width: 540px) {
+  .setup-toolbar-guide__toolbar { gap: 5px; padding: 8px; }
+  .setup-toolbar-guide .setup-toolbar-guide__control { min-height: 34px; min-width: 34px; }
+  .setup-toolbar-guide__example figcaption { align-items: flex-start; }
+  .setup-toolbar-guide__detail { min-height: 100px; }
+}

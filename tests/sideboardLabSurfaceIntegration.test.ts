@@ -92,7 +92,7 @@ describe("Sideboard Lab desktop surface", () => {
     expect(viewSource).toContain("Community median");
     expect(viewSource).toContain("Common supported plans");
     expect(viewSource).toContain("Quantity is descriptive and is not graded independently.");
-    expect(viewSource).toContain("Current-season pattern");
+    expect(viewSource).toContain("Pattern since 31 July 2026");
     expect(viewSource).toContain("Exact active-deck exercises");
     expect(viewSource).toContain("Full-corpus matchup exercises");
     expect(viewSource).toContain("Legend-wide fallback exercises");
@@ -109,7 +109,7 @@ describe("Sideboard Lab desktop surface", () => {
     expect(viewSource).toContain("Patterns, not prescriptions");
     expect(viewSource).toContain("This is not a whole-plan grade.");
     expect(viewSource).toContain("sampled player's exact plan is never used as the answer");
-    expect(viewSource).toContain("All available pre-season and current-season history indexed.");
+    expect(viewSource).toContain("All available history indexed.");
     expect(viewSource).toContain("Historical observations are structurally validated because their rules epoch is unknown.");
   });
 

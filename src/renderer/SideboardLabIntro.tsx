@@ -105,7 +105,7 @@ export function SideboardLabIntro({ onStart, onDismiss }: SideboardLabIntroProps
           </article>
           <article>
             <span aria-hidden="true"><BarChart3 size={19} /></span>
-            <div><strong>3. Reveal real evidence</strong><p>Card signals, moved-copy ranges, recurring IN↔OUT pairs, and supported full packages come from completed community windows where those cards were actually available. Targeted modes query the full indexed pre-season and current-season corpus.</p></div>
+            <div><strong>3. Reveal real evidence</strong><p>Card signals, moved-copy ranges, recurring IN↔OUT pairs, and supported full packages come from completed community windows where those cards were actually available. Targeted modes query all available indexed history.</p></div>
           </article>
           <article>
             <span aria-hidden="true"><Shield size={19} /></span>

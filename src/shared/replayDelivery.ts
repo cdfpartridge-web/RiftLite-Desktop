@@ -23,7 +23,8 @@ export interface ReplayDeliverySummary {
 
 const REPLAY_AUTH_ERROR_PATTERN = /authentication_required|linked RiftLite account token|device credential is not linked/i;
 const REPLAY_PROCESSING_ERROR_PATTERN = /replay_processing|processing is still in progress/i;
-const REPLAY_INCOMPLETE_MULLIGAN_PATTERN = /opening mulligan|incomplete[_ -]capture|raw_capture_incomplete/i;
+const REPLAY_INCOMPLETE_MULLIGAN_PATTERN = /^(?:RiftLite replay complete 422: )?Replay capture is incomplete: The replay did not capture the opening mulligan\.$/i;
+const REPLAY_INCOMPLETE_CAPTURE_PATTERN = /^(?:RiftLite replay complete 422: )?Replay capture is incomplete:/i;
 const REPLAY_EMPTY_BODY_PATTERN = /empty_body|JSON request body is required/i;
 const REPLAY_TOO_LARGE_PATTERN = /body_too_large|too.large|exceeds?.+(?:limit|size)|413/i;
 
@@ -61,8 +62,20 @@ export function replayDeliveryErrorMessage(
       ? `The upload is complete and the website is still preparing this replay. RiftLite will check again after ${formatRetryTime(context.nextRetryAt)}.`
       : "The upload is complete and the website is still preparing this replay. RiftLite will check again automatically.";
   }
-  if (REPLAY_INCOMPLETE_MULLIGAN_PATTERN.test(searchable)) {
+  const captureCode = context.code?.trim() ?? "";
+  const normalizedMessage = message.replace(/\s+/g, " ");
+  if (
+    captureCode === "replay_capture_missing_mulligan" ||
+    ((!captureCode || captureCode === "raw_capture_incomplete") &&
+      REPLAY_INCOMPLETE_MULLIGAN_PATTERN.test(normalizedMessage))
+  ) {
     return "The opening mulligan was not captured. The replay can still be uploaded as a partial replay, and the missing opening will be clearly marked.";
+  }
+  if (
+    captureCode === "replay_capture_incomplete" || captureCode === "raw_capture_incomplete" ||
+    REPLAY_INCOMPLETE_CAPTURE_PATTERN.test(normalizedMessage)
+  ) {
+    return "This capture is missing required game data, so the website cannot publish it. The saved capture remains available locally. Open the technical details to see what is missing.";
   }
   if (REPLAY_EMPTY_BODY_PATTERN.test(searchable)) {
     return "RiftLite could not finish the website upload request. Retry it; if it repeats, update RiftLite. The local replay capture is safe.";

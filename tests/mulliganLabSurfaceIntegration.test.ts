@@ -57,8 +57,8 @@ describe("Mulligan Lab desktop surface", () => {
     expect(labSource).toContain("Eligible matchup cohorts rotate through successive daily packs");
   });
 
-  it("separates the rotating exercises from all-history pre-season and current-season evidence", () => {
-    expect(labSource).toContain("available pre-season and current-season history");
+  it("separates the rotating exercises from all-history evidence with explicit historical periods", () => {
+    expect(labSource).toContain("all available history");
     expect(labSource).toContain('readyPack?.coveragePolicy === "all-available-history"');
     expect(labSource).toContain('includedPeriods.has("preseason")');
     expect(labSource).toContain('includedPeriods.has("current-season")');
@@ -149,7 +149,7 @@ describe("Mulligan Lab desktop surface", () => {
     expect(labSource).toContain("mulliganLabChoiceEvidence(card.stats)");
     expect(labSource).toContain("Same curve shape");
     expect(labSource).toContain("Same initiative");
-    expect(labSource).toContain("Meta movement");
+    expect(labSource).toContain("Historical movement");
     expect(stylesSource).toContain(".mulligan-lab-context-slices");
     expect(stylesSource).toContain('[data-feedback="mixed-copy"]');
   });
@@ -240,7 +240,7 @@ describe("Mulligan Lab desktop surface", () => {
 
   it("explains community history, curve guidance, and outcomes without causal claims", () => {
     expect(introSource).toContain("anonymised community Web Replays");
-    expect(introSource).toContain("indexed pre-season and current-season history");
+    expect(introSource).toContain("all available indexed history");
     expect(introSource).toContain("The Curve check is a printed-cost gameplay baseline.");
     expect(introSource).toContain("outcome rates are descriptive, not proof that a choice caused a win");
     expect(introSource).toContain("Green means aligned with a reliable pattern");

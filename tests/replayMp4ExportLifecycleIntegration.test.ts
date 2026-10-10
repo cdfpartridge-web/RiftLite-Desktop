@@ -100,6 +100,16 @@ describe("replay MP4 export lifecycle integration", () => {
     expect(presentation).toContain("setReplayMp4WindowsHidden(partialPath, false)");
   });
 
+  it("measures video presentation timestamps instead of stream-copy progress or container/audio duration", () => {
+    const probe = sourceBetween("async function replayMp4ProbeMedia(", "async function writeReplayMp4WatermarkPng(");
+    const runner = sourceBetween("async function runReplayMp4Ffmpeg(", "function replayMp4ProbeOutput(");
+    expect(probe).toContain("replayMp4VideoTimelineArgs(filePath)");
+    expect(probe).toContain("(line) => timeline.consumeLine(line)");
+    expect(probe).toContain("const durationMs = timeline.durationMs");
+    expect(probe).not.toContain("scannedDurationMs || headerDurationMs");
+    expect(runner).toContain("onOutputLine?.(line)");
+  });
+
   it("canonicalizes source protection and detects same-file identity", () => {
     const guard = sourceBetween("async function assertReplayMp4DestinationDiffersFromSource(", "async function setReplayMp4WindowsHidden(");
     expect(guard).toContain("replayMp4CanonicalCandidatePath(sourcePath)");

@@ -29,6 +29,7 @@ function riftAtlasCardImageUrl(cardCode: string): string {
 }
 
 const LEGEND_IMAGE_URLS: Record<string, string> = {
+  "Riven": "https://cdn.piltoverarchive.com/cards/RAD-149.webp",
   "Evelynn": "https://cdn.piltoverarchive.com/cards/RAD-153.webp",
   "Mordekaiser": "https://cdn.piltoverarchive.com/temporary/1790861904340-69cuehy8is7.png",
   "Ekko": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/8ca3ef446631784ce1d261e30f6a163843ffcb2b-744x1039.png?accountingTag=RB",

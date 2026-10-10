@@ -55,7 +55,7 @@ const HOME_DECK_LEGENDS_BY_THEME: Record<HomeDeckThemeId, readonly string[]> = {
   "calm-order": ["Azir", "Ivern", "Leona", "Shen"],
   "fury-order": ["Mordekaiser", "Darius", "Rek'Sai", "Vi"],
   "mind-chaos": ["Diana", "Ezreal", "Mel", "Teemo"],
-  "calm-chaos": ["Irelia", "Vex", "Yasuo"],
+  "calm-chaos": ["Irelia", "Riven", "Vex", "Yasuo"],
   "body-calm": ["K'Sante", "Jax", "Lee Sin", "Master Yi", "Master Yi, Wuju Master", "Master Yi, Wuju Bladesman"],
   "body-mind": ["Jayce"],
   "fury-mind": ["Ekko", "Jhin", "Kai'Sa", "Rumble"],
