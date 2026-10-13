@@ -168,6 +168,163 @@ describe("Atlas completed single-game echoes", () => {
     await test.coordinator.waitForAllReplayFinalizations();
   });
 
+  it.each(["match-start", "match-snapshot", "match-update"] as const)("does not recreate the saved match when its result dialog closes and emits %s", async (kind) => {
+    const test = harness();
+    await finishYi(test);
+    await test.coordinator.confirmMatch({ ...test.saved[0], status: "saved" });
+    // Closing Atlas's result dialog leaves the finished board visible. Its
+    // preload may call this a new start because the terminal result reset its
+    // active flag, but neither the room nor the actual game score changed.
+    await test.coordinator.handleEvent(event(kind, 103, {
+      ...yi, atlasResultKind: "", endText: "",
+      score: { me: "6", opp: "3", source: "atlas-score-track" }
+    }));
+    expect(test.coordinator.hasActiveCaptureSession("atlas")).toBe(false);
+    await test.coordinator.handleEvent(event("match-start", 136, {
+      ...yi, roomCode: "NEWROOM", opponentName: "New Rival",
+      score: { me: "0", opp: "0", source: "atlas-score-track" }
+    }));
+    expect(test.saved).toHaveLength(1);
+    expect(test.drafts()).toHaveLength(1);
+    expect(test.coordinator.getLiveOverlayMatch()).toMatchObject({ opponentName: "New Rival", score: "0-0" });
+    await test.coordinator.waitForAllReplayFinalizations();
+  });
+
+  it("keeps a finished board closed through later snapshots, then captures a snapshot-only same-room score reset", async () => {
+    const test = harness();
+    await finishYi(test);
+    for (const seconds of [103, 200, 300]) {
+      await test.coordinator.handleEvent(event("match-snapshot", seconds, {
+        ...yi, score: { me: "6", opp: "3" }
+      }));
+      expect(test.coordinator.hasActiveCaptureSession("atlas")).toBe(false);
+    }
+    await test.coordinator.handleEvent(event("match-snapshot", 305, {
+      ...yi, score: { me: "0", opp: "0" }
+    }));
+    await test.coordinator.handleEvent(complete(310));
+    expect(test.saved).toHaveLength(2);
+    expect(test.drafts()).toHaveLength(2);
+    expect(test.saved[1].capturedAt).toBe(event("match-snapshot", 305, {}).capturedAt);
+    await test.coordinator.waitForAllReplayFinalizations();
+  });
+
+  it.each(["atlasGameInstanceId", "atlasHistoryStartedAt"] as const)("captures a genuine missed start when %s changes despite the same room and score", async (identity) => {
+    const test = harness();
+    const previous = { ...yi, [identity]: identity === "atlasHistoryStartedAt" ? 1_000 : "previous-game" };
+    const next = { ...yi, [identity]: identity === "atlasHistoryStartedAt" ? 2_000 : "next-game" };
+    await test.coordinator.handleEvent(event("match-start", 0, { ...previous, score: { me: "0", opp: "0" } }));
+    await test.coordinator.handleEvent(complete(100, previous));
+    await test.coordinator.handleEvent(event("match-snapshot", 110, { ...next, score: { me: "6", opp: "3" } }));
+    await test.coordinator.handleEvent(complete(115, next));
+    expect(test.saved).toHaveLength(2);
+    expect(test.saved[1].capturedAt).toBe(event("match-snapshot", 110, {}).capturedAt);
+    await test.coordinator.waitForAllReplayFinalizations();
+  });
+
+  it("captures the first observed active board even when no match-start was received", async () => {
+    const test = harness();
+    await test.coordinator.handleEvent(event("match-snapshot", 90, { ...yi, score: { me: "6", opp: "3" } }));
+    await test.coordinator.handleEvent(complete(100));
+    expect(test.saved).toHaveLength(1);
+    expect(test.saved[0].capturedAt).toBe(event("match-snapshot", 90, {}).capturedAt);
+    await test.coordinator.waitForAllReplayFinalizations();
+  });
+
+  it("does not recreate a completed automatic BO1 victory after its result dialog closes", async () => {
+    const test = harness();
+    const bo1 = { ...yi, format: "Bo1" };
+    await test.coordinator.handleEvent(event("match-start", 0, { ...bo1, score: { me: "0", opp: "0" } }));
+    await test.coordinator.handleEvent(event("match-end", 100, {
+      ...bo1, atlasResultKind: "game-result", endText: "Victory", score: { me: "8", opp: "3" }
+    }));
+    expect(test.saved).toHaveLength(1);
+    await test.coordinator.confirmMatch({ ...test.saved[0], status: "saved" });
+    await test.coordinator.handleEvent(event("match-snapshot", 102, {
+      ...bo1, atlasResultKind: "game-result", endText: "Victory", score: { me: "8", opp: "3" }
+    }));
+    expect(test.coordinator.hasActiveCaptureSession("atlas")).toBe(false);
+    await test.coordinator.handleEvent(event("match-start", 103, { ...bo1, score: { me: "8", opp: "3" } }));
+    expect(test.coordinator.hasActiveCaptureSession("atlas")).toBe(false);
+    await test.coordinator.handleEvent(event("match-start", 110, { ...bo1, score: { me: "0", opp: "0" } }));
+    await test.coordinator.handleEvent(complete(115, bo1));
+    expect(test.saved).toHaveLength(2);
+    expect(test.drafts()).toHaveLength(2);
+    await test.coordinator.waitForAllReplayFinalizations();
+  });
+
+  it("does not recreate a three-game landing-page finish when the old board starts again after 148 seconds of silence", async () => {
+    const test = harness();
+    for (const [gameNumber, me, opp] of [[1, "8", "4"], [2, "4", "8"], [3, "7", "6"]] as const) {
+      await test.coordinator.handleEvent(event("match-start", (gameNumber - 1) * 30, {
+        ...yi, score: { me: "0", opp: "0" }
+      }));
+      await test.coordinator.handleEvent(event("match-snapshot", gameNumber * 30 - 5, {
+        ...yi, score: { me, opp }
+      }));
+      if (gameNumber < 3) {
+        await test.coordinator.handleEvent(event("match-end", gameNumber * 30 - 1, {
+          ...yi, atlasResultKind: "game-result", atlasBo3GameNumber: gameNumber,
+          endText: `Confirm Game ${gameNumber} Winner`, score: { me, opp }
+        }));
+      }
+    }
+    await test.coordinator.handleEvent({
+      ...event("match-end", 100, {
+        ...yi, active: false, reason: "inactive-debounce", atlasResultKind: "", endText: "",
+        score: { me: "7", opp: "6" }
+      }), url: "https://play.riftatlas.com/"
+    });
+    expect(test.saved).toHaveLength(1);
+    expect(test.saved[0].games).toHaveLength(3);
+    await test.coordinator.confirmMatch({ ...test.saved[0], status: "saved" });
+    // Oct 13 sequence, with synthetic players/rooms and the observed delays.
+    await test.coordinator.handleEvent(event("match-start", 248.141, {
+      ...yi, reason: "interaction-settled", atlasResultKind: "", endText: "", score: { me: "7", opp: "6" }
+    }));
+    expect(test.coordinator.hasActiveCaptureSession("atlas")).toBe(false);
+    await test.coordinator.handleEvent(event("match-start", 249.791, {
+      ...yi, roomCode: "NEWROOM", opponentName: "New Rival", score: { me: "0", opp: "0" }
+    }));
+    expect(test.saved).toHaveLength(1);
+    expect(test.drafts()).toHaveLength(1);
+    expect(test.coordinator.getLiveOverlayMatch()).toMatchObject({ opponentName: "New Rival", gameNumber: 1, score: "0-0" });
+    await test.coordinator.waitForAllReplayFinalizations();
+  });
+
+  it("does not recreate an early terminal match through an old-board start, inactive end and next opponent", async () => {
+    vi.useFakeTimers();
+    const test = harness();
+    await test.coordinator.handleEvent(event("match-start", 0, { ...yi, score: { me: "0", opp: "0" } }));
+    await test.coordinator.handleEvent({ ...complete(100), payload: { ...complete(100).payload, score: { me: "4", opp: "2" } } });
+    await test.coordinator.confirmMatch({ ...test.saved[0], status: "saved" });
+    await test.coordinator.handleEvent(event("match-start", 112.063, {
+      ...yi, atlasResultKind: "", endText: "", score: { me: "4", opp: "2" }
+    }));
+    await test.coordinator.handleEvent(event("match-end", 115.124, {
+      ...yi, active: false, reason: "inactive-debounce", atlasResultKind: "", endText: "", score: { me: "4", opp: "2" }
+    }));
+    await test.coordinator.handleEvent(event("match-start", 159.744, {
+      ...yi, roomCode: "NEWROOM", opponentName: "New Rival", score: { me: "0", opp: "0" }
+    }));
+    await vi.advanceTimersByTimeAsync(46_000);
+    expect(test.saved).toHaveLength(1);
+    expect(test.drafts()).toHaveLength(1);
+    expect(test.coordinator.getLiveOverlayMatch()).toMatchObject({ opponentName: "New Rival", score: "0-0" });
+    await test.coordinator.waitForAllReplayFinalizations();
+  });
+
+  it("accepts a same-room snapshot with different nonzero points when a genuine game's start was missed", async () => {
+    const test = harness();
+    await finishYi(test);
+    await test.coordinator.handleEvent(event("match-snapshot", 110, { ...yi, score: { me: "2", opp: "1" } }));
+    expect(test.coordinator.hasActiveCaptureSession("atlas")).toBe(true);
+    await test.coordinator.handleEvent(complete(120));
+    expect(test.saved).toHaveLength(2);
+    expect(test.saved[1].capturedAt).toBe(event("match-snapshot", 110, {}).capturedAt);
+    await test.coordinator.waitForAllReplayFinalizations();
+  });
+
   it("keeps a known-room terminal screen closed while it continues emitting, then accepts a rematch", async () => {
     const test = harness();
     await finishYi(test);

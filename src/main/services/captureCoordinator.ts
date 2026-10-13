@@ -105,6 +105,9 @@ interface RecentAtlasDraftPublication {
   score: string;
   gameCount: number;
   terminalResult: boolean;
+  gameInstanceId: string;
+  historyStartedAt: number | undefined;
+  finishedBoardScore: { me: number; opp: number } | undefined;
 }
 
 const CAPTURE_COORDINATOR_GUARD_MARKER = "atlas-bo3-final-guard-v2-2026-06-07";
@@ -313,7 +316,7 @@ export class CaptureCoordinator {
     }
     if (
       trackedEvent.platform === "atlas" &&
-      trackedEvent.kind === "match-start" &&
+      this.isFreshAtlasBoardAfterPublication(trackedEvent) &&
       !readPayloadString(trackedEvent.payload.atlasResultKind) &&
       !readPayloadString(trackedEvent.payload.endText)
     ) {
@@ -721,7 +724,14 @@ export class CaptureCoordinator {
     }
     const terminalResult = readPayloadString(event.payload.atlasResultKind) === "match-terminal" ||
       /match complete/i.test(readPayloadString(event.payload.endText));
-    if (draft.format !== "Bo3" && !terminalResult) {
+    const finalGame = draft.games?.at(-1);
+    const finalScore = readPayloadScorePair({
+      me: finalGame?.myPoints, opp: finalGame?.oppPoints
+    }) ?? readPayloadScorePair(event.payload.score);
+    // Manual partial reviews must still allow the same game to continue.
+    const finishedBoardScore = !readPayloadBoolean(event.payload.forceReview) &&
+      finalScore && finalScore.me + finalScore.opp > 0 ? finalScore : undefined;
+    if (draft.format !== "Bo3" && !terminalResult && !finishedBoardScore) {
       return;
     }
     const gameCount = draft.games?.length ?? 0;
@@ -737,7 +747,10 @@ export class CaptureCoordinator {
       opponentChampion: normalizeCaptureNameKey(draft.opponentChampion),
       score: draft.score,
       gameCount,
-      terminalResult
+      terminalResult,
+      gameInstanceId: readPayloadString(event.payload.atlasGameInstanceId),
+      historyStartedAt: readPayloadNumber(event.payload.atlasHistoryStartedAt),
+      finishedBoardScore
     });
   }
 
@@ -763,21 +776,15 @@ export class CaptureCoordinator {
       resultKind === "match-terminal" ||
       isAtlasConfirmWinnerText(event) ||
       /match complete/i.test(endText);
-    if (!isResultScreen) {
-      return false;
-    }
     const recent = this.recentAtlasDraftPublications.get("atlas");
     // An opponent can end a BO3 after its first game. Atlas still emits active
     // snapshots of that terminal screen; they must not recreate the cleared
     // session and trigger another review when the next opponent joins.
-    if (!recent || (recent.gameCount < 2 && !recent.terminalResult)) {
+    if (!recent || this.hasDifferentAtlasGameIdentity(event, recent)) {
       return false;
     }
     const eventAtMs = Date.parse(event.capturedAt);
     const currentAtMs = Number.isFinite(eventAtMs) ? eventAtMs : Date.now();
-    if (currentAtMs - recent.publishedAtMs > RECENT_ATLAS_DRAFT_PUBLICATION_TTL_MS) {
-      return false;
-    }
     const roomCode = normalizeCaptureNameKey(readPayloadString(event.payload.roomCode));
     if (recent.roomCode && roomCode && recent.roomCode !== roomCode) {
       return false;
@@ -789,6 +796,28 @@ export class CaptureCoordinator {
     const sameMyChampion = !recent.myChampion || !myChampion || recent.myChampion === myChampion;
     const sameOpponentChampion = !recent.opponentChampion || !opponentChampion || recent.opponentChampion === opponentChampion;
     const matchesPublishedResult = sameOpponent && sameMyChampion && sameOpponentChampion;
+    if (!isResultScreen) {
+      const score = readPayloadScorePair(event.payload.score);
+      // Dismissing Atlas's result dialog can make the preload announce a new
+      // start while the finished board is still visible. Exact room, opponent
+      // and point evidence remains useful after the loose result-echo TTL.
+      // A reset, changed identity or changed points is allowed through.
+      const sameFinishedBoard = readPayloadBoolean(event.payload.active) &&
+        matchesPublishedResult && Boolean(recent.roomCode && roomCode === recent.roomCode) &&
+        Boolean(recent.opponentName && opponentName === recent.opponentName) &&
+        Boolean(score && recent.finishedBoardScore &&
+          score.me === recent.finishedBoardScore.me && score.opp === recent.finishedBoardScore.opp);
+      if (sameFinishedBoard) {
+        recent.publishedAtMs = Math.max(recent.publishedAtMs, currentAtMs);
+      }
+      return sameFinishedBoard;
+    }
+    if (
+      (recent.gameCount < 2 && !recent.terminalResult && !recent.finishedBoardScore) ||
+      currentAtMs - recent.publishedAtMs > RECENT_ATLAS_DRAFT_PUBLICATION_TTL_MS
+    ) {
+      return false;
+    }
     if (
       matchesPublishedResult && recent.terminalResult &&
       recent.roomCode && roomCode === recent.roomCode &&
@@ -800,6 +829,37 @@ export class CaptureCoordinator {
       recent.publishedAtMs = Math.max(recent.publishedAtMs, currentAtMs);
     }
     return matchesPublishedResult;
+  }
+
+  private hasDifferentAtlasGameIdentity(event: CaptureEvent, recent: RecentAtlasDraftPublication): boolean {
+    const gameInstanceId = readPayloadString(event.payload.atlasGameInstanceId);
+    const historyStartedAt = readPayloadNumber(event.payload.atlasHistoryStartedAt);
+    return Boolean(
+      (recent.gameInstanceId && gameInstanceId && recent.gameInstanceId !== gameInstanceId) ||
+      (recent.historyStartedAt && historyStartedAt && recent.historyStartedAt !== historyStartedAt)
+    );
+  }
+
+  private isFreshAtlasBoardAfterPublication(event: CaptureEvent): boolean {
+    if (!readPayloadBoolean(event.payload.active)) {
+      return false;
+    }
+    // Starts have already passed the finished-board check. Also release the
+    // marker for a genuine snapshot-only rematch whose start was not observed.
+    if (event.kind === "match-start") {
+      return true;
+    }
+    const recent = this.recentAtlasDraftPublications.get("atlas");
+    if (!recent) return false;
+    const roomCode = normalizeCaptureNameKey(readPayloadString(event.payload.roomCode));
+    const opponentName = normalizeCaptureNameKey(readPayloadString(event.payload.opponentName));
+    const score = readPayloadScorePair(event.payload.score);
+    return this.hasDifferentAtlasGameIdentity(event, recent) || Boolean(
+      (recent.roomCode && roomCode && recent.roomCode !== roomCode) ||
+      (recent.opponentName && opponentName && recent.opponentName !== opponentName) ||
+      (recent.finishedBoardScore && score &&
+        (score.me !== recent.finishedBoardScore.me || score.opp !== recent.finishedBoardScore.opp))
+    );
   }
 
   private evaluateAtlasBo3PreDraftFinalGuard(
@@ -3223,6 +3283,14 @@ function readPayloadScoreTotal(value: unknown): number {
   const me = readPayloadNumber(score.me);
   const opp = readPayloadNumber(score.opp ?? score.opponent);
   return (me ?? 0) + (opp ?? 0);
+}
+
+function readPayloadScorePair(value: unknown): { me: number; opp: number } | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const score = value as Record<string, unknown>;
+  const me = readPayloadNumber(score.me);
+  const opp = readPayloadNumber(score.opp ?? score.opponent);
+  return me !== undefined && opp !== undefined && me >= 0 && opp >= 0 ? { me, opp } : undefined;
 }
 
 function readPayloadNumber(value: unknown): number | undefined {

@@ -3926,6 +3926,9 @@ function App() {
       .then((state) => setAtlasKnownOpponentHand(state ?? EMPTY_ATLAS_KNOWN_OPPONENT_HAND))
       .catch(() => setAtlasKnownOpponentHand(EMPTY_ATLAS_KNOWN_OPPONENT_HAND));
     const offEvent = window.riftlite.onCaptureEvent((event) => {
+      if (event.kind === "match-start") {
+        clearPendingReviewFallback();
+      }
       if (event.kind === "match-start" || event.kind === "match-end") {
         const pinnedFromMain = event.payload.enhancedInsightsEnabledAtStart;
         const enabledAtStart = typeof pinnedFromMain === "boolean"
@@ -4616,7 +4619,10 @@ function App() {
     const generation = ++pendingReviewFallbackGenerationRef.current;
     pendingReviewFallbackTimerRef.current = window.setTimeout(() => {
       pendingReviewFallbackTimerRef.current = undefined;
-      void openLatestPendingReview()
+      void openLatestPendingReview(() => (
+        generation === pendingReviewFallbackGenerationRef.current
+        && healthRef.current.state === "review-needed"
+      ))
         .then((opened) => {
           if (
             !opened &&
@@ -4669,11 +4675,16 @@ function App() {
     }
   }
 
-  async function openLatestPendingReview(): Promise<boolean> {
+  async function openLatestPendingReview(isCurrent: () => boolean = () => true): Promise<boolean> {
     const [nextSettings, nextMatches] = await Promise.all([
       window.riftlite.getSettings(),
       window.riftlite.getMatches()
     ]);
+    // A new game or completed review can invalidate this read while IPC is
+    // pending. Do not restore its stale history or reopen the previous review.
+    if (!isCurrent()) {
+      return false;
+    }
     setSettings(nextSettings);
     setMatches(nextMatches);
     if (!nextSettings.confirmationEnabled) {
@@ -4712,6 +4723,7 @@ function App() {
   }
 
   async function dismissReviewDraft(draft: MatchDraft) {
+    clearPendingReviewFallback();
     if (draft.status === "saved") {
       openNextQueuedReview();
       return;
@@ -4787,6 +4799,7 @@ function App() {
   }
 
   async function deleteReviewDraft(draft: MatchDraft) {
+    clearPendingReviewFallback();
     await window.riftlite.deleteMatch(draft.id, draft);
     markReviewDismissed(draft);
     openNextQueuedReview();
@@ -5173,6 +5186,7 @@ function App() {
   }
 
   async function confirmDraft(draft: MatchDraft) {
+    clearPendingReviewFallback();
     const editingSavedManualMatch = draft.status === "saved" && (draft.source === "scorepad" || draft.source === "manual");
     const normalizedDraft = normalizeReviewDraft(
       draft.status === "saved" ? draft : attachTestingSessionToDraft(draft)
