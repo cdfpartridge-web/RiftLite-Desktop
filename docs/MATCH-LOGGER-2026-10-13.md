@@ -1,6 +1,6 @@
 # Atlas match logger reopening — 13 October 2026
 
-Local source fix based on desktop HEAD `62f4fcf11c5517ac495027c081f7b219957b8a02`, version 0.9.83. The published v0.9.83 installers do not contain this fix. No rebuild, installation, version change, push or publication was performed.
+Initially fixed in local source on v0.9.83; now published in v0.9.84 for Windows and both Mac architectures. See the [release receipt](./RELEASE-v0.9.84-2026-10-13.md). The investigation and source-only validation below record the original pre-release work.
 
 ## Confirmed cause
 
