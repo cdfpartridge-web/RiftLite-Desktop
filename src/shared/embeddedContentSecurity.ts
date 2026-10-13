@@ -1,4 +1,5 @@
 import { GAME_WEBVIEW_PARTITIONS } from "./gameWebview.js";
+import { isAtlasAuthNavigationUrl } from "./atlasAuthNavigation.js";
 import { isAtlasDeckPageUrl, isAtlasDeckWorkflowUrl } from "./atlasDeckNavigation.js";
 import type { GamePlatform } from "./types.js";
 
@@ -248,7 +249,7 @@ export function isAllowedGamePopupNavigation(
   value: string
 ): boolean {
   if (value === "about:blank" || isAllowedEmbeddedNavigation(policy, value) ||
-    (policy.platform === "atlas" && isAtlasDeckWorkflowUrl(value))) {
+    (policy.platform === "atlas" && (isAtlasDeckWorkflowUrl(value) || isAtlasAuthNavigationUrl(value)))) {
     return true;
   }
   const url = parsedUrl(value);
@@ -259,7 +260,7 @@ export function isAllowedGamePopupNavigation(
 }
 
 /**
- * Clerk and Firebase can use either a popup or a same-window redirect for
+ * Atlas account auth, legacy Clerk and Firebase can use a popup or redirect for
  * provider sign-in. The latter must remain in the embedded game's persistent
  * session or the OAuth callback loses the cookies that started the flow.
  */
@@ -268,7 +269,7 @@ export function isAllowedGameMainFrameNavigation(
   value: string
 ): boolean {
   if (isAllowedEmbeddedNavigation(policy, value) ||
-    (policy.platform === "atlas" && isAtlasDeckWorkflowUrl(value))) {
+    (policy.platform === "atlas" && (isAtlasDeckWorkflowUrl(value) || isAtlasAuthNavigationUrl(value)))) {
     return true;
   }
   const url = parsedUrl(value);
