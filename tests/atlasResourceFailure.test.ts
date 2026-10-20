@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   ATLAS_RECOVERY_CACHE_MISS_WINDOW_MS,
+  atlasFailureResourceType,
   isExpectedAtlasRecoveryCacheMiss,
   shouldPresentAtlasResourceFailure
 } from "../src/shared/atlasResourceFailure.js";
@@ -37,6 +38,15 @@ function context(
 }
 
 describe("Atlas recovery resource-failure presentation", () => {
+  it("includes HTTP artwork and media failures without treating unrelated requests as board failures", () => {
+    for (const type of ["image", "font", "media", "script", "xhr", "webSocket"]) {
+      expect(atlasFailureResourceType(type)).toBe(true);
+    }
+    for (const type of ["ping", "cspReport", "unknown", ""]) {
+      expect(atlasFailureResourceType(type)).toBe(false);
+    }
+  });
+
   it("hides a passive static cache miss immediately after recovery", () => {
     expect(isExpectedAtlasRecoveryCacheMiss(context())).toBe(true);
     expect(shouldPresentAtlasResourceFailure(context())).toBe(false);

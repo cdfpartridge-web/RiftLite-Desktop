@@ -5,7 +5,7 @@ import { createDefaultSettings } from "../src/shared/settingsDefaults";
 import type { SavedDeck } from "../src/shared/types";
 
 function render(overrides: Partial<FirstRunSetupProps> = {}) {
-  return renderToStaticMarkup(<FirstRunSetup settings={createDefaultSettings()} decks={[]} step="player" accountVerified={false} onStepChange={vi.fn()} onSave={vi.fn(async () => undefined)} onOpenDestination={vi.fn()} onOpenWebsite={vi.fn(async () => undefined)} onFinish={vi.fn(async () => undefined)} onSkip={vi.fn(async () => undefined)} {...overrides} />);
+  return renderToStaticMarkup(<FirstRunSetup settings={createDefaultSettings()} decks={[]} step="player" accountVerified={false} accountContent={<div data-inline-account="true">Inline account controls</div>} onImportDeck={vi.fn(async () => { throw new Error("Unused importer"); })} onStepChange={vi.fn()} onSave={vi.fn(async () => undefined)} onOpenWebsite={vi.fn(async () => undefined)} onFinish={vi.fn(async () => undefined)} onSkip={vi.fn(async () => undefined)} {...overrides} />);
 }
 
 describe("first install setup", () => {
@@ -25,13 +25,23 @@ describe("first install setup", () => {
   it("never calls a saved but unverified account connected", () => {
     const settings = { ...createDefaultSettings(), accountUid: "saved-account", accountHandle: "river" };
     const unverified = render({ step: "account", settings, accountVerified: false });
-    expect(unverified).toContain("Reconnect your RiftLite account");
+    expect(unverified).toContain("Inline account controls");
     expect(unverified).toContain("Continue without account");
     expect(unverified).not.toContain("Your account is connected");
     expect(render({ step: "account", accountVerified: true })).not.toContain("Your account is connected");
     const verified = render({ step: "account", settings, accountVerified: true });
-    expect(verified).toContain("Your account is connected");
-    expect(verified).toContain("@river");
+    expect(verified).not.toContain("Continue without account");
+    expect(verified).toContain("Inline account controls");
+  });
+
+  it("keeps account controls mounted between steps without sending users to the Account page", () => {
+    for (const step of ["player", "replays", "deck", "ready"] as const) {
+      const html = render({ step });
+      expect(html).toContain('hidden="" class="first-run-setup__account-step"');
+      expect(html).toContain('data-inline-account="true"');
+      expect(html).not.toContain("Account page, then return");
+    }
+    expect(render({ step: "account" })).not.toContain('hidden="" class="first-run-setup__account-step"');
   });
 
   it("keeps microphone off by default and explains separate online consent", () => {
@@ -100,8 +110,10 @@ describe("first install setup", () => {
     const deck: SavedDeck = { id: "deck-1", title: "Ahri Tempo", legend: "Ahri", sourceUrl: "", sourceKey: "", snapshotJson: "{}", lastImportedAt: "", lastRefreshStatus: "", lastRefreshError: "" };
     const settings = { ...createDefaultSettings(), activeDeckId: "deck-1" };
     expect(render({ step: "deck" })).toContain("Choose a deck later");
-    expect(render({ step: "deck" })).toContain("public Piltover Archive deck link");
-    expect(render({ step: "deck", settings, decks: [deck] })).toContain("public Piltover Archive link");
+    expect(render({ step: "deck" })).toContain("Piltover Archive");
+    expect(render({ step: "deck", settings, decks: [deck] })).toContain("Piltover Archive");
+    expect(render({ step: "deck" })).not.toContain("Open Deck Library");
+    expect(render({ step: "deck" })).toContain("without leaving setup");
     expect(render({ step: "deck", settings, decks: [deck] })).toContain('aria-label="Deck selected"');
     const missing = render({ step: "ready", settings });
     expect(missing).toContain("Choose later");

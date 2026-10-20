@@ -3272,6 +3272,9 @@ function App() {
   const enhancedInsightSessionActiveRef = useRef(false);
   const lastReplayStartEventRef = useRef<CaptureEvent | null>(null);
   const armedReplayVideoRef = useRef<Partial<Record<GamePlatform, ArmedReplayVideoSource>>>({});
+  const replayVideoArmGenerationRef = useRef(0);
+  const replayVideoArmRequestRef = useRef<object | null>(null);
+  const replayVideoStartPendingRef = useRef(false);
   const [playRecordingState, setPlayRecordingState] = useState({videoRecording: false, videoArmed: false, microphoneRecording: false});
   useEffect(() => {
     if (activeView !== "play") return;
@@ -3310,8 +3313,13 @@ function App() {
     [testingSessions, activeTestingSessionId]
   );
 
-  const refreshWebReplayDiagnostics = useCallback((): Promise<WebReplayUploadDiagnostics | null> => {
+  const refreshWebReplayDiagnostics = useCallback((afterCurrent = false): Promise<WebReplayUploadDiagnostics | null> => {
     if (webReplayDiagnosticsRequestRef.current) {
+      // An account link can finish while an anonymous diagnostics read is
+      // still in flight. Wait for it, then check the newly linked identity.
+      if (afterCurrent) {
+        return webReplayDiagnosticsRequestRef.current.then(() => refreshWebReplayDiagnostics());
+      }
       return webReplayDiagnosticsRequestRef.current;
     }
     setWebReplayDiagnosticsRefreshing(true);
@@ -3554,11 +3562,6 @@ function App() {
     persistFirstRunSetup({ ...initialFirstRunSetupState(), step });
   }
 
-  function openFirstRunSetupDestination(target: NavigationTarget) {
-    setFirstRunSetupOpen(false);
-    openNavigationTarget(target);
-  }
-
   async function finishFirstRunSetup(target: NavigationTarget = { view: "play" }, skipped = false) {
     // A failed disk save must leave the screen open and retryable.
     await saveSettings({ firstRunComplete: true });
@@ -3647,6 +3650,9 @@ function App() {
   }, [activeView]);
 
   useEffect(() => window.riftlite.onAppNavigate((request) => {
+    if (request.view === "account" && firstRunSetupOpenRef.current) {
+      return;
+    }
     if (request.view === "hubs") {
       setActiveView("hubs");
       return;
@@ -4213,7 +4219,10 @@ function App() {
       },
       onDomReady: presentGame,
       onDidFinishLoad: presentGame,
-      onDidNavigate: () => applyGameZoom(),
+      onDidNavigate: () => {
+        stopArmedReplaySources();
+        applyGameZoom();
+      },
       onDidNavigateInPage: () => applyGameZoom(),
       onDidStartLoading: () => {
         if (platform === "atlas") {
@@ -5966,6 +5975,8 @@ function App() {
   }
 
   function stopArmedReplaySources(): void {
+    replayVideoArmGenerationRef.current += 1;
+    replayVideoArmRequestRef.current = null;
     for (const armed of Object.values(armedReplayVideoRef.current)) {
       stopReplaySource(armed?.source);
     }
@@ -5982,6 +5993,7 @@ function App() {
       return null;
     }
     if (!armed.source.stream.getVideoTracks().some((track) => track.readyState === "live")) {
+      stopReplaySource(armed.source);
       delete armedReplayVideoRef.current[platform];
       return null;
     }
@@ -5995,8 +6007,23 @@ function App() {
     if (
       !currentSettings?.replayCaptureEnabled ||
       !currentSettings.replayVideoEnabled ||
-      replayVideoRef.current
+      replayVideoRef.current ||
+      replayVideoStartPendingRef.current ||
+      replayVideoArmRequestRef.current ||
+      activeViewRef.current !== "play"
     ) {
+      return;
+    }
+    const webview = gameRef.current;
+    const gameIsCurrent = () => {
+      try {
+        return Boolean(webview && gameRef.current === webview &&
+          gamePlatformForTrustedUrl(webview.getURL(), true) === platform);
+      } catch {
+        return false;
+      }
+    };
+    if (!gameIsCurrent()) {
       return;
     }
     const quality = currentSettings.replayVideoQuality || "sharp";
@@ -6014,35 +6041,71 @@ function App() {
     }
     lastReplayArmAttemptRef.current = now;
     const profile = REPLAY_VIDEO_PROFILES[quality] ?? REPLAY_VIDEO_PROFILES.sharp;
-    let source = await prepareDisplayReplaySource(platform, mode, profile, { targetAlreadyPrepared: true });
-    if (!source) {
-      source = await prepareDisplayReplaySource(platform, mode, profile);
-    }
-    if (!source) {
-      source = await prepareSystemWindowReplaySource(platform, profile);
-    }
-    if (!source) {
-      if (!quiet) {
-        showActionFeedback("Video replay could not arm yet.");
+    const request = {};
+    const generation = replayVideoArmGenerationRef.current;
+    replayVideoArmRequestRef.current = request;
+    const requestIsCurrent = () => replayVideoArmRequestRef.current === request &&
+      replayVideoArmGenerationRef.current === generation &&
+      !replayVideoRef.current && !replayVideoStartPendingRef.current &&
+      activeViewRef.current === "play" && gameIsCurrent() &&
+      settingsRef.current?.replayCaptureEnabled && settingsRef.current.replayVideoEnabled &&
+      (settingsRef.current.replayVideoQuality || "sharp") === quality;
+    try {
+      let source = await prepareDisplayReplaySource(platform, mode, profile, { targetAlreadyPrepared: true });
+      if (!requestIsCurrent()) {
+        stopReplaySource(source ?? undefined);
+        return;
       }
-      reportReplayVideoDebug(platform, "arm-failed", { mode, quality });
-      void primeReplayVideoTarget(platform);
-      return;
+      if (!source) {
+        source = await prepareDisplayReplaySource(platform, mode, profile);
+      }
+      if (!requestIsCurrent()) {
+        stopReplaySource(source ?? undefined);
+        return;
+      }
+      // Focus can arrive while Atlas is in its deck editor or navigating back.
+      // A transient direct-capture failure must not start whole-window capture
+      // speculatively. Match start retries direct capture before its fallback.
+      if (!source) {
+        if (!quiet) {
+          showActionFeedback("Video replay could not arm yet.");
+        }
+        reportReplayVideoDebug(platform, "arm-failed", { mode, quality });
+        void primeReplayVideoTarget(platform);
+        return;
+      }
+      stopReplaySource(current?.source);
+      armedReplayVideoRef.current[platform] = {
+        platform,
+        mode,
+        quality,
+        source
+      };
+      if (!quiet) {
+        showActionFeedback("Direct replay capture armed.");
+      }
+      reportReplayVideoDebug(platform, "armed", { mode, quality, source: source.source });
+    } finally {
+      if (replayVideoArmRequestRef.current === request) {
+        replayVideoArmRequestRef.current = null;
+      }
     }
-    stopReplaySource(current?.source);
-    armedReplayVideoRef.current[platform] = {
-      platform,
-      mode,
-      quality,
-      source
-    };
-    if (!quiet) {
-      showActionFeedback("Direct replay capture armed.");
-    }
-    reportReplayVideoDebug(platform, "armed", { mode, quality, source: source.source });
   }
 
   async function maybeStartReplayVideo(event: CaptureEvent) {
+    if (event.kind !== "match-start" || replayVideoStartPendingRef.current) {
+      return;
+    }
+    replayVideoStartPendingRef.current = true;
+    replayVideoArmGenerationRef.current += 1;
+    try {
+      await startReplayVideo(event);
+    } finally {
+      replayVideoStartPendingRef.current = false;
+    }
+  }
+
+  async function startReplayVideo(event: CaptureEvent) {
     const currentSettings = settingsRef.current;
     if (event.kind !== "match-start") {
       return;
@@ -7987,9 +8050,26 @@ function App() {
           logoUrl={logoUrl}
           step={firstRunSetupState.step}
           accountVerified={hasVerifiedRiftLiteAccount(settings) && getRiftLiteAccountState(settings) === "ready" && webReplayDiagnostics?.accountVerified !== false}
+          accountContent={<AccountView
+            variant="setup"
+            settings={settings}
+            matches={activeLocalMatches(matches)}
+            decks={decks}
+            webReplayDiagnostics={webReplayDiagnostics}
+            onSettingsChanged={setSettings}
+            onRefreshWebReplayDiagnostics={() => refreshWebReplayDiagnostics(true)}
+            onOpenWebReplays={() => changeFirstRunSetupStep("replays")}
+            onAccountDataRestored={refreshRestoredAccountData}
+          />}
+          onImportDeck={async (source, kind) => {
+            const imported = kind === "url"
+              ? await window.riftlite.importDeck(source.trim())
+              : await window.riftlite.importDeckText(source.trim());
+            setDecks(await window.riftlite.getDecks());
+            return imported;
+          }}
           onStepChange={changeFirstRunSetupStep}
           onSave={saveSettings}
-          onOpenDestination={openFirstRunSetupDestination}
           onOpenWebsite={() => window.riftlite.openExternalResource(RIFT_REPLAY_WEB_URL)}
           onFinish={finishFirstRunSetup}
           onSkip={() => finishFirstRunSetup({ view: "home" }, true)}
@@ -15362,7 +15442,8 @@ function TeamModerationPanel() {
   );
 }
 
-function AccountView({
+export function AccountView({
+  variant = "page",
   settings,
   matches,
   decks,
@@ -15372,6 +15453,7 @@ function AccountView({
   onOpenWebReplays,
   onAccountDataRestored
 }: {
+  variant?: "page" | "setup";
   settings: UserSettings;
   matches: MatchDraft[];
   decks: SavedDeck[];
@@ -15393,6 +15475,12 @@ function AccountView({
   const [linkSession, setLinkSession] = useState<AccountLinkSession | null>(null);
   const [linkProvider, setLinkProvider] = useState<AccountLinkProvider | null>(null);
   const [linkBusy, setLinkBusy] = useState(false);
+  const [profileBusy, setProfileBusy] = useState(false);
+  const accountMountedRef = useRef(true);
+  const accountSettingsRef = useRef(settings);
+  const linkAttemptRef = useRef(0);
+  const linkStartBusyRef = useRef(false);
+  accountSettingsRef.current = settings;
   const [linkQr, setLinkQr] = useState("");
   const [showPostLinkSyncChoice, setShowPostLinkSyncChoice] = useState(false);
   const [showPostLinkWebReplayChoice, setShowPostLinkWebReplayChoice] = useState(false);
@@ -15467,6 +15555,14 @@ function AccountView({
   const showAccountSignInActions = overview.action === "sign-in";
 
   useEffect(() => {
+    accountMountedRef.current = true;
+    return () => {
+      accountMountedRef.current = false;
+      linkAttemptRef.current += 1;
+    };
+  }, []);
+
+  useEffect(() => {
     if (accountState === "needs-profile") setProfileExpanded(true);
   }, [accountState]);
 
@@ -15502,12 +15598,6 @@ function AccountView({
     return next;
   }
 
-  async function loadConnectionStatus() {
-    const next = await window.riftlite.getAccountConnectionStatus();
-    setConnectionStatus(next);
-    return next;
-  }
-
   function applyProfile(next: AccountProfile | null) {
     setProfile(next);
     if (!next) {
@@ -15533,13 +15623,16 @@ function AccountView({
     setMarketingConsentDraft(next.marketingConsent);
   }
 
-  async function refreshSettingsAndProfile() {
-    const [nextSettings, nextProfile, nextCloudStatus, nextConnectionStatus] = await Promise.all([
-      window.riftlite.getSettings(),
+  async function refreshSettingsAndProfile(isCurrent = () => accountMountedRef.current) {
+    const [nextProfile, nextCloudStatus, nextConnectionStatus] = await Promise.all([
       window.riftlite.getAccountProfile(),
-      window.riftlite.getAccountCloudSyncStatus(),
+      variant === "setup" ? Promise.resolve(null) : window.riftlite.getAccountCloudSyncStatus(),
       window.riftlite.getAccountConnectionStatus()
     ]);
+    // Profile and connection checks can persist canonical identity fields.
+    // Read settings afterwards so setup immediately receives those updates.
+    const nextSettings = await window.riftlite.getSettings();
+    if (!isCurrent()) return { settings: nextSettings, cloudStatus: nextCloudStatus };
     onSettingsChanged(nextSettings);
     applyProfile(nextProfile);
     setCloudStatus(nextCloudStatus);
@@ -15554,16 +15647,18 @@ function AccountView({
         applyProfile(null);
         return;
       }
-      const nextProfile = await window.riftlite.getAccountProfile();
-      if (!cancelled) {
-        applyProfile(nextProfile);
+      try {
+        const nextProfile = await window.riftlite.getAccountProfile();
+        if (!cancelled) applyProfile(nextProfile);
+      } catch (error) {
+        if (!cancelled) setStatus(accountLinkErrorMessage(error));
       }
     }
     void loadProfile();
     return () => {
       cancelled = true;
     };
-  }, [accountLinked, settings.accountHandle, settings.accountDisplayName, settings.username]);
+  }, [accountLinked, settings.accountUid, settings.accountHandle, settings.accountDisplayName, settings.username]);
 
   useEffect(() => {
     let cancelled = false;
@@ -15572,10 +15667,15 @@ function AccountView({
         setConnectionStatus(null);
         return;
       }
-      const next = await window.riftlite.getAccountConnectionStatus();
-      if (!cancelled) {
-        setConnectionStatus(next);
-        onSettingsChanged(await window.riftlite.getSettings());
+      try {
+        const next = await window.riftlite.getAccountConnectionStatus();
+        const nextSettings = await window.riftlite.getSettings();
+        if (!cancelled) {
+          setConnectionStatus(next);
+          onSettingsChanged(nextSettings);
+        }
+      } catch (error) {
+        if (!cancelled) setStatus(accountLinkErrorMessage(error));
       }
     }
     void refreshConnection();
@@ -15585,6 +15685,7 @@ function AccountView({
   }, [accountLinked, settings.accountUid, settings.firebaseRefreshToken]);
 
   useEffect(() => {
+    if (variant === "setup") return undefined;
     let cancelled = false;
     async function refreshCloud() {
       if (!accountLinked) {
@@ -15633,6 +15734,7 @@ function AccountView({
       cancelled = true;
     };
   }, [
+    variant,
     accountLinked,
     settings.accountCloudSyncEnabled,
     settings.accountCloudSyncLastSyncedAt,
@@ -15645,8 +15747,10 @@ function AccountView({
     }
     let cancelled = false;
     let checking = false;
+    const attempt = linkAttemptRef.current;
+    const isCurrent = () => !cancelled && accountMountedRef.current && linkAttemptRef.current === attempt;
     const checkStatus = async () => {
-      if (checking || cancelled) return;
+      if (checking || !isCurrent()) return;
       // OAuth completes in the user's browser. Polling while RiftLite is in
       // the background cannot improve what they see, so resume immediately
       // when the app regains focus instead of spending Firestore reads there.
@@ -15654,16 +15758,18 @@ function AccountView({
       checking = true;
       try {
         const result = await window.riftlite.getAccountLinkStatus(linkSession.sessionId);
-        if (cancelled) return;
+        if (!isCurrent()) return;
         if (result.status === "complete") {
+          const refreshed = await refreshSettingsAndProfile(isCurrent);
+          if (!isCurrent()) return;
           setStatus(result.message || "Account linked and verified.");
           setLinkSession(null);
           setLinkProvider(null);
           setLinkQr("");
           const linkedForFirstTime = linkStartedAsFirstConnection.current || result.adoptedAnonymousAccount === true;
           linkStartedAsFirstConnection.current = false;
-          const refreshed = await refreshSettingsAndProfile();
-          if (linkedForFirstTime && refreshed.settings.accountUid) {
+          void onRefreshWebReplayDiagnostics();
+          if (variant !== "setup" && linkedForFirstTime && refreshed.settings.accountUid) {
             setShowPostLinkSyncChoice(true);
             if (!webReplayPlatformEnabled(refreshed.settings, "atlas")) {
               setShowPostLinkWebReplayChoice(true);
@@ -15675,11 +15781,15 @@ function AccountView({
           setLinkProvider(null);
           setLinkQr("");
           linkStartedAsFirstConnection.current = false;
+          // A failed verification may still have linked the account. Reflect
+          // the stored identity so the user can retry its connection check.
+          const nextSettings = await window.riftlite.getSettings();
+          if (accountMountedRef.current && linkAttemptRef.current === attempt) onSettingsChanged(nextSettings);
         } else {
           setStatus("Waiting for website sign-in...");
         }
       } catch (error) {
-        if (!cancelled) {
+        if (isCurrent()) {
           if (Date.now() >= linkSession.expiresAt) {
             setStatus("Account link expired. Start a new link when ready.");
             setLinkSession(null);
@@ -15706,12 +15816,17 @@ function AccountView({
   }, [linkSession]);
 
   async function startLink(provider: AccountLinkProvider) {
-    if (linkBusy || linkSession) return;
+    if (linkStartBusyRef.current || linkBusy || linkSession) return;
+    linkStartBusyRef.current = true;
+    const attempt = ++linkAttemptRef.current;
+    const startedUid = accountSettingsRef.current.accountUid;
+    const isCurrent = () => accountMountedRef.current && linkAttemptRef.current === attempt;
     const providerName = provider === "google" ? "Google" : provider === "discord" ? "Discord" : "email";
     setLinkBusy(true);
     setStatus(`Preparing ${providerName} sign-in...`);
     try {
       const session = await window.riftlite.startAccountLink();
+      if (!isCurrent() || accountSettingsRef.current.accountUid !== startedUid) return;
       const loginUrl = accountLinkUrlForProvider(session.loginUrl, provider);
       const providerSession = { ...session, loginUrl };
       linkStartedAsFirstConnection.current = !accountLinked;
@@ -15719,23 +15834,27 @@ function AccountView({
       setLinkSession(providerSession);
       setLinkQr("");
       QRCode.toDataURL(loginUrl, { margin: 1, width: 180 })
-        .then(setLinkQr)
+        .then((value) => { if (isCurrent()) setLinkQr(value); })
         .catch(() => undefined);
       try {
         await window.riftlite.openExternalResource(loginUrl);
-        setStatus(`Your browser is open. Finish ${providerName} sign-in there; RiftLite will continue automatically.`);
+        if (isCurrent()) setStatus(`Your browser is open. Finish ${providerName} sign-in there; RiftLite will continue automatically.`);
       } catch {
-        setStatus("RiftLite could not open your browser. Expand Having trouble? to open or copy the secure sign-in link.");
+        if (isCurrent()) setStatus("RiftLite could not open your browser. Use Open secure link to try again.");
       }
     } catch (error) {
-      linkStartedAsFirstConnection.current = false;
-      setStatus(accountLinkErrorMessage(error));
+      if (isCurrent()) {
+        linkStartedAsFirstConnection.current = false;
+        setStatus(accountLinkErrorMessage(error));
+      }
     } finally {
-      setLinkBusy(false);
+      linkStartBusyRef.current = false;
+      if (isCurrent()) setLinkBusy(false);
     }
   }
 
   async function saveProfile() {
+    if (profileBusy) return;
     if (!accountLinked) {
       setStatus("Link an account first.");
       return;
@@ -15744,24 +15863,35 @@ function AccountView({
       setStatus("Choose a profile handle first.");
       return;
     }
+    setProfileBusy(true);
+    const startedUid = settings.accountUid;
+    const isCurrent = () => accountMountedRef.current && accountSettingsRef.current.accountUid === startedUid;
     setStatus("Saving profile...");
     try {
       const nextProfile = await window.riftlite.saveAccountProfile({
         handle: handleDraft.trim(),
         displayName: displayNameDraft.trim() || handleDraft.trim(),
-        searchable: searchableDraft,
-        publicProfile: publicDraft,
-        showStats: showStatsDraft,
-        showMatches: showMatchesDraft,
-        showDecks: showDecksDraft,
-        showHubBadges: showHubBadgesDraft,
-        marketingConsent: marketingConsentDraft
+        ...(variant === "setup" ? {} : {
+          searchable: searchableDraft,
+          publicProfile: publicDraft,
+          showStats: showStatsDraft,
+          showMatches: showMatchesDraft,
+          showDecks: showDecksDraft,
+          showHubBadges: showHubBadgesDraft,
+          marketingConsent: marketingConsentDraft
+        })
       });
+      const nextSettings = await window.riftlite.getSettings();
+      if (!isCurrent()) return;
       applyProfile(nextProfile);
-      onSettingsChanged(await window.riftlite.getSettings());
+      onSettingsChanged(nextSettings);
+      void onRefreshWebReplayDiagnostics();
+      if (variant === "setup") setProfileExpanded(false);
       setStatus("Profile saved.");
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Profile save failed.");
+      if (isCurrent()) setStatus(error instanceof Error ? error.message : "Profile save failed.");
+    } finally {
+      if (accountMountedRef.current) setProfileBusy(false);
     }
   }
 
@@ -15816,16 +15946,23 @@ function AccountView({
   }
 
   async function checkAccountConnection() {
+    if (connectionBusy) return;
+    const startedUid = settings.accountUid;
+    const isCurrent = () => accountMountedRef.current && accountSettingsRef.current.accountUid === startedUid;
     setConnectionBusy(true);
     setStatus("Checking website, desktop, and replay ownership...");
     try {
-      const next = await loadConnectionStatus();
-      onSettingsChanged(await window.riftlite.getSettings());
+      const next = await window.riftlite.getAccountConnectionStatus();
+      const nextSettings = await window.riftlite.getSettings();
+      if (!isCurrent()) return;
+      setConnectionStatus(next);
+      onSettingsChanged(nextSettings);
+      void onRefreshWebReplayDiagnostics();
       setStatus(next.message);
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Could not verify the account connection.");
+      if (isCurrent()) setStatus(error instanceof Error ? error.message : "Could not verify the account connection.");
     } finally {
-      setConnectionBusy(false);
+      if (accountMountedRef.current) setConnectionBusy(false);
     }
   }
 
@@ -16034,6 +16171,47 @@ function AccountView({
     }
   }
 
+  if (variant === "setup") {
+    const submitProfileOnEnter = (event: React.KeyboardEvent<HTMLInputElement>) => {
+      if (event.key !== "Enter") return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (!profileBusy && handleDraft.trim() && !isGenericAccountDisplayName(displayNameDraft)) void saveProfile();
+    };
+    return <div className="first-run-setup__account-flow" data-setup-account-state={accountState}>
+      {showAccountSignInActions ? <>
+        <div className="first-run-setup__account-actions">
+          <button type="button" className="first-run-setup__button first-run-setup__button--secondary" disabled={linkBusy} onClick={() => void startLink("google")}><span className="account-google-mark" aria-hidden="true">G</span> Continue with Google</button>
+          <button type="button" className="first-run-setup__button first-run-setup__button--secondary" disabled={linkBusy} onClick={() => void startLink("email")}><Mail size={16} /> Continue with email</button>
+          <button type="button" className="first-run-setup__button first-run-setup__button--secondary" disabled={linkBusy} onClick={() => void startLink("discord")}><MessageCircle size={16} /> Continue with Discord</button>
+        </div>
+        <p className="first-run-setup__note">Sign in securely in your browser, then return to this setup. For an existing account, use its original sign-in method or an already linked Discord identity.</p>
+      </> : null}
+      {linkSession ? <div className="first-run-setup__account-status" role="status">
+        <strong>Finish {linkProvider === "google" ? "Google" : linkProvider === "discord" ? "Discord" : "email"} sign-in in your browser</strong>
+        <p>Confirm the RiftLite account shown there, then come back here. This setup will continue automatically.</p>
+        <button type="button" className="first-run-setup__button first-run-setup__button--secondary" onClick={() => {
+          void window.riftlite.openExternalResource(linkSession.loginUrl).catch((error) => {
+            if (accountMountedRef.current) setStatus(accountLinkErrorMessage(error));
+          });
+        }}><ExternalLink size={15} /> Open secure link</button>
+      </div> : null}
+      {!linkSession && accountLinked ? <div className="first-run-setup__account-status" data-connected={accountReady}>
+        <strong>{accountReady ? "Your account is connected" : accountState === "needs-profile" ? "Choose your RiftLite name" : overview.title}</strong>
+        {accountReady ? <p>{settings.accountHandle ? `@${settings.accountHandle}` : settings.accountDisplayName}</p> : <p>{accountState === "needs-profile" ? "Choose a display name and a unique handle to finish connecting your account." : overview.description}</p>}
+        {!accountVerified && signedIn ? <button type="button" className="first-run-setup__button first-run-setup__button--secondary" disabled={connectionBusy} onClick={() => void checkAccountConnection()}><RefreshCw size={15} />{connectionBusy ? "Checking…" : "Check connection"}</button> : null}
+        {accountReady && !profileExpanded ? <button type="button" className="first-run-setup__text-button" onClick={() => setProfileExpanded(true)}>Edit RiftLite name</button> : null}
+      </div> : null}
+      {!linkSession && signedIn && (!profileComplete || profileExpanded) ? <div className="first-run-setup__account-profile">
+        <label className="first-run-setup__field first-run-setup__account-field" htmlFor="setup-account-display-name"><span>Display name</span><input id="setup-account-display-name" value={displayNameDraft} disabled={profileBusy} onChange={(event) => setDisplayNameDraft(event.currentTarget.value)} onKeyDown={submitProfileOnEnter} placeholder="Name shown in RiftLite" autoComplete="off" /></label>
+        <label className="first-run-setup__field first-run-setup__account-field" htmlFor="setup-account-handle"><span>Account handle</span><input id="setup-account-handle" value={handleDraft} disabled={profileBusy} onChange={(event) => setHandleDraft(event.currentTarget.value)} onKeyDown={submitProfileOnEnter} placeholder="your-handle" autoComplete="off" spellCheck={false} /><small>Your unique handle for your profile and invitations.</small></label>
+        <button type="button" className="first-run-setup__button first-run-setup__button--secondary" disabled={profileBusy || !handleDraft.trim() || isGenericAccountDisplayName(displayNameDraft)} onClick={() => void saveProfile()}><Save size={15} />{profileBusy ? "Saving…" : "Save account name"}</button>
+      </div> : null}
+      {status ? <p className="first-run-setup__note" role="status">{status}</p> : null}
+      <p className="first-run-setup__note">{settings.accountCloudSyncEnabled ? "Your existing cloud backup preference stays on. Manage it later in Account." : "Cloud backup is optional. You can choose its settings later in Account; signing in here does not restore or replace your data."}</p>
+    </div>;
+  }
+
   return (
     <section className="dashboard-page account-page">
       <AccountIdentityCard overview={overview}
@@ -16178,7 +16356,7 @@ function AccountView({
         </label>
         </div> : null}
         <div className="row-actions">
-          <button className="primary" disabled={!accountLinked || !handleDraft.trim() || isGenericAccountDisplayName(displayNameDraft)} onClick={() => void saveProfile()}><Save size={16} /> {profileComplete ? "Save profile" : "Finish setup"}</button>
+          <button className="primary" disabled={!accountLinked || profileBusy || !handleDraft.trim() || isGenericAccountDisplayName(displayNameDraft)} onClick={() => void saveProfile()}><Save size={16} /> {profileBusy ? "Saving…" : profileComplete ? "Save profile" : "Finish setup"}</button>
           {profileLink ? <button className="secondary" onClick={() => void copyProfileLink()}>Copy profile link</button> : null}
           {profileLink ? <button className="secondary" onClick={() => void window.riftlite.openExternalResource(profileLink)}><ExternalLink size={16} /> Open profile</button> : null}
           <button className="secondary" disabled={!signedIn || !publicDraft || !handleDraft.trim()} onClick={() => void refreshProfileMatches()}><RefreshCw size={16} /> Refresh public matches</button>

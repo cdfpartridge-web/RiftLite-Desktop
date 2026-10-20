@@ -5,8 +5,8 @@ export const RIFTLITE_BUILD_IDENTITY = {
   userDataDirectory: "RiftLite Beta 0.6",
   mediaDirectoryName: "RiftLite",
   protocol: "riftlite",
-  packageVersion: "0.9.84",
-  displayVersion: "0.9.84",
+  packageVersion: "0.9.85",
+  displayVersion: "0.9.85",
   updatesEnabled: true,
   usageAnalyticsEnabled: true
 } as const;

@@ -11,6 +11,14 @@ interface AtlasResourceFailurePresentationContext {
 
 const passiveResourceTypes = new Set(["font", "image", "media"]);
 
+/** Include failed artwork/media requests when diagnosing an incomplete board. */
+export function atlasFailureResourceType(value: string): boolean {
+  return [
+    "mainFrame", "subFrame", "stylesheet", "script", "xhr", "fetch",
+    "webSocket", "image", "font", "media"
+  ].includes(value);
+}
+
 /**
  * Cache clearing can cancel a passive static request while the replacement
  * Atlas guest is mounting. Keep that event in the raw diagnostic stream, but

@@ -1,4 +1,6 @@
 import { ipcRenderer } from "electron";
+import { installAtlasRendererPerformanceMonitor } from "./atlasRendererPerformance.js";
+import { ATLAS_RENDERER_PERFORMANCE_IPC_CHANNEL } from "../shared/atlasRendererPerformance.js";
 import { battlefieldCodeFor, battlefieldImageFor, collectTcgaBattlefieldCandidates } from "./tcgaBattlefields.js";
 import { isGeneratedBattlefieldName } from "../shared/generatedBattlefields.js";
 import {
@@ -3508,6 +3510,11 @@ declare global {
 installAtlasAuthoritativeMatchBridge();
 installAtlasBattlefieldSeatBridge();
 installAtlasEditableFocusBridge();
+if (platform === "atlas") {
+  installAtlasRendererPerformanceMonitor((summary) => {
+    ipcRenderer.send(ATLAS_RENDERER_PERFORMANCE_IPC_CHANNEL, summary);
+  });
+}
 installNetworkHooks();
 installDebugCapture();
 installTcgaResearchInteractionCapture();

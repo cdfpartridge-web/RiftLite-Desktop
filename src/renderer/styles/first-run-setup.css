@@ -149,6 +149,19 @@
 .first-run-setup__spinner { animation: first-run-setup-spin .9s linear infinite; }
 @keyframes first-run-setup-spin { to { transform: rotate(360deg); } }
 
+.first-run-setup__account-flow { display: grid; gap: 14px; padding: 20px; border: 1px solid #71b4c444; border-radius: 13px; background: #13304054; }
+.first-run-setup__account-flow h2 { margin: 0; color: #e0eef7; font-size: 17px; }
+.first-run-setup__account-flow p { margin: 0; color: #a6bfce; font-size: 12px; line-height: 1.7; }
+.first-run-setup__account-flow strong { color: #e0eef7; }
+.first-run-setup__account-actions { display: flex; flex-wrap: wrap; gap: 9px; align-items: center; }
+.first-run-setup__account-profile { display: grid; gap: 12px; }
+.first-run-setup__account-field { display: grid; gap: 7px; color: #c2d5e2; font-size: 12px; }
+.first-run-setup .first-run-setup__account-field input { width: 100%; min-width: 0; padding: 11px 13px; border: 1px solid #6395ac55; border-radius: 9px; background: #071321; color: #e3eff7; font-size: 12px; }
+.first-run-setup__account-status { margin: 0; padding: 10px 12px; border: 1px solid #79bdd13d; border-radius: 9px; color: #c2deeb; background: #153247; overflow-wrap: anywhere; font-size: 12px; line-height: 1.6; }
+.first-run-setup__account-flow details { color: #9fb7c7; font-size: 11px; line-height: 1.7; }
+.first-run-setup__account-flow summary { cursor: pointer; }
+.first-run-setup__account-flow .first-run-setup__note { margin: 0; }
+
 .first-run-setup-return { display: flex; flex: 0 0 auto; align-items: center; justify-content: space-between; gap: 18px; padding: 13px 20px; margin: 0 0 16px; border: 1px solid #74c6d353; border-radius: 12px; background: linear-gradient(100deg, #173a4b, #102330); color: #dcf0f7; }
 .first-run-setup-return > div { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .first-run-setup-return strong { font-size: 12px; font-weight: 600; }

@@ -95,7 +95,11 @@ import { AtlasGuestRecoveryLifecycle } from "./services/atlasGuestRecoveryLifecy
 import { AtlasCompatibilityStyleInstaller } from "./services/atlasCompatibilityStyleInstaller.js";
 import { AtlasInvalidClaimsRecoveryBudget } from "../shared/atlasInvalidClaimsRecovery.js";
 import { AtlasKnownOpponentHandTracker } from "../shared/atlasKnownOpponentHand.js";
-import { shouldPresentAtlasResourceFailure } from "../shared/atlasResourceFailure.js";
+import { atlasFailureResourceType, shouldPresentAtlasResourceFailure } from "../shared/atlasResourceFailure.js";
+import {
+  ATLAS_RENDERER_PERFORMANCE_IPC_CHANNEL,
+  validatedAtlasRendererPerformanceSummary
+} from "../shared/atlasRendererPerformance.js";
 import {
   atlasExplicitRepairUrl,
   clearAtlasWebviewRuntime,
@@ -945,6 +949,8 @@ function atlasDependencyOrigin(value: string): string {
     const hostname = url.hostname.toLowerCase();
     if (
       hostname === "play.riftatlas.com" ||
+      hostname === "riftatlas.com" ||
+      hostname === "auth.riftatlas.com" ||
       hostname === "clerk.riftatlas.com" ||
       hostname === "accounts.riftatlas.com" ||
       hostname.endsWith(".riftatlas-workers.com") ||
@@ -956,10 +962,6 @@ function atlasDependencyOrigin(value: string): string {
     // Ignore malformed request URLs.
   }
   return "";
-}
-
-function atlasFailureResourceType(value: string): boolean {
-  return ["mainFrame", "subFrame", "stylesheet", "script", "xhr", "fetch", "webSocket"].includes(value);
 }
 
 function safeAtlasResourcePath(value: string): string {
@@ -9496,6 +9498,29 @@ function registerIpc(): void {
         documentFocused: diagnostic.documentFocused,
         documentVisible: diagnostic.documentVisible,
         activeControl: diagnostic.activeControl
+      }
+    }).catch(() => undefined);
+  });
+  const atlasRendererPerformanceReportedAt = new WeakMap<WebContents, number>();
+  ipcMain.on(ATLAS_RENDERER_PERFORMANCE_IPC_CHANNEL, (ipcEvent, value: unknown) => {
+    if (trustedGameIpcPlatform(ipcEvent) !== "atlas") return;
+    const summary = validatedAtlasRendererPerformanceSummary(value);
+    if (!summary) return;
+    const now = performance.now();
+    const previous = atlasRendererPerformanceReportedAt.get(ipcEvent.sender);
+    if (previous !== undefined && now - previous < 10_000) return;
+    atlasRendererPerformanceReportedAt.set(ipcEvent.sender, now);
+    void diagnostics.record({
+      id: `atlas-renderer-performance-${randomUUID()}`,
+      platform: "atlas",
+      kind: "debug",
+      capturedAt: new Date().toISOString(),
+      url: "https://play.riftatlas.com/",
+      payload: {
+        reason: "atlas-renderer-performance",
+        diagnosticType: "performance",
+        source: "atlas-renderer",
+        ...summary
       }
     }).catch(() => undefined);
   });

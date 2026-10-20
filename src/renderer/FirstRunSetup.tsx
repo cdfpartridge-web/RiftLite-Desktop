@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   ArrowLeft, ArrowRight, BarChart3, Check, ChevronRight, Cloud, ExternalLink, Gamepad2,
   Layers3, LoaderCircle, Mic, MonitorPlay, Play, Settings2, ShieldCheck,
@@ -9,6 +9,7 @@ import type { SavedDeck, UserSettings } from "../shared/types.js";
 import { initialFirstRunReplayPreferences, rawCaptureForFirstRunReplayPreferences } from "../shared/firstRunReplayPreferences.js";
 import { activeDiscordReplayHubIds } from "../shared/replaySharing.js";
 import { SetupToolbarGuide } from "./SetupToolbarGuide.js";
+import { FirstRunDeckImport } from "./FirstRunDeckImport.js";
 import "./styles/first-run-setup.css";
 
 export type FirstRunSetupStep = "player" | "account" | "replays" | "deck" | "ready";
@@ -19,9 +20,10 @@ export interface FirstRunSetupProps {
   step: FirstRunSetupStep;
   logoUrl?: string;
   accountVerified: boolean;
+  accountContent: React.ReactNode;
+  onImportDeck: (source: string, kind: "url" | "text") => Promise<SavedDeck>;
   onStepChange: (step: FirstRunSetupStep) => void;
   onSave: (patch: Partial<UserSettings>) => Promise<void>;
-  onOpenDestination: (target: NavigationTarget) => void;
   onOpenWebsite: () => Promise<void>;
   onFinish: (target?: NavigationTarget) => Promise<void>;
   onSkip: () => Promise<void>;
@@ -45,9 +47,9 @@ const FEATURE_MAP = [
   { title: "Settings", description: "Adjust your preferences or reopen this setup.", icon: Settings2, target: { view: "settings" } }
 ] as const satisfies readonly { title: string; description: string; icon: typeof Play; target: NavigationTarget }[];
 
-const FOCUSABLE_SELECTOR = "button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), summary, [tabindex]:not([tabindex='-1'])";
+const FOCUSABLE_SELECTOR = "button:not(:disabled), [href], input:not(:disabled), textarea:not(:disabled), select:not(:disabled), summary, [tabindex]:not([tabindex='-1'])";
 
-export function FirstRunSetup({ settings, decks, step, logoUrl, accountVerified, onStepChange, onSave, onOpenDestination, onOpenWebsite, onFinish, onSkip }: FirstRunSetupProps) {
+export function FirstRunSetup({ settings, decks, step, logoUrl, accountVerified, accountContent, onImportDeck, onStepChange, onSave, onOpenWebsite, onFinish, onSkip }: FirstRunSetupProps) {
   const [username, setUsername] = useState(settings.username);
   const [platform, setPlatform] = useState(settings.defaultGamePlatform);
   const [localReplay, setLocalReplay] = useState(settings.replayCaptureEnabled);
@@ -61,7 +63,10 @@ export function FirstRunSetup({ settings, decks, step, logoUrl, accountVerified,
   const [confirmResults, setConfirmResults] = useState(settings.confirmationEnabled);
   const [fullscreenBar, setFullscreenBar] = useState(settings.showPlayToolbarInFullscreen);
   const [deckId, setDeckId] = useState(settings.activeDeckId);
-  const [busy, setBusy] = useState(false);
+  const [saving, setBusy] = useState(false);
+  const [importBusy, setImportBusy] = useState(false);
+  const importBusyRef = useRef(false);
+  const busy = saving || importBusy;
   const [error, setError] = useState("");
   const busyRef = useRef(false);
   const mountedRef = useRef(true);
@@ -69,6 +74,11 @@ export function FirstRunSetup({ settings, decks, step, logoUrl, accountVerified,
   const dialogRef = useRef<HTMLElement | null>(null);
   const headingRef = useRef<HTMLHeadingElement | null>(null);
   const contentRef = useRef<HTMLDivElement | null>(null);
+  const previousSettingsRef = useRef(settings);
+  const onImportBusyChange = useCallback((next: boolean) => {
+    importBusyRef.current = next;
+    setImportBusy(next);
+  }, []);
   const index = STEPS.findIndex((item) => item.id === step);
   const connected = accountVerified && Boolean(settings.accountUid);
   const discordDestinations = activeDiscordReplayHubIds(settings).length > 0 && (onlineAtlas || onlineTcga);
@@ -86,7 +96,7 @@ export function FirstRunSetup({ settings, decks, step, logoUrl, accountVerified,
               : "Online uploads: check settings";
 
   async function runAction(action: () => Promise<void>) {
-    if (busyRef.current) return;
+    if (busyRef.current || importBusyRef.current) return;
     busyRef.current = true;
     setBusy(true);
     setError("");
@@ -125,10 +135,6 @@ export function FirstRunSetup({ settings, decks, step, logoUrl, accountVerified,
     void runAction(async () => { await saveCurrentStep(); onStepChange(next); });
   }
 
-  function openDestination(target: NavigationTarget) {
-    void runAction(async () => { await saveCurrentStep(); onOpenDestination(target); });
-  }
-
   function finish(target: NavigationTarget) {
     void runAction(async () => { await saveCurrentStep(); await onFinish(target); });
   }
@@ -147,7 +153,7 @@ export function FirstRunSetup({ settings, decks, step, logoUrl, accountVerified,
       if (event.key === "Escape") {
         event.preventDefault();
         event.stopPropagation();
-        if (!busyRef.current) skipRef.current();
+        if (!busyRef.current && !importBusyRef.current) skipRef.current();
         return;
       }
       if (event.key !== "Tab" || !dialogRef.current) return;
@@ -177,6 +183,15 @@ export function FirstRunSetup({ settings, decks, step, logoUrl, accountVerified,
       if (previousFocus?.isConnected) previousFocus.focus({ preventScroll: true });
     };
   }, []);
+
+  useEffect(() => {
+    // Account profile completion can update the saved player name while this
+    // screen stays mounted. Refresh clean drafts without overwriting typed edits.
+    const previous = previousSettingsRef.current;
+    setUsername((draft) => draft === previous.username ? settings.username : draft);
+    setPlatform((draft) => draft === previous.defaultGamePlatform ? settings.defaultGamePlatform : draft);
+    previousSettingsRef.current = settings;
+  }, [settings]);
 
   useEffect(() => {
     const preferences = initialFirstRunReplayPreferences(settings);
@@ -229,12 +244,14 @@ export function FirstRunSetup({ settings, decks, step, logoUrl, accountVerified,
               </div></fieldset>
             </> : null}
 
+            <div hidden={step !== "account"} className="first-run-setup__account-step">
             {step === "account" ? <>
               <div className="first-run-setup__heading"><span className="first-run-setup__eyebrow">YOUR ACCOUNT · OPTIONAL</span><h1 ref={headingRef} tabIndex={-1} id="first-run-setup-title">Take your games further.</h1><p id="first-run-setup-description">A free RiftLite account connects your desktop to online replays and the community.</p></div>
               <div className="first-run-setup__benefits"><div><Video size={21} /><strong>Online replays</strong><span>Upload and share the games you choose.</span></div><div><Cloud size={21} /><strong>Account backup</strong><span>Choose whether to back up supported app data.</span></div><div><Users size={21} /><strong>Your community</strong><span>Join groups and connect with other players.</span></div></div>
-              <div className="first-run-setup__account-card" data-connected={connected}><span className="first-run-setup__account-icon" aria-hidden="true">{connected ? <ShieldCheck size={25} /> : <UserRound size={25} />}</span><div><strong>{connected ? "Your account is connected" : settings.accountUid ? "Reconnect your RiftLite account" : "Connect when you're ready"}</strong><p>{connected ? settings.accountHandle ? `@${settings.accountHandle}` : settings.accountDisplayName || settings.accountEmail || "Verified RiftLite account" : settings.accountUid ? "Verify your saved account to use online features." : "Use Google, email or Discord on the Account page, then return to setup."}</p></div><button type="button" className="first-run-setup__button first-run-setup__button--secondary" disabled={busy} onClick={() => openDestination({ view: "account" })}>{connected ? "Account settings" : "Sign in / create account"}<ArrowRight size={15} /></button></div>
-              <p className="first-run-setup__note"><ShieldCheck size={18} aria-hidden="true" /><span>You can keep using RiftLite on this device without an account. Uploads, replay visibility and account backup have their own settings.</span></p>
             </> : null}
+              {accountContent}
+              <p className="first-run-setup__note"><ShieldCheck size={18} aria-hidden="true" /><span>You can keep using RiftLite without an account. Browser sign-in returns to this setup; choose your replay preferences in the next step.</span></p>
+            </div>
 
             {step === "replays" ? <>
               <div className="first-run-setup__heading"><span className="first-run-setup__eyebrow">REMEMBER YOUR GAMES</span><h1 ref={headingRef} tabIndex={-1} id="first-run-setup-title">Choose what to save.</h1><p id="first-run-setup-description">Keep games for review, with recording choices that suit you.</p></div>
@@ -257,12 +274,14 @@ export function FirstRunSetup({ settings, decks, step, logoUrl, accountVerified,
               <details className="first-run-setup__extra"><summary>More recording & play options <ChevronRight size={15} aria-hidden="true" /></summary><div className="first-run-setup__preferences"><SetupToggle title="Capture interactive replay data" description={onlineAtlas || onlineTcga ? "Required for online replays. Turn off both upload options above to disable capture." : uploadsConfigured ? "Your existing upload preferences still apply." : "Interactive replay data stays here until you choose to upload."} checked={interactiveReplay} disabled={busy || (interactiveReplay && (onlineAtlas || onlineTcga))} onChange={setInteractiveReplay} /><SetupToggle title="Review results after each match" description="Check the result and add details before saving." checked={confirmResults} disabled={busy} onChange={setConfirmResults} /><SetupToggle title="Show the top bar in fullscreen" description="Keep Play controls, including Known opponent hand, within reach. Also in Settings → Appearance & Play." checked={fullscreenBar} disabled={busy} onChange={setFullscreenBar} /></div></details>
             </> : null}
 
+            <div hidden={step !== "deck"} className="first-run-setup__deck-step">
             {step === "deck" ? <>
               <div className="first-run-setup__heading"><span className="first-run-setup__eyebrow">BRING YOUR GAME PLAN · OPTIONAL</span><h1 ref={headingRef} tabIndex={-1} id="first-run-setup-title">Start with your deck.</h1><p id="first-run-setup-description">Choose a deck to connect your games, stats and preparation.</p></div>
-              {decks.length ? <><label className="first-run-setup__field" htmlFor="first-run-deck"><span>Your active deck</span><select id="first-run-deck" value={chosenDeck?.id ?? ""} disabled={busy} onChange={(event) => setDeckId(event.currentTarget.value)}><option value="">Choose later</option>{decks.map((deck) => <option key={deck.id} value={deck.id}>{deck.title || "Untitled deck"}{deck.legend ? ` · ${deck.legend}` : ""}</option>)}</select><small>You can change your active deck from the Deck Library.</small></label><div className="first-run-setup__deck-card"><Layers3 size={32} aria-hidden="true" /><div><strong>{chosenDeck?.title || (chosenDeck ? "Untitled deck" : "No deck selected yet")}</strong><p>{chosenDeck ? chosenDeck.legend || "Saved in your Deck Library" : "That's fine — add or choose a deck whenever you're ready."}</p></div>{chosenDeck ? <Check size={20} aria-label="Deck selected" /> : null}</div></> : <div className="first-run-setup__empty-deck"><span aria-hidden="true"><Layers3 size={38} /></span><strong>Your first deck starts here.</strong><p>Import a public Piltover Archive deck link or paste a deck list in the Deck Library, then return to setup.</p></div>}
-              <button type="button" className="first-run-setup__button first-run-setup__button--secondary" disabled={busy} onClick={() => openDestination({ view: "decks", deckFocus: "library" })}>{decks.length ? "Add another deck" : "Open Deck Library"}<ArrowRight size={16} /></button>
-              <p className="first-run-setup__note"><Layers3 size={18} aria-hidden="true" /><span>Use the regular importer: a public Piltover Archive link or a pasted deck list. Prepare also holds your Deck Notebook, matchup plans, Mulligan Lab and Sideboard Lab.</span></p>
+              {decks.length ? <><label className="first-run-setup__field" htmlFor="first-run-deck"><span>Your active deck</span><select id="first-run-deck" value={chosenDeck?.id ?? ""} disabled={busy} onChange={(event) => setDeckId(event.currentTarget.value)}><option value="">Choose later</option>{decks.map((deck) => <option key={deck.id} value={deck.id}>{deck.title || "Untitled deck"}{deck.legend ? ` · ${deck.legend}` : ""}</option>)}</select><small>You can change your active deck from the Deck Library.</small></label><div className="first-run-setup__deck-card"><Layers3 size={32} aria-hidden="true" /><div><strong>{chosenDeck?.title || (chosenDeck ? "Untitled deck" : "No deck selected yet")}</strong><p>{chosenDeck ? chosenDeck.legend || "Saved in your Deck Library" : "That's fine — add or choose a deck whenever you're ready."}</p></div>{chosenDeck ? <Check size={20} aria-label="Deck selected" /> : null}</div></> : null}
             </> : null}
+              <FirstRunDeckImport onImport={onImportDeck} onImported={(deck) => setDeckId(deck.id)} onBusyChange={onImportBusyChange} />
+              <p className="first-run-setup__note"><Layers3 size={18} aria-hidden="true" /><span>Your deck is saved to the Deck Library without leaving setup. Prepare also holds your Deck Notebook, matchup plans, Mulligan Lab and Sideboard Lab.</span></p>
+            </div>
 
             {step === "ready" ? <>
               <div className="first-run-setup__heading first-run-setup__heading--ready"><span className="first-run-setup__eyebrow">MAKE YOURSELF AT HOME</span><h1 ref={headingRef} tabIndex={-1} id="first-run-setup-title">You're ready to explore.</h1><p id="first-run-setup-description">Start a game, or pick something to explore. Your preferences are saved.</p></div>
