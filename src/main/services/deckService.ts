@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { normalizeLegendName } from "../../shared/legendNames.js";
-import type { DeckEntry, MatchDraft, SavedDeck, UserSettings } from "../../shared/types.js";
+import { deckContentFingerprint as snapshotFingerprint } from "../../shared/deckImport.js";
+import type { DeckEntry, DeckImportChoice, DeckImportResult, MatchDraft, SavedDeck, UserSettings } from "../../shared/types.js";
 import { RiftLiteStore } from "./store.js";
 
 const PILTOVER_URL_RE = /^https?:\/\/(?:www\.)?piltoverarchive\.com\/decks\/view\/([0-9a-fA-F-]{36})(?:[/?#].*)?$/;
@@ -26,9 +27,9 @@ export class DeckService {
     return this.store.getSavedDecks();
   }
 
-  async importDeck(url: string): Promise<SavedDeck> {
+  async importDeck(url: string, choice?: DeckImportChoice): Promise<DeckImportResult> {
     const payload = await this.fetchPiltoverDeck(url);
-    return this.store.upsertSavedDeck({
+    return this.store.importSavedDeck({
       sourceUrl: payload.sourceUrl,
       sourceKey: payload.sourceKey,
       title: payload.title,
@@ -36,12 +37,22 @@ export class DeckService {
       snapshotJson: JSON.stringify(payload.snapshot),
       lastRefreshStatus: "ok",
       lastRefreshError: ""
+    }, choice);
+  }
+
+  /** Package imports already carry their own notebook import flow and identity. */
+  async importDeckPackageSource(url: string): Promise<SavedDeck> {
+    const payload = await this.fetchPiltoverDeck(url);
+    return this.store.upsertSavedDeck({
+      sourceUrl: payload.sourceUrl, sourceKey: payload.sourceKey, title: payload.title,
+      legend: payload.legend, snapshotJson: JSON.stringify(payload.snapshot),
+      lastRefreshStatus: "ok", lastRefreshError: ""
     });
   }
 
-  async importDeckText(text: string): Promise<SavedDeck> {
+  async importDeckText(text: string, choice?: DeckImportChoice): Promise<DeckImportResult> {
     const payload = parsePiltoverDeckText(text);
-    return this.store.upsertSavedDeck({
+    return this.store.importSavedDeck({
       sourceUrl: payload.sourceUrl,
       sourceKey: payload.sourceKey,
       title: payload.title,
@@ -49,7 +60,7 @@ export class DeckService {
       snapshotJson: JSON.stringify(payload.snapshot),
       lastRefreshStatus: "text-import",
       lastRefreshError: ""
-    });
+    }, choice);
   }
 
   async refreshDeck(id: string): Promise<SavedDeck> {
@@ -62,9 +73,11 @@ export class DeckService {
     }
     try {
       const payload = await this.fetchPiltoverDeck(existing.sourceUrl);
+      Object.assign(payload.snapshot, { title: existing.title || payload.title, sourceKey: existing.sourceKey, source_key: existing.sourceKey });
       return this.store.upsertSavedDeck({
+        id: existing.id,
         sourceUrl: payload.sourceUrl,
-        sourceKey: payload.sourceKey,
+        sourceKey: existing.sourceKey,
         title: existing.title || payload.title,
         legend: payload.legend,
         snapshotJson: JSON.stringify(payload.snapshot),
@@ -96,6 +109,16 @@ export class DeckService {
   }
 
   async attachBestDeck(draft: MatchDraft, snapshot: Record<string, unknown>, settings: UserSettings): Promise<MatchDraft> {
+    const active = settings.activeDeckId ? await this.store.getSavedDeck(settings.activeDeckId) : null;
+    // A deliberate separate copy must win over automatic content matching.
+    // Keep an already attached copy fixed for the remainder of its match.
+    if (active?.sourceKey.startsWith("copy:") && !draft.deckSourceKey?.startsWith("copy:") && isDeckCompatible(active, draft.myChampion)) {
+      const captured = draft.deckSnapshotJson ? parseJsonRecord(draft.deckSnapshotJson)
+        : draft.platform === "tcga" ? buildTcgaSnapshot(snapshot.selectedDeck && typeof snapshot.selectedDeck === "object" ? snapshot.selectedDeck as Record<string, unknown> : {}) : null;
+      if (!captured || snapshotFingerprint(captured) === snapshotFingerprint(parseJsonRecord(active.snapshotJson))) {
+        return applyDeckToDraft(draft, active);
+      }
+    }
     if (draft.deckSnapshotJson) {
       return draft;
     }
@@ -107,7 +130,6 @@ export class DeckService {
       return applyDeckToDraft(draft, tcgaDeck);
     }
     if (settings.activeDeckId) {
-      const active = await this.store.getSavedDeck(settings.activeDeckId);
       if (active && isDeckCompatible(active, draft.myChampion)) {
         return applyDeckToDraft(draft, active);
       }
@@ -127,6 +149,7 @@ export class DeckService {
     }
     const targetFingerprint = snapshotFingerprint(snapshot);
     for (const deck of await this.store.getSavedDecks()) {
+      if (deck.sourceKey.startsWith("copy:")) continue;
       if (snapshotFingerprint(parseJsonRecord(deck.snapshotJson)) === targetFingerprint) {
         return deck;
       }
@@ -505,28 +528,6 @@ function isDeckCompatible(deck: SavedDeck, matchLegend: string): boolean {
   const deckLegend = normalizeLegendName(readString(snapshot.legend) || readString(snapshot.legend_key) || deck.legend);
   const target = normalizeLegendName(matchLegend);
   return Boolean(deckLegend && target && deckLegend === target);
-}
-
-function snapshotFingerprint(snapshot: Record<string, unknown>): string {
-  const block = (label: string, rawEntries: unknown): string => {
-    const entries = Array.isArray(rawEntries) ? rawEntries : rawEntries && typeof rawEntries === "object" ? [rawEntries] : [];
-    const values = entries.map((entry) => {
-      const record = entry && typeof entry === "object" ? entry as Record<string, unknown> : {};
-      const name = label === "legend"
-        ? normalizeLegendName(record.name)
-        : readString(record.name);
-      const qty = Number(record.qty ?? 1) || 1;
-      return name ? `${qty}x${normalizeLookupKey(name)}` : "";
-    }).filter(Boolean).sort();
-    return `${label}:${values.join("|")}`;
-  };
-  return [
-    block("legend", snapshot.legend_entry || { name: snapshot.legend, qty: 1 }),
-    block("runes", snapshot.runes),
-    block("battlefields", snapshot.battlefields),
-    block("main", snapshot.main_deck || snapshot.mainDeck),
-    block("side", snapshot.sideboard)
-  ].join("||");
 }
 
 function visibleLines(html: string): string[] {

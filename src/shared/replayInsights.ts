@@ -10,7 +10,7 @@ import { deckSnapshotHash } from "./deckNotebook.js";
 import { riftboundBasePrintCode, riftboundCardCodeAliases } from "./cardIdentity.js";
 import { MULLIGAN_LAB_CURRENT_SEASON_STARTED_ON } from "./mulliganLab.js";
 import {
-  RADIANCE_PRESEASON_START_AT,
+  RADIANCE_START_AT,
   STAT_SEASONS,
   isInStatSeason,
   statMatchTimestamp,
@@ -301,7 +301,7 @@ export interface ReplayInsightsCoverage {
 export interface ReplayInsightsScopeReceipt {
   /** Legacy training boundary retained for saved receipt compatibility. */
   currentSeasonStartedOn: typeof MULLIGAN_LAB_CURRENT_SEASON_STARTED_ON;
-  currentSeasonStartedAt: typeof RADIANCE_PRESEASON_START_AT;
+  currentSeasonStartedAt: typeof RADIANCE_START_AT;
   periods: ReplayInsightPeriod[];
   periodGameCounts: Record<ReplayInsightPeriod, number>;
   deckVersions: Array<{ fingerprint: string; games: number }>;
@@ -2425,6 +2425,7 @@ function buildReportCoverage(analyses: ReplayAnalysis[]): ReplayInsightsCoverage
 
 function buildReplayInsightsScopeReceipt(scopedGames: ReplayInsightEligibleGame[]): ReplayInsightsScopeReceipt {
   const periodGameCounts: Record<ReplayInsightPeriod, number> = {
+    radiance: 0,
     "radiance-preseason": 0,
     "vendetta-launch": 0,
     "vendetta-preview": 0,
@@ -2443,7 +2444,7 @@ function buildReplayInsightsScopeReceipt(scopedGames: ReplayInsightEligibleGame[
   const dates = replayInsightObservedDates(scopedGames);
   return {
     currentSeasonStartedOn: MULLIGAN_LAB_CURRENT_SEASON_STARTED_ON,
-    currentSeasonStartedAt: RADIANCE_PRESEASON_START_AT,
+    currentSeasonStartedAt: RADIANCE_START_AT,
     periods: orderedReplayInsightPeriods(Object.entries(periodGameCounts)
       .filter(([, count]) => count > 0)
       .map(([period]) => period as ReplayInsightPeriod)),

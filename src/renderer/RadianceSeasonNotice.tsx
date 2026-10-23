@@ -1,14 +1,14 @@
 import { useState } from "react";
 import { Sparkles, X } from "lucide-react";
-import { RADIANCE_PRESEASON_START_AT, STAT_SEASONS, type StatSeasonId } from "../shared/statSeasons";
+import { RADIANCE_START_AT, STAT_SEASONS, type StatSeasonId } from "../shared/statSeasons";
 import "./styles/radiance-season-notice.css";
 
-const DISMISSED_KEY = "riftlite:radiance-preseason-notice-dismissed";
+const DISMISSED_KEY = "riftlite:radiance-season-notice-dismissed";
 
 export function RadianceSeasonNotice() {
   const [dismissed, setDismissed] = useState(() => {
     try {
-      return window.localStorage.getItem(DISMISSED_KEY) === RADIANCE_PRESEASON_START_AT;
+      return window.localStorage.getItem(DISMISSED_KEY) === RADIANCE_START_AT;
     } catch {
       return false;
     }
@@ -18,20 +18,20 @@ export function RadianceSeasonNotice() {
   function dismiss() {
     setDismissed(true);
     try {
-      window.localStorage.setItem(DISMISSED_KEY, RADIANCE_PRESEASON_START_AT);
+      window.localStorage.setItem(DISMISSED_KEY, RADIANCE_START_AT);
     } catch {
       // Keep the notice dismissed for this view if storage is unavailable.
     }
   }
 
   return (
-    <aside className="radiance-season-notice" aria-label="Radiance pre-season announcement">
+    <aside className="radiance-season-notice" aria-label="Radiance season announcement">
       <Sparkles size={20} aria-hidden="true" />
       <div>
-        <strong>Radiance pre-season stats have started</strong>
-        <p>Matches played from <time dateTime={RADIANCE_PRESEASON_START_AT} title="10 October 2026 at 17:35:38 UK time">10 October, 17:35 UK time</time> count toward the new period. Use the Season filter to see your older matches and stats. Nothing has been reset.</p>
+        <strong>Radiance season is live</strong>
+        <p>Radiance is now the default for matches and stats, starting <time dateTime={RADIANCE_START_AT} title="23 October 2026 at 13:11:27 UK time">23 October, 13:11 UK time</time>. Use the Season filter to see Radiance pre-season and older results. Nothing has been reset.</p>
       </div>
-      <button type="button" className="secondary radiance-season-dismiss" onClick={dismiss} aria-label="Dismiss Radiance pre-season announcement"><X size={16} /></button>
+      <button type="button" className="secondary radiance-season-dismiss" onClick={dismiss} aria-label="Dismiss Radiance season announcement"><X size={16} /></button>
     </aside>
   );
 }

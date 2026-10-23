@@ -34,10 +34,10 @@ describe("Home launchpad", () => {
     const releaseNotesSource = appSource.slice(releaseNotesStart, releaseNotesEnd);
 
     expect(releaseNotesSource).toContain("version: APP_VERSION_META");
-    expect(releaseNotesSource).toContain("Radiance pre-season stats");
+    expect(releaseNotesSource).toContain("Official Radiance stats");
     expect(releaseNotesSource).toContain("Quick setup");
-    expect(releaseNotesSource).toContain("Sign up with Discord");
-    expect(releaseNotesSource).toContain("Added 80 card prints");
+    expect(releaseNotesSource).toContain("Interactive replays");
+    expect(releaseNotesSource).toContain("Save as separate deck");
     expect(releaseNotesSource).not.toContain("Search Rules");
     expect(releaseNotesSource).not.toContain("Deck Insights is now the default Insights view");
   });

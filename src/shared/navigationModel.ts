@@ -53,8 +53,9 @@ export type PrimaryNavigationEntry =
   | NavigationDisclosure;
 
 export const REVIEW_NAVIGATION_ITEMS = [
+  { id: "interactive-replays", label: "Interactive replays", target: { view: "web-replay" } },
   { id: "match-history", label: "Matches", target: { view: "matches" } },
-  { id: "local-replays", label: "Replays & videos", target: { view: "replays" } },
+  { id: "local-replays", label: "Replay library", target: { view: "replays" } },
   { id: "my-stats", label: "Stats", target: { view: "stats" } }
 ] as const satisfies readonly NavigationItem[];
 
@@ -81,7 +82,7 @@ export const NAVIGATION_DISCLOSURES = {
     kind: "disclosure",
     id: "review",
     label: "Review",
-    defaultTarget: { view: "matches" },
+    defaultTarget: { view: "web-replay" },
     children: REVIEW_NAVIGATION_ITEMS
   },
   prepare: {
@@ -140,8 +141,7 @@ export function navigationOwner(context: NavigationContext): NavigationOwner {
     case "replays":
       return disclosureOwner("review", "local-replays");
     case "web-replay":
-      // Existing deep links still open the hosted library within Replays & videos.
-      return disclosureOwner("review", "local-replays");
+      return disclosureOwner("review", "interactive-replays");
     case "stats":
       return disclosureOwner("review", "my-stats");
     case "decks":

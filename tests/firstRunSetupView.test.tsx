@@ -55,6 +55,38 @@ describe("first install setup", () => {
     expect(html).not.toContain("Set up online replays");
   });
 
+  it("introduces interactive review first and leaves original video optional", () => {
+    const html = render({ step: "replays" });
+    expect(html).toContain("Recommended");
+    expect(html).toContain("Walk through your game, search actions and review combat in the web player");
+    expect(html).toContain("upload it to your RiftLite account to watch");
+    expect(html.indexOf("Capture interactive replays")).toBeLessThan(html.indexOf("Record game video"));
+    expect(html.indexOf("Upload Atlas replays")).toBeLessThan(html.indexOf("Optional game video"));
+    const capture = html.slice(html.indexOf("Capture interactive replays")).split("</label>")[0];
+    const video = html.slice(html.indexOf("Record game video")).split("</label>")[0];
+    expect(capture).toContain('checked=""');
+    expect(video).not.toContain('checked=""');
+    expect(html).toContain("Interactive replays work without it");
+  });
+
+  it("preserves an existing user's video and disabled interactive capture when setup reopens", () => {
+    const settings = createDefaultSettings();
+    settings.firstRunComplete = true;
+    settings.replayCaptureEnabled = true;
+    settings.replayVideoEnabled = true;
+    settings.replayMicAudioEnabled = true;
+    settings.rawCapture.enabled = false;
+    const html = render({ step: "replays", settings });
+    for (const title of ["Record game video", "Include my microphone"]) {
+      expect(html.slice(html.indexOf(title)).split("</label>")[0]).toContain('checked=""');
+    }
+    expect(html.slice(html.indexOf("Capture interactive replays")).split("</label>")[0]).not.toContain('checked=""');
+    const ready = render({ step: "ready", settings });
+    expect(ready).toContain("Interactive replays off");
+    expect(ready).toContain("Video on");
+    expect(ready).toContain("Microphone on");
+  });
+
   it("keeps online setup inside the wizard with explicit opt-in and Public for a new profile", () => {
     const settings = { ...createDefaultSettings(), accountUid: "player-one" };
     const html = render({ step: "replays", settings, accountVerified: true });
@@ -128,6 +160,7 @@ describe("first install setup", () => {
     expect(html).toContain("Online uploads off");
     expect(html).toContain("choose Save match");
     expect(html).toContain("Visit RiftLite.com/replays");
+    expect(html).toContain("Interactive replays, game walkthroughs and action search on the web");
     expect(html).not.toContain("Opening Turns Lab");
     expect(html).not.toContain("Replay Coach");
     expect(html).toContain('data-setup-action="finish"');

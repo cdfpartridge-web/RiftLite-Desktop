@@ -31,6 +31,7 @@ import type {
   DeckGuideSection,
   DeckMatchupGuide,
   DeckNotebook,
+  DeckImportChoice,
   DeckNotebookExport,
   DeckPackageExport,
   DeckPackageImportResult,
@@ -231,6 +232,13 @@ import {
   type RawCaptureFinishIdentity
 } from "./services/rawCaptureService.js";
 import { attachReplayVideoToStore } from "./services/replayVideoAttachment.js";
+import {
+  createStagedReplayVideo,
+  discardPublishedReplayVideoSources,
+  publishStagedReplayVideo,
+  replayVideoDiscardMarkerPath,
+  replayVideoPublicationMarkerPath
+} from "./services/replayVideoStaging.js";
 import {
   clearReplayVideoRecoverySidecar,
   interruptedReplayVideoCandidates,
@@ -456,7 +464,7 @@ const rawCaptureIngressLimiter = new RawCaptureIngressLimiter();
 const replayFrameHashByPlatform = new Map<GamePlatform, { hash: string; capturedAt: number }>();
 const ensuredReplayFrameDirectories = new Set<string>();
 let replayFrameDirectoryCache: { path: string; expiresAt: number } | null = null;
-const replayVideoSessions = new Map<string, ReplayVideoSession>();
+const replayVideoSessions = new Map<string, ReplayVideoSession & { destinationPath: string }>();
 type ConfirmedMatchDeliveryJob = {
   saved: MatchDraft;
   pending: Promise<void> | null;
@@ -1360,6 +1368,12 @@ function replayVideoDirectory(settings?: UserSettings): string {
   return join(replayBundleDirectory(settings), "Video");
 }
 
+function replayVideoStagingDirectory(): string {
+  // Keep the growing recording out of Documents/cloud-sync folders. Only
+  // completed media is published to the user's chosen replay directory.
+  return join(app.getPath("userData"), "Replay Video Staging");
+}
+
 function replayFrameDirectory(replayId: string, settings?: UserSettings): string {
   return join(replayBundleDirectory(settings), "Imported Frames", safeFileComponent(replayId, "replay"));
 }
@@ -1410,6 +1424,7 @@ function replayLocalFileRoots(settings: UserSettings, replay: ReplayRecord): Rep
       replayVideoImportDirectory(settings),
       replayVideoDirectory(),
       replayVideoImportDirectory(),
+      replayVideoStagingDirectory(),
       legacyReplayVideoDirectory()
     ],
     "raw-capture": [
@@ -3780,21 +3795,20 @@ async function trackSpotlightClick(payload: SpotlightClickPayload): Promise<void
 
 async function startReplayVideoCaptureFile(options: ReplayVideoStartOptions): Promise<ReplayVideoSession> {
   const settings = await store.getSettings();
-  const directory = replayVideoDirectory(settings);
-  await mkdir(directory, { recursive: true });
   const startedAt = new Date().toISOString();
   const filename = screenshotFilename(`${options.platform}-${options.quality}-${options.title || "video-replay"}`, replayVideoExtension(options.mimeType));
-  const filePath = join(directory, filename);
-  await writeFile(filePath, Buffer.alloc(0));
+  const { stagingPath: filePath, destinationPath } = await createStagedReplayVideo(
+    replayVideoStagingDirectory(), replayVideoDirectory(settings), filename
+  );
   const session: ReplayVideoSession = {
     id: `video-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
     path: filePath,
     url: pathToFileURL(filePath).href,
-    filename,
-    directory,
+    filename: basename(filePath),
+    directory: dirname(filePath),
     startedAt
   };
-  replayVideoSessions.set(session.id, session);
+  replayVideoSessions.set(session.id, { ...session, destinationPath });
   await writeReplayVideoRecoverySidecar(filePath, {
     version: 1,
     session,
@@ -3839,11 +3853,33 @@ async function finishReplayVideoCaptureFile(sessionId: string, options: ReplayVi
     console.warn("[replay-video] Finished video failed decode probe; marking media as needing review.", session.path);
   }
   const actualBitrateKbps = actualReplayBitrateKbps(fileStats.size, options.durationMs) ?? options.actualBitrateKbps;
+  let savedPath = session.path;
+  if (decodeProbeOk) {
+    try {
+      const published = await publishStagedReplayVideo(session.path, session.destinationPath);
+      savedPath = published.path;
+      if (containerFinalized) await markReplayVideoSeekable(savedPath);
+      // The destination retains RiftLite's discoverable filename if the app
+      // exits before attaching it. Failed publication keeps the local source.
+      if (!published.sourceRetained) {
+        await clearReplayVideoRecoverySidecar(session.path).catch(() => undefined);
+        await unlink(replayVideoSeekableMarkerPath(session.path)).catch(() => undefined);
+      }
+      void diagnostics?.record({
+        id: randomUUID(), platform: options.platform, kind: "debug", capturedAt: new Date().toISOString(), url: "",
+        payload: { reason: "replay-video-published", sizeBytes: fileStats.size, sourceRetained: published.sourceRetained }
+      }).catch(() => undefined);
+    } catch (error) {
+      // Playback, attachment and crash recovery all support this local root;
+      // a disconnected/full/unsupported destination must not lose the video.
+      void logStartupIssue("replay video retained in local recording storage", error);
+    }
+  }
   return {
-    path: session.path,
-    url: session.url,
-    filename: session.filename,
-    directory: session.directory,
+    path: savedPath,
+    url: pathToFileURL(savedPath).href,
+    filename: basename(savedPath),
+    directory: dirname(savedPath),
     mimeType: options.mimeType,
     source: options.source,
     platform: options.platform,
@@ -4151,6 +4187,7 @@ async function replayVideoPathAllowed(filePath: string): Promise<boolean> {
     replayVideoImportDirectory(settings),
     replayVideoDirectory(),
     replayVideoImportDirectory(),
+    replayVideoStagingDirectory(),
     legacyReplayVideoDirectory()
   ];
   return roots.some((root) => pathInside(target, root));
@@ -4170,6 +4207,7 @@ async function discardReplayVideoAsset(video: ReplayVideoAsset): Promise<void> {
   if (!await replayVideoPathAllowed(filePath)) {
     return;
   }
+  await discardPublishedReplayVideoSources(replayVideoStagingDirectory(), resolve(filePath));
   await unlink(resolve(filePath)).catch((error: NodeJS.ErrnoException) => {
     if (error.code !== "ENOENT") {
       throw error;
@@ -4177,6 +4215,8 @@ async function discardReplayVideoAsset(video: ReplayVideoAsset): Promise<void> {
   });
   await unlink(replayVideoSeekableMarkerPath(resolve(filePath))).catch(() => undefined);
   await clearReplayVideoRecoverySidecar(resolve(filePath)).catch(() => undefined);
+  await unlink(replayVideoPublicationMarkerPath(resolve(filePath))).catch(() => undefined);
+  await unlink(replayVideoDiscardMarkerPath(resolve(filePath))).catch(() => undefined);
 }
 
 async function deleteReplayVideoByMatch(matchId: string): Promise<void> {
@@ -6971,7 +7011,7 @@ async function importCompactDeckSharePayload(parsed: CompactDeckSharePayload): P
     });
   } else if (sourceUrl.startsWith("http")) {
     try {
-      deck = await deckService.importDeck(sourceUrl);
+      deck = await deckService.importDeckPackageSource(sourceUrl);
     } catch (error) {
       throw new Error(`Could not fetch the deck source for this short package. Ask for the .riftdeck file instead. ${error instanceof Error ? error.message : ""}`.trim());
     }
@@ -7542,7 +7582,17 @@ async function recoverInterruptedReplayVideosOnStartup(): Promise<number> {
   const knownVideoPaths = storedReplays
     .map((replay) => replay.video?.path?.trim())
     .filter((filePath): filePath is string => Boolean(filePath));
-  const candidates = await interruptedReplayVideoCandidates(directory, knownVideoPaths);
+  const candidates = [...new Set((await Promise.all(
+    [...new Set([directory, replayVideoStagingDirectory()])]
+      .map(async (root) => {
+        try {
+          return await interruptedReplayVideoCandidates(root, knownVideoPaths);
+        } catch (error) {
+          await logStartupIssue("replay video recovery directory unavailable", error);
+          return [];
+        }
+      })
+  )).flat())];
   let recovered = 0;
 
   for (const filePath of candidates) {
@@ -8792,15 +8842,15 @@ function registerIpc(): void {
   });
   handleTrustedAppIpc("matches:export-csv", (_event, payload: MatchHistoryCsvExportPayload) => exportMatchHistoryCsv(payload));
   handleTrustedAppIpc("decks:get", () => deckService.getDecks());
-  handleTrustedAppIpc("decks:import", async (_event, url: string) => {
-    const deck = await deckService.importDeck(url);
-    queueAccountCloudSync("Deck imported");
-    return deck;
+  handleTrustedAppIpc("decks:import", async (_event, url: string, choice?: DeckImportChoice) => {
+    const result = await deckService.importDeck(url, choice);
+    if (result.status === "saved") queueAccountCloudSync("Deck imported");
+    return result;
   });
-  handleTrustedAppIpc("decks:import-text", async (_event, text: string) => {
-    const deck = await deckService.importDeckText(text);
-    queueAccountCloudSync("Deck imported");
-    return deck;
+  handleTrustedAppIpc("decks:import-text", async (_event, text: string, choice?: DeckImportChoice) => {
+    const result = await deckService.importDeckText(text, choice);
+    if (result.status === "saved") queueAccountCloudSync("Deck imported");
+    return result;
   });
   handleTrustedAppIpc("decks:refresh", async (_event, id: string) => {
     const deck = await deckService.refreshDeck(id);

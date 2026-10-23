@@ -133,6 +133,8 @@ import type {
   DeckGuideNote,
   DeckMatchupGuide,
   DeckNotebook,
+  DeckImportChoice,
+  DeckImportResult,
   DeckSnapshot,
   DeckTestingGoalStatus,
   DeckTrackerCardState,
@@ -444,6 +446,7 @@ import {
   type NavigationTarget
 } from "../shared/navigationModel";
 import { FirstRunSetup } from "./FirstRunSetup";
+import { DeckImportDecision } from "./DeckImportDecision";
 import { DeckShareCardDialog, type DeckShareCardViewModel } from "./DeckShareCard";
 import { HomeDeckThemeIntro } from "./HomeDeckThemeIntro";
 import { InsightsHubView } from "./InsightsHubView";
@@ -586,14 +589,13 @@ const LAB_TRAINING_LEGEND_NAMES = new Set(LAB_TRAINING_LEGEND_NAME_BY_CANONICAL.
 const RELEASE_NOTES = {
   version: APP_VERSION_META,
   title: `RiftLite v${APP_VERSION_META}`,
-  intro: "Radiance pre-season stats, a simpler first-run setup, and replay improvements.",
+  intro: "Official Radiance stats, interactive replays first, and more control over your decks and recordings.",
   items: [
-    "Radiance pre-season stats start on 10 October at 17:35 UK time. Use the Season filter across personal and community stats to explore earlier results.",
-    "Quick setup replaces the guided tour with player, simulator, account, replay and deck setup, including a Play toolbar guide. Reopen it from Settings.",
-    "Sign up with Discord, set replay visibility inside setup, and use a public Piltover Archive link to import your deck.",
-    "Keep the top bar visible in fullscreen from Settings, and copy the Atlas Game log directly from the desktop app.",
-    "Faster replay saving, corrected MP4 duration checks, clearer upload errors, and the latest Atlas status indicators in Web Replays.",
-    "Added 80 card prints since v0.9.81, including 68 Radiance prints, plus updated names and artwork. The catalog now includes 1,445 prints."
+    "Radiance is now the default season for personal and community stats, starting 23 October at 13:11:27 UK time. Radiance pre-season and older results remain in the Season filter.",
+    "Interactive replays lead Quick setup and Review. Step through turns, search actions and review combat; game video is an optional extra.",
+    "Fresh installs capture interactive replay data with video and timed screenshots off. Your existing recording choices stay the same, and online uploads still require your choice.",
+    "Importing an identical deck now offers Update existing or Save as separate deck, so named copies can keep their own stats.",
+    "Video recordings now grow in local app storage and move to your chosen folder when complete, avoiding writes to a synced folder throughout the match."
   ]
 };
 const RIOT_LEGAL_NOTICE = `RiftLite was created under Riot Games' "Legal Jibber Jabber" policy using assets owned by Riot Games. Riot Games does not endorse or sponsor this project.`;
@@ -636,7 +638,6 @@ function homeFeaturedPartnersFromConfig(value: unknown): HomeFeaturedPartner[] {
     .filter((item): item is HomeFeaturedPartner => item !== null);
 }
 const DIRECT_REPLAY_MODE_MIGRATION_KEY = "riftlite-direct-replay-mode-v2";
-const VIDEO_REPLAY_DEFAULTS_MIGRATION_KEY = "riftlite-video-replay-defaults-v070";
 const GAME_ZOOM_RESET_MIGRATION_KEY = "riftlite-game-zoom-reset-v0760";
 const NATIVE_GAME_ZOOM_MIGRATION_KEY = "riftlite-native-game-zoom-v0805";
 const VISION_TRACKER_DEFAULT_OFF_MIGRATION_KEY = "riftlite-vision-tracker-default-off-v0770";
@@ -4521,19 +4522,6 @@ function App() {
       } else if (bootSettings.replayVideoMode === "game-frame") {
         localStorage.setItem(DIRECT_REPLAY_MODE_MIGRATION_KEY, "done");
       }
-      const shouldApplyVideoDefaults =
-        localStorage.getItem(VIDEO_REPLAY_DEFAULTS_MIGRATION_KEY) !== "done" &&
-        bootSettings.replayVideoEnabled === false &&
-        (bootSettings.replayVideoQuality === "compact" || !bootSettings.replayVideoQuality) &&
-        (bootSettings.replayVideoMode || "game-frame") === "game-frame";
-      if (shouldApplyVideoDefaults) {
-        bootSettings = await window.riftlite.saveSettings({
-          replayVideoEnabled: true,
-          replayVideoQuality: "sharp",
-          replayVideoMode: "game-frame"
-        });
-      }
-      localStorage.setItem(VIDEO_REPLAY_DEFAULTS_MIGRATION_KEY, "done");
       if (localStorage.getItem(GAME_ZOOM_RESET_MIGRATION_KEY) !== "done") {
         const savedZoom = clampGameZoom(bootSettings.gameZoomFactor);
         if (savedZoom > 1.2) {
@@ -7440,8 +7428,8 @@ function App() {
     hubs: "Your groups",
     groups: "Your groups",
     decks: deckFocusTarget === "prep" ? "Matchup Prep" : "Deck Library",
-    replays: "Replays & videos",
-    "web-replay": "Online replay library",
+    replays: "Replay library",
+    "web-replay": "Interactive replays",
     "recording-sharing": "Recording & sharing",
     stream: "Overlay",
     account: "Account",
@@ -7597,7 +7585,10 @@ function App() {
                   title={entry.label}
                   aria-expanded={open}
                   aria-controls={`nav-submenu-${entry.id}`}
-                  onClick={() => setExpandedNavGroup((current) => current === entry.id ? null : entry.id)}
+                  onClick={() => {
+                    setExpandedNavGroup((current) => current === entry.id ? null : entry.id);
+                    if (entry.id === "review" && !active) openNavigationTarget(entry.defaultTarget);
+                  }}
                 >
                   {navigationIcon(entry.id)}<span>{entry.label}</span>
                   {entry.id === "review" && webReplayNavBadge ? (
@@ -8061,11 +8052,11 @@ function App() {
             onOpenWebReplays={() => changeFirstRunSetupStep("replays")}
             onAccountDataRestored={refreshRestoredAccountData}
           />}
-          onImportDeck={async (source, kind) => {
+          onImportDeck={async (source, kind, choice) => {
             const imported = kind === "url"
-              ? await window.riftlite.importDeck(source.trim())
-              : await window.riftlite.importDeckText(source.trim());
-            setDecks(await window.riftlite.getDecks());
+              ? await window.riftlite.importDeck(source.trim(), choice)
+              : await window.riftlite.importDeckText(source.trim(), choice);
+            if (imported.status === "saved") setDecks(await window.riftlite.getDecks());
             return imported;
           }}
           onStepChange={changeFirstRunSetupStep}
@@ -8398,7 +8389,7 @@ function navigationIcon(id: string): React.ReactNode {
     case "review":
     case "match-history": return <ClipboardList size={19} />;
     case "local-replays": return <Film size={19} />;
-    case "web-replays": return <Globe2 size={19} />;
+    case "interactive-replays": return <Globe2 size={19} />;
     case "my-stats": return <BarChart3 size={19} />;
     case "prepare":
     case "matchup-prep": return <BookOpen size={19} />;
@@ -13496,13 +13487,13 @@ function EmbeddedRiftReplayView({
     <section className="web-replay-page review-workspace review-web" data-fullscreen={replayFullscreen}>
       <div className="web-replay-toolbar review-page-heading">
         <div>
-          <span className="review-kicker">Review / Replay library</span>
-          <h2>Web Replays</h2>
+          <span className="review-kicker">Review your games</span>
+          <h2>Interactive replays</h2>
           <p>
             {embedState.loading
               ? "Connecting to your RiftLite replay library..."
               : embedState.authenticated
-                ? "Signed in with your linked RiftLite account."
+                ? "Step through turns, search actions and save private reviews with your RiftLite account."
                 : embedState.error
                   ? "We couldn't connect to your account library. Reconnect your account or refresh the library to try again."
                   : "Public replays are shown below. Link your account to open My replays."}
@@ -13533,7 +13524,7 @@ function EmbeddedRiftReplayView({
           </button>
         </div>
       </div>
-      <div className="row-actions"><button className="secondary" onClick={onOpenLibrary}>Back to my games</button><button className="secondary" onClick={onOpenSetup}>Recording &amp; sharing</button></div>
+      <div className="row-actions"><button className="secondary" onClick={onOpenLibrary}>All saved games &amp; videos</button><button className="secondary" onClick={onOpenSetup}>Recording &amp; sharing</button></div>
       <div className="web-replay-frame-shell review-surface" aria-label="Web replay library">
         {embedState.url ? (
           <RiftReplayWebview
@@ -19466,6 +19457,9 @@ function DecksView({
   const [textDeck, setTextDeck] = useState("");
   const [importOpen, setImportOpen] = useState(!decks.length);
   const [importMode, setImportMode] = useState<"link" | "text">("link");
+  const [importBusy, setImportBusy] = useState(false);
+  const importBusyRef = useRef(false);
+  const [importDuplicate, setImportDuplicate] = useState<Extract<DeckImportResult, { status: "duplicate" }> | null>(null);
   const [deckQuery, setDeckQuery] = useState("");
   const [selectedId, setSelectedId] = useState(selectionTarget || settings.activeDeckId || decks[0]?.id || "");
   const appliedSelectionTargetRef = useRef("");
@@ -19503,41 +19497,29 @@ function DecksView({
     });
   }
 
-  async function importDeck() {
-    if (!url.trim()) {
-      setStatus("Paste a public Piltover deck link first.");
-      return;
-    }
+  async function importDeck(choice?: DeckImportChoice) {
+    const source = (importMode === "link" ? url : textDeck).trim();
+    if (importBusyRef.current || !source) return;
+    importBusyRef.current = true;
+    setImportBusy(true);
     setStatus("Importing deck...");
     try {
-      const saved = await window.riftlite.importDeck(url.trim());
+      const result = importMode === "link" ? await window.riftlite.importDeck(source, choice) : await window.riftlite.importDeckText(source, choice);
+      if (result.status === "duplicate") { setImportDuplicate(result); setStatus(""); return; }
+      const saved = result.deck;
+      setImportDuplicate(null);
       setUrl("");
-      setSelectedId(saved.id);
-      await onDecksChanged();
-      setImportOpen(false);
-      setDeckQuery("");
-      setStatus(`Imported ${saved.title}.`);
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Deck import failed.");
-    }
-  }
-
-  async function importTextDeck() {
-    if (!textDeck.trim()) {
-      setStatus("Paste a Piltover-format deck list first.");
-      return;
-    }
-    setStatus("Importing text deck...");
-    try {
-      const saved = await window.riftlite.importDeckText(textDeck);
       setTextDeck("");
       setSelectedId(saved.id);
       await onDecksChanged();
       setImportOpen(false);
       setDeckQuery("");
-      setStatus(`Imported ${saved.title}.`);
+      setStatus(choice?.mode === "separate" ? `Saved ${saved.title} with separate stats. Set it as your active deck before playing.` : `${choice?.mode === "update" ? "Updated" : "Imported"} ${saved.title}.`);
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Text deck import failed.");
+      setStatus(error instanceof Error ? error.message : "Deck import failed.");
+    } finally {
+      importBusyRef.current = false;
+      setImportBusy(false);
     }
   }
 
@@ -19569,6 +19551,7 @@ function DecksView({
       </header>
       <section className="prepare-import modern-panel" id="deck-library-import" hidden={!importOpen}>
         <header><div><h3>Add to your library</h3><p className="muted">Use a public Piltover Archive link or paste a deck list.</p></div><button type="button" className="icon-button" aria-label="Close deck import" onClick={() => setImportOpen(false)}><X size={17} /></button></header>
+        <fieldset disabled={importBusy || Boolean(importDuplicate)} style={{ border: 0, margin: 0, padding: 0, minWidth: 0, display: "grid", gap: 16 }}>
         <div className="prepare-import-tabs" aria-label="Deck import method">
           <button type="button" className="secondary" aria-pressed={importMode === "link"} data-active={importMode === "link"} onClick={() => setImportMode("link")}><Link2 size={15} /> Deck link</button>
           <button type="button" className="secondary" aria-pressed={importMode === "text"} data-active={importMode === "text"} onClick={() => setImportMode("text")}><FileText size={15} /> Text list</button>
@@ -19579,8 +19562,10 @@ function DecksView({
         </div>
         <div className="text-deck-import" hidden={importMode !== "text"}>
           <textarea aria-label="Deck text list" value={textDeck} onChange={(event) => setTextDeck(event.target.value)} placeholder={"Vex v3\n\nLegend\n1 Vex, Gloomist\n\nRunes\n7 Calm Rune\n5 Chaos Rune\n\nMain Deck\n3 Falling Star\n\nSideboard\n1 Rebuke"} />
-          <button className="secondary" disabled={!textDeck.trim()} onClick={() => void importTextDeck()}>Import text list</button>
+          <button className="secondary" disabled={!textDeck.trim()} onClick={() => void importDeck()}>Import text list</button>
         </div>
+        </fieldset>
+        {importDuplicate ? <DeckImportDecision duplicate={importDuplicate} busy={importBusy} onChoose={choice => void importDeck(choice)} onCancel={() => { setImportDuplicate(null); setStatus(""); }} /> : null}
       </section>
       {status ? <p className="prepare-status" role="status">{status}</p> : null}
       <section className="prepare-layout" id="deck-library-saved">
@@ -21807,13 +21792,13 @@ function ReplayView({
       <header className="review-page-heading review-replays-heading">
         <div>
           <span className="review-kicker">Your replay library</span>
-          <h2>Replays &amp; videos</h2>
+          <h2>Replay library</h2>
           <p>Select a game to watch its interactive replay, local video or game log.</p>
         </div>
         <span className="review-replays-total"><History size={16} /> {mergedLibrary.length} game{mergedLibrary.length === 1 ? "" : "s"}</span>
         <div className="replay-library-toolbar row-actions" role="group" aria-label="Replay library actions">
-          <button className="primary replay-library-setup" onClick={() => onNavigate("recording-sharing")}><SlidersHorizontal size={18} />Recording &amp; sharing</button>
-          <button className="secondary replay-library-browse" onClick={() => onNavigate("web-replay")}><Globe2 size={18} />Browse online replays</button>
+          <button className="primary replay-library-browse" onClick={() => onNavigate("web-replay")}><Globe2 size={18} />Interactive replays</button>
+          <button className="secondary replay-library-setup" onClick={() => onNavigate("recording-sharing")}><SlidersHorizontal size={18} />Recording &amp; sharing</button>
           <button className="secondary replay-library-refresh" disabled={cloudLoading || !hasVerifiedRiftLiteAccount(settings)} aria-busy={cloudLoading} title={!hasVerifiedRiftLiteAccount(settings) ? "Connect your RiftLite account to refresh your online games" : undefined} onClick={() => setCloudRefresh((value) => value + 1)}><RefreshCw size={18} />{cloudLoading ? "Loading online games…" : "Refresh online games"}</button>
         </div>
       </header>

@@ -8,7 +8,7 @@ import {
 } from "../src/shared/replayInsights.js";
 import { replayWithIntelligence } from "../src/shared/replayIntelligence.js";
 import { parseReplayCardActionText } from "../src/shared/replayCardText.js";
-import { CURRENT_STAT_SEASON, RADIANCE_PRESEASON_START_AT, RADIANCE_PRESEASON_START_MS } from "../src/shared/statSeasons.js";
+import { CURRENT_STAT_SEASON, RADIANCE_START_AT, RADIANCE_START_MS, RADIANCE_PRESEASON_START_AT, RADIANCE_PRESEASON_START_MS } from "../src/shared/statSeasons.js";
 import type {
   MatchDraft,
   ReplayIntelligenceCorrection,
@@ -603,9 +603,9 @@ describe("Replay Insights", () => {
     expect(allHistory.analyzedReplayIds).toEqual(["preseason", "current-season"]);
     expect(allHistory.scopeReceipt).toMatchObject({
       currentSeasonStartedOn: "2026-07-31",
-      currentSeasonStartedAt: RADIANCE_PRESEASON_START_AT,
+      currentSeasonStartedAt: RADIANCE_START_AT,
       periods: ["vendetta-launch", "pre-vendetta"],
-      periodGameCounts: { "radiance-preseason": 0, "vendetta-launch": 1, "vendetta-preview": 0, "pre-vendetta": 1, unknown: 0 },
+      periodGameCounts: { radiance: 0, "radiance-preseason": 0, "vendetta-launch": 1, "vendetta-preview": 0, "pre-vendetta": 1, unknown: 0 },
       unknownDeckGames: 0
     });
     expect(allHistory.scopeReceipt.deckVersions).toHaveLength(1);
@@ -619,13 +619,15 @@ describe("Replay Insights", () => {
       "2026-07-20T10:00:00.000Z",
       new Date(RADIANCE_PRESEASON_START_MS - 1).toISOString(),
       RADIANCE_PRESEASON_START_AT,
-      new Date(RADIANCE_PRESEASON_START_MS + 1).toISOString(),
+      new Date(RADIANCE_START_MS - 1).toISOString(),
+      RADIANCE_START_AT,
+      new Date(RADIANCE_START_MS + 1).toISOString(),
       "invalid"
     ];
     // Every replay was created after the cutoff; original match time determines its season.
     const sources = capturedTimes.map((_, index) => ({
       ...replay(`season-${index}`, lateKeepEvents()),
-      capturedAt: new Date(RADIANCE_PRESEASON_START_MS + 86_400_000).toISOString()
+      capturedAt: new Date(RADIANCE_START_MS + 86_400_000).toISOString()
     }));
     const matches = capturedTimes.map((capturedAt, index) => ({ ...match(sources[index]!.id), capturedAt }));
     const original = JSON.stringify({ sources, matches });
@@ -633,12 +635,16 @@ describe("Replay Insights", () => {
       filters: { period }, cardCatalog: CATALOG
     });
     const current = reportFor(CURRENT_STAT_SEASON);
-    expect(current.analyzedReplayIds).toEqual(["season-3", "season-4"]);
-    expect(current.scopeReceipt.periodGameCounts["radiance-preseason"]).toBe(2);
-    expect(current.scopeReceipt.periods).toEqual(["radiance-preseason"]);
-    expect(current.scopeReceipt.observedFrom).toBe(RADIANCE_PRESEASON_START_AT);
-    expect(current.scopeReceipt.observedThrough).toBe(new Date(RADIANCE_PRESEASON_START_MS + 1).toISOString());
-    expect(current.insights.every((insight) => insight.dataReceipt.periods.every((period) => period === "radiance-preseason"))).toBe(true);
+    expect(current.analyzedReplayIds).toEqual(["season-5", "season-6"]);
+    expect(current.scopeReceipt.periodGameCounts.radiance).toBe(2);
+    expect(current.scopeReceipt.periods).toEqual(["radiance"]);
+    expect(current.scopeReceipt.observedFrom).toBe(RADIANCE_START_AT);
+    expect(current.scopeReceipt.observedThrough).toBe(new Date(RADIANCE_START_MS + 1).toISOString());
+    expect(current.insights.every((insight) => insight.dataReceipt.periods.every((period) => period === "radiance"))).toBe(true);
+    const preseason = reportFor("radiance-preseason");
+    expect(preseason.analyzedReplayIds).toEqual(["season-3", "season-4"]);
+    expect(preseason.scopeReceipt.periodGameCounts["radiance-preseason"]).toBe(2);
+    expect(preseason.scopeReceipt.periodGameCounts.radiance).toBe(0);
     expect(reportFor("vendetta-launch").analyzedReplayIds).toEqual(["season-2"]);
     expect(reportFor("current-season").analyzedReplayIds).toEqual(["season-2"]);
     expect(reportFor("vendetta-preview").analyzedReplayIds).toEqual(["season-1"]);

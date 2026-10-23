@@ -89,8 +89,16 @@
 .first-run-setup .first-run-setup__toggle input[type="checkbox"]:checked::before { background: #123448; transform: translateX(14px); }
 .first-run-setup__toggle[data-disabled="true"] { opacity: .48; cursor: default; }
 .first-run-setup__extra { margin-top: 13px; }
+.first-run-setup__interactive { padding: 19px; border: 1px solid #79cdda6b; border-radius: 14px; background: linear-gradient(145deg, #17475838, #11212f); }
+.first-run-setup__replay-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 9px; }
+.first-run-setup__interactive h2, .first-run-setup__video h2 { display: flex; align-items: center; gap: 9px; margin: 0; color: #e1edf5; font-size: 15px; font-weight: 600; }
+.first-run-setup__interactive h2 svg { color: #88d7e2; }
+.first-run-setup__recommended { padding: 4px 8px; border-radius: 6px; background: #78c9d51a; color: #a1dfe7; font-size: 9px; font-weight: 600; }
+.first-run-setup__interactive > p, .first-run-setup__video > p { margin: 9px 0 14px; color: #9bb2c2; font-size: 11px; line-height: 1.7; }
+.first-run-setup__video { margin-top: 24px; }
+.first-run-setup__video h2 { color: #b4c8d5; font-size: 13px; }
 .first-run-setup__online { margin-top: 21px; }
-.first-run-setup__online h2 { margin: 0; color: #e1edf5; font-size: 15px; font-weight: 600; }
+.first-run-setup__online h3 { margin: 0; color: #d0e2ed; font-size: 12px; font-weight: 600; }
 .first-run-setup__online > p { margin: 7px 0 13px; color: #9bb2c2; font-size: 11px; line-height: 1.65; }
 .first-run-setup__account-required { padding: 12px 14px; margin-bottom: 12px; border: 1px solid #bea5753d; border-radius: 10px; background: #b58f4310; }
 .first-run-setup__account-required p { margin: 0; color: #c8b990; font-size: 11px; line-height: 1.7; }

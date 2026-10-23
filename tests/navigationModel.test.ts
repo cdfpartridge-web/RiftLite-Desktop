@@ -15,12 +15,12 @@ import {
 } from "../src/shared/navigationModel.js";
 
 describe("desktop navigation model", () => {
-  it("makes all top-level views reachable and retains the hosted library as an internal route", () => {
+  it("makes all top-level views including interactive replays reachable and retains the legacy hubs route", () => {
     const reachableViews = new Set(allNavigationItems().map((item) => item.target.view));
 
-    expect([...reachableViews].sort()).toEqual(ACTIVE_VIEWS.filter((view) => view !== "web-replay" && view !== "hubs").sort());
+    expect([...reachableViews].sort()).toEqual(ACTIVE_VIEWS.filter((view) => view !== "hubs").sort());
     expect(ACTIVE_VIEWS).toContain("web-replay");
-    for (const view of ACTIVE_VIEWS.filter((view) => view !== "web-replay" && view !== "hubs")) {
+    for (const view of ACTIVE_VIEWS.filter((view) => view !== "hubs")) {
       expect(reachableViews.has(view), `${view} should be reachable`).toBe(true);
     }
   });
@@ -36,10 +36,11 @@ describe("desktop navigation model", () => {
     ]);
   });
 
-  it("keeps the approved Review children and targets", () => {
+  it("leads Review with interactive replays while retaining matches, replay library and stats routes", () => {
     expect(REVIEW_NAVIGATION_ITEMS).toEqual([
+      { id: "interactive-replays", label: "Interactive replays", target: { view: "web-replay" } },
       { id: "match-history", label: "Matches", target: { view: "matches" } },
-      { id: "local-replays", label: "Replays & videos", target: { view: "replays" } },
+      { id: "local-replays", label: "Replay library", target: { view: "replays" } },
       { id: "my-stats", label: "Stats", target: { view: "stats" } }
     ]);
   });
@@ -91,7 +92,7 @@ describe("desktop navigation model", () => {
   it.each([
     [{ view: "matches" }, "review", "match-history"],
     [{ view: "replays" }, "review", "local-replays"],
-    [{ view: "web-replay" }, "review", "local-replays"],
+    [{ view: "web-replay" }, "review", "interactive-replays"],
     [{ view: "stats" }, "review", "my-stats"],
     [{ view: "decks", deckFocus: "library" }, "prepare", "deck-library"],
     [{ view: "decks", deckFocus: "prep" }, "prepare", "matchup-prep"],
@@ -125,7 +126,7 @@ describe("desktop navigation model", () => {
   });
 
   it("uses the audited defaults for disclosures", () => {
-    expect(NAVIGATION_DISCLOSURES.review.defaultTarget).toEqual({ view: "matches" });
+    expect(NAVIGATION_DISCLOSURES.review.defaultTarget).toEqual({ view: "web-replay" });
     expect(NAVIGATION_DISCLOSURES.prepare.defaultTarget).toEqual({ view: "decks", deckFocus: "library" });
     expect(NAVIGATION_DISCLOSURES.community.defaultTarget).toEqual({ view: "community", communityTab: "legend-meta" });
   });

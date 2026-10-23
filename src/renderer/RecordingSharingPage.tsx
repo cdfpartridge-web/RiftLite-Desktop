@@ -29,7 +29,7 @@ const RESULTS_BOT_INSTALL_URL = "https://discord.com/oauth2/authorize?client_id=
 export function RecordingSharingPage({ settings, diagnostics, replayControls, videoControls, advancedControls,
   onOpenAccount, onOpenHubs, onOpenLibrary, onManageReplayVisibility, onSettingsChanged, onRefreshDiagnostics, initialSection, api = window.riftlite
 }: RecordingSharingPageProps) {
-  const [expanded, setExpanded] = useState<RecordingSharingSection | null>(initialSection ?? null);
+  const [expanded, setExpanded] = useState<RecordingSharingSection | null>(initialSection ?? "replays");
   const currentAccount = useRef(settings.accountUid);
   currentAccount.current = settings.accountUid;
   useEffect(() => { if (initialSection) setExpanded(initialSection); }, [initialSection]);
@@ -42,14 +42,14 @@ export function RecordingSharingPage({ settings, diagnostics, replayControls, vi
   const attention = diagnostics?.queue.filter((item) => item.stage === "failed" || item.stage === "paused" || item.canUploadAnyway || item.recommendedAction === "review-result" || item.discordShareStatus === "failed" || item.discordShareStatus === "partial").length ?? 0;
   const replaySummary = platforms
     ? `${platforms} · ${settings.rawCapture.visibility === "unlisted" ? "Unlisted links" : settings.rawCapture.visibility === "public" ? "Public" : "Private"}${!verified ? " · Account needs attention" : !settings.rawCapture.enabled ? " · Capture is off" : ""}`
-    : "Automatic uploads off";
+    : settings.rawCapture.enabled ? "Replay data saved locally · Online uploads off" : "Interactive replay capture off";
 
   function section(id: RecordingSharingSection, title: string, description: string, summary: string, icon: ReactNode, content: ReactNode) {
     const open = expanded === id;
-    return <section className="recording-sharing-card" aria-labelledby={`recording-sharing-${id}-title`}>
+    return <section className="recording-sharing-card" data-primary={id === "replays"} aria-labelledby={`recording-sharing-${id}-title`}>
       <div className="recording-sharing-card-heading">
         <span className="recording-sharing-icon" aria-hidden="true">{icon}</span>
-        <div className="recording-sharing-copy"><h3 id={`recording-sharing-${id}-title`}>{title}</h3><p>{description}</p><span className="recording-sharing-summary">{summary}</span></div>
+        <div className="recording-sharing-copy"><h3 id={`recording-sharing-${id}-title`}>{title}<span className="recording-sharing-badge">{id === "replays" ? "Recommended" : "Optional"}</span></h3><p>{description}</p><span className="recording-sharing-summary">{summary}</span></div>
         <button className="secondary" type="button" aria-expanded={open} aria-controls={`recording-sharing-${id}-controls`} onClick={() => setExpanded(open ? null : id)}>
           {open ? "Close" : id === "discord" && !destinations.length ? "Set up" : "Manage"}<ChevronDown size={15} className={open ? "recording-sharing-chevron-open" : ""} />
         </button>
@@ -59,14 +59,14 @@ export function RecordingSharingPage({ settings, diagnostics, replayControls, vi
   }
 
   return <section className="dashboard-page recording-sharing-page">
-    <header className="recording-sharing-heading"><div><span className="eyebrow">Set up once</span><h2>Recording &amp; sharing</h2><p>Choose what to save and where to share it. Your library is where you watch and manage each game.</p></div><button className="secondary" type="button" onClick={onOpenLibrary}>Open replay library<ArrowRight size={16} /></button></header>
+    <header className="recording-sharing-heading"><div><span className="eyebrow">Set up once</span><h2>Recording &amp; sharing</h2><p>Start with interactive replays to review your games. Add video or Discord sharing whenever you want.</p></div><button className="secondary" type="button" onClick={onOpenLibrary}>Open replay library<ArrowRight size={16} /></button></header>
     <div className="recording-sharing-account" data-ready={verified}>
-      <Shield size={18} aria-hidden="true" /><div><strong>{verified ? `Connected as ${settings.accountHandle ? `@${settings.accountHandle}` : settings.accountDisplayName || "your RiftLite account"}` : "Connect your RiftLite account for online replays"}</strong><span>{verified ? "Interactive replay uploads use this account. Videos stay on this computer." : "You can still record videos locally. Sign in to upload interactive replays and share them."}</span></div>
+      <Shield size={18} aria-hidden="true" /><div><strong>{verified ? `Connected as ${settings.accountHandle ? `@${settings.accountHandle}` : settings.accountDisplayName || "your RiftLite account"}` : "Connect your RiftLite account for online replays"}</strong><span>{verified ? "Choose which games to upload below. Your saved review notes stay private unless you choose to share them." : "Replay data can be saved on this computer. Sign in and enable uploads to watch your games online."}</span></div>
       <button className="secondary" type="button" onClick={onOpenAccount}>{verified ? "Account" : "Connect account"}</button>
     </div>
     <div className="recording-sharing-sections">
-      {section("replays", "Interactive replays", "Revisit the board and each turn online.", replaySummary, <Layers size={22} />, <>{replayControls}<div className="recording-sharing-footnote"><p className="muted">To change a past replay, open My replays and choose Change visibility on that game. Your default for future games stays separate.</p><button className="secondary" type="button" onClick={onManageReplayVisibility}><Shield size={15} />Change a past replay’s visibility</button></div></>)}
-      {section("video", "Video recordings", "Save a video of your game on this computer.", videoOn ? `Recording enabled · ${settings.replayMicAudioEnabled ? "Microphone on" : "Microphone off"}` : "Video recording off", <Video size={22} />, videoControls)}
+      {section("replays", "Interactive replays", "Step through turns, search actions and review combat online. No video recording needed.", replaySummary, <Layers size={22} />, <>{replayControls}<div className="recording-sharing-footnote"><p className="muted">To change a past replay, open My replays and choose Change visibility on that game. Your default for future games stays separate.</p><button className="secondary" type="button" onClick={onManageReplayVisibility}><Shield size={15} />Change a past replay’s visibility</button></div></>)}
+      {section("video", "Video recordings", "Record the original game screen and audio on this computer. Useful for clips and content creation.", videoOn ? `Recording enabled · ${settings.replayMicAudioEnabled ? "Microphone on" : "Microphone off"}` : "Video recording off", <Video size={22} />, videoControls)}
       {section("discord", "Discord", "Post interactive replay links to your server.", destinations.length ? `${destinations.length} automatic sharing destination${destinations.length === 1 ? "" : "s"} selected` : "Optional · Automatic sharing off", <MessageCircle size={22} />, <DiscordSetup key={settings.accountUid || "local"} settings={settings} accountVerified={verified} uploadEnabled={Boolean(settings.rawCapture.enabled && (atlas || tcga))} api={api} onOpenAccount={onOpenAccount} onOpenHubs={onOpenHubs} onOpenReplaySetup={() => setExpanded("replays")} onSettingsChanged={(next) => { if (currentAccount.current === next.accountUid) onSettingsChanged(next); }} onRefreshDiagnostics={onRefreshDiagnostics} />)}
     </div>
     {attention > 0 ? <div className="recording-sharing-attention"><div><strong>{attention} replay{attention === 1 ? " needs" : "s need"} attention</strong><p>Review the affected games and their next steps in your replay library.</p></div><button className="secondary" type="button" onClick={onOpenLibrary}>Review games<ArrowRight size={15} /></button></div> : null}

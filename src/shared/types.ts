@@ -267,6 +267,12 @@ export interface DeckSnapshot {
   tcgaMeta?: Record<string, unknown>;
 }
 
+export type DeckImportChoice = { mode: "update"; deckId: string } | { mode: "separate"; title: string };
+
+export type DeckImportResult =
+  | { status: "saved"; deck: SavedDeck }
+  | { status: "duplicate"; decks: Pick<SavedDeck, "id" | "title">[]; suggestedTitle: string };
+
 export interface SavedDeck {
   id: string;
   sourceUrl: string;
@@ -2512,8 +2518,8 @@ export interface RiftLiteApi {
   purgeMatch(id: string): Promise<void>;
   exportMatchHistoryCsv(payload: MatchHistoryCsvExportPayload): Promise<string>;
   getDecks(): Promise<SavedDeck[]>;
-  importDeck(url: string): Promise<SavedDeck>;
-  importDeckText(text: string): Promise<SavedDeck>;
+  importDeck(url: string, choice?: DeckImportChoice): Promise<DeckImportResult>;
+  importDeckText(text: string, choice?: DeckImportChoice): Promise<DeckImportResult>;
   refreshDeck(id: string): Promise<SavedDeck>;
   renameDeck(id: string, title: string): Promise<SavedDeck>;
   deleteDeck(id: string): Promise<void>;

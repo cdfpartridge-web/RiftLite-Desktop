@@ -9,7 +9,7 @@ import type { SavedDeck, UserSettings } from "../shared/types.js";
 import { initialFirstRunReplayPreferences, rawCaptureForFirstRunReplayPreferences } from "../shared/firstRunReplayPreferences.js";
 import { activeDiscordReplayHubIds } from "../shared/replaySharing.js";
 import { SetupToolbarGuide } from "./SetupToolbarGuide.js";
-import { FirstRunDeckImport } from "./FirstRunDeckImport.js";
+import { FirstRunDeckImport, type FirstRunDeckImportProps } from "./FirstRunDeckImport.js";
 import "./styles/first-run-setup.css";
 
 export type FirstRunSetupStep = "player" | "account" | "replays" | "deck" | "ready";
@@ -21,7 +21,7 @@ export interface FirstRunSetupProps {
   logoUrl?: string;
   accountVerified: boolean;
   accountContent: React.ReactNode;
-  onImportDeck: (source: string, kind: "url" | "text") => Promise<SavedDeck>;
+  onImportDeck: FirstRunDeckImportProps["onImport"];
   onStepChange: (step: FirstRunSetupStep) => void;
   onSave: (patch: Partial<UserSettings>) => Promise<void>;
   onOpenWebsite: () => Promise<void>;
@@ -32,14 +32,14 @@ export interface FirstRunSetupProps {
 const STEPS = [
   { id: "player", label: "Your player", hint: "Name & simulator", icon: Gamepad2 },
   { id: "account", label: "Your account", hint: "Connect when you're ready", icon: UserRound },
-  { id: "replays", label: "Your replays", hint: "Choose what to save", icon: Video },
+  { id: "replays", label: "Your replays", hint: "Review your games", icon: MonitorPlay },
   { id: "deck", label: "Your deck", hint: "Bring your game plan", icon: Layers3 },
   { id: "ready", label: "Make it yours", hint: "Find your next step", icon: Sparkles }
 ] as const;
 
 const FEATURE_MAP = [
   { title: "Play", description: "Open your simulator and play in RiftLite.", icon: Play, target: { view: "play" } },
-  { title: "Review", description: "Results, replays, video, game logs and stats.", icon: Video, target: { view: "matches" } },
+  { title: "Review", description: "Interactive replays, game walkthroughs and action search on the web.", icon: MonitorPlay, target: { view: "web-replay" } },
   { title: "Prepare", description: "Decks, matchup prep, Mulligan & Sideboard Labs.", icon: Layers3, target: { view: "decks", deckFocus: "library" } },
   { title: "Community", description: "Explore the meta, join groups and find a match.", icon: Users, target: { view: "community", communityTab: "legend-meta" } },
   { title: "Insights", description: "Explore patterns in your saved match data.", icon: BarChart3, target: { view: "insights" } },
@@ -254,24 +254,32 @@ export function FirstRunSetup({ settings, decks, step, logoUrl, accountVerified,
             </div>
 
             {step === "replays" ? <>
-              <div className="first-run-setup__heading"><span className="first-run-setup__eyebrow">REMEMBER YOUR GAMES</span><h1 ref={headingRef} tabIndex={-1} id="first-run-setup-title">Choose what to save.</h1><p id="first-run-setup-description">Keep games for review, with recording choices that suit you.</p></div>
-              <div className="first-run-setup__preferences">
-                <SetupToggle title="Save local replays" description="Keep replay evidence on this device for games you play in RiftLite." checked={localReplay} disabled={busy} onChange={setLocalReplay} />
-                <SetupToggle title="Record game video" description="Save video with game audio when available. Uses more disk space." checked={localReplay && video} disabled={busy || !localReplay} onChange={setVideo} />
-                <SetupToggle title="Include my microphone" description="Add your voice to future game videos." checked={microphone} disabled={busy || !localReplay || !video} onChange={setMicrophone} icon={<Mic size={15} />} />
-              </div>
-              <section className="first-run-setup__online" aria-labelledby="first-run-online-title">
-                <h2 id="first-run-online-title">Online replays</h2>
-                <p>Automatically upload future games so you can watch and share them on the web.</p>
+              <div className="first-run-setup__heading"><span className="first-run-setup__eyebrow">PLAY. REVIEW. IMPROVE.</span><h1 ref={headingRef} tabIndex={-1} id="first-run-setup-title">Learn from your games.</h1><p id="first-run-setup-description">Start with interactive replays. Add a video recording if you want the original game screen too.</p></div>
+              <section className="first-run-setup__interactive" aria-labelledby="first-run-interactive-title">
+                <div className="first-run-setup__replay-heading"><h2 id="first-run-interactive-title"><MonitorPlay size={20} aria-hidden="true" />Interactive replays</h2><span className="first-run-setup__recommended">Recommended</span></div>
+                <p>Walk through your game, search actions and review combat in the web player. Capture the game here, then upload it to your RiftLite account to watch.</p>
+                <div className="first-run-setup__preferences"><SetupToggle title="Capture interactive replays" description={onlineAtlas || onlineTcga ? "Required for online replays. Turn off both upload options below to disable capture." : uploadsConfigured ? "Your existing upload preferences still apply." : "Interactive replay data stays here until you choose to upload."} checked={interactiveReplay} disabled={busy || (interactiveReplay && (onlineAtlas || onlineTcga))} onChange={setInteractiveReplay} /></div>
+                <section className="first-run-setup__online" aria-labelledby="first-run-online-title">
+                <h3 id="first-run-online-title">Save to your account</h3>
+                <p>Choose whether to automatically upload future games. Sharing depends on the visibility you choose below.</p>
                 {!connected ? <div className="first-run-setup__account-required"><p>{settings.accountUid ? "Reconnect and verify your RiftLite account before turning on online replays." : "If you didn’t connect a RiftLite account in the previous step, online replays aren’t available. Local recordings still work."}</p><button type="button" className="first-run-setup__text-button" disabled={busy} onClick={() => moveTo("account")}><ArrowLeft size={14} />Back to account</button></div> : null}
                 <div className="first-run-setup__preferences">
                   <SetupToggle title="Upload Atlas replays" description="Save future captured Atlas games to your RiftLite account." checked={onlineAtlas} disabled={busy || (!connected && !onlineAtlas)} onChange={(enabled) => { setOnlineAtlas(enabled); if (enabled) setInteractiveReplay(true); }} />
                   <SetupToggle title="Upload TCG Arena replays" description="Save future captured TCG Arena games to your RiftLite account." checked={onlineTcga} disabled={busy || (!connected && !onlineTcga)} onChange={(enabled) => { setOnlineTcga(enabled); if (enabled) setInteractiveReplay(true); }} />
                 </div>
                 <label className="first-run-setup__field first-run-setup__visibility" htmlFor="first-run-visibility"><span>Who can watch new online replays?</span><select id="first-run-visibility" value={displayedVisibility} disabled={busy || !connected || discordDestinations} onChange={(event) => setVisibility(event.currentTarget.value as UserSettings["rawCapture"]["visibility"])} aria-describedby="first-run-visibility-help"><option value="public">Public — anyone can find and watch</option><option value="unlisted">Unlisted — anyone with the link</option><option value="private">Private — only you</option></select><small id="first-run-visibility-help">{discordDestinations ? "Your automatic Discord destinations use Unlisted. Change those destinations in Recording & sharing to choose another visibility." : "Applies to future uploads. Your existing online replays keep their current visibility."}</small></label>
-                {(onlineAtlas || onlineTcga) && !interactiveReplay ? <p className="first-run-setup__paused" role="status">Uploads are paused. Turn on interactive replay data in the options below to resume them.</p> : null}
+                {(onlineAtlas || onlineTcga) && !interactiveReplay ? <p className="first-run-setup__paused" role="status">Uploads are paused. Turn on Capture interactive replays above to resume them.</p> : null}
+                </section>
               </section>
-              <details className="first-run-setup__extra"><summary>More recording & play options <ChevronRight size={15} aria-hidden="true" /></summary><div className="first-run-setup__preferences"><SetupToggle title="Capture interactive replay data" description={onlineAtlas || onlineTcga ? "Required for online replays. Turn off both upload options above to disable capture." : uploadsConfigured ? "Your existing upload preferences still apply." : "Interactive replay data stays here until you choose to upload."} checked={interactiveReplay} disabled={busy || (interactiveReplay && (onlineAtlas || onlineTcga))} onChange={setInteractiveReplay} /><SetupToggle title="Review results after each match" description="Check the result and add details before saving." checked={confirmResults} disabled={busy} onChange={setConfirmResults} /><SetupToggle title="Show the top bar in fullscreen" description="Keep Play controls, including Known opponent hand, within reach. Also in Settings → Appearance & Play." checked={fullscreenBar} disabled={busy} onChange={setFullscreenBar} /></div></details>
+              <section className="first-run-setup__video" aria-labelledby="first-run-video-title">
+                <h2 id="first-run-video-title"><Video size={18} aria-hidden="true" />Optional game video</h2>
+                <p>Keep the original game screen and audio as a video. This uses more processing and disk space. Interactive replays work without it.</p>
+                <div className="first-run-setup__preferences">
+                  <SetupToggle title="Record game video" description={localReplay ? "Save video with game audio when available." : "Turn on Save local replays in More options below to enable video."} checked={localReplay && video} disabled={busy || !localReplay} onChange={setVideo} />
+                  <SetupToggle title="Include my microphone" description="Add your voice to future game videos." checked={microphone} disabled={busy || !localReplay || !video} onChange={setMicrophone} icon={<Mic size={15} />} />
+                </div>
+              </section>
+              <details className="first-run-setup__extra"><summary>More options <ChevronRight size={15} aria-hidden="true" /></summary><div className="first-run-setup__preferences"><SetupToggle title="Save local replays" description="Keep match logs and replay evidence on this device. Also required for video recording." checked={localReplay} disabled={busy} onChange={setLocalReplay} /><SetupToggle title="Review results after each match" description="Check the result and add details before saving." checked={confirmResults} disabled={busy} onChange={setConfirmResults} /><SetupToggle title="Show the top bar in fullscreen" description="Keep Play controls, including Known opponent hand, within reach. Also in Settings → Appearance & Play." checked={fullscreenBar} disabled={busy} onChange={setFullscreenBar} /></div></details>
             </> : null}
 
             <div hidden={step !== "deck"} className="first-run-setup__deck-step">
@@ -286,7 +294,7 @@ export function FirstRunSetup({ settings, decks, step, logoUrl, accountVerified,
             {step === "ready" ? <>
               <div className="first-run-setup__heading first-run-setup__heading--ready"><span className="first-run-setup__eyebrow">MAKE YOURSELF AT HOME</span><h1 ref={headingRef} tabIndex={-1} id="first-run-setup-title">You're ready to explore.</h1><p id="first-run-setup-description">Start a game, or pick something to explore. Your preferences are saved.</p></div>
               <dl className="first-run-setup__summary"><div><dt>Simulator</dt><dd>{platform === "atlas" ? "Atlas" : "TCG Arena"}</dd></div><div><dt>Player</dt><dd>{username.trim() || "Set later"}</dd></div><div><dt>Account</dt><dd>{connected ? "Connected" : "Not connected"}</dd></div><div><dt>Deck</dt><dd>{chosenDeck?.title || (chosenDeck ? "Untitled deck" : "Choose later")}</dd></div></dl>
-              <div className="first-run-setup__recording-summary" aria-label="Your recording choices"><span>Video {localReplay && video ? "on" : "off"}</span><span>Microphone {localReplay && video && microphone ? "on" : "off"}</span><span>Interactive data {interactiveReplay ? "on" : "off"}</span><span>{onlineSummary}</span></div>
+              <div className="first-run-setup__recording-summary" aria-label="Your recording choices"><span>Interactive replays {interactiveReplay ? "on" : "off"}</span><span>{onlineSummary}</span><span>Video {localReplay && video ? "on" : "off"}</span><span>Microphone {localReplay && video && microphone ? "on" : "off"}</span></div>
               <p className="first-run-setup__first-game"><strong>Your first game:</strong> Play in RiftLite. {confirmResults ? "When a result is captured, check it and choose Save match. Find it again in Review." : "Captured results save automatically. Open Review to check or correct them."}</p>
               <SetupToolbarGuide />
               <div className="first-run-setup__website"><Cloud size={21} aria-hidden="true" /><div><strong>Your games on RiftLite.com</strong><p>Watch your uploaded replays, share links and explore public games. Sign in with the same RiftLite account to find your library.</p><button type="button" className="first-run-setup__text-button" disabled={busy} onClick={() => void runAction(onOpenWebsite)}>Visit RiftLite.com/replays<ExternalLink size={14} /></button></div></div>

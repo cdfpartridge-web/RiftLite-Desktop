@@ -11,6 +11,10 @@
 .recording-sharing-account span { color: var(--muted); margin-top: 4px; }
 .recording-sharing-sections { display: grid; gap: 12px; }
 .recording-sharing-card { border: 1px solid var(--border); background: var(--surface); border-radius: 14px; overflow: hidden; }
+.recording-sharing-card[data-primary="true"] { border-color: rgb(40 215 255 / 45%); }
+.recording-sharing-card[data-primary="true"] .recording-sharing-card-heading { background: rgb(40 215 255 / 5%); }
+.recording-sharing-badge { display: inline-block; margin-left: 10px; padding: 3px 7px; border: 1px solid var(--border); border-radius: 6px; color: var(--muted); font-size: 10px; font-weight: 600; vertical-align: middle; }
+.recording-sharing-card[data-primary="true"] .recording-sharing-badge { border-color: rgb(40 215 255 / 30%); color: var(--cyan-soft); }
 .recording-sharing-card-heading { padding: 22px; }
 .recording-sharing-icon { display: grid; place-items: center; width: 46px; height: 46px; border-radius: 12px; background: rgb(40 215 255 / 8%); color: var(--cyan-soft); flex-shrink: 0; }
 .recording-sharing-copy h3 { margin: 0; font-size: 17px; }
@@ -97,4 +101,8 @@
   .recording-sharing-card-heading > button { font-size: 12px; padding: 8px 10px; }
   .recording-sharing-heading > div { flex-basis: 100%; }
   .recording-video-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 480px) {
+  .recording-sharing-account > div { flex-basis: calc(100% - 40px); }
+  .recording-sharing-account > button { margin-left: 36px; }
 }

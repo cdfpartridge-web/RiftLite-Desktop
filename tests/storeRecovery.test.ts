@@ -954,13 +954,13 @@ describe("RiftLiteStore database recovery", () => {
       const store = new RiftLiteStore(dbPath, legacyPath);
       await store.load();
       const fresh = await store.getSettings();
-      expect(fresh.rawCapture).toMatchObject({ visibility: "public", enabled: false, webReplayAutoUploadEnabled: false, tcgaWebReplayAutoUploadEnabled: false });
+      expect(fresh.rawCapture).toMatchObject({ visibility: "public", enabled: true, webReplayAutoUploadEnabled: false, tcgaWebReplayAutoUploadEnabled: false });
       await store.saveSettings({ rawCapture: { ...fresh.rawCapture, visibility: "private" } });
       const restarted = new RiftLiteStore(dbPath, legacyPath);
       await restarted.load();
       const saved = await restarted.getSettings();
       expect(saved.firstRunComplete).toBe(false);
-      expect(saved.rawCapture).toMatchObject({ visibility: "private", enabled: false, webReplayAutoUploadEnabled: false });
+      expect(saved.rawCapture).toMatchObject({ visibility: "private", enabled: true, webReplayAutoUploadEnabled: false });
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

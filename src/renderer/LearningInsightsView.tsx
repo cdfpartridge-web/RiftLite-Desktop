@@ -35,7 +35,7 @@ import {
   resolveLabTrainingDeckId,
   storeLabTrainingHandoff
 } from "../shared/labTrainingHandoff";
-import { CURRENT_STAT_SEASON, RADIANCE_PRESEASON_START_AT, STAT_SEASONS, type StatSeasonId } from "../shared/statSeasons";
+import { CURRENT_STAT_SEASON, RADIANCE_START_AT, STAT_SEASONS, type StatSeasonId } from "../shared/statSeasons";
 import { legendImageUrl } from "../shared/legendImages";
 import type { ActiveView } from "../shared/navigationModel";
 import {
@@ -555,7 +555,7 @@ export function LearningInsightsView({
       </header>
 
       {showScopeEditor ? <section className="rail-card insights-filter-card insights-scope-editor">
-        <header><div><span>Comparable evidence</span><strong>{activeFilterCount ? `${activeFilterCount} active refinement${activeFilterCount === 1 ? "" : "s"}` : "Radiance pre-season"}</strong></div>{activeFilterCount ? <button type="button" className="secondary compact" onClick={clearFilters}><RotateCcw size={13} /> Reset</button> : null}</header>
+        <header><div><span>Comparable evidence</span><strong>{activeFilterCount ? `${activeFilterCount} active refinement${activeFilterCount === 1 ? "" : "s"}` : periodLabel(CURRENT_STAT_SEASON)}</strong></div>{activeFilterCount ? <button type="button" className="secondary compact" onClick={clearFilters}><RotateCcw size={13} /> Reset</button> : null}</header>
         <div className="insights-filters">
           <label>Season<select value={period} onChange={(event) => setPeriod(event.target.value as StatSeasonId)}>{STAT_SEASONS.map((season) => <option key={season.id} value={season.id}>{season.label}</option>)}</select></label>
           <label>Period<select value={rangeDays} onChange={(event) => setRangeDays(Number(event.target.value))}><option value={0}>All available dates</option><option value={7}>Last 7 days</option><option value={30}>Last 30 days</option><option value={90}>Last 90 days</option></select></label>
@@ -1383,4 +1383,4 @@ function moveCoachTab(event: React.KeyboardEvent<HTMLButtonElement>, current: Co
   window.requestAnimationFrame(() => document.getElementById(`coach-tab-${next}`)?.focus());
 }
 
-export const INSIGHTS_CURRENT_SEASON_BOUNDARY = RADIANCE_PRESEASON_START_AT;
+export const INSIGHTS_CURRENT_SEASON_BOUNDARY = RADIANCE_START_AT;

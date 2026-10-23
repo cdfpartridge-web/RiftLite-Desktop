@@ -1,10 +1,11 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Check, FileText, Link2, LoaderCircle, Plus } from "lucide-react";
-import type { SavedDeck } from "../shared/types.js";
+import type { DeckImportChoice, DeckImportResult, SavedDeck } from "../shared/types.js";
+import { DeckImportDecision } from "./DeckImportDecision.js";
 import "./styles/first-run-deck-import.css";
 
 export interface FirstRunDeckImportProps {
-  onImport: (source: string, kind: "url" | "text") => Promise<SavedDeck>;
+  onImport: (source: string, kind: "url" | "text", choice?: DeckImportChoice) => Promise<DeckImportResult>;
   onImported: (deck: SavedDeck) => void;
   onBusyChange?: (busy: boolean) => void;
 }
@@ -14,6 +15,7 @@ export function FirstRunDeckImport({ onImport, onImported, onBusyChange }: First
   const [url, setUrl] = useState("");
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
+  const [duplicate, setDuplicate] = useState<Extract<DeckImportResult, { status: "duplicate" }> | null>(null);
   const [error, setError] = useState("");
   const [importedTitle, setImportedTitle] = useState("");
   const busyRef = useRef(false);
@@ -34,7 +36,7 @@ export function FirstRunDeckImport({ onImport, onImported, onBusyChange }: First
     setImportedTitle("");
   }
 
-  async function importDeck() {
+  async function importDeck(choice?: DeckImportChoice) {
     if (busyRef.current || !source.trim()) return;
     busyRef.current = true;
     setBusy(true);
@@ -42,8 +44,11 @@ export function FirstRunDeckImport({ onImport, onImported, onBusyChange }: First
     setImportedTitle("");
     try {
       callbacksRef.current.onBusyChange?.(true);
-      const deck = await onImport(source.trim(), kind);
+      const result = await onImport(source.trim(), kind, choice);
       if (!mountedRef.current) return;
+      if (result.status === "duplicate") { setDuplicate(result); return; }
+      const deck = result.deck;
+      setDuplicate(null);
       callbacksRef.current.onImported(deck);
       setImportedTitle(deck.title || "Your deck");
       if (kind === "url") setUrl("");
@@ -64,6 +69,7 @@ export function FirstRunDeckImport({ onImport, onImported, onBusyChange }: First
   return <section className="first-run-deck-import" aria-labelledby="first-run-deck-import-title" aria-busy={busy}>
     <h2 id="first-run-deck-import-title">Add your deck</h2>
     <p>Paste a public Piltover Archive link or a deck list. Your deck will be saved here, without leaving Quick setup.</p>
+    <fieldset disabled={busy || Boolean(duplicate)} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
     <div className="first-run-deck-import__methods" role="group" aria-label="Deck import method">
       <button type="button" aria-pressed={kind === "url"} disabled={busy} onClick={() => changeKind("url")}><Link2 size={15} aria-hidden="true" />Piltover Archive link</button>
       <button type="button" aria-pressed={kind === "text"} disabled={busy} onClick={() => changeKind("text")}><FileText size={15} aria-hidden="true" />Paste deck list</button>
@@ -75,10 +81,12 @@ export function FirstRunDeckImport({ onImport, onImported, onBusyChange }: First
       <span>Deck list</span>
       <textarea id="first-run-deck-list" rows={7} autoComplete="off" spellCheck={false} value={text} disabled={busy} placeholder={"My deck\n\nLegend\n1 Ahri, Alluring\n\nMain Deck\n3 Falling Star"} onChange={(event) => { setText(event.currentTarget.value); setError(""); setImportedTitle(""); }} />
     </label>}
-    {error ? <p className="first-run-setup__error" role="alert">{error}</p> : null}
-    {importedTitle ? <p className="first-run-deck-import__success" role="status"><Check size={16} aria-hidden="true" /><span>{importedTitle} is ready to use.</span></p> : null}
     <button type="button" className="first-run-setup__button first-run-setup__button--secondary" disabled={busy || !source.trim()} onClick={() => void importDeck()}>
       {busy ? <LoaderCircle className="first-run-setup__spinner" size={16} aria-hidden="true" /> : <Plus size={16} aria-hidden="true" />}{busy ? "Importing deck…" : "Import deck"}
     </button>
+    </fieldset>
+    {duplicate ? <DeckImportDecision duplicate={duplicate} busy={busy} onChoose={choice => void importDeck(choice)} onCancel={() => { setDuplicate(null); setError(""); }} /> : null}
+    {error ? <p className="first-run-setup__error" role="alert">{error}</p> : null}
+    {importedTitle ? <p className="first-run-deck-import__success" role="status"><Check size={16} aria-hidden="true" /><span>{importedTitle} is ready to use.</span></p> : null}
   </section>;
 }

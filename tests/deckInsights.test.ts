@@ -9,7 +9,7 @@ import {
 } from "../src/shared/deckInsights";
 import type { MulliganLabRegistryCard } from "../src/shared/mulliganLab";
 import type { ReplayInsightCardReport } from "../src/shared/replayInsights";
-import { RADIANCE_PRESEASON_START_AT, RADIANCE_PRESEASON_START_MS } from "../src/shared/statSeasons";
+import { RADIANCE_START_AT, RADIANCE_START_MS, RADIANCE_PRESEASON_START_AT, RADIANCE_PRESEASON_START_MS } from "../src/shared/statSeasons";
 import type { MatchDraft, SavedDeck } from "../src/shared/types";
 
 const registry: MulliganLabRegistryCard[] = [
@@ -133,12 +133,16 @@ describe("deck insights", () => {
       match({ id: "before", capturedAt: new Date(RADIANCE_PRESEASON_START_MS - 1).toISOString(), result: "Loss" }),
       match({ id: "at", capturedAt: RADIANCE_PRESEASON_START_AT }),
       match({ id: "after", capturedAt: new Date(RADIANCE_PRESEASON_START_MS + 1).toISOString() }),
+      match({ id: "official-before", capturedAt: new Date(RADIANCE_START_MS - 1).toISOString(), result: "Loss" }),
+      match({ id: "official-at", capturedAt: RADIANCE_START_AT }),
+      match({ id: "official-after", capturedAt: new Date(RADIANCE_START_MS + 1).toISOString() }),
       match({ id: "unknown", capturedAt: "invalid" })
     ];
     const original = JSON.stringify(matches);
     const report = buildDeckInsightPerformance(deck, matches);
     expect(report.periods).toEqual([
-      expect.objectContaining({ key: "radiance-preseason", label: "Radiance pre-season", record: "2-0", total: 2 }),
+      expect.objectContaining({ key: "radiance", label: "Radiance", record: "2-0", total: 2 }),
+      expect.objectContaining({ key: "radiance-preseason", label: "Radiance pre-season", record: "2-1", total: 3 }),
       expect.objectContaining({ key: "vendetta-launch", record: "0-1", total: 1 }),
       expect.objectContaining({ key: "vendetta-preview", record: "1-0", total: 1 }),
       expect.objectContaining({ key: "pre-vendetta", record: "1-0", total: 1 })

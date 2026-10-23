@@ -1,9 +1,13 @@
 /** Fixed product stats boundary approved on 10 October 2026, 17:35:38 UK time. */
 export const RADIANCE_PRESEASON_START_AT = "2026-10-10T16:35:38.000Z";
 export const RADIANCE_PRESEASON_START_MS = Date.parse(RADIANCE_PRESEASON_START_AT);
+/** Official season starts at the user-approved "From now" instant, 23 October 2026, 13:11:27 UK. */
+export const RADIANCE_START_AT = "2026-10-23T12:11:27.000Z";
+export const RADIANCE_START_MS = Date.parse(RADIANCE_START_AT);
 export const VENDETTA_PREVIEW_START_MS = Date.UTC(2026, 6, 6);
 export const VENDETTA_LAUNCH_START_MS = Date.UTC(2026, 6, 31);
 export const STAT_SEASONS = [
+  { id: "radiance", label: "Radiance" },
   { id: "radiance-preseason", label: "Radiance pre-season" },
   { id: "vendetta-launch", label: "Vendetta season" },
   { id: "vendetta-preview", label: "Vendetta Preview season" },
@@ -11,7 +15,7 @@ export const STAT_SEASONS = [
   { id: "", label: "All tracked seasons" },
 ] as const;
 export type StatSeasonId = (typeof STAT_SEASONS)[number]["id"];
-export const CURRENT_STAT_SEASON: StatSeasonId = "radiance-preseason";
+export const CURRENT_STAT_SEASON: StatSeasonId = "radiance";
 
 type StatTimestamp = string | number | null | undefined;
 
@@ -41,6 +45,7 @@ export function statMatchTimestamp(match: {
 export function statSeasonForTimestamp(value: StatTimestamp): Exclude<StatSeasonId, ""> | null {
   const timestamp = statTimestampMs(value);
   if (timestamp === null) return null;
+  if (timestamp >= RADIANCE_START_MS) return "radiance";
   if (timestamp >= RADIANCE_PRESEASON_START_MS) return "radiance-preseason";
   if (timestamp >= VENDETTA_LAUNCH_START_MS) return "vendetta-launch";
   if (timestamp >= VENDETTA_PREVIEW_START_MS) return "vendetta-preview";

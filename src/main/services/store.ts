@@ -8,6 +8,8 @@ import { homedir } from "node:os";
 import initSqlJs, { type Database, type SqlJsStatic } from "sql.js";
 import { deckNotebookWithCurrentVersion, deckSnapshotHash, emptyDeckNotebook, normalizeDeckNotebook, enrichDeckNotebookForDeck } from "../../shared/deckNotebook.js";
 import { normalizeLegendName } from "../../shared/legendNames.js";
+import { deckContentFingerprint, deckImportSnapshot } from "../../shared/deckImport.js";
+import type { DeckImportChoice, DeckImportResult } from "../../shared/types.js";
 import { atlasHistoryForMatch, normalizeAtlasMatchHistory, normalizeAtlasHistoryMarkers, type AtlasMatchHistory, type AtlasHistoryMarker } from "../../shared/atlasHistory.js";
 import { buildCombinedBo3Match, buildMatchCombinePreview, markOriginalAsCombined, restoreCombinedOriginal, type MatchCombinePreview, type MatchCombineSavePayload } from "../../shared/matchCombine.js";
 import { createDefaultSettings, DEFAULT_RAW_CAPTURE_ENDPOINT } from "../../shared/settingsDefaults.js";
@@ -356,15 +358,26 @@ export class RiftLiteStore {
 
   private normalizeSettings(parsed: Partial<UserSettings>, newProfile = false): UserSettings {
     const defaults = createDefaultSettings();
-    // New installations start with Public selected, while old settings without
-    // a visibility choice retain the original Private fallback.
-    const rawCaptureFallback: UserSettings["rawCapture"] = { ...defaults.rawCapture, visibility: newProfile ? "public" : "private" };
+    // Fresh devices prefer local interactive capture. Older profiles without
+    // these settings keep their former capture/video behaviour and privacy;
+    // changing the fresh defaults must not silently opt an existing user in.
+    const rawCaptureFallback: UserSettings["rawCapture"] = {
+      ...defaults.rawCapture,
+      enabled: newProfile ? defaults.rawCapture.enabled : false,
+      visibility: newProfile ? defaults.rawCapture.visibility : "private"
+    };
     return {
       ...defaults,
       ...parsed,
       defaultGamePlatform: normalizeDefaultGamePlatform((parsed as { defaultGamePlatform?: unknown }).defaultGamePlatform),
       homeDeckThemeEnabled: normalizeHomeDeckThemeEnabled((parsed as { homeDeckThemeEnabled?: unknown }).homeDeckThemeEnabled),
       showPlayToolbarInFullscreen: parsed.showPlayToolbarInFullscreen === true,
+      replayKeyframesEnabled: typeof parsed.replayKeyframesEnabled === "boolean"
+        ? parsed.replayKeyframesEnabled
+        : newProfile ? defaults.replayKeyframesEnabled : true,
+      replayVideoEnabled: typeof parsed.replayVideoEnabled === "boolean"
+        ? parsed.replayVideoEnabled
+        : newProfile ? defaults.replayVideoEnabled : true,
       replayVideoMode: normalizeReplayVideoMode((parsed as { replayVideoMode?: unknown }).replayVideoMode),
       replayFramePreset: normalizeReplayFramePreset((parsed as { replayFramePreset?: unknown }).replayFramePreset),
       overlayDisplay: { ...defaults.overlayDisplay, ...parsed.overlayDisplay },
@@ -803,7 +816,10 @@ export class RiftLiteStore {
   }
 
   async getSavedDecks(): Promise<SavedDeck[]> {
-    return this.enqueueDatabaseRead("get-saved-decks", (db) => {
+    return this.enqueueDatabaseRead("get-saved-decks", (db) => this.readSavedDecksFromDatabase(db));
+  }
+
+  private readSavedDecksFromDatabase(db: Database): SavedDeck[] {
       const result = db.exec(
         `SELECT id, source_url, source_key, title, legend, snapshot_json,
                 last_imported_at, last_refresh_status, last_refresh_error
@@ -811,7 +827,6 @@ export class RiftLiteStore {
          ORDER BY title COLLATE NOCASE ASC, last_imported_at DESC`
       );
       return (result[0]?.values ?? []).map(savedDeckFromRow);
-    });
   }
 
   async getSavedDeck(id: string): Promise<SavedDeck | null> {
@@ -854,7 +869,41 @@ export class RiftLiteStore {
   }
 
   async upsertSavedDeck(deck: Partial<SavedDeck> & Pick<SavedDeck, "title" | "legend" | "snapshotJson">): Promise<SavedDeck> {
-    return this.enqueueAtomicDatabaseMutation("upsert-saved-deck", (db) => {
+    return this.enqueueAtomicDatabaseMutation("upsert-saved-deck", (db) => this.upsertSavedDeckInDatabase(db, deck));
+  }
+
+  /** The duplicate check and the chosen write share one queue/transaction. */
+  async importSavedDeck(deck: Omit<SavedDeck, "id" | "lastImportedAt">, choice?: DeckImportChoice): Promise<DeckImportResult> {
+    return this.enqueueAtomicDatabaseMutation("import-saved-deck", (db): DeckImportResult => {
+      const decks = this.readSavedDecksFromDatabase(db);
+      const snapshot = deckImportSnapshot(deck.snapshotJson);
+      const fingerprint = deckContentFingerprint(snapshot);
+      const matches = decks.filter(existing => existing.sourceKey === deck.sourceKey ||
+        (deck.sourceUrl.startsWith("http") && existing.sourceUrl === deck.sourceUrl) ||
+        deckContentFingerprint(deckImportSnapshot(existing.snapshotJson)) === fingerprint);
+      const duplicate = (): DeckImportResult => ({ status: "duplicate", decks: matches.map(({ id, title }) => ({ id, title })), suggestedTitle: deck.title });
+      if (!choice && matches.length) return duplicate();
+      if (choice && choice.mode !== "update" && choice.mode !== "separate") throw new Error("Choose how to import this deck.");
+      if (choice?.mode === "update") {
+        const existing = matches.find(item => item.id === choice.deckId);
+        if (!existing) throw new Error("That matching deck is no longer available. Cancel and import again.");
+        // Keep the selected entry's identity, name, source and notebook/history.
+        Object.assign(snapshot, { title: existing.title, sourceKey: existing.sourceKey, source_key: existing.sourceKey, sourceUrl: existing.sourceUrl, source_url: existing.sourceUrl });
+        return { status: "saved", deck: this.upsertSavedDeckInDatabase(db, { ...deck, id: existing.id, title: existing.title, sourceKey: existing.sourceKey, sourceUrl: existing.sourceUrl, snapshotJson: JSON.stringify(snapshot) }) };
+      }
+      if (choice?.mode === "separate") {
+        const title = typeof choice.title === "string" ? choice.title.trim() : "";
+        if (!title || title.length > 120) throw new Error("Enter a deck name of 1–120 characters.");
+        if (decks.some(existing => existing.title.trim().toLowerCase() === title.toLowerCase())) throw new Error("Choose a different name for your separate deck.");
+        const sourceKey = `copy:${randomUUID()}`;
+        Object.assign(snapshot, { title, sourceKey, source_key: sourceKey });
+        return { status: "saved", deck: this.upsertSavedDeckInDatabase(db, { ...deck, title, sourceKey, snapshotJson: JSON.stringify(snapshot) }) };
+      }
+      return { status: "saved", deck: this.upsertSavedDeckInDatabase(db, deck) };
+    });
+  }
+
+  private upsertSavedDeckInDatabase(db: Database, deck: Partial<SavedDeck> & Pick<SavedDeck, "title" | "legend" | "snapshotJson">): SavedDeck {
       const now = new Date().toISOString();
       const existing = deck.sourceKey
         ? this.readSavedDeckBySourceKeyFromDatabase(db, deck.sourceKey.trim())
@@ -890,7 +939,6 @@ export class RiftLiteStore {
       );
       this.ensureDeckNotebookCurrentVersion(db, next);
       return next;
-    });
   }
 
   async renameSavedDeck(id: string, title: string): Promise<SavedDeck> {

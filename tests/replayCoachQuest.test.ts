@@ -8,7 +8,7 @@ import type {
   ReplayInsightCardReport,
   ReplayInsightsReport
 } from "../src/shared/replayInsights.js";
-import { RADIANCE_PRESEASON_START_AT } from "../src/shared/statSeasons.js";
+import { RADIANCE_START_AT } from "../src/shared/statSeasons.js";
 
 const NOW = "2026-08-25T12:00:00.000Z";
 
@@ -116,9 +116,9 @@ function report(insights: ReplayInsight[], cards: ReplayInsightCardReport[] = []
     },
     scopeReceipt: {
       currentSeasonStartedOn: "2026-07-31",
-      currentSeasonStartedAt: RADIANCE_PRESEASON_START_AT,
+      currentSeasonStartedAt: RADIANCE_START_AT,
       periods: ["vendetta-launch"],
-      periodGameCounts: { "radiance-preseason": 0, "vendetta-launch": 12, "vendetta-preview": 0, "pre-vendetta": 0, unknown: 0 },
+      periodGameCounts: { radiance: 0, "radiance-preseason": 0, "vendetta-launch": 12, "vendetta-preview": 0, "pre-vendetta": 0, unknown: 0 },
       deckVersions: [{ fingerprint: "private-deck-hash", games: 12 }],
       unknownDeckGames: 0,
       observedFrom: "2026-08-01T00:00:00.000Z",

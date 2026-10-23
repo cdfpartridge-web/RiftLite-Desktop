@@ -87,8 +87,9 @@ describe("desktop reporting date filters", () => {
   });
 
   it("keeps the exact Radiance cutoff consistent across history, stats and archived views", () => {
-    const cutoff = statSeasons.RADIANCE_PRESEASON_START_MS;
+    const cutoff = statSeasons.RADIANCE_START_MS;
     const source = [
+      match("preseason-start", 18, { capturedAt: statSeasons.RADIANCE_PRESEASON_START_AT }),
       match("before", 18, { capturedAt: new Date(cutoff - 1).toISOString(), result: "Loss" }),
       match("at", 18, { capturedAt: new Date(cutoff).toISOString() }),
       match("after", 18, { capturedAt: new Date(cutoff + 1).toISOString() }),
@@ -98,8 +99,9 @@ describe("desktop reporting date filters", () => {
     expect(current.map((row: MatchDraft) => row.id)).toEqual(["at", "after"]);
     expect(filters.localMatchStats(current)).toMatchObject({ record: "2-0", winRate: "100%" });
     expect(filters.filterMatrixMatches(source, filters.DEFAULT_MATRIX_FILTERS).map((row: MatchDraft) => row.id)).toEqual(["at", "after"]);
-    expect(filters.filterLocalMatches(source, { ...filters.DEFAULT_MATCH_HISTORY_FILTERS, season: "vendetta-launch" }).map((row: MatchDraft) => row.id)).toEqual(["before"]);
-    expect(filters.filterLocalMatches(source, { ...filters.DEFAULT_MATCH_HISTORY_FILTERS, season: "" })).toHaveLength(3);
+    expect(filters.filterLocalMatches(source, { ...filters.DEFAULT_MATCH_HISTORY_FILTERS, season: "radiance-preseason" }).map((row: MatchDraft) => row.id)).toEqual(["preseason-start", "before"]);
+    expect(filters.filterMatrixMatches(source, { ...filters.DEFAULT_MATRIX_FILTERS, season: "radiance-preseason" }).map((row: MatchDraft) => row.id)).toEqual(["preseason-start", "before"]);
+    expect(filters.filterLocalMatches(source, { ...filters.DEFAULT_MATCH_HISTORY_FILTERS, season: "" })).toHaveLength(4);
     expect(JSON.stringify(source)).toBe(before);
   });
 

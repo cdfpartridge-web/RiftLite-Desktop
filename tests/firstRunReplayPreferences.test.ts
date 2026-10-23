@@ -19,7 +19,7 @@ function discordSettings(rawCapture: Partial<RawCaptureSettings> = {}): UserSett
 
 describe("initial first-run replay preferences", () => {
   it.each(["private", "unlisted", "public"] as const)("preserves saved %s even before setup completes with all capture and uploads off", (visibility) => {
-    const settings = settingsWith({ visibility });
+    const settings = settingsWith({ enabled: false, visibility });
     expect(settings.firstRunComplete).toBe(false);
     expect(initialFirstRunReplayPreferences(settings)).toEqual({ capture: false, atlas: false, tcga: false, visibility });
     expect(settings.rawCapture.visibility).toBe(visibility);

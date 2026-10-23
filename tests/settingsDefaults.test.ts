@@ -5,7 +5,7 @@ describe("device settings defaults", () => {
   it("does not share nested preferences or consent between consumers", () => {
     const first = createDefaultSettings();
     const second = createDefaultSettings();
-    first.rawCapture.enabled = true;
+    first.rawCapture.enabled = false;
     first.rawCapture.webReplayAutoUploadEnabled = true;
     first.rawCapture.webReplayAutoUploadAccountUid = "first-device-account";
     first.rawCapture.webReplayDiscordShareHubIds!.push("private-hub");
@@ -16,7 +16,7 @@ describe("device settings defaults", () => {
 
     for (const other of [second, createDefaultSettings()]) {
       expect(other.rawCapture).toMatchObject({
-        enabled: false, webReplayAutoUploadEnabled: false, webReplayAutoUploadAccountUid: "",
+        enabled: true, webReplayAutoUploadEnabled: false, webReplayAutoUploadAccountUid: "",
         webReplayDiscordShareHubIds: []
       });
       expect(other.overlayDisplay.showBranding).toBe(true);
@@ -26,14 +26,19 @@ describe("device settings defaults", () => {
     }
   });
 
-  it("requires onboarding and local consent on a new device", () => {
+  it("starts with local interactive replays and requires separate consent for online uploads", () => {
     const settings = createDefaultSettings();
     expect(settings.firstRunComplete).toBe(false);
     expect(settings.lastSeenVersion).toBe("");
     expect(settings.accountUid).toBe("");
     expect(settings.firebaseRefreshToken).toBe("");
+    expect(settings.replayCaptureEnabled).toBe(true);
+    expect(settings.replayKeyframesEnabled).toBe(false);
+    expect(settings.replayVideoEnabled).toBe(false);
+    expect(settings.replayShadowClipEnabled).toBe(false);
+    expect(settings.replayMicAudioEnabled).toBe(false);
     expect(settings.rawCapture).toMatchObject({
-      enabled: false,
+      enabled: true,
       webReplayAutoUploadEnabled: false,
       tcgaWebReplayAutoUploadEnabled: false,
       webReplayDiscordShareEnabled: false,

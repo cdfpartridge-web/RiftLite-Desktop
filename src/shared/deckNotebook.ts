@@ -307,6 +307,7 @@ export function buildDeckVersionPerformance(deck: SavedDeck, notebook: DeckNoteb
 }
 
 function matchBelongsToVersion(deck: SavedDeck, versions: DeckVersionEntry[], version: DeckVersionEntry, index: number, match: MatchDraft): boolean {
+  if ((match.deckSourceKey || match.deckSourceId) && !matchLooksLikeDeck(deck, match)) return false;
   const matchHash = deckSnapshotHash(match.deckSnapshotJson ?? "");
   if (matchHash) {
     return matchHash === version.snapshotHash;

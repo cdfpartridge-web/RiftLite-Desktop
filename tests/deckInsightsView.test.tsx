@@ -12,7 +12,7 @@ import { buildDeckInsightPerformance } from "../src/shared/deckInsights";
 import { buildDeckBo3Results, buildDeckDataCompleteness } from "../src/shared/deckResults";
 import { DEFAULT_DATE_FILTER } from "../src/shared/dateFilter";
 import { MULLIGAN_LAB_CURRENT_SEASON_STARTED_ON } from "../src/shared/mulliganLab";
-import { RADIANCE_PRESEASON_START_AT, RADIANCE_PRESEASON_START_MS, STAT_SEASONS } from "../src/shared/statSeasons";
+import { RADIANCE_START_AT, RADIANCE_START_MS, RADIANCE_PRESEASON_START_AT, STAT_SEASONS } from "../src/shared/statSeasons";
 import type { MatchDraft, SavedDeck } from "../src/shared/types";
 
 const deck: SavedDeck = {
@@ -100,7 +100,7 @@ describe("DeckInsightsView", () => {
     expect(markup).toContain('value="custom"');
     expect(markup).toContain('value="90d"');
     expect(markup).toContain('value="180d"');
-    expect(markup).toContain('<option value="radiance-preseason" selected="">Radiance pre-season</option>');
+    expect(markup).toContain('<option value="radiance" selected="">Radiance</option>');
     for (const season of STAT_SEASONS) expect(markup).toContain(season.label);
     expect(markup).not.toContain("What your cards actually do in games");
   });
@@ -125,16 +125,19 @@ describe("DeckInsightsView", () => {
 describe("Deck Insights date scope", () => {
   it("defaults to Radiance from the exact cutoff and intersects it with the selected dates", () => {
     const source = [
-      datedMatch("before", new Date(RADIANCE_PRESEASON_START_MS - 1).toISOString()),
-      datedMatch("at", RADIANCE_PRESEASON_START_AT),
-      datedMatch("after", new Date(RADIANCE_PRESEASON_START_MS + 1).toISOString()),
+      datedMatch("vendetta", "2026-10-09T12:00:00Z"),
+      datedMatch("preseason", RADIANCE_PRESEASON_START_AT),
+      datedMatch("before", new Date(RADIANCE_START_MS - 1).toISOString()),
+      datedMatch("at", RADIANCE_START_AT),
+      datedMatch("after", new Date(RADIANCE_START_MS + 1).toISOString()),
       datedMatch("unknown", "invalid")
     ];
     const before = JSON.stringify(source);
     expect(filterDeckInsightMatches(source, DEFAULT_DATE_FILTER).map((match) => match.id)).toEqual(["at", "after"]);
-    expect(filterDeckInsightMatches(source, DEFAULT_DATE_FILTER, "vendetta-launch").map((match) => match.id)).toEqual(["before"]);
-    expect(filterDeckInsightMatches(source, DEFAULT_DATE_FILTER, "current-season").map((match) => match.id)).toEqual(["before"]);
-    expect(filterDeckInsightMatches(source, DEFAULT_DATE_FILTER, "").map((match) => match.id)).toEqual(["before", "at", "after"]);
+    expect(filterDeckInsightMatches(source, DEFAULT_DATE_FILTER, "radiance-preseason").map((match) => match.id)).toEqual(["preseason", "before"]);
+    expect(filterDeckInsightMatches(source, DEFAULT_DATE_FILTER, "vendetta-launch").map((match) => match.id)).toEqual(["vendetta"]);
+    expect(filterDeckInsightMatches(source, DEFAULT_DATE_FILTER, "current-season").map((match) => match.id)).toEqual(["vendetta"]);
+    expect(filterDeckInsightMatches(source, DEFAULT_DATE_FILTER, "").map((match) => match.id)).toEqual(["vendetta", "preseason", "before", "at", "after"]);
     expect(filterDeckInsightMatches(source, { preset: "date", from: "2026-10-09", to: "" }).map((match) => match.id)).toEqual([]);
     expect(JSON.stringify(source)).toBe(before);
   });

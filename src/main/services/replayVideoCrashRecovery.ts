@@ -2,6 +2,7 @@ import { readdir, stat, unlink, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
 import type { GamePlatform, ReplayVideoMimeType, ReplayVideoQuality, ReplayVideoSession } from "../../shared/types.js";
+import { isDiscardedStagedReplayVideo, verifiedPublishedReplayVideoPath } from "./replayVideoStaging.js";
 
 const RECOVERY_SIDECAR_SUFFIX = ".riftlite-recording.json";
 const RIFTLITE_RECORDING_FILENAME = /^RiftLite_(?:atlas|tcga)-(?:compact|balanced|sharp|sharp30|youtube)-.+\.(?:webm|mp4)$/i;
@@ -58,7 +59,10 @@ export async function interruptedReplayVideoCandidates(
       continue;
     }
     const filePath = join(directory, entry.name);
-    if (known.has(normalizedPath(filePath))) {
+    if (await isDiscardedStagedReplayVideo(filePath)) continue;
+    const publishedPath = await verifiedPublishedReplayVideoPath(filePath);
+    const recoveryPath = publishedPath ?? filePath;
+    if (known.has(normalizedPath(filePath)) || known.has(normalizedPath(recoveryPath))) {
       continue;
     }
     const hasSidecar = entryNames.has(`${entry.name}${RECOVERY_SIDECAR_SUFFIX}`);
@@ -69,11 +73,18 @@ export async function interruptedReplayVideoCandidates(
     if (!fileStats?.isFile() || fileStats.size < RECOVERY_MIN_BYTES || nowMs - fileStats.mtimeMs < RECOVERY_MIN_AGE_MS) {
       continue;
     }
-    candidates.push({ path: filePath, modifiedAt: fileStats.mtimeMs });
+    candidates.push({ path: recoveryPath, modifiedAt: fileStats.mtimeMs });
   }
 
+  const emitted = new Set<string>();
   return candidates
     .sort((left, right) => left.modifiedAt - right.modifiedAt)
+    .filter((candidate) => {
+      const key = normalizedPath(candidate.path);
+      if (emitted.has(key)) return false;
+      emitted.add(key);
+      return true;
+    })
     .slice(0, RECOVERY_MAX_FILES)
     .map((candidate) => candidate.path);
 }

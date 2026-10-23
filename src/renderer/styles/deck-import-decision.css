@@ -1,0 +1,13 @@
+.deck-import-decision { margin-top: 16px; padding: 16px; border: 1px solid #58c3dd66; border-radius: 12px; background: #102a38; color: #e5f1f7; }
+.deck-import-decision h3 { margin: 0 0 8px; font-size: 15px; }
+.deck-import-decision p { margin: 8px 0 12px; color: #bdd0dc; font-size: 12px; line-height: 1.5; }
+.prepare-page .prepare-import .deck-import-decision p { margin: 8px 0 12px; color: #bdd0dc; line-height: 1.5; }
+.deck-import-decision__options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin: 14px 0; }
+.deck-import-decision__options > div { min-width: 0; padding: 12px; border: 1px solid #89b6cb33; border-radius: 8px; background: #0a1a26; }
+.deck-import-decision label { display: grid; gap: 7px; font-size: 12px; }
+.deck-import-decision input, .deck-import-decision select { box-sizing: border-box; width: 100%; min-width: 0; padding: 10px; background: #08141e; border: 1px solid #769eb666; border-radius: 6px; color: #e5f1f7; }
+.deck-import-decision strong { overflow-wrap: anywhere; }
+.deck-import-decision button { min-height: 36px; white-space: normal; }
+.deck-import-decision :focus-visible { outline: 2px solid #77dced; outline-offset: 2px; }
+.first-run-setup .deck-import-decision__options { grid-template-columns: 1fr; }
+@media (max-width: 700px) { .deck-import-decision__options { grid-template-columns: 1fr; } }
