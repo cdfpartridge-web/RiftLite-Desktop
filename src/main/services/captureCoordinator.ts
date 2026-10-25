@@ -102,6 +102,8 @@ interface RecentAtlasDraftPublication {
   opponentName: string;
   myChampion: string;
   opponentChampion: string;
+  myChampionAliases: string[];
+  opponentChampionAliases: string[];
   score: string;
   gameCount: number;
   terminalResult: boolean;
@@ -745,6 +747,11 @@ export class CaptureCoordinator {
       opponentName: normalizeCaptureNameKey(draft.opponentName),
       myChampion: normalizeCaptureNameKey(draft.myChampion),
       opponentChampion: normalizeCaptureNameKey(draft.opponentChampion),
+      // A registry/deck lookup may resolve a different display label than the
+      // completed Atlas board. Remember only these exact observed labels so
+      // its final snapshots cannot recreate capture and block post-game work.
+      myChampionAliases: atlasPublishedChampionAliases(draft.myChampion, event.payload.myChampion),
+      opponentChampionAliases: atlasPublishedChampionAliases(draft.opponentChampion, event.payload.opponentChampion),
       score: draft.score,
       gameCount,
       terminalResult,
@@ -793,8 +800,8 @@ export class CaptureCoordinator {
     const myChampion = normalizeCaptureNameKey(draft?.myChampion || readPayloadString(event.payload.myChampion));
     const opponentChampion = normalizeCaptureNameKey(draft?.opponentChampion || readPayloadString(event.payload.opponentChampion));
     const sameOpponent = !recent.opponentName || !opponentName || recent.opponentName === opponentName;
-    const sameMyChampion = !recent.myChampion || !myChampion || recent.myChampion === myChampion;
-    const sameOpponentChampion = !recent.opponentChampion || !opponentChampion || recent.opponentChampion === opponentChampion;
+    const sameMyChampion = !recent.myChampion || !myChampion || recent.myChampion === myChampion || recent.myChampionAliases.includes(myChampion);
+    const sameOpponentChampion = !recent.opponentChampion || !opponentChampion || recent.opponentChampion === opponentChampion || recent.opponentChampionAliases.includes(opponentChampion);
     const matchesPublishedResult = sameOpponent && sameMyChampion && sameOpponentChampion;
     if (!isResultScreen) {
       const score = readPayloadScorePair(event.payload.score);
@@ -2703,6 +2710,14 @@ function chooseAtlasOpponentFromCandidates(value: unknown, localNames: string[])
 function isDistinctCaptureName(candidate: string, localNames: string[]): boolean {
   const key = normalizeCaptureNameKey(candidate);
   return Boolean(key) && !localNames.some((name) => normalizeCaptureNameKey(name) === key);
+}
+
+function atlasPublishedChampionAliases(saved: string, captured: unknown): string[] {
+  // Do not truncate or fuzzy-match labels: a long or malformed label cannot
+  // become equal to a different champion. At most two exact names are kept.
+  return [...new Set([saved, captured].filter((value): value is string => (
+    typeof value === "string" && value.length <= 256 && !/[\u0000-\u001f\u007f]/.test(value)
+  )).map(normalizeCaptureNameKey).filter(Boolean))];
 }
 
 function normalizeCaptureNameKey(value: string): string {

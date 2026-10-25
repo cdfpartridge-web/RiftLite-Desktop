@@ -47,16 +47,18 @@ function decode(input: NonNullable<AtlasPostgameQueryResult["replay"]>) {
   for (const node of input.nodes as any[]) values.push(node[0] === "a" ? node[1].map(resolve) : Object.fromEntries(node[1].map(([key, value]: any[]) => [key, resolve(value)])));
   return values[input.root.r];
 }
-function harness() {
+function harness(requestTarget: AtlasPostgameQueryTarget = target) {
+  const requestKey = `${requestTarget.roomCode}:${requestTarget.roomCreatedAt}:${requestTarget.gameNumber}:${requestTarget.gameHistoryStartedAt}`;
+  const requestApi = `https://realtime.riftatlas-workers.com/api/replays/${encodeURIComponent(requestKey)}`;
   const token = `header.${Buffer.from(JSON.stringify({ sub: "account-a", exp: Math.floor(Date.now() / 1000) + 3600 })).toString("base64url")}.signature`;
   let session = { user: { id: "account-a", email: "not-returned@example.invalid" }, session: { id: "session-a" } };
-  const metadata: Record<string, unknown> = { gameKey: key, gameId: "game-id", status: "ready", expiresAt: Date.now() + 60_000, canFork: true, ownPlayerIds: ["player-a"], finalFrameIndex: 1 };
+  const metadata: Record<string, unknown> = { gameKey: requestKey, gameId: "game-id", status: "ready", expiresAt: Date.now() + 60_000, canFork: true, ownPlayerIds: ["player-a"], finalFrameIndex: 1 };
   let payload: unknown = envelope(view());
   const fetcher = vi.fn(async (url: string, _init?: RequestInit): Promise<Response> => {
     if (url.endsWith("/get-session")) return response(session);
     if (url.endsWith("/token")) return response({ token });
     if (url.endsWith("/metadata")) return response(metadata);
-    if (url === api) return response(payload);
+    if (url === requestApi) return response(payload);
     throw new Error("Unexpected endpoint");
   });
   const page = new EventTarget();
@@ -67,6 +69,55 @@ function harness() {
 describe("Atlas completed replay guest query", () => {
   const pendingCompletion = (expectedPageUrl = "https://play.riftatlas.com/lobby"): AtlasPostgameQueryTarget => ({
     ...target, gameHistoryEndedAt: undefined, completionCheck: "atlas", expectedPageUrl,
+  });
+  const pendingBo3 = (gameNumber = 2): AtlasPostgameQueryTarget => ({ ...pendingCompletion(), gameNumber,
+    completionMatchFormat: "bo3", completionSeriesStartedAt: start - 2000 });
+  function bo3Harness(input = pendingBo3()) {
+    const h = harness(input), payload = view();
+    payload.replayId = `${input.roomCode}:${input.roomCreatedAt}:${input.gameNumber}:${input.gameHistoryStartedAt}`;
+    for (const frame of payload.frames) Object.assign(frame.state, { gameNumber: input.gameNumber, matchFormat: "bo3", seriesStartedAt: input.completionSeriesStartedAt });
+    h.context.location.href = input.expectedPageUrl;
+    h.setPayload(envelope(payload));
+    return { h, input, payload };
+  }
+  it.each([1, 2, 3])("confirms missing-ending BO3 Game %i against its exact series and completed Atlas export", async gameNumber => {
+    const { h, input } = bo3Harness(pendingBo3(gameNumber));
+    const result = await h.run(input);
+    expect(result.status).toBe("ready");
+    expect(decode(result.replay!).frames.every((frame: any) => frame.state.gameNumber === gameNumber && frame.state.seriesStartedAt === input.completionSeriesStartedAt)).toBe(true);
+  });
+  it.each(["missing series", "bad series", "series after start", "format without check", "series without format", "unknown format"])("rejects malformed BO3 confirmation target: %s before auth", async invalid => {
+    const { h, input } = bo3Harness();
+    if (invalid === "missing series") delete input.completionSeriesStartedAt;
+    if (invalid === "bad series") input.completionSeriesStartedAt = -1;
+    if (invalid === "series after start") input.completionSeriesStartedAt = start + 1;
+    if (invalid === "format without check") { delete input.completionCheck; input.gameHistoryEndedAt = start + 60_000; }
+    if (invalid === "series without format") { delete input.completionMatchFormat; input.gameNumber = 1; }
+    if (invalid === "unknown format") Object.assign(input, { completionMatchFormat: "bo5" });
+    await expect(h.run(input)).rejects.toThrow("Invalid completed");
+    expect(h.fetcher).not.toHaveBeenCalled();
+  });
+  it.each(["wrong series", "missing series", "wrong format", "wrong game", "wrong participant", "missing completion", "unfinished outcome"])("rejects mismatched or unfinished BO3 export: %s", async invalid => {
+    const { h, input, payload } = bo3Harness();
+    payload.frames[0].state = structuredClone(payload.frames[0].state);
+    if (invalid === "wrong series") Object.assign(payload.frames[0].state, { seriesStartedAt: start - 3000 });
+    if (invalid === "missing series") delete (payload.frames[0].state as Record<string, unknown>).seriesStartedAt;
+    if (invalid === "wrong format") payload.frames[0].state.matchFormat = "bo1";
+    if (invalid === "wrong game") payload.frames[0].state.gameNumber = 1;
+    if (invalid === "wrong participant") payload.frames[0].state.players[1].id = "outside-player";
+    if (invalid === "missing completion") delete (payload as Record<string, unknown>).completedAt;
+    if (invalid === "unfinished outcome") delete (payload.frames[1].state as Record<string, unknown>).gameOutcome;
+    h.setPayload(envelope(payload));
+    await expect(h.run(input)).rejects.toThrow();
+  });
+  it("does not fetch BO3 data while still on the game page or when Atlas restricts it", async () => {
+    const { h, input } = bo3Harness();
+    input.expectedPageUrl = "https://play.riftatlas.com/game"; h.context.location.href = input.expectedPageUrl;
+    expect((await h.run(input)).status).toBe("deferred"); expect(h.fetcher).not.toHaveBeenCalled();
+    input.expectedPageUrl = "https://play.riftatlas.com/lobby"; h.context.location.href = input.expectedPageUrl;
+    h.metadata.forkBlockedReason = "private_deck";
+    expect((await h.run(input)).status).toBe("restricted");
+    expect(h.fetcher.mock.calls.every(call => !call[0].includes("/api/replays/") || call[0].endsWith("/metadata"))).toBe(true);
   });
   it.each(["/", "/lobby", "/lobby/", "/en/lobby", `/replays/${encodeURIComponent(key)}`])("confirms an exact missing-ending game from %s through ready metadata and a completed export", async path => {
     const h = harness(), input = pendingCompletion(`https://play.riftatlas.com${path}`);

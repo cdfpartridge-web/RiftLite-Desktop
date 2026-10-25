@@ -15,10 +15,10 @@ export const atlasPostgameGameKey = (target: AtlasPostgameTarget): string => `${
 type Room = {
   fields: Record<string, unknown>; localPlayerId: string; participantIds: string[];
   capturedSnapshot: boolean; sequence?: number; blocked: boolean;
-  fallbackSequenceValid: boolean; fallbackIdentityChanged: boolean;
+  fallbackSequenceValid: boolean; fallbackIdentityChanged: boolean; fallbackSeriesChanged: boolean;
 };
 type Found = { target: AtlasPostgameTarget; format: "bo1" | "bo3"; winner: string; seriesComplete: boolean };
-const ROOM_FIELDS = ["roomCode", "createdAt", "gameNumber", "matchFormat", "gameVariant", "roomMode", "testMode", "gameHistoryStartedAt", "gameHistoryEndedAt", "gameOutcome", "winsByPlayerId", "phase", "rewindProtocolVersion"];
+const ROOM_FIELDS = ["roomCode", "createdAt", "gameNumber", "matchFormat", "gameVariant", "roomMode", "testMode", "seriesStartedAt", "gameHistoryStartedAt", "gameHistoryEndedAt", "gameOutcome", "winsByPlayerId", "phase", "rewindProtocolVersion"];
 
 /** Read only already-persisted authoritative evidence. Never infer identities from labels or a browser route. */
 export async function extractAtlasPostgameTargets(input: unknown, canContinue: () => boolean = () => true): Promise<AtlasPostgameTarget[]> {
@@ -58,7 +58,7 @@ export async function extractAtlasPostgameTargets(input: unknown, canContinue: (
     const code = roomCode(packet.gameInstanceId) || roomCode(packet.roomCode) || roomCode(snapshot?.roomCode) || roomCode(shell?.roomCode) || socket?.room || "";
     if (!code || socket && socket.room !== code) continue;
     if (rooms.size >= 6 && !rooms.has(code)) return [];
-    const state = rooms.get(code) ?? { fields: {}, localPlayerId: "", participantIds: [], capturedSnapshot: false, blocked: false, fallbackSequenceValid: false, fallbackIdentityChanged: false };
+    const state = rooms.get(code) ?? { fields: {}, localPlayerId: "", participantIds: [], capturedSnapshot: false, blocked: false, fallbackSequenceValid: false, fallbackIdentityChanged: false, fallbackSeriesChanged: false };
     rooms.set(code, state);
     const viewer = record(shell?.viewer ?? snapshot?.viewer), self = record(shell?.selfPlayer ?? snapshot?.selfPlayer);
     const ids = [socket?.player, text(packet.viewerPlayerId), text(viewer?.playerId), text(self?.id ?? self?.playerId)].filter((value): value is string => Boolean(value));
@@ -66,6 +66,7 @@ export async function extractAtlasPostgameTargets(input: unknown, canContinue: (
     if (ids[0]) state.localPlayerId = ids[0];
     const apply = (fields: Record<string, unknown>) => {
       const nextNumber = number(fields.gameNumber), nextStart = timestamp(fields.gameHistoryStartedAt), nextCreated = timestamp(fields.createdAt);
+      if (Object.hasOwn(fields, "seriesStartedAt") && state.fields.seriesStartedAt !== undefined && fields.seriesStartedAt !== state.fields.seriesStartedAt) state.fallbackSeriesChanged = true;
       if (nextCreated && timestamp(state.fields.createdAt) && nextCreated !== state.fields.createdAt || nextNumber && number(state.fields.gameNumber) && nextNumber !== state.fields.gameNumber || nextStart && timestamp(state.fields.gameHistoryStartedAt) && nextStart !== state.fields.gameHistoryStartedAt) {
         for (const key of ["gameHistoryStartedAt", "gameHistoryEndedAt", "gameOutcome"]) delete state.fields[key];
         state.capturedSnapshot = false;
@@ -108,6 +109,8 @@ export async function extractAtlasPostgameTargets(input: unknown, canContinue: (
     found.set(atlasPostgameGameKey(target), { target, format: fields.matchFormat as "bo1" | "bo3", winner: String(winners[0]), seriesComplete });
   }
   if (!canContinue()) throw new Error("Atlas post-game import deferred while a game is active.");
+  const completedSeries = completedBo3Targets(rooms, found);
+  if (completedSeries) return completedSeries;
   const entries = [...found.values()].filter(entry => !rooms.get(entry.target.roomCode)?.blocked).sort((a, b) => a.target.gameNumber - b.target.gameNumber);
   // Some completed BO1s contain the exact game identity but never receive
   // Atlas's terminal room fields. This is only a request to check Atlas after
@@ -130,6 +133,52 @@ export async function extractAtlasPostgameTargets(input: unknown, canContinue: (
   for (const entry of entries) wins.set(entry.winner, (wins.get(entry.winner) ?? 0) + 1);
   if (entries[0].format === "bo3" && !entries.some(entry => entry.seriesComplete) && ![...wins.values()].some(count => count >= 2)) return [];
   return entries.map(entry => entry.target);
+}
+
+/**
+ * Atlas may move each BO3 game into a new room without sending its terminal
+ * fields. The shared series identity and coherent final wins allow an idle
+ * completion check, never a fabricated game outcome. Atlas must still return
+ * an owned, unrestricted, completed export matching this exact game/series.
+ */
+function completedBo3Targets(rooms: Map<string, Room>, found: Map<string, Found>): AtlasPostgameTarget[] | null {
+  if (rooms.size !== 2 && rooms.size !== 3) return null;
+  const ordered = [...rooms].sort((a, b) => number(a[1].fields.gameNumber) - number(b[1].fields.gameNumber));
+  const first = ordered[0][1], participants = [...first.participantIds].sort();
+  const seriesStartedAt = timestamp(first.fields.seriesStartedAt);
+  if (participants.length !== 2 || new Set(participants).size !== 2 || !seriesStartedAt) return null;
+  const targets: AtlasPostgameTarget[] = [];
+  let priorWins = [0, 0], priorStart = 0, fallbackCount = 0, explicitCount = 0;
+  for (const [index, [code, state]] of ordered.entries()) {
+    const fields = state.fields, gameNumber = number(fields.gameNumber);
+    const startedAt = timestamp(fields.gameHistoryStartedAt), createdAt = timestamp(fields.createdAt);
+    if (state.blocked || !state.capturedSnapshot || !state.fallbackSequenceValid || state.fallbackIdentityChanged || state.fallbackSeriesChanged
+      || state.localPlayerId !== first.localPlayerId || !participants.includes(state.localPlayerId)
+      || state.participantIds.length !== 2 || state.participantIds.some(id => !participants.includes(id))
+      || fields.matchFormat !== "bo3" || fields.roomMode !== "multiplayer" || fields.gameVariant !== "duel" || fields.testMode !== false || fields.rewindProtocolVersion !== 5
+      || gameNumber !== index + 1 || !createdAt || !startedAt || createdAt > startedAt || startedAt <= priorStart
+      || timestamp(fields.seriesStartedAt) !== seriesStartedAt || seriesStartedAt > startedAt) return null;
+    const wins = record(fields.winsByPlayerId);
+    if (!wins || Object.keys(wins).length !== 2 || participants.some(id => !Number.isInteger(wins[id]) || Number(wins[id]) < 0 || Number(wins[id]) > 2)) return null;
+    const currentWins = participants.map(id => Number(wins[id]));
+    const increments = currentWins.map((value, i) => value - priorWins[i]);
+    if (currentWins[0] + currentWins[1] !== gameNumber || increments.some(value => value !== 0 && value !== 1) || increments[0] + increments[1] !== 1
+      || (index < ordered.length - 1 ? currentWins.some(value => value === 2) : !currentWins.some(value => value === 2))) return null;
+    const target = { roomCode: code, roomCreatedAt: createdAt, gameNumber, gameHistoryStartedAt: startedAt, localPlayerId: state.localPlayerId };
+    if (fields.gameHistoryEndedAt === undefined && fields.gameOutcome === undefined) {
+      targets.push({ ...target, completionCheck: "atlas", completionMatchFormat: "bo3", completionSeriesStartedAt: seriesStartedAt });
+      fallbackCount++;
+    } else {
+      const completed = found.get(atlasPostgameGameKey(target));
+      if (!completed || completed.format !== "bo3" || completed.winner !== participants[increments.indexOf(1)]) return null;
+      targets.push(completed.target);
+      explicitCount++;
+    }
+    priorWins = currentWins; priorStart = startedAt;
+  }
+  // Do not combine unrelated historical targets or change the existing path
+  // for a capture whose games all already include authoritative endings.
+  return fallbackCount > 0 && found.size === explicitCount ? targets : null;
 }
 
 type Attempt = { count: number; nextAt: number; done: boolean };

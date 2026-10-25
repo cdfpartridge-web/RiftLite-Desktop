@@ -5,6 +5,8 @@ export interface AtlasPostgameQueryTarget {
   gameHistoryStartedAt: number;
   gameHistoryEndedAt?: number;
   completionCheck?: "atlas";
+  completionMatchFormat?: "bo3";
+  completionSeriesStartedAt?: number;
   localPlayerId: string;
   expectedPageUrl: string;
 }
@@ -39,11 +41,15 @@ async function queryAtlasPostgameInPage(target: AtlasPostgameQueryTarget): Promi
   const integer = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value > 0;
   const identifier = (value: unknown): value is string => typeof value === "string" && /^[A-Za-z0-9_-]{1,256}$/.test(value);
   const verifyCompletion = target.completionCheck === "atlas";
+  const verifyBo3 = verifyCompletion && target.completionMatchFormat === "bo3";
   if (!identifier(target.roomCode) || !identifier(target.localPlayerId) || !integer(target.roomCreatedAt) || !integer(target.gameHistoryStartedAt)
     || (target.completionCheck !== undefined && !verifyCompletion)
+    || (target.completionMatchFormat !== undefined && !verifyBo3)
+    || (verifyBo3 ? !integer(target.completionSeriesStartedAt) || target.completionSeriesStartedAt > target.gameHistoryStartedAt
+      : target.completionSeriesStartedAt !== undefined)
     || (target.gameHistoryEndedAt === undefined ? !verifyCompletion : !integer(target.gameHistoryEndedAt) || target.gameHistoryEndedAt < target.gameHistoryStartedAt)
     || !integer(target.gameNumber) || target.gameNumber > 3
-    || (verifyCompletion && (target.gameNumber !== 1 || target.roomCreatedAt > target.gameHistoryStartedAt || target.gameHistoryStartedAt > Date.now() + 60_000))) throw new Error("Invalid completed Atlas game.");
+    || (verifyCompletion && ((!verifyBo3 && target.gameNumber !== 1) || target.roomCreatedAt > target.gameHistoryStartedAt || target.gameHistoryStartedAt > Date.now() + 60_000))) throw new Error("Invalid completed Atlas game.");
   const gameKey = `${target.roomCode}:${target.roomCreatedAt}:${target.gameNumber}:${target.gameHistoryStartedAt}`;
   const expectedUrl = new URL(target.expectedPageUrl);
   const path = expectedUrl.pathname.replace(/^\/(?:en|zh-CN|fr|ko)(?=\/|$)/, "") || "/";
@@ -175,7 +181,9 @@ async function queryAtlasPostgameInPage(target: AtlasPostgameQueryTarget): Promi
         if (!record(frame) || !record(frame.state) || frame.index !== index || !Number.isSafeInteger(frame.sequence) || (frame.sequence as number) < 0 || (frame.sequence as number) < previousSequence
           || typeof frame.elapsedMs !== "number" || !Number.isFinite(frame.elapsedMs) || frame.elapsedMs < previousElapsed || frame.elapsedMs < 0 || frame.elapsedMs > completedAt - target.gameHistoryStartedAt + 1000
           || frame.state.roomCode !== target.roomCode || frame.state.createdAt !== target.roomCreatedAt || frame.state.gameHistoryStartedAt !== target.gameHistoryStartedAt
-          || (frame.state.gameNumber ?? 1) !== 1 || frame.state.matchFormat !== "bo1" || frame.state.gameVariant !== "duel" || frame.state.testMode !== false || frame.state.rewindProtocolVersion !== 5
+          || (frame.state.gameNumber ?? 1) !== target.gameNumber || frame.state.matchFormat !== (verifyBo3 ? "bo3" : "bo1")
+          || (verifyBo3 && frame.state.seriesStartedAt !== target.completionSeriesStartedAt)
+          || frame.state.gameVariant !== "duel" || frame.state.testMode !== false || frame.state.rewindProtocolVersion !== 5
           || !Array.isArray(frame.state.players) || frame.state.players.length !== 2
           || new Set(frame.state.players.map(player => record(player) ? player.id : undefined)).size !== 2
           || frame.state.players.some(player => !record(player) || typeof player.id !== "string" || !ids.includes(player.id))) throw new Error("Atlas replay completion could not be confirmed.");

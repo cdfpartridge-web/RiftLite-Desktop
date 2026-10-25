@@ -131,6 +131,81 @@ function harness() {
   return { importer, ready, listCaptures, readCapture, query, deliver, report, diagnostic, descriptor, advance: (ms: number) => { now += ms; } };
 }
 
+function completedBo3Room(gameNumber: number, wins: [number, number], extra: Record<string, unknown> = {}) {
+  const code = `ROOM${gameNumber}`, socketId = `socket-${gameNumber}`;
+  const start = startedAt + (gameNumber - 1) * 60_000;
+  return {
+    socket: { socketId, url: `wss://realtime.riftatlas-workers.com/parties/match/${code}?playerId=player-me` },
+    messages: [
+      message({ type: "authoritative_snapshot", sequence: 0, snapshot: snapshot(gameNumber, "bo3", {
+        roomCode: code, createdAt: start - 10_000, seriesStartedAt: startedAt - 5_000, ...extra,
+      }) }, { socketId }),
+      message({ type: "authoritative_patch_commit", gameInstanceId: code, baseSequence: 0, sequence: 1,
+        patch: { operations: [{ op: "set_room_fields", fields: { winsByPlayerId: { "player-me": wins[0], "player-other": wins[1] } } }] } }, { socketId }),
+    ],
+  };
+}
+const bo3Capture = (...games: ReturnType<typeof completedBo3Room>[]) => ({
+  schema: "riftreplay-raw-capture", version: 1, sockets: games.map(game => game.socket), messages: games.flatMap(game => game.messages),
+});
+
+describe("completed BO3 rooms without captured ending packets", () => {
+  it.each<{ wins: [number, number][] }>([
+    { wins: [[1, 0], [1, 1], [2, 1]] },
+    { wins: [[0, 1], [0, 2]] },
+  ])("checks each immutable game after coherent final series wins %j", async ({ wins }) => {
+    const input = bo3Capture(...wins.map((score, i) => completedBo3Room(i + 1, score)));
+    const before = JSON.stringify(input);
+    const result = await extractAtlasPostgameTargets(input);
+    expect(result).toHaveLength(wins.length);
+    expect(result.map(target => target.gameNumber)).toEqual(wins.map((_, i) => i + 1));
+    expect(new Set(result.map(atlasPostgameGameKey)).size).toBe(wins.length);
+    for (const target of result) {
+      expect(target).toEqual(expect.objectContaining({ completionCheck: "atlas", completionMatchFormat: "bo3", completionSeriesStartedAt: startedAt - 5_000 }));
+      expect(target).not.toHaveProperty("gameHistoryEndedAt");
+    }
+    expect(JSON.stringify(input)).toBe(before);
+  });
+
+  it("preserves an explicit last-game ending while collecting earlier games from the same verified series", async () => {
+    const third = completedBo3Room(3, [2, 1], { gameHistoryEndedAt: startedAt + 150_000, gameOutcome: { reason: "concession", winnerPlayerIds: ["player-me"] } });
+    const result = await extractAtlasPostgameTargets(bo3Capture(completedBo3Room(1, [1, 0]), completedBo3Room(2, [1, 1]), third));
+    expect(result.map(target => target.gameNumber)).toEqual([1, 2, 3]);
+    expect(result.slice(0, 2).every(target => target.completionCheck === "atlas")).toBe(true);
+    expect(result[2].gameHistoryEndedAt).toBe(startedAt + 150_000);
+    expect(result[2]).not.toHaveProperty("completionCheck");
+  });
+
+  it.each<{ wins: [number, number][] }>([
+    { wins: [[1, 0]] }, { wins: [[1, 0], [1, 1]] }, { wins: [[1, 0], [2, 0], [2, 1]] },
+    { wins: [[1, 0], [0, 2]] }, { wins: [[1, 0], [1, 0]] }, { wins: [[1, 0], [3, 0]] },
+  ])("rejects unfinished or incoherent series progression %j", async ({ wins }) => {
+    expect(await extractAtlasPostgameTargets(bo3Capture(...wins.map((score, i) => completedBo3Room(i + 1, score))))).toEqual([]);
+  });
+
+  it.each([
+    { seriesStartedAt: startedAt + 1 }, { seriesStartedAt: undefined }, { seriesStartedAt: null },
+    { gameHistoryStartedAt: startedAt }, { gameHistoryEndedAt: null }, { gameHistoryEndedAt: startedAt + 90_000 },
+    { gameOutcome: {} }, { gameOutcome: null }, { matchFormat: "bo1" }, { gameNumber: 3 },
+    { players: [{ id: "player-me" }, { id: "different-opponent" }] },
+  ])("does not combine ambiguous or partial room evidence %j", async extra => {
+    expect(await extractAtlasPostgameTargets(bo3Capture(completedBo3Room(1, [1, 0]), completedBo3Room(2, [2, 0], extra)))).toEqual([]);
+  });
+
+  it("rejects a series identity that changes within one captured room", async () => {
+    const second = completedBo3Room(2, [2, 0], { seriesStartedAt: startedAt - 4_000 });
+    second.messages.push(message({ type: "authoritative_patch_commit", gameInstanceId: "ROOM2", baseSequence: 1, sequence: 2,
+      patch: { operations: [{ op: "set_room_fields", fields: { seriesStartedAt: startedAt - 5_000 } }] } }, { socketId: "socket-2" }));
+    expect(await extractAtlasPostgameTargets(bo3Capture(completedBo3Room(1, [1, 0]), second))).toEqual([]);
+  });
+
+  it("does not turn a duplicated or missing authoritative commit into a BO3 fallback", async () => {
+    const second = completedBo3Room(2, [2, 0]);
+    second.messages.push(second.messages[1]);
+    expect(await extractAtlasPostgameTargets(bo3Capture(completedBo3Room(1, [1, 0]), second))).toEqual([]);
+  });
+});
+
 describe("automatic post-game attachment queue", () => {
   it.each(["capture", "query", "attachment"] as const)("reports bounded %s failures without private payloads or exception text", async stage => {
     const h = harness();

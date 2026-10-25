@@ -14,7 +14,7 @@ const settings = {
   activeHubs: [], activeTeams: [], activeDeckId: ""
 } as unknown as UserSettings;
 
-function harness() {
+function harness(resolveLegend: (value: string) => Promise<string> = async () => "") {
   const saved: MatchDraft[] = [];
   const sent: Array<{ channel: string; payload: unknown }> = [];
   const diagnostics = { record: vi.fn(async (_event: CaptureEvent) => undefined) };
@@ -35,7 +35,7 @@ function harness() {
   const coordinator = new CaptureCoordinator(
     store as never,
     () => ({ webContents: { send: (channel: string, payload: unknown) => sent.push({ channel, payload }) } }) as never,
-    { resolveLegend: async () => "", resolveBattlefield: async () => "", resolveCard: async () => "" } as never,
+    { resolveLegend, resolveBattlefield: async () => "", resolveCard: async () => "" } as never,
     { syncMatch: async (draft: MatchDraft) => draft } as never,
     diagnostics as never
   );
@@ -73,6 +73,83 @@ async function finishYi(test: ReturnType<typeof harness>, format = "Bo3") {
 afterEach(() => vi.useRealTimers());
 
 describe("Atlas completed single-game echoes", () => {
+  it("keeps post-game collection unblocked when terminal legend labels differ from resolved saved names", async () => {
+    const test = harness(async (value) => value === "SYNTHETIC-LEGEND" ? "Canonical Legend" : "");
+    const provider = { ...yi, opponentChampion: "Provider Legend Label", opponentChampionCode: "SYNTHETIC-LEGEND", atlasGameInstanceId: "synthetic-completed-game" };
+    for (const [gameNumber, me, opp] of [[1, "8", "4"], [2, "4", "8"], [3, "7", "6"]] as const) {
+      await test.coordinator.handleEvent(event("match-start", (gameNumber - 1) * 30, {
+        ...provider, score: { me: "0", opp: "0" }
+      }));
+      await test.coordinator.handleEvent(event("match-snapshot", gameNumber * 30 - 5, {
+        ...provider, score: { me, opp }
+      }));
+      if (gameNumber < 3) await test.coordinator.handleEvent(event("match-end", gameNumber * 30 - 1, {
+        ...provider, atlasResultKind: "game-result", atlasBo3GameNumber: gameNumber,
+        endText: `Confirm Game ${gameNumber} Winner`, score: { me, opp }
+      }));
+    }
+    const terminal = complete(100, provider);
+    terminal.payload.score = { me: "7", opp: "6" };
+    await test.coordinator.handleEvent(terminal);
+    expect(test.saved).toHaveLength(1);
+    expect(test.saved[0]).toMatchObject({ format: "Bo3", opponentChampion: "Canonical Legend" });
+    expect(test.saved[0].games).toHaveLength(3);
+    await test.coordinator.waitForAllReplayFinalizations();
+    // Actual event shape: active terminal snapshots 3 ms and 8.5 s after save,
+    // followed by a quiet inactive lobby with no second match-end event.
+    for (const seconds of [100.003, 108.5]) {
+      await test.coordinator.handleEvent({ ...terminal, kind: "match-snapshot", id: `terminal-alias-${seconds}`, capturedAt: event("match-snapshot", seconds, {}).capturedAt });
+    }
+    await test.coordinator.handleEvent({ ...event("match-snapshot", 111.5, {
+      ...provider, active: false, opponentChampion: "", atlasResultKind: "", endText: "", score: { me: "7", opp: "6" }
+    }), url: "https://play.riftatlas.com/" });
+    expect(test.coordinator.hasActiveCaptureSession("atlas")).toBe(false);
+    expect(test.coordinator.getGamePlatformSwitchStatus().allowed).toBe(true);
+    expect(test.drafts()).toHaveLength(1);
+    await test.coordinator.handleEvent(event("match-start", 120, {
+      ...provider, atlasGameInstanceId: "synthetic-next-game", score: { me: "0", opp: "0" }
+    }));
+    expect(test.coordinator.hasActiveCaptureSession("atlas")).toBe(true);
+    expect(test.coordinator.getLiveOverlayMatch()).toMatchObject({ score: "0-0" });
+    expect(test.saved).toHaveLength(1);
+    await test.coordinator.waitForAllReplayFinalizations();
+  });
+
+  it("accepts only the exact saved and terminal champion labels for either player", async () => {
+    const test = harness(async (value) => value === "SYNTHETIC-OWN" ? "Canonical Own Legend" : value === "SYNTHETIC-OPP" ? "Canonical Opponent Legend" : "");
+    const provider = { ...yi, myChampion: "Provider Own Legend", opponentChampion: "Provider Opponent Legend", myChampionCode: "SYNTHETIC-OWN", opponentChampionCode: "SYNTHETIC-OPP" };
+    await test.coordinator.handleEvent(event("match-start", 0, { ...provider, score: { me: "0", opp: "0" } }));
+    await test.coordinator.handleEvent(complete(100, provider));
+    await test.coordinator.waitForAllReplayFinalizations();
+    for (const [seconds, labels] of [
+      [101, { myChampion: "Canonical Own Legend", opponentChampion: "Canonical Opponent Legend" }],
+      [102, { myChampion: provider.myChampion, opponentChampion: provider.opponentChampion }]
+    ] as const) {
+      await test.coordinator.handleEvent({ ...complete(seconds, { ...provider, ...labels }), kind: "match-snapshot" });
+      expect(test.coordinator.hasActiveCaptureSession("atlas")).toBe(false);
+    }
+    await test.coordinator.handleEvent({ ...complete(103, { ...provider, opponentChampion: "Provider Opponent Legend Alternate" }), kind: "match-snapshot" });
+    expect(test.coordinator.hasActiveCaptureSession("atlas")).toBe(true);
+    expect(test.saved).toHaveLength(1);
+  });
+
+  it.each(["room", "opponent", "game-instance", "history", "score"] as const)("does not let terminal champion aliases hide a new %s boundary", async (boundary) => {
+    const test = harness(async (value) => value === "SYNTHETIC-LEGEND" ? "Canonical Legend" : "");
+    const provider = { ...yi, opponentChampion: "Provider Legend Label", opponentChampionCode: "SYNTHETIC-LEGEND", atlasGameInstanceId: "synthetic-completed", atlasHistoryStartedAt: 1000 };
+    await test.coordinator.handleEvent(event("match-start", 0, { ...provider, score: { me: "0", opp: "0" } }));
+    await test.coordinator.handleEvent(complete(100, provider));
+    await test.coordinator.waitForAllReplayFinalizations();
+    const change = boundary === "room" ? { roomCode: "NEWROOM" }
+      : boundary === "opponent" ? { opponentName: "New Rival" }
+      : boundary === "game-instance" ? { atlasGameInstanceId: "synthetic-new" }
+      : boundary === "history" ? { atlasHistoryStartedAt: 2000 }
+      : { score: { me: "0", opp: "0" } };
+    await test.coordinator.handleEvent(event("match-snapshot", 103, { ...provider, score: { me: "6", opp: "3" }, ...change }));
+    expect(test.coordinator.hasActiveCaptureSession("atlas")).toBe(true);
+    expect(test.coordinator.getGamePlatformSwitchStatus().allowed).toBe(false);
+    expect(test.saved).toHaveLength(1);
+  });
+
   it("does not reopen a finished match through the debug heartbeat recorded before the Akali join", async () => {
     const test = harness();
     await finishYi(test);
