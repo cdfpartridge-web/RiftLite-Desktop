@@ -2,7 +2,7 @@ import { app } from "electron";
 import { mkdir, open, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 import { gunzip, gzip } from "node:zlib";
 import type {
@@ -515,6 +515,13 @@ export type PreparedTcgaWebReplayCapture = {
   discordShareHubIds?: string[];
 };
 
+export type AutomaticAtlasPostgameCapture = {
+  captureSessionId: string;
+  remoteReplayId: string;
+  accountUid: string;
+  completedAt: number;
+};
+
 type RawCaptureReplayIdentity = {
   captureSessionIds: string[];
   roomCodes: string[];
@@ -649,8 +656,12 @@ export class RawCaptureService {
   private readonly journalHandleCloseTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly ownedJournalPaths = new Set<string>();
   private readonly journalRewriteSessionIds = new Set<string>();
-  private readonly journalCleanupPaths = new Set<string>();
+  private readonly retiredJournalPathsBySessionId = new Map<string, Set<string>>();
+  private readonly journalFallbackSessionIds = new Set<string>();
   private journalRecoveryPromise: Promise<void> | null = null;
+  private journalRecoveryFailedSettings: UserSettings | null = null;
+  private journalRecoveryRetryAfter = 0;
+  private uploadDiagnosticsInFlight: { settings: UserSettings; promise: Promise<WebReplayUploadDiagnostics> } | null = null;
 
   constructor(
     private readonly store: RiftLiteStore,
@@ -658,7 +669,8 @@ export class RawCaptureService {
       firebaseIdTokenFromSettings(store, expectedAccountUid)
     ),
     private readonly webReplayPublishedHandler: WebReplayPublishedHandler = () => undefined,
-    private readonly replayUpdatedHandler: ReplayUpdatedHandler = () => undefined
+    private readonly replayUpdatedHandler: ReplayUpdatedHandler = () => undefined,
+    private readonly activeJournalDirectory?: string
   ) {}
 
   async appendFrame(payload: RawCaptureAppendFramePayload): Promise<void> {
@@ -672,7 +684,7 @@ export class RawCaptureService {
       return;
     }
     const settings = await this.store.getSettings();
-    await this.ensureInterruptedCaptureRecovery(settings);
+    await this.ensureInterruptedCaptureRecovery(settings, false);
     if (!settings.rawCapture.enabled) {
       await this.clearSessionsAndJournals();
       return;
@@ -1129,8 +1141,12 @@ export class RawCaptureService {
     this.journalRewriteSessionIds.add(target.captureSessionId);
     const provisionalJournalPath = this.journalPathsBySessionId.get(provisional.captureSessionId);
     if (provisionalJournalPath) {
-      this.journalCleanupPaths.add(provisionalJournalPath);
+      this.retainSessionJournal(target.captureSessionId, provisionalJournalPath);
     }
+    for (const path of this.retiredJournalPathsBySessionId.get(provisional.captureSessionId) ?? []) {
+      this.retainSessionJournal(target.captureSessionId, path);
+    }
+    this.retiredJournalPathsBySessionId.delete(provisional.captureSessionId);
     this.sessions.delete(provisional.captureSessionId);
     for (const [key, sessionId] of this.sessionIdByTransport) {
       if (sessionId === provisional.captureSessionId) {
@@ -1601,6 +1617,20 @@ export class RawCaptureService {
 
   async getWebReplayUploadDiagnostics(): Promise<WebReplayUploadDiagnostics> {
     const settings = await this.store.getSettings();
+    if (this.uploadDiagnosticsInFlight?.settings === settings) {
+      return this.uploadDiagnosticsInFlight.promise;
+    }
+    // Focus, polling and replay notifications can request the same disk-backed
+    // activity snapshot together. Share only that active read, never a settled
+    // result; the next refresh sees uploads, removals and changed preferences.
+    const promise = this.buildWebReplayUploadDiagnostics(settings).finally(() => {
+      if (this.uploadDiagnosticsInFlight?.promise === promise) this.uploadDiagnosticsInFlight = null;
+    });
+    this.uploadDiagnosticsInFlight = { settings, promise };
+    return promise;
+  }
+
+  private async buildWebReplayUploadDiagnostics(settings: UserSettings): Promise<WebReplayUploadDiagnostics> {
     await this.ensureInterruptedCaptureRecovery(settings);
     const [replays, manifests, captureStatus] = await Promise.all([
       this.store.getReplays(),
@@ -2109,6 +2139,147 @@ export class RawCaptureService {
     }
     const raw = await readFile(replay.rawCapture.localPath, "utf8");
     return JSON.parse(raw) as unknown;
+  }
+
+  /** Metadata-only queue discovery; never opens capture payloads during polling. */
+  async listAutomaticAtlasPostgameCaptures(): Promise<AutomaticAtlasPostgameCapture[]> {
+    const settings = await this.store.getSettings();
+    if (!hasVerifiedRiftLiteAccount(settings) || !riftLiteWebReplayAutoUploadAccountUid(settings)) return [];
+    const manifests = await readRawCaptureManifests(settings);
+    const counts = new Map<string, number>();
+    for (const manifest of manifests) {
+      const id = manifest.metadata.captureSessionId;
+      counts.set(id, (counts.get(id) ?? 0) + 1);
+    }
+    const candidates = manifests.map(manifest => ({ manifest, capture: this.automaticAtlasPostgameDescriptor(manifest, settings) }))
+      .filter((entry): entry is { manifest: PersistedRawCaptureManifest; capture: AutomaticAtlasPostgameCapture } =>
+        Boolean(entry.capture && counts.get(entry.capture.captureSessionId) === 1))
+      .sort((a, b) => b.capture.completedAt - a.capture.completedAt);
+    const result: AutomaticAtlasPostgameCapture[] = [];
+    for (const candidate of candidates) {
+      if (await this.hasActiveManifestParent(candidate.manifest)) result.push(candidate.capture);
+      if (result.length >= 10) break;
+    }
+    return result;
+  }
+
+  private automaticAtlasPostgameDescriptor(manifest: PersistedRawCaptureManifest, settings: UserSettings): AutomaticAtlasPostgameCapture | null {
+    const metadata = manifest.metadata;
+    const completedAt = Date.parse(metadata.captureCompletedAt || manifest.identity?.completedAt || "");
+    if (manifest.platform !== "atlas" || metadata.provider !== "riftlite-v2" ||
+        metadata.uploadStatus !== "uploaded" || metadata.processingStatus !== "ready" ||
+        !/^[A-Za-z0-9_-]{1,160}$/.test(metadata.captureSessionId) || !/^rl2_[a-f0-9]{32}$/.test(metadata.uploadId ?? "") ||
+        !Number.isFinite(completedAt) || completedAt < Date.now() - 6 * 60 * 60 * 1000 || completedAt > Date.now() + 60_000 ||
+        !hasVerifiedRiftLiteAccount(settings) || !rawCaptureWebReplayAutoUploadEligibleForPlatform("atlas", metadata, settings)) return null;
+    return { captureSessionId: metadata.captureSessionId, remoteReplayId: metadata.uploadId!,
+      accountUid: normalizeRiftLiteAccountUid(settings.accountUid), completedAt };
+  }
+
+  private async automaticAtlasPostgameManifest(captureSessionId: string): Promise<{
+    manifest: PersistedRawCaptureManifest; capture: AutomaticAtlasPostgameCapture; settings: UserSettings;
+  }> {
+    if (!/^[A-Za-z0-9_-]{1,160}$/.test(captureSessionId)) throw new Error("Atlas post-game capture is unavailable.");
+    const settings = await this.store.getSettings();
+    const matches = (await readRawCaptureManifests(settings)).filter(manifest => manifest.metadata.captureSessionId === captureSessionId);
+    if (matches.length !== 1) throw new Error("Atlas post-game capture is missing or ambiguous.");
+    const manifest = matches[0], capture = this.automaticAtlasPostgameDescriptor(manifest, settings);
+    if (!capture) throw new Error("Atlas post-game automatic import is no longer eligible.");
+    await this.assertActiveManifestParent(manifest);
+    return { manifest, capture, settings };
+  }
+
+  async readAutomaticAtlasPostgameCapture(captureSessionId: string, canContinue: () => boolean = () => true): Promise<unknown> {
+    const assertQuiet = () => { if (!canContinue()) throw new Error("Atlas post-game import paused while gameplay is active."); };
+    assertQuiet();
+    const initial = await this.automaticAtlasPostgameManifest(captureSessionId);
+    assertQuiet();
+    const handle = await open(initial.manifest.localPath, "r");
+    let bytes: Buffer;
+    try {
+      const info = await handle.stat();
+      assertQuiet();
+      const limit = initial.manifest.artifactEncoding === "gzip" ? RIFTLITE_REPLAY_V2_MAX_GZIP_BYTES : RIFTLITE_REPLAY_V2_MAX_EXPANDED_BYTES;
+      if (!info.isFile() || info.size <= 0 || info.size > limit) throw new Error("Atlas capture exceeds the post-game read limit.");
+      const buffer = Buffer.alloc(info.size + 1);
+      let size = 0;
+      while (size < buffer.length) {
+        assertQuiet();
+        const part = await handle.read(buffer, size, buffer.length - size, null);
+        if (!part.bytesRead) break;
+        size += part.bytesRead;
+      }
+      if (size !== info.size) throw new Error("Atlas capture changed during the post-game read.");
+      bytes = buffer.subarray(0, size);
+    } finally { await handle.close(); }
+    assertQuiet();
+    if (initial.manifest.artifactEncoding === "gzip") bytes = await gunzipAsync(bytes, { maxOutputLength: RIFTLITE_REPLAY_V2_MAX_EXPANDED_BYTES });
+    assertQuiet();
+    const payload: unknown = JSON.parse(bytes.toString("utf8"));
+    const object = readObject(payload);
+    if (object?.schema !== "riftreplay-raw-capture" || object.version !== 1 ||
+        readObject(object.capture)?.captureSessionId !== captureSessionId) throw new Error("Atlas capture identity could not be verified.");
+    const current = await this.automaticAtlasPostgameManifest(captureSessionId);
+    assertQuiet();
+    if (current.capture.remoteReplayId !== initial.capture.remoteReplayId || current.capture.accountUid !== initial.capture.accountUid ||
+        rawCaptureSourcePathKey(current.manifest.localPath) !== rawCaptureSourcePathKey(initial.manifest.localPath)) {
+      throw new Error("Atlas post-game capture changed during the read.");
+    }
+    return payload;
+  }
+
+  async sendAutomaticAtlasPostgame(captureSessionId: string, gameNumber: number, envelope: unknown, canContinue: () => boolean = () => true): Promise<"attached" | "exists"> {
+    const assertQuiet = () => { if (!canContinue()) throw new Error("Atlas post-game import paused while gameplay is active."); };
+    assertQuiet();
+    const exported = readObject(envelope);
+    if (!Number.isInteger(gameNumber) || gameNumber < 1 || gameNumber > 3 || exported?.format !== "riftatlas-replay" ||
+        exported.version !== 2 || !Array.isArray(exported.nodes) || !readObject(exported.root)) {
+      throw new Error("Atlas post-game export is invalid.");
+    }
+    const encoded = JSON.stringify(envelope);
+    if (Buffer.byteLength(encoded, "utf8") > 3_900_000) throw new Error("Atlas post-game export exceeds the upload limit.");
+    const initial = await this.automaticAtlasPostgameManifest(captureSessionId);
+    assertQuiet();
+    const auth = await this.canonicalReplayAuth(initial.settings, initial.manifest.metadata, true, "atlas");
+    assertQuiet();
+    const beforeAttempt = async () => {
+      assertQuiet();
+      const current = await this.automaticAtlasPostgameManifest(captureSessionId);
+      assertQuiet();
+      if (current.capture.remoteReplayId !== initial.capture.remoteReplayId || current.capture.accountUid !== initial.capture.accountUid ||
+          rawCaptureSourcePathKey(current.manifest.localPath) !== rawCaptureSourcePathKey(initial.manifest.localPath)) {
+        throw new Error("Atlas post-game replay or account changed before upload.");
+      }
+      await this.assertRiftLiteReplayUploadAccountCurrent(auth.settings, current.manifest.metadata, true, "atlas");
+      assertQuiet();
+    };
+    const endpoint = `${RIFTLITE_REPLAY_ORIGIN}/api/v2/replays/${initial.capture.remoteReplayId}/atlas-postgame`;
+    const headers = { Authorization: `Bearer ${auth.idToken}`, "Content-Type": "application/json" };
+    const metadataResponse = await fetchRiftLiteReplayV2WithRetry(`${endpoint}?metadata=1`, { method: "GET", headers }, beforeAttempt);
+    assertQuiet();
+    const metadataText = await readReplayResponseText(metadataResponse, "Atlas post-game metadata");
+    assertQuiet();
+    const metadata = parseJsonObject(metadataText);
+    if (!metadataResponse.ok) throw replayV2ApiError("Atlas post-game metadata", metadataResponse, metadata, metadataText);
+    if (metadata?.canManage !== true || typeof metadata.accountId !== "string" || !metadata.accountId ||
+        metadata.accountId === "public" || metadata.accountId.length > 128 || !Array.isArray(metadata.games)) {
+      throw new Error("The RiftLite account could not confirm ownership of the Atlas replay.");
+    }
+    await beforeAttempt();
+    if (metadata.games.some(game => readObject(game)?.gameNumber === gameNumber)) return "exists";
+    // Never replace another import or change its explicit sharing choice.
+    const body = `{"replay":${encoded},"expectedAccountId":${JSON.stringify(metadata.accountId)},"expectedSha256":null}`;
+    const response = await fetchRiftLiteReplayV2WithRetry(endpoint, { method: "PUT", headers, body }, beforeAttempt);
+    assertQuiet();
+    const responseText = await readReplayResponseText(response, "Atlas post-game import");
+    assertQuiet();
+    const result = parseJsonObject(responseText);
+    if (!response.ok) throw replayV2ApiError("Atlas post-game import", response, result, responseText);
+    await beforeAttempt();
+    if (result?.accountId !== metadata.accountId || result.canManage !== true || !Array.isArray(result.games) ||
+        !result.games.some(game => readObject(game)?.gameNumber === gameNumber)) {
+      throw new Error("The Atlas post-game import was not confirmed by the server.");
+    }
+    return "attached";
   }
 
   async sendAtlasHistoryToReplay(localReplayId:string, input:AtlasMatchHistory):Promise<void> {
@@ -3721,14 +3892,22 @@ export class RawCaptureService {
     return failed;
   }
 
-  private ensureInterruptedCaptureRecovery(settings: UserSettings): Promise<void> {
+  private ensureInterruptedCaptureRecovery(settings: UserSettings, allowRetry = true): Promise<void> {
     if (!this.journalRecoveryPromise) {
-      this.journalRecoveryPromise = this.recoverInterruptedCaptureJournals(settings).catch((error) => {
+      if (this.journalRecoveryFailedSettings === settings &&
+        (!allowRetry || Date.now() < this.journalRecoveryRetryAfter)) return Promise.resolve();
+      this.journalRecoveryPromise = this.recoverInterruptedCaptureJournals(settings).then(() => {
+        this.journalRecoveryFailedSettings = null;
+        this.journalRecoveryRetryAfter = 0;
+      }, (error) => {
         this.lastAssociationError = `RiftLite could not recover an interrupted Web Replay capture: ${
           truncateForUi(error instanceof Error ? error.message : String(error), 220)
         }`;
-        // A temporarily unavailable replay folder must not disable recovery
-        // for the rest of this desktop process.
+        // Keep transient recovery retryable, but never rescan the archive for
+        // every incoming frame while a selected or staging volume is offline.
+        // Status/diagnostics polls retry after 30s; changed settings retry now.
+        this.journalRecoveryFailedSettings = settings;
+        this.journalRecoveryRetryAfter = Date.now() + 30_000;
         this.journalRecoveryPromise = null;
       });
     }
@@ -3736,49 +3915,86 @@ export class RawCaptureService {
   }
 
   private async recoverInterruptedCaptureJournals(settings: UserSettings): Promise<void> {
-    await this.classifyPreviouslyRecoveredCaptures(settings);
-    const directory = await rawCaptureDirectory(settings);
-    const entries = await readdir(directory, { withFileTypes: true }).catch(() => []);
-    const journalPaths = entries
-      .filter((entry) => entry.isFile() && entry.name.endsWith(RAW_CAPTURE_JOURNAL_SUFFIX))
-      .map((entry) => join(directory, entry.name))
-      .filter((journalPath) => !this.ownedJournalPaths.has(journalPath));
+    let transientRecoveryFailure: Error | null = null;
+    let retainedWarning = "";
+    try {
+      await this.classifyPreviouslyRecoveredCaptures(settings);
+    } catch (error) {
+      transientRecoveryFailure = error instanceof Error ? error : new Error(String(error));
+    }
+    const directories = new Set([
+      this.activeJournalDirectory ? resolve(this.activeJournalDirectory) : await rawCaptureDirectory(settings),
+      resolve(rawCaptureDirectoryPath(settings))
+    ]);
+    const journalPaths: string[] = [];
+    for (const directory of directories) {
+      const entries = await readdir(directory, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== "ENOENT") transientRecoveryFailure = error;
+        return [];
+      });
+      journalPaths.push(...entries
+        .filter((entry) => entry.isFile() && entry.name.endsWith(RAW_CAPTURE_JOURNAL_SUFFIX))
+        .map((entry) => join(directory, entry.name))
+        .filter((journalPath) => !this.ownedJournalPaths.has(journalPath)));
+    }
     if (!journalPaths.length) {
+      if (transientRecoveryFailure) throw transientRecoveryFailure;
+      if (retainedWarning) this.lastAssociationError = retainedWarning;
       return;
     }
     const existingCaptureSessionIds = new Set(
-      (await readRawCaptureManifests(settings)).map((manifest) => manifest.metadata.captureSessionId)
+      (await readRawCaptureManifests(settings).catch((error) => {
+        transientRecoveryFailure = error instanceof Error ? error : new Error(String(error));
+        return [];
+      })).map((manifest) => manifest.metadata.captureSessionId)
     );
     const recoveredJournals = await Promise.all(journalPaths.map(async (journalPath) => ({
       journalPath,
       journal: await this.readActiveCaptureJournal(journalPath)
     })));
-    const journalCaptureSessionIds = new Set(recoveredJournals
-      .map(({ journal }) => journal?.session.captureSessionId)
-      .filter((captureSessionId): captureSessionId is string => Boolean(captureSessionId)));
-    const incorporatedJournalIds = new Set<string>();
+    const groups = new Map<string, PersistedRawCaptureJournal[]>();
     for (const { journal } of recoveredJournals) {
-      for (const sourceCaptureSessionId of journal?.session.sourceCaptureSessionIds ?? []) {
-        if (
-          sourceCaptureSessionId !== journal?.session.captureSessionId &&
-          journalCaptureSessionIds.has(sourceCaptureSessionId)
-        ) {
+      if (!journal) {
+        retainedWarning = "RiftLite found an interrupted Web Replay journal, but it was incomplete or invalid and was left in place for diagnostics.";
+        continue;
+      }
+      const group = groups.get(journal.session.captureSessionId) ?? [];
+      group.push(journal);
+      groups.set(journal.session.captureSessionId, group);
+    }
+    const candidates = new Map<string, PersistedRawCaptureJournal>();
+    for (const [captureSessionId, group] of groups) {
+      const longest = [...group].sort((left, right) =>
+        right.session.frames.length - left.session.frames.length ||
+        Number(left.session.provisional) - Number(right.session.provisional) ||
+        right.session.sourceCaptureSessionIds.length - left.session.sourceCaptureSessionIds.length)[0];
+      if (!group.every((entry) => rawCaptureJournalContains(longest.session, entry.session, true))) {
+        retainedWarning = "RiftLite kept conflicting Web Replay recovery journals in place. No copy was overwritten or removed.";
+        continue;
+      }
+      candidates.set(captureSessionId, longest);
+    }
+    const incorporatedJournalIds = new Set<string>();
+    for (const journal of candidates.values()) {
+      for (const sourceCaptureSessionId of journal.session.sourceCaptureSessionIds) {
+        const source = candidates.get(sourceCaptureSessionId);
+        if (source && sourceCaptureSessionId !== journal.session.captureSessionId &&
+          rawCaptureJournalContains(journal.session, source.session, false)) {
           incorporatedJournalIds.add(sourceCaptureSessionId);
         }
       }
     }
-    let transientRecoveryFailure: Error | null = null;
-    for (const { journalPath, journal } of recoveredJournals) {
-      if (!journal) {
-        this.lastAssociationError = "RiftLite found an interrupted Web Replay journal, but it was incomplete or invalid and was left in place for diagnostics.";
-        continue;
-      }
+    for (const journal of candidates.values()) {
       if (incorporatedJournalIds.has(journal.session.captureSessionId)) {
-        await unlink(journalPath).catch(() => undefined);
+        // Do not discard a merged source until its containing capture has
+        // actually reached a durable final raw file and manifest below.
         continue;
       }
       if (existingCaptureSessionIds.has(journal.session.captureSessionId)) {
-        await unlink(journalPath).catch(() => undefined);
+        // A sidecar alone does not prove that it contains every journal frame.
+        // Retain ambiguous crash leftovers instead of overwriting a published
+        // capture or deleting the only complete recovery source.
+        retainedWarning = "RiftLite kept an additional Web Replay journal alongside an existing saved capture for recovery checks.";
         continue;
       }
       const recoveredAt = Date.now();
@@ -3797,8 +4013,13 @@ export class RawCaptureService {
           completedAt: recoveredAtIso
         }, undefined, settings, { recoveredFromJournalAt: recoveredAtIso });
         existingCaptureSessionIds.add(manifest.metadata.captureSessionId);
-        await unlink(journalPath).catch(() => undefined);
-        this.lastAssociationError = "";
+        const incorporatedIds = journal.session.sourceCaptureSessionIds.filter((sourceId) => {
+          const source = candidates.get(sourceId);
+          return source && rawCaptureJournalContains(journal.session, source.session, false);
+        });
+        for (const id of [journal.session.captureSessionId, ...incorporatedIds]) {
+          for (const copy of groups.get(id) ?? []) await unlink(copy.path).catch(() => undefined);
+        }
       } catch (error) {
         transientRecoveryFailure = error instanceof Error ? error : new Error(String(error));
         this.lastAssociationError = `RiftLite kept an interrupted Web Replay journal for a later recovery attempt: ${
@@ -3809,6 +4030,7 @@ export class RawCaptureService {
     if (transientRecoveryFailure) {
       throw transientRecoveryFailure;
     }
+    this.lastAssociationError = retainedWarning;
   }
 
   private async classifyPreviouslyRecoveredCaptures(settings: UserSettings): Promise<void> {
@@ -4002,46 +4224,29 @@ export class RawCaptureService {
     frame: RawCaptureFrame,
     settings: UserSettings
   ): Promise<void> {
+    const captureSessionId = session.captureSessionId;
     try {
       let journalPath = this.journalPathsBySessionId.get(session.captureSessionId);
       const expectedJournalPath = join(
-        rawCaptureDirectoryPath(settings),
+        this.activeJournalDirectory && !this.journalFallbackSessionIds.has(captureSessionId)
+          ? this.activeJournalDirectory
+          : rawCaptureDirectoryPath(settings),
         `${session.captureSessionId}${RAW_CAPTURE_JOURNAL_SUFFIX}`
       );
       if (journalPath && resolve(journalPath) !== resolve(expectedJournalPath)) {
         await this.closeSessionJournalHandle(session.captureSessionId);
-        this.ownedJournalPaths.delete(journalPath);
-        this.journalCleanupPaths.add(journalPath);
+        this.retainSessionJournal(captureSessionId, journalPath);
         journalPath = undefined;
         this.journalRewriteSessionIds.add(session.captureSessionId);
       }
       if (!journalPath) {
-        journalPath = join(await rawCaptureDirectory(settings), `${session.captureSessionId}${RAW_CAPTURE_JOURNAL_SUFFIX}`);
+        journalPath = expectedJournalPath;
+        await mkdir(dirname(journalPath), { recursive: true });
         this.journalPathsBySessionId.set(session.captureSessionId, journalPath);
       }
       this.ownedJournalPaths.add(journalPath);
-      if (this.journalRewriteSessionIds.delete(session.captureSessionId)) {
-        await this.closeSessionJournalHandle(session.captureSessionId);
-        const checkpoint: RawCaptureJournalCheckpointEntry = {
-          schema: "riftlite-active-raw-capture-journal",
-          version: 1,
-          kind: "checkpoint",
-          captureSessionId: session.captureSessionId,
-          session
-        };
-        await writeUtf8FileAtomically(journalPath, `${JSON.stringify(checkpoint)}\n`);
-        const cleanupPaths = [...this.journalCleanupPaths];
-        this.journalCleanupPaths.clear();
-        await Promise.all(cleanupPaths.map(async (cleanupPath) => {
-          const cleanupSessionId = [...this.journalPathsBySessionId.entries()]
-            .find(([, candidatePath]) => candidatePath === cleanupPath)?.[0];
-          if (cleanupSessionId) {
-            await this.closeSessionJournalHandle(cleanupSessionId);
-            this.journalPathsBySessionId.delete(cleanupSessionId);
-          }
-          this.ownedJournalPaths.delete(cleanupPath);
-          await unlink(cleanupPath).catch(() => undefined);
-        }));
+      if (this.journalRewriteSessionIds.has(session.captureSessionId)) {
+        await this.writeSessionJournalCheckpoint(session, journalPath);
         return;
       }
       const entry: RawCaptureJournalFrameEntry = {
@@ -4068,6 +4273,26 @@ export class RawCaptureService {
       this.scheduleSessionJournalHandleClose(session.captureSessionId);
     } catch {
       await this.closeSessionJournalHandle(session.captureSessionId);
+      // A failed append can leave a partial row. Rewrite all retained frames on
+      // the next attempt rather than appending after it or losing this frame.
+      this.journalRewriteSessionIds.add(captureSessionId);
+      if (this.activeJournalDirectory && !this.journalFallbackSessionIds.has(captureSessionId)) {
+        this.journalFallbackSessionIds.add(captureSessionId);
+        const previousPath = this.journalPathsBySessionId.get(captureSessionId);
+        if (previousPath) this.retainSessionJournal(captureSessionId, previousPath);
+        this.journalPathsBySessionId.delete(captureSessionId);
+        try {
+          const fallbackPath = join(await rawCaptureDirectory(settings), `${captureSessionId}${RAW_CAPTURE_JOURNAL_SUFFIX}`);
+          this.journalPathsBySessionId.set(captureSessionId, fallbackPath);
+          this.ownedJournalPaths.add(fallbackPath);
+          await this.writeSessionJournalCheckpoint(session, fallbackPath);
+          return;
+        } catch {
+          // Retain both paths for recovery and retry a complete checkpoint next
+          // frame. Failure of either disk must never discard in-memory capture.
+        }
+      }
+      this.lastAssociationError = "RiftLite cannot save active Web Replay recovery data to disk. In-memory capture is continuing; keep RiftLite open until the replay is saved.";
       if (!session.diagnostics.some((diagnostic) => diagnostic.code === "active_journal_write_failed")) {
         session.diagnostics.push({
           ts: Date.now(),
@@ -4079,17 +4304,58 @@ export class RawCaptureService {
     }
   }
 
+  private retainSessionJournal(captureSessionId: string, path: string): void {
+    const paths = this.retiredJournalPathsBySessionId.get(captureSessionId) ?? new Set<string>();
+    paths.add(path);
+    this.retiredJournalPathsBySessionId.set(captureSessionId, paths);
+    this.ownedJournalPaths.add(path);
+  }
+
+  private async writeSessionJournalCheckpoint(session: ActiveRawCaptureSession, journalPath: string): Promise<void> {
+    await this.closeSessionJournalHandle(session.captureSessionId);
+    const checkpoint: RawCaptureJournalCheckpointEntry = {
+      schema: "riftlite-active-raw-capture-journal", version: 1, kind: "checkpoint",
+      captureSessionId: session.captureSessionId, session
+    };
+    await writeUtf8FileAtomically(journalPath, `${JSON.stringify(checkpoint)}\n`);
+    this.journalRewriteSessionIds.delete(session.captureSessionId);
+    if (this.journalFallbackSessionIds.has(session.captureSessionId)) {
+      this.lastAssociationError = "The local replay staging folder is unavailable. Active Web Replay recovery is using your selected replay folder for this game.";
+      if (!session.diagnostics.some(diagnostic => diagnostic.code === "active_journal_staging_fallback")) {
+        session.diagnostics.push({ ts: Date.now(), severity: "warn", code: "active_journal_staging_fallback",
+          message: this.lastAssociationError });
+      }
+    }
+    // Retired/merged journals remain recoverable until the final raw file AND
+    // its manifest have both been written successfully.
+    for (const path of this.retiredJournalPathsBySessionId.get(session.captureSessionId) ?? []) {
+      for (const [otherId, otherPath] of this.journalPathsBySessionId) {
+        if (otherId !== session.captureSessionId && otherPath === path) {
+          await this.closeSessionJournalHandle(otherId);
+        }
+      }
+    }
+  }
+
   private async discardSessionJournal(captureSessionId: string): Promise<void> {
     const journalPath = this.journalPathsBySessionId.get(captureSessionId);
+    const paths = new Set(this.retiredJournalPathsBySessionId.get(captureSessionId));
+    if (journalPath) paths.add(journalPath);
     await this.closeSessionJournalHandle(captureSessionId);
     this.journalPathsBySessionId.delete(captureSessionId);
     this.journalRewriteSessionIds.delete(captureSessionId);
-    if (!journalPath) {
-      return;
+    this.retiredJournalPathsBySessionId.delete(captureSessionId);
+    this.journalFallbackSessionIds.delete(captureSessionId);
+    for (const path of paths) {
+      for (const [otherId, otherPath] of this.journalPathsBySessionId) {
+        if (otherPath === path) {
+          await this.closeSessionJournalHandle(otherId);
+          this.journalPathsBySessionId.delete(otherId);
+        }
+      }
+      this.ownedJournalPaths.delete(path);
+      await unlink(path).catch(() => undefined);
     }
-    this.ownedJournalPaths.delete(journalPath);
-    this.journalCleanupPaths.delete(journalPath);
-    await unlink(journalPath).catch(() => undefined);
   }
 
   private async closeSessionJournalHandle(captureSessionId: string): Promise<void> {
@@ -4145,7 +4411,8 @@ export class RawCaptureService {
     this.clearSessions();
     await Promise.all(captureSessionIds.map((captureSessionId) => this.discardSessionJournal(captureSessionId)));
     this.journalRewriteSessionIds.clear();
-    this.journalCleanupPaths.clear();
+    this.retiredJournalPathsBySessionId.clear();
+    this.journalFallbackSessionIds.clear();
   }
 
   private async drainPendingFrames(): Promise<void> {
@@ -6687,6 +6954,45 @@ function extractUploadId(body: Record<string, unknown> | null, uploadUrl: string
     return id;
   }
   return uploadUrl.split("/").filter(Boolean).at(-1) ?? "";
+}
+
+function rawCaptureJournalContains(
+  complete: ActiveRawCaptureSession,
+  candidate: ActiveRawCaptureSession,
+  sameCapture: boolean
+): boolean {
+  const fingerprint = (frame: RawCaptureFrame): string => JSON.stringify([
+    frame.ts, frame.dir, frame.socketId ?? null, frame.type ?? null, frame.raw,
+    frame.drop ?? false, frame.dropReason ?? null
+  ]);
+  if (normalizeRiftLiteAccountUid(complete.webReplayAutoUploadAccountUid) !==
+      normalizeRiftLiteAccountUid(candidate.webReplayAutoUploadAccountUid) ||
+    normalizeRiftLiteAccountUid(complete.webReplayDiscordShareAccountUid) !==
+      normalizeRiftLiteAccountUid(candidate.webReplayDiscordShareAccountUid) ||
+    !sameStringSet(complete.webReplayDiscordShareHubIds, candidate.webReplayDiscordShareHubIds)) return false;
+  if (sameCapture) {
+    // Different capture-time owners/consent are never reconciled from whichever
+    // file happens to be longest. The original sharing boundary must survive.
+    if (complete.captureSessionId !== candidate.captureSessionId ||
+      (complete.provisional && !candidate.provisional) ||
+      candidate.sourceCaptureSessionIds.some((id) => !complete.sourceCaptureSessionIds.includes(id))) return false;
+    return candidate.frames.every((frame, index) => complete.frames[index] &&
+      fingerprint(frame) === fingerprint(complete.frames[index]));
+  }
+  // Merging renumbers seq and can interleave sockets. Compare a multiset of
+  // original frames, retaining real repeated actions as separate occurrences.
+  const remaining = new Map<string, number>();
+  for (const frame of complete.frames) {
+    const key = fingerprint(frame);
+    remaining.set(key, (remaining.get(key) ?? 0) + 1);
+  }
+  for (const frame of candidate.frames) {
+    const key = fingerprint(frame);
+    const count = remaining.get(key) ?? 0;
+    if (!count) return false;
+    remaining.set(key, count - 1);
+  }
+  return true;
 }
 
 async function rawCaptureDirectory(settings: UserSettings): Promise<string> {

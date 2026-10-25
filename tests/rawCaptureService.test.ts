@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, rmdir, writeFile } from "node:fs/promises";
 import { createHash, randomBytes } from "node:crypto";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
@@ -5600,5 +5600,342 @@ describe("RawCaptureService", () => {
       uploadId: "remote-after-purge"
     })).rejects.toThrow("Replay was removed");
     expect((await store.getReplays()).some((candidate) => candidate.id === original.id)).toBe(false);
+  });
+
+  it("coalesces concurrent upload diagnostics but reads fresh data after the completed snapshot", async () => {
+    const directory = await tempReplayDirectory();
+    const store = fakeStore(settings({ enabled: true }, directory));
+    const service = new RawCaptureService(store);
+    await service.getStatus(); // Complete the one-time recovery before this measured read.
+    const originalRead = store.getReplays.bind(store);
+    let release!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const reads = vi.spyOn(store, "getReplays").mockImplementation(async () => { await held; return originalRead(); });
+    const requests = Array.from({ length: 10 }, () => service.getWebReplayUploadDiagnostics());
+    await vi.waitFor(() => expect(reads).toHaveBeenCalledTimes(1));
+    release();
+    const results = await Promise.all(requests);
+    expect(results.every(result => result === results[0])).toBe(true);
+    await store.saveReplay({ ...replay("new-diagnostic-replay"), rawCapture: {
+      provider: "riftlite-v2", captureSessionId: "new-diagnostic-capture", localPath: "", messageCount: 1,
+      uploadStatus: "failed", processingStatus: "failed", error: "New synthetic failure"
+    } });
+    const refreshed = await service.getWebReplayUploadDiagnostics();
+    expect(reads).toHaveBeenCalledTimes(2);
+    expect(refreshed.recentFailures.some(failure => failure.error === "New synthetic failure")).toBe(true);
+  });
+
+  it("does not share an in-flight diagnostics snapshot across settings/account changes", async () => {
+    const directory = await tempReplayDirectory();
+    const store = fakeStore(settings({ enabled: true }, directory));
+    const service = new RawCaptureService(store);
+    await service.getStatus();
+    let release!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const reads = vi.spyOn(store, "getReplays").mockImplementation(async () => { await held; return []; });
+    const first = service.getWebReplayUploadDiagnostics();
+    await vi.waitFor(() => expect(reads).toHaveBeenCalledTimes(1));
+    await store.saveSettings({ accountUid: "new-diagnostic-account" });
+    const second = service.getWebReplayUploadDiagnostics();
+    await vi.waitFor(() => expect(reads).toHaveBeenCalledTimes(2));
+    release();
+    expect((await first).accountLinked).toBe(false);
+    expect((await second).accountLinked).toBe(true);
+  });
+
+  it("releases a failed diagnostics read so the next refresh can recover", async () => {
+    const directory = await tempReplayDirectory();
+    const store = fakeStore(settings({ enabled: true }, directory));
+    const service = new RawCaptureService(store);
+    await service.getStatus();
+    vi.spyOn(store, "getReplays").mockRejectedValueOnce(new Error("Synthetic read failure"));
+    await expect(service.getWebReplayUploadDiagnostics()).rejects.toThrow("Synthetic read failure");
+    await expect(service.getWebReplayUploadDiagnostics()).resolves.toMatchObject({ captureEnabled: true });
+  });
+
+  describe("local active journal staging", () => {
+    async function harness() {
+      const directory = await tempReplayDirectory();
+      const staging = await tempReplayDirectory();
+      const store = fakeStore({ ...settings({ enabled: true,
+        webReplayAutoUploadEnabled: true, webReplayAutoUploadAccountUid: "original-owner"
+      }, directory), accountUid: "original-owner", firebaseRefreshToken: "synthetic-refresh" });
+      const create = () => new RawCaptureService(store, undefined, undefined, undefined, staging);
+      const service = create();
+      const append = (index: number) => service.appendFrame(atlasFrame(JSON.stringify({
+        type: "authoritative_snapshot", roomCode: "STAGING", seriesId: "staging-series", phase: "in_game", body: { index }
+      }), { ts: 1781360000000 + index }));
+      await append(1);
+      const id = (await service.getStatus()).captureSessionId!;
+      const name = `${id}.riftlite-active.jsonl`;
+      const stagePath = join(staging, name);
+      const legacyPath = join(directory, "Raw Capture", name);
+      const close = () => (service as any).closeSessionJournalHandle(id);
+      return { directory, staging, store, service, create, append, id, stagePath, legacyPath, close };
+    }
+
+    async function manifests(directory: string) {
+      const rawDirectory = join(directory, "Raw Capture");
+      return Promise.all((await readdir(rawDirectory)).filter(name => name.endsWith(".riftlite-index.json"))
+        .map(async name => JSON.parse(await readFile(join(rawDirectory, name), "utf8"))));
+    }
+
+    it("writes live frames only in staging, then publishes the complete capture to the selected folder", async () => {
+      const h = await harness();
+      await h.append(2);
+      await h.close();
+      expect((await readFile(h.stagePath, "utf8")).trim().split("\n")).toHaveLength(2);
+      await expect(readFile(h.legacyPath)).rejects.toThrow();
+      await h.service.finishCapture({ platform: "atlas", captureSessionId: h.id, title: "Staged game" });
+      const saved = await manifests(h.directory);
+      expect(saved).toHaveLength(1);
+      expect(saved[0].localPath.startsWith(join(h.directory, "Raw Capture"))).toBe(true);
+      expect(JSON.parse(await readFile(saved[0].localPath, "utf8")).messages).toHaveLength(2);
+      await expect(readFile(h.stagePath)).rejects.toThrow();
+    });
+
+    it("recovers a staged journal after a restart without granting a newly signed-in account upload consent", async () => {
+      const h = await harness();
+      await h.close();
+      const current = await h.store.getSettings();
+      await h.store.saveSettings({ accountUid: "new-owner", rawCapture: {
+        ...current.rawCapture, webReplayAutoUploadAccountUid: "new-owner"
+      } });
+      await h.create().getStatus();
+      const saved = await manifests(h.directory);
+      expect(saved).toHaveLength(1);
+      expect(saved[0].metadata.webReplayAutoUploadEligible).toBe(false);
+      expect(saved[0].metadata.webReplayAutoUploadAccountUid).toBeUndefined();
+      await expect(readFile(h.stagePath)).rejects.toThrow();
+    });
+
+    it("recovers legacy journals when local staging is newly enabled", async () => {
+      const h = await harness();
+      await h.close();
+      const original = await readFile(h.stagePath, "utf8");
+      await writeFile(h.legacyPath, original);
+      await rm(h.stagePath);
+      await h.create().getStatus();
+      expect(await manifests(h.directory)).toHaveLength(1);
+      await expect(readFile(h.legacyPath)).rejects.toThrow();
+    });
+
+    it("keeps the staging journal when final export is unavailable and recovers once the selected folder returns", async () => {
+      const h = await harness();
+      await h.close();
+      const blocked = join(h.directory, "offline-volume");
+      await writeFile(blocked, "synthetic blocked destination");
+      await h.store.saveSettings({ replayDirectory: blocked });
+      const restarted = h.create();
+      expect((await restarted.getStatus()).lastError).toContain("could not recover");
+      expect(await readFile(h.stagePath, "utf8")).toContain("authoritative_snapshot");
+      await h.store.saveSettings({ replayDirectory: h.directory });
+      await restarted.getStatus();
+      expect(await manifests(h.directory)).toHaveLength(1);
+      await expect(readFile(h.stagePath)).rejects.toThrow();
+    });
+
+    it("continues staging live frames when the completed replay destination is unavailable", async () => {
+      const h = await harness();
+      const blocked = join(h.directory, "offline-volume");
+      await writeFile(blocked, "synthetic blocked destination");
+      await h.store.saveSettings({ replayDirectory: blocked });
+      await h.append(2);
+      await h.close();
+      expect((await readFile(h.stagePath, "utf8")).trim().split("\n")).toHaveLength(2);
+      await expect(h.service.finishCapture({ platform: "atlas", captureSessionId: h.id })).rejects.toThrow();
+      expect(await readFile(h.stagePath, "utf8")).toContain("authoritative_snapshot");
+    });
+
+    it("falls back with every retained frame after a staging disk write fails, retaining the original until durable recovery", async () => {
+      const h = await harness();
+      await h.append(2);
+      await h.close();
+      const original = await readFile(h.stagePath, "utf8");
+      (h.service as any).journalHandlesBySessionId.set(h.id, {
+        appendFile: async () => { throw new Error("synthetic staging disk full"); }, close: async () => undefined
+      });
+      await h.append(3);
+      expect((await h.service.getStatus()).lastError).toContain("using your selected replay folder");
+      expect(await readFile(h.stagePath, "utf8")).toBe(original);
+      const fallback = JSON.parse((await readFile(h.legacyPath, "utf8")).trim());
+      expect(fallback.kind).toBe("checkpoint");
+      expect(fallback.session.frames).toHaveLength(3);
+      await h.create().getStatus();
+      const saved = await manifests(h.directory);
+      expect(saved).toHaveLength(1);
+      expect(JSON.parse(await readFile(saved[0].localPath, "utf8")).messages).toHaveLength(3);
+      await expect(readFile(h.stagePath)).rejects.toThrow();
+      await expect(readFile(h.legacyPath)).rejects.toThrow();
+    });
+
+    it("keeps frames in memory with a visible warning if both staging and fallback fail, then checkpoints all on retry", async () => {
+      const h = await harness();
+      await h.close();
+      (h.service as any).journalHandlesBySessionId.set(h.id, {
+        appendFile: async () => { throw new Error("synthetic staging disk full"); }, close: async () => undefined
+      });
+      const blocked = join(h.directory, "offline-volume");
+      await writeFile(blocked, "synthetic blocked destination");
+      await h.store.saveSettings({ replayDirectory: blocked });
+      await h.append(2);
+      expect(await h.service.getStatus()).toMatchObject({ messageCount: 2, lastError: expect.stringContaining("cannot save") });
+      await h.store.saveSettings({ replayDirectory: h.directory });
+      await h.append(3);
+      await h.close();
+      expect(JSON.parse((await readFile(h.legacyPath, "utf8")).trim()).session.frames).toHaveLength(3);
+      await h.service.finishCapture({ platform: "atlas", captureSessionId: h.id });
+      await expect(readFile(h.stagePath)).rejects.toThrow();
+      await expect(readFile(h.legacyPath)).rejects.toThrow();
+    });
+
+    it("falls back when staging is unavailable at startup without rescanning all manifests on every frame", async () => {
+      const directory = await tempReplayDirectory();
+      const blockedStaging = join(directory, "staging-unavailable");
+      await writeFile(blockedStaging, "synthetic unavailable staging volume");
+      const store = fakeStore(settings({ enabled: true }, directory));
+      const reads = vi.spyOn(store, "getReplays");
+      const service = new RawCaptureService(store, undefined, undefined, undefined, blockedStaging);
+      for (let index = 0; index < 3; index++) {
+        await service.appendFrame(atlasFrame(JSON.stringify({ type: "room_shell_sync", roomCode: "FALLBACK", phase: "in_game", index }),
+          { ts: 1781360000000 + index }));
+      }
+      const status = await service.getStatus();
+      expect(status).toMatchObject({ messageCount: 3, lastError: expect.stringContaining("using your selected replay folder") });
+      expect(reads).toHaveBeenCalledTimes(1);
+      await (service as any).closeSessionJournalHandle(status.captureSessionId);
+      const path = join(directory, "Raw Capture", `${status.captureSessionId}.riftlite-active.jsonl`);
+      expect((await (service as any).readActiveCaptureJournal(path)).session.frames).toHaveLength(3);
+    });
+
+    it.each(["frames", "owner"])("retains conflicting %s copies without overwriting either or creating a capture", async conflict => {
+      const h = await harness();
+      await h.close();
+      const original = await readFile(h.stagePath, "utf8");
+      const other = JSON.parse(original.trim());
+      if (conflict === "frames") other.frame.raw = JSON.stringify({ type: "authoritative_snapshot", roomCode: "OTHER" });
+      else other.consent.webReplayAutoUploadAccountUid = "another-owner";
+      const conflicting = `${JSON.stringify(other)}\n`;
+      await writeFile(h.legacyPath, conflicting);
+      expect((await h.create().getStatus()).lastError).toContain("conflicting");
+      expect(await manifests(h.directory)).toHaveLength(0);
+      expect(await readFile(h.stagePath, "utf8")).toBe(original);
+      expect(await readFile(h.legacyPath, "utf8")).toBe(conflicting);
+    });
+
+    it("accepts a provisional-to-authoritative prefix during fallback recovery", async () => {
+      const h = await harness();
+      await h.close();
+      const old = JSON.parse((await readFile(h.stagePath, "utf8")).trim());
+      old.consent.provisional = true;
+      await writeFile(h.stagePath, `${JSON.stringify(old)}\n`);
+      const session = (h.service as any).sessions.get(h.id);
+      expect(session.provisional).toBe(false);
+      await writeFile(h.legacyPath, JSON.stringify({ schema: "riftlite-active-raw-capture-journal", version: 1,
+        kind: "checkpoint", captureSessionId: h.id, session }) + "\n");
+      await h.create().getStatus();
+      expect(await manifests(h.directory)).toHaveLength(1);
+      await expect(readFile(h.stagePath)).rejects.toThrow();
+      await expect(readFile(h.legacyPath)).rejects.toThrow();
+    });
+
+    it("does not delete any duplicate until both the final raw file and manifest are saved", async () => {
+      const h = await harness();
+      await h.close();
+      const original = await readFile(h.stagePath, "utf8");
+      await writeFile(h.legacyPath, original);
+      const blockedIndex = join(h.directory, "Raw Capture", `Recovered-Atlas-capture-${h.id}.json.riftlite-index.json`);
+      await mkdir(blockedIndex);
+      const restarted = h.create();
+      expect((await restarted.getStatus()).lastError).toContain("could not recover");
+      expect(await readFile(h.stagePath, "utf8")).toBe(original);
+      expect(await readFile(h.legacyPath, "utf8")).toBe(original);
+      expect(JSON.parse(await readFile(blockedIndex.replace(/\.riftlite-index\.json$/, ""), "utf8")).messages).toHaveLength(1);
+      // This fixture-created empty directory simulates failure of sidecar publication.
+      await rmdir(blockedIndex);
+      vi.spyOn(Date, "now").mockReturnValue(Date.now() + 31_000);
+      await restarted.getStatus();
+      expect(await manifests(h.directory)).toHaveLength(1);
+      await expect(readFile(h.stagePath)).rejects.toThrow();
+      await expect(readFile(h.legacyPath)).rejects.toThrow();
+    });
+
+    it("retains an existing capture's journal if its sidecar cannot prove the raw file is complete", async () => {
+      const h = await harness();
+      await h.close();
+      const original = await readFile(h.stagePath, "utf8");
+      const session = (h.service as any).sessions.get(h.id);
+      const saved = await (h.service as any).persistSession(session, { platform: "atlas" }, undefined, await h.store.getSettings());
+      await rm(saved.localPath);
+      expect((await h.create().getStatus()).lastError).toContain("additional Web Replay journal");
+      expect(await readFile(h.stagePath, "utf8")).toBe(original);
+    });
+
+    it.each([false, true])("retains merged source journals until their owning capture is durably saved (different owner: %s)", async differentOwner => {
+      const h = await harness();
+      await h.close();
+      const target = structuredClone((h.service as any).sessions.get(h.id));
+      const sourceId = `${h.id}-source`;
+      const source = { ...structuredClone(target), captureSessionId: sourceId, provisional: true };
+      if (differentOwner) source.webReplayAutoUploadAccountUid = "other-owner";
+      target.sourceCaptureSessionIds = [sourceId];
+      const serialize = (session: typeof target) => JSON.stringify({ schema: "riftlite-active-raw-capture-journal", version: 1,
+        kind: "checkpoint", captureSessionId: session.captureSessionId, session }) + "\n";
+      const targetBytes = serialize(target);
+      const sourceBytes = serialize(source);
+      const sourcePath = join(h.directory, "Raw Capture", `${sourceId}.riftlite-active.jsonl`);
+      await writeFile(h.stagePath, targetBytes);
+      await writeFile(sourcePath, sourceBytes);
+      const blockedId = differentOwner ? sourceId : h.id;
+      const blockedIndex = join(h.directory, "Raw Capture", `Recovered-Atlas-capture-${blockedId}.json.riftlite-index.json`);
+      await mkdir(blockedIndex);
+      const restarted = h.create();
+      expect((await restarted.getStatus()).lastError).toContain("could not recover");
+      // A failed parent must never consume its merged source; a different owner
+      // must never be treated as incorporated even if every frame is present.
+      expect(await readFile(sourcePath, "utf8")).toBe(sourceBytes);
+      if (!differentOwner) expect(await readFile(h.stagePath, "utf8")).toBe(targetBytes);
+      await rmdir(blockedIndex);
+      vi.spyOn(Date, "now").mockReturnValue(Date.now() + 31_000);
+      await restarted.getStatus();
+      const saved = await manifests(h.directory);
+      expect(saved).toHaveLength(differentOwner ? 2 : 1);
+      if (differentOwner) expect(saved.find(entry => entry.metadata.captureSessionId === sourceId).metadata.webReplayAutoUploadEligible).toBe(false);
+      await expect(readFile(sourcePath)).rejects.toThrow();
+    });
+
+    it("bounds failed recovery scans to later polls or changed settings, never repeated frame ingress", async () => {
+      const h = await harness();
+      await h.close();
+      const blocked = join(h.directory, "offline-volume");
+      await writeFile(blocked, "synthetic unavailable final destination");
+      await h.store.saveSettings({ replayDirectory: blocked });
+      const reads = vi.spyOn(h.store, "getReplays");
+      const restarted = h.create();
+      await restarted.getStatus();
+      expect(reads).toHaveBeenCalledTimes(1);
+      const append = (index: number) => restarted.appendFrame(atlasFrame(JSON.stringify({
+        type: "room_shell_sync", roomCode: "NEW-STAGED", phase: "in_game", index
+      }), { ts: 1781360001000 + index }));
+      for (let index = 0; index < 3; index++) {
+        await append(index);
+        await restarted.getStatus();
+      }
+      expect(reads).toHaveBeenCalledTimes(1);
+      const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 31_000);
+      await append(3);
+      expect(reads).toHaveBeenCalledTimes(1);
+      await restarted.getStatus();
+      expect(reads).toHaveBeenCalledTimes(2);
+      await h.store.saveSettings({ replayDirectory: h.directory });
+      await append(4);
+      expect(reads).toHaveBeenCalledTimes(3);
+      expect(await manifests(h.directory)).toHaveLength(1);
+      clock.mockReturnValue(Date.now() + 31_000);
+      await restarted.getStatus();
+      await append(5);
+      expect(reads).toHaveBeenCalledTimes(3); // Successful recovery is cached again.
+      for (const id of (restarted as any).sessions.keys()) await (restarted as any).closeSessionJournalHandle(id);
+    });
   });
 });

@@ -266,4 +266,72 @@ describe("passive Atlas realtime diagnostics", () => {
     expect(() => diagnostics.observe("Network.webSocketCreated", { requestId: "one", url: socketUrl })).not.toThrow();
     expect(() => diagnostics.observe("Network.webSocketClosed", { requestId: "one" })).not.toThrow();
   });
+
+  it("reports bounded source/receipt delays and source silence separately without emitting per frame", () => {
+    let wall = 1_000_000, mono = 10_000;
+    const events: AtlasRealtimeDiagnosticEvent[] = [];
+    const diagnostics = new AtlasRealtimeDiagnostics(event => events.push(event), {
+      now: () => wall, monotonicNow: () => mono, mainLoopDelayMs: () => 125.6
+    });
+    const observe = (suffix: string, values: Record<string, unknown>) =>
+      diagnostics.observe(`Network.webSocket${suffix}`, { requestId: "private-id", ...values });
+    observe("Created", { url: socketUrl });
+    observe("WillSendHandshakeRequest", { timestamp: 100, wallTime: 1000,
+      request: { headers: { Authorization: "private-token" } } });
+    wall += 10_000; mono += 10_000;
+    observe("FrameReceived", { timestamp: 100.025, response: { opcode: 1, payloadData: "private-frame" } });
+    observe("FrameSent", { timestamp: 110, response: { opcode: 1, payloadData: "private-action" } });
+    expect(events).toHaveLength(2);
+    wall += 1_000; mono += 1_000;
+    observe("Closed", { timestamp: 111 });
+    expect(events.at(-1)).toMatchObject({ observerTimingEpoch: 1, observerTimestampSamples: 4,
+      observerDeliveryLagMaxMs: 9_975, observerDeliveryLagLastMs: 0,
+      sourceSinceLastReceivedMs: 10_975, sourceSinceLastSentMs: 1_000, mainLoopDelayMs: 126 });
+    expect(JSON.stringify(events)).not.toMatch(/private|secret|wallTime|timestamp|riftatlas-workers/);
+  });
+
+  it("resets source statistics after a target clock reset and clear removes the anchor", () => {
+    let wall = 1_000_000, mono = 10_000;
+    const events: AtlasRealtimeDiagnosticEvent[] = [];
+    const diagnostics = new AtlasRealtimeDiagnostics(event => events.push(event), {
+      now: () => wall, monotonicNow: () => mono
+    });
+    const observe = (suffix: string, values: Record<string, unknown> = {}) =>
+      diagnostics.observe(`Network.webSocket${suffix}`, { requestId: "one", ...values });
+    observe("Created", { url: socketUrl });
+    observe("WillSendHandshakeRequest", { timestamp: 100, wallTime: 1000 });
+    wall += 1_000; mono += 1_000;
+    observe("FrameReceived", { timestamp: 100, response: { opcode: 1 } });
+    observe("Closed", { timestamp: 101 });
+    observe("Created", { url: socketUrl });
+    observe("WillSendHandshakeRequest", { timestamp: 1, wallTime: 1001 });
+    observe("Closed", { timestamp: 1 });
+    expect(events.at(-1)).toMatchObject({ observerTimingEpoch: 2, observerDeliveryLagMaxMs: 0,
+      observerTimestampSamples: 2, sourceSinceLastReceivedMs: null });
+    diagnostics.clear();
+    observe("Created", { url: socketUrl });
+    observe("Closed", { timestamp: 2 });
+    expect(events.at(-1)).not.toHaveProperty("observerTimingEpoch");
+  });
+
+  it("does not invent source idle durations when the lifecycle timestamp is absent", () => {
+    const events: AtlasRealtimeDiagnosticEvent[] = [];
+    const diagnostics = new AtlasRealtimeDiagnostics(event => events.push(event), {
+      now: () => 1_000_000, monotonicNow: () => 10_000
+    });
+    diagnostics.observe("Network.webSocketCreated", { requestId: "one", url: socketUrl });
+    diagnostics.observe("Network.webSocketWillSendHandshakeRequest", { requestId: "one", timestamp: 100, wallTime: 1000 });
+    diagnostics.observe("Network.webSocketClosed", { requestId: "one" });
+    expect(events.at(-1)?.observerTimestampSamples).toBe(1);
+    expect(events.at(-1)).not.toHaveProperty("sourceSinceLastReceivedMs");
+  });
+
+  it("isolates a failing main-loop sampler and ignores its invalid samples", () => {
+    for (const sample of [() => { throw new Error("private failure"); }, () => NaN, () => -1]) {
+      const events: AtlasRealtimeDiagnosticEvent[] = [];
+      const diagnostics = new AtlasRealtimeDiagnostics(event => events.push(event), { mainLoopDelayMs: sample });
+      expect(() => diagnostics.observe("Network.webSocketCreated", { requestId: "one", url: socketUrl })).not.toThrow();
+      expect(events[0]).not.toHaveProperty("mainLoopDelayMs");
+    }
+  });
 });

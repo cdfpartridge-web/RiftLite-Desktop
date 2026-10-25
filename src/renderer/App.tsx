@@ -473,6 +473,7 @@ import {
   updateAtlasShellVisibility
 } from "./atlasShellVisibility";
 import { bindGameWebviewEvents } from "./gameWebviewEvents";
+import { DeckTrackerRefreshCoordinator } from "./deckTrackerRefresh";
 import { AtlasDeckNavigation } from "./AtlasDeckNavigation";
 import { gamePlatformForTrustedUrl } from "../shared/embeddedContentSecurity";
 import {
@@ -3253,6 +3254,22 @@ function App() {
   const communityAccountUidRef = useRef("");
   const activeViewRef = useRef<ActiveView>(activeView);
   const settingsRef = useRef<UserSettings | null>(settings);
+  const deckTrackerRefreshRef = useRef<DeckTrackerRefreshCoordinator | null>(null);
+  if (!deckTrackerRefreshRef.current) {
+    deckTrackerRefreshRef.current = new DeckTrackerRefreshCoordinator({
+      isEnabled: () => DECK_TRACKER_FEATURE_ENABLED && settingsRef.current?.deckTrackerEnabled === true,
+      loadState: () => window.riftlite.getDeckTrackerState(),
+      loadVisionStatus: () => window.riftlite.getVisionDeckTrackerStatus(),
+      apply: (state, status) => {
+        setDeckTrackerState(state);
+        if (status) setVisionTrackerStatus(status);
+      },
+      clear: () => {
+        setDeckTrackerState(null);
+        setVisionTrackerStatus(null);
+      }
+    });
+  }
   const healthRef = useRef<CaptureHealth>(health);
   const decksRef = useRef<SavedDeck[]>(decks);
   const testingSessionsRef = useRef<TestingSession[]>(testingSessions);
@@ -4113,6 +4130,7 @@ function App() {
       offAtlasKnownHandShortcut();
       offUpdate();
       offGameWebviewFailure();
+      deckTrackerRefreshRef.current?.invalidate();
       if (actionFeedbackTimerRef.current) {
         window.clearTimeout(actionFeedbackTimerRef.current);
       }
@@ -4364,21 +4382,21 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (!DECK_TRACKER_FEATURE_ENABLED) {
-      setDeckTrackerState(null);
-      return;
-    }
-    if (!settings) {
+    if (!DECK_TRACKER_FEATURE_ENABLED || !settings?.deckTrackerEnabled) {
+      void refreshDeckTrackerState();
       return;
     }
     void refreshDeckTrackerState();
     if (activeView !== "play") {
-      return;
+      return () => deckTrackerRefreshRef.current?.invalidate();
     }
     const timer = window.setInterval(() => {
       void refreshDeckTrackerState();
     }, 2500);
-    return () => window.clearInterval(timer);
+    return () => {
+      window.clearInterval(timer);
+      deckTrackerRefreshRef.current?.invalidate();
+    };
   }, [activeView, activePlatform, settings?.activeDeckId, settings?.deckTrackerEnabled, settings?.deckTrackerAutoStart]);
 
   useEffect(() => {
@@ -5258,20 +5276,7 @@ function App() {
   }
 
   async function refreshDeckTrackerState() {
-    if (!DECK_TRACKER_FEATURE_ENABLED) {
-      setDeckTrackerState(null);
-      return;
-    }
-    const [state, status] = await Promise.all([
-      window.riftlite.getDeckTrackerState().catch(() => null),
-      window.riftlite.getVisionDeckTrackerStatus().catch(() => null)
-    ]);
-    if (state) {
-      setDeckTrackerState(state);
-      if (status) {
-        setVisionTrackerStatus(status);
-      }
-    }
+    await deckTrackerRefreshRef.current?.refresh();
   }
 
   async function adjustDeckTrackerCard(cardKey: string, delta: number) {

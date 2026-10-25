@@ -24,7 +24,7 @@ describe("release packaging continuity", () => {
       };
     };
 
-    expect(manifest.version).toBe("0.9.86");
+    expect(manifest.version).toBe("0.9.87");
     expect(manifest.devDependencies["electron-builder"]).toBe("26.15.3");
     expect(manifest.build.toolsets.nsis).toBe("1.2.1");
     expect(manifest.build).toMatchObject({
@@ -174,5 +174,25 @@ describe("release packaging continuity", () => {
     expect(windowsVerifier).not.toContain("app-builder-bin");
     expect(windowsMetadataVerifier).toContain('Join-Path $PSScriptRoot "release-directory.mjs"');
     expect(windowsMetadataVerifier).not.toContain("7zip-bin");
+  });
+
+  it("keeps tagged Mac builds in draft until cross-platform verification permits publication", () => {
+    const { load } = require("js-yaml") as {
+      load: (source: string) => {
+        jobs: { mac: { steps: Array<{ name?: string; if?: string; uses?: string; with?: Record<string, unknown> }> } };
+      };
+    };
+    const workflow = load(readFileSync(resolve(projectDirectory, ".github", "workflows", "build-mac.yml"), "utf8"));
+    const steps = workflow.jobs.mac.steps;
+    const releaseSteps = steps.filter((step) => step.uses?.startsWith("softprops/action-gh-release@"));
+    expect(releaseSteps).toHaveLength(1);
+    const release = releaseSteps[0];
+
+    expect(release.if).toBe("github.ref_type == 'tag'");
+    expect(release.with?.draft).toBe(true);
+    expect(release.with?.make_latest).toBe(false);
+    expect(steps.indexOf(release)).toBeGreaterThan(steps.findIndex((step) => step.name === "Smoke-test packaged macOS application"));
+    expect(steps.indexOf(release)).toBeGreaterThan(steps.findIndex((step) => step.name === "Upload macOS installers"));
+    expect(readFileSync(resolve(projectDirectory, "scripts", "package-mac-release.cjs"), "utf8")).toContain('publish: "never"');
   });
 });

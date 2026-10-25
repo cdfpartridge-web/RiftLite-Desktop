@@ -172,6 +172,8 @@ jobs:
         if: github.ref_type == 'tag'
         uses: softprops/action-gh-release@v3
         with:
+          draft: true
+          make_latest: false
           files: |
             release/RiftLiteBetaInstall-*.dmg
             release/RiftLiteBetaInstall-*.zip

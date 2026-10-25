@@ -14,6 +14,9 @@ import { deflateRawSync, inflateRawSync } from "node:zlib";
 import ffmpegStaticPath from "ffmpeg-static";
 import { AtlasHistoryService } from "./services/atlasHistoryService.js";
 import { AtlasHistoryAutoImport } from "./services/atlasHistoryAutoImport.js";
+import { AtlasPostgameAutoImport } from "./services/atlasPostgameAutoImport.js";
+import { AtlasPostgameIdleGate } from "./services/atlasPostgameIdleGate.js";
+import { atlasPostgameCancelScript, atlasPostgameQueryScript, type AtlasPostgameQueryResult } from "./services/atlasPostgameQuery.js";
 import type {
   ActiveDeckPrep,
   AtlasConnectionDiagnostics,
@@ -408,6 +411,10 @@ let syncService: FirebaseSyncService;
 let deckService: DeckService;
 let deckTrackerService: DeckTrackerService;
 let rawCaptureService: RawCaptureService;
+let atlasPostgameAutoImport: AtlasPostgameAutoImport | undefined;
+const atlasPostgameIdleGate = new AtlasPostgameIdleGate();
+let atlasPostgameQueryGuest: WebContents | null = null;
+let atlasPostgameQueryGeneration = 0;
 let overlayServer: OverlayServer;
 let simEventReceiver: SimEventReceiver | null = null;
 let diagnostics: CaptureDiagnostics;
@@ -990,6 +997,76 @@ function atlasDiagnosticGuestUrl(value: string): string {
   } catch {
     return "";
   }
+}
+
+function atlasPostgameReady(): boolean {
+  const guest = gameWebContentsByPlatform.get("atlas");
+  if (!mainServicesReady || !guest || guest.isDestroyed() || typeof capture === "undefined") return false;
+  return atlasPostgameIdleGate.allows({
+    trusted: isCurrentTrustedGameWebContents("atlas", guest),
+    loading: guest.isLoadingMainFrame(),
+    capturing: capture.hasActiveCaptureSession("atlas"),
+    platformSwitchAllowed: capture.getGamePlatformSwitchStatus().allowed,
+    url: guest.getURL(),
+  });
+}
+
+function cancelAtlasPostgameQuery(): void {
+  const guest = atlasPostgameQueryGuest;
+  if (!guest) return;
+  atlasPostgameQueryGuest = null;
+  atlasPostgameQueryGeneration += 1;
+  if (!guest.isDestroyed()) void guest.executeJavaScript(atlasPostgameCancelScript()).catch(() => undefined);
+}
+
+function startAtlasPostgameCollection(): void {
+  if (atlasPostgameAutoImport) return;
+  atlasPostgameAutoImport = new AtlasPostgameAutoImport({
+    ready: atlasPostgameReady,
+    listCaptures: () => rawCaptureService.listAutomaticAtlasPostgameCaptures(),
+    readCapture: (id) => rawCaptureService.readAutomaticAtlasPostgameCapture(id, atlasPostgameReady),
+    deliver: (id, gameNumber, replay) => rawCaptureService.sendAutomaticAtlasPostgame(id, gameNumber, replay, atlasPostgameReady),
+    diagnostic: (event) => {
+      if (typeof diagnostics === "undefined") return;
+      void diagnostics.record({
+        id: `atlas-postgame-${randomUUID()}`,
+        platform: "atlas",
+        kind: "debug",
+        capturedAt: new Date().toISOString(),
+        url: "https://play.riftatlas.com/",
+        payload: { reason: "atlas-postgame-collection", stage: event.stage, outcome: event.outcome, attempt: event.attempt }
+      }).catch(() => undefined);
+    },
+    query: async (target) => {
+      if (!atlasPostgameReady()) throw new Error("Atlas replay collection is waiting until gameplay finishes.");
+      const guest = gameWebContentsByPlatform.get("atlas")!;
+      const url = guest.getURL();
+      const generation = ++atlasPostgameQueryGeneration;
+      atlasPostgameQueryGuest = guest;
+      try {
+        const result: unknown = await guest.executeJavaScript(atlasPostgameQueryScript({ ...target, expectedPageUrl: url }));
+        if (generation !== atlasPostgameQueryGeneration || !atlasPostgameReady() || guest !== gameWebContentsByPlatform.get("atlas") || guest.getURL() !== url) {
+          throw new Error("Atlas replay collection paused because the game changed.");
+        }
+        return result as AtlasPostgameQueryResult;
+      } finally {
+        if (generation === atlasPostgameQueryGeneration) atlasPostgameQueryGuest = null;
+      }
+    },
+  });
+  // This timer only checks a cheap main-process gate during gameplay. Disk and
+  // network work starts after a quiet interval, with no active match. Recent
+  // completed captures can also resume after restart once Atlas is idle.
+  const timer = setInterval(() => {
+    if (atlasPostgameReady()) void atlasPostgameAutoImport?.run().catch(() => undefined);
+    else cancelAtlasPostgameQuery();
+  }, 15_000);
+  timer.unref();
+  app.once("before-quit", () => {
+    clearInterval(timer);
+    cancelAtlasPostgameQuery();
+    atlasPostgameAutoImport?.dispose();
+  });
 }
 
 function startRawCaptureUploadRetry(): void {
@@ -2562,6 +2639,8 @@ function installRawCaptureWebSocketTap(webContents: WebContents): void {
         ...event
       }
     }).catch(() => undefined);
+  }, {
+    mainLoopDelayMs: () => eventLoopWatchdog?.currentLagMs()
   });
   try {
     if (!webContents.debugger.isAttached()) {
@@ -2577,7 +2656,13 @@ function installRawCaptureWebSocketTap(webContents: WebContents): void {
         raw: "{\"type\":\"debugger-attached\"}"
       }
     }, "debugger-attached");
-    webContents.debugger.sendCommand("Network.enable").catch((error) => {
+    // Atlas capture consumes WebSocket events only. Keeping HTTP bodies here
+    // duplicates asset memory without contributing anything to the replay.
+    webContents.debugger.sendCommand("Network.enable", {
+      maxTotalBufferSize: 0,
+      maxResourceBufferSize: 0,
+      maxPostDataSize: 0
+    }).catch((error) => {
       void logStartupIssue("raw capture network enable failed", error);
     });
   } catch (error) {
@@ -2704,11 +2789,14 @@ function ingestAtlasRawFrame(
   bridgeBattlefieldSeat = false,
   authoritativeMatchTracker?: AtlasAuthoritativeMatchTracker
 ): void {
-  atlasAutomaticRecoverySafetyFence.observeRealtimeFrame(
+  const atlasGameActivity = atlasAutomaticRecoverySafetyFence.observeRealtimeFrame(
     webContents.id,
     frame.requestUrl,
     frame.frame.raw
   );
+  if (atlasGameActivity && atlasPostgameIdleGate.observeRealtimeActivity(frame.frame.raw)) {
+    cancelAtlasPostgameQuery();
+  }
   const authoritativeMatchState = bridgeBattlefieldSeat
     ? authoritativeMatchTracker?.observeFrame(frame) ?? null
     : null;
@@ -9726,6 +9814,9 @@ app.whenReady().then(async () => {
         store,
         (expectedAccountUid) => syncService.refreshLinkedAccountIdToken(expectedAccountUid),
         async (localMatchId, webReplayId, expectedAccountUid) => {
+          // The original upload completes first. Optional post-game collection
+          // has its own idle/retry budget and cannot delay match capture.
+          if (atlasPostgameReady()) void atlasPostgameAutoImport?.run().catch(() => undefined);
           const match = (await store.getMatches()).find((candidate) => candidate.id === localMatchId);
           if (match?.platform === "tcga") {
             const synced = await syncService.syncMatch(match, { quiet: true });
@@ -9746,7 +9837,8 @@ app.whenReady().then(async () => {
           if (window && !window.isDestroyed() && !window.webContents.isDestroyed()) {
             window.webContents.send("replay:updated", replay);
           }
-        }
+        },
+        join(app.getPath("userData"), "Raw Capture Staging")
       );
     });
     overlayServer = new OverlayServer(store, () => {
@@ -9864,6 +9956,7 @@ app.whenReady().then(async () => {
       ));
     }
     registerIpc();
+    startAtlasPostgameCollection();
     mainServicesReady = true;
     await runStartupStage("Opening the main window", () => createWindow());
     if (!IS_PACKAGED_SMOKE_TEST) {

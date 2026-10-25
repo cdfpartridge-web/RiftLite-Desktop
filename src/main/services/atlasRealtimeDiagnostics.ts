@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { AtlasObserverTiming } from "./atlasObserverTiming.js";
 
 type AtlasRealtimeRoute = "match" | "matchmaking" | "account" | "other";
 const NETWORK_ERRORS = [
@@ -41,6 +42,15 @@ export interface AtlasRealtimeDiagnosticEvent {
   sentCloseCode?: number;
   networkError?: NetworkError | "unknown";
   suppressedEvents: number;
+  /** Bounded CDP-source to main-observer delay, not a wire/server RTT. */
+  observerTimingEpoch?: number;
+  observerTimestampSamples?: number;
+  observerDeliveryLagLastMs?: number;
+  observerDeliveryLagMaxMs?: number;
+  sourceSinceLastReceivedMs?: number | null;
+  sourceSinceLastSentMs?: number | null;
+  /** Optional caller-supplied main-loop delay sample at this lifecycle event. */
+  mainLoopDelayMs?: number;
 }
 
 interface SocketState {
@@ -57,6 +67,15 @@ interface SocketState {
   handshakeStatus?: number;
   receivedCloseCode?: number;
   sentCloseCode?: number;
+  timing?: {
+    epoch: number;
+    samples: number;
+    lastLagMs: number;
+    maxLagMs: number;
+    currentSourceMs: number | null;
+    lastReceivedSourceMs: number | null;
+    lastSentSourceMs: number | null;
+  };
 }
 
 /** Passive metadata observer for an already-enabled CDP Network stream. */
@@ -68,12 +87,16 @@ export class AtlasRealtimeDiagnostics {
   private eventWindowStart = 0;
   private emittedInWindow = 0;
   private suppressedEvents = 0;
+  private readonly timing: AtlasObserverTiming;
+  private readonly mainLoopDelayMs?: () => number | undefined;
 
   constructor(
     private readonly onEvent: (event: AtlasRealtimeDiagnosticEvent) => void,
-    options: { now?: () => number } = {}
+    options: { now?: () => number; monotonicNow?: () => number; mainLoopDelayMs?: () => number | undefined } = {}
   ) {
     this.now = options.now ?? Date.now;
+    this.timing = new AtlasObserverTiming(options.monotonicNow);
+    this.mainLoopDelayMs = options.mainLoopDelayMs;
   }
 
   observe(method: string, params: unknown): void {
@@ -111,6 +134,7 @@ export class AtlasRealtimeDiagnostics {
     const state = this.sockets.get(requestId);
     if (!state) return;
     const now = this.observedAt();
+    this.observeTiming(state, payload, method);
     if (method === "Network.webSocketFrameReceived" || method === "Network.webSocketFrameSent") {
       const frame = record(payload.response);
       if (!frameOpcodes.has(frame.opcode)) return;
@@ -147,6 +171,31 @@ export class AtlasRealtimeDiagnostics {
 
   clear(): void {
     this.sockets.clear();
+    this.timing.clear();
+  }
+
+  private observeTiming(state: SocketState, payload: Record<string, unknown>, method: string): void {
+    if (state.timing) state.timing.currentSourceMs = null;
+    // Only the trusted handshake request supplies CDP's paired clocks. Use the
+    // unclamped wall clock here so normal NTP changes do not distort correlation.
+    const sample = this.timing.observe(method === "Network.webSocketWillSendHandshakeRequest"
+      ? payload : { timestamp: payload.timestamp }, this.now());
+    if (!sample) return;
+    if (!state.timing || state.timing.epoch !== sample.epoch) {
+      state.timing = { epoch: sample.epoch, samples: 0, lastLagMs: 0, maxLagMs: 0,
+        currentSourceMs: sample.sourceMs,
+        lastReceivedSourceMs: null, lastSentSourceMs: null };
+    }
+    const timing = state.timing;
+    timing.samples = increment(timing.samples);
+    timing.lastLagMs = sample.deliveryLagMs;
+    timing.maxLagMs = Math.max(timing.maxLagMs, sample.deliveryLagMs);
+    timing.currentSourceMs = sample.sourceMs;
+    if (method === "Network.webSocketFrameReceived") {
+      timing.lastReceivedSourceMs = Math.max(timing.lastReceivedSourceMs ?? 0, sample.sourceMs);
+    } else if (method === "Network.webSocketFrameSent") {
+      timing.lastSentSourceMs = Math.max(timing.lastSentSourceMs ?? 0, sample.sourceMs);
+    }
   }
 
   private observedAt(): number {
@@ -172,6 +221,14 @@ export class AtlasRealtimeDiagnostics {
       return;
     }
     this.emittedInWindow += 1;
+    const timing = state.timing;
+    let mainLoopDelayMs: number | undefined;
+    try {
+      const value = this.mainLoopDelayMs?.();
+      if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
+        mainLoopDelayMs = Math.min(600_000, Math.round(value));
+      }
+    } catch { /* Optional measurement must not interrupt observation. */ }
     const event: AtlasRealtimeDiagnosticEvent = {
       type,
       connectionId: state.connectionId,
@@ -186,6 +243,19 @@ export class AtlasRealtimeDiagnostics {
       ...(state.receivedCloseCode === undefined ? {} : { receivedCloseCode: state.receivedCloseCode }),
       ...(state.sentCloseCode === undefined ? {} : { sentCloseCode: state.sentCloseCode }),
       ...(networkError === undefined ? {} : { networkError }),
+      ...(timing ? {
+        observerTimingEpoch: timing.epoch,
+        observerTimestampSamples: timing.samples,
+        observerDeliveryLagLastMs: timing.lastLagMs,
+        observerDeliveryLagMaxMs: timing.maxLagMs,
+        ...(timing.currentSourceMs === null ? {} : {
+          sourceSinceLastReceivedMs: timing.lastReceivedSourceMs === null ? null
+            : Math.max(0, Math.round(timing.currentSourceMs - timing.lastReceivedSourceMs)),
+          sourceSinceLastSentMs: timing.lastSentSourceMs === null ? null
+            : Math.max(0, Math.round(timing.currentSourceMs - timing.lastSentSourceMs))
+        })
+      } : {}),
+      ...(mainLoopDelayMs === undefined ? {} : { mainLoopDelayMs }),
       suppressedEvents: this.suppressedEvents
     };
     this.suppressedEvents = 0;

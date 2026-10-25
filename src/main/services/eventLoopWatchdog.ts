@@ -7,6 +7,8 @@ export interface EventLoopLagEvent {
 
 export interface EventLoopWatchdog {
   stop(): void;
+  /** Recent timer drift, including a delayed tick that has not run yet. */
+  currentLagMs(): number;
 }
 
 /**
@@ -22,9 +24,13 @@ export function startEventLoopWatchdog(
   const cooldownMs = Math.max(intervalMs, options.cooldownMs ?? 30_000);
   let expectedAt = performance.now() + intervalMs;
   let lastReportedAt = Number.NEGATIVE_INFINITY;
+  let lastTickAt = Number.NEGATIVE_INFINITY;
+  let lastLagMs = 0;
   const timer = setInterval(() => {
     const now = performance.now();
     const lagMs = Math.max(0, now - expectedAt);
+    lastTickAt = now;
+    lastLagMs = lagMs;
     expectedAt = now + intervalMs;
     if (lagMs < thresholdMs || now - lastReportedAt < cooldownMs) {
       return;
@@ -39,5 +45,15 @@ export function startEventLoopWatchdog(
     });
   }, intervalMs);
   timer.unref();
-  return { stop: () => clearInterval(timer) };
+  return {
+    stop: () => clearInterval(timer),
+    currentLagMs: () => {
+      const now = performance.now();
+      return Math.round(Math.max(
+        0,
+        now - expectedAt,
+        now - lastTickAt <= intervalMs ? lastLagMs : 0
+      ));
+    }
+  };
 }
