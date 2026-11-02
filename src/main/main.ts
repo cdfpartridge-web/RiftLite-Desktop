@@ -14,9 +14,11 @@ import { deflateRawSync, inflateRawSync } from "node:zlib";
 import ffmpegStaticPath from "ffmpeg-static";
 import { AtlasHistoryService } from "./services/atlasHistoryService.js";
 import { AtlasHistoryAutoImport } from "./services/atlasHistoryAutoImport.js";
-import { AtlasPostgameAutoImport } from "./services/atlasPostgameAutoImport.js";
+import { AtlasPostgameAutoImport, AtlasPostgameDeferredError } from "./services/atlasPostgameAutoImport.js";
 import { AtlasPostgameIdleGate } from "./services/atlasPostgameIdleGate.js";
-import { atlasPostgameCancelScript, atlasPostgameQueryScript, type AtlasPostgameQueryResult } from "./services/atlasPostgameQuery.js";
+import { GameplayMaintenanceScheduler, GameplayMaintenanceDeferredError } from "./services/gameplayMaintenanceScheduler.js";
+import { GameplayMaintenanceSnapshot } from "./services/gameplayMaintenanceSnapshot.js";
+import { atlasPostgameCancelScript, atlasPostgameQueryScript, atlasPostgameQueryFailureReason, AtlasPostgameQueryError, type AtlasPostgameQueryResult } from "./services/atlasPostgameQuery.js";
 import type {
   ActiveDeckPrep,
   AtlasConnectionDiagnostics,
@@ -102,6 +104,7 @@ import { AtlasKnownOpponentHandTracker } from "../shared/atlasKnownOpponentHand.
 import { atlasFailureResourceType, shouldPresentAtlasResourceFailure } from "../shared/atlasResourceFailure.js";
 import {
   ATLAS_RENDERER_PERFORMANCE_IPC_CHANNEL,
+  AtlasRendererPerformanceReportLimiter,
   validatedAtlasRendererPerformanceSummary
 } from "../shared/atlasRendererPerformance.js";
 import {
@@ -518,15 +521,25 @@ const atlasGuestRecoveryByGuest = new Map<number, AtlasGuestRecoveryLifecycle>()
 const ATLAS_EMPTY_SHELL_MAIN_RELOAD_DELAY_MS = 5_000;
 const ATLAS_INVALID_CLAIMS_RECOVERY_DELAY_MS = 5_000;
 
+let automaticMaintenanceHoldCount = 0;
+const automaticMaintenance = new GameplayMaintenanceScheduler({
+  ready: automaticMaintenanceReady,
+  onError: (key, error) => logStartupIssue(`automatic ${key} maintenance failed`, error)
+});
 const accountCloudSyncQueue = new AccountCloudSyncQueue(
   async (reason) => {
+    checkpointAutomaticMaintenance();
     const settings = await store.getSettings();
+    checkpointAutomaticMaintenance();
     if (!settings.accountCloudSyncEnabled || !settings.accountUid) {
       return;
     }
     try {
-      await syncService.uploadAccountCloudSync(`${reason}. Account sync updated.`, { automatic: true });
+      await syncService.uploadAccountCloudSync(`${reason}. Account sync updated.`, {
+        automatic: true, checkpoint: checkpointAutomaticMaintenance
+      });
     } catch (error) {
+      if (error instanceof GameplayMaintenanceDeferredError) throw error;
       await store.updateSettings((current) => (
         current.accountUid === settings.accountUid && current.accountCloudSyncEnabled
           ? { accountCloudSyncLastError: error instanceof Error ? error.message : "Account cloud sync failed." }
@@ -537,8 +550,21 @@ const accountCloudSyncQueue = new AccountCloudSyncQueue(
   },
   async (error) => {
     await logStartupIssue("queued account cloud sync failed", error);
-  }
+  },
+  20_000,
+  () => automaticMaintenance.request("account-cloud-sync")
 );
+automaticMaintenance.register("account-cloud-sync", () => accountCloudSyncQueue.flush());
+automaticMaintenance.register("pending-replays", async () => {
+  await retryPendingRawCapturesAndMatchReports();
+});
+const replayDiagnosticsSnapshot = new GameplayMaintenanceSnapshot(
+  automaticMaintenance,
+  "replay-diagnostics",
+  () => store.getSettings(),
+  () => rawCaptureService.getWebReplayUploadDiagnostics()
+);
+app.once("will-quit", () => automaticMaintenance.dispose());
 
 function queueAccountCloudSync(reason = "Local data changed"): void {
   accountCloudSyncQueue.queue(reason);
@@ -1011,6 +1037,24 @@ function atlasPostgameReady(): boolean {
   });
 }
 
+/** One cheap foreground boundary for optional automatic work, across providers. */
+function automaticMaintenanceReady(): boolean {
+  if (!mainServicesReady || automaticMaintenanceHoldCount || typeof capture === "undefined") return false;
+  if (capture.hasGameplayInProgress()) return false;
+  if (!atlasPostgameIdleGate.isQuiet()) return false;
+  const guest = gameWebContentsByPlatform.get("atlas");
+  // No Atlas guest is a normal startup/TCGA-only state, not a permanent hold.
+  if (!guest || guest.isDestroyed()) return true;
+  return atlasPostgameIdleGate.allowsMaintenance({
+    loading: guest.isLoadingMainFrame(),
+    url: guest.getURL()
+  });
+}
+
+function checkpointAutomaticMaintenance(): void {
+  if (!automaticMaintenanceReady()) throw new GameplayMaintenanceDeferredError();
+}
+
 function cancelAtlasPostgameQuery(): void {
   const guest = atlasPostgameQueryGuest;
   if (!guest) return;
@@ -1034,21 +1078,31 @@ function startAtlasPostgameCollection(): void {
         kind: "debug",
         capturedAt: new Date().toISOString(),
         url: "https://play.riftatlas.com/",
-        payload: { reason: "atlas-postgame-collection", stage: event.stage, outcome: event.outcome, attempt: event.attempt }
+        payload: { reason: "atlas-postgame-collection", stage: event.stage, outcome: event.outcome, attempt: event.attempt, ...(event.failureReason ? { failureReason: event.failureReason } : {}) }
       }).catch(() => undefined);
     },
     query: async (target) => {
-      if (!atlasPostgameReady()) throw new Error("Atlas replay collection is waiting until gameplay finishes.");
+      if (!atlasPostgameReady()) throw new AtlasPostgameDeferredError();
       const guest = gameWebContentsByPlatform.get("atlas")!;
       const url = guest.getURL();
       const generation = ++atlasPostgameQueryGeneration;
       atlasPostgameQueryGuest = guest;
       try {
-        const result: unknown = await guest.executeJavaScript(atlasPostgameQueryScript({ ...target, expectedPageUrl: url }));
+        const result: unknown = await guest.executeJavaScript(atlasPostgameQueryScript({ ...target, expectedPageUrl: url }, true));
+        if (result && typeof result === "object" && Object.hasOwn(result, "riftlitePostgameFailure")) {
+          throw new AtlasPostgameQueryError(atlasPostgameQueryFailureReason({
+            code: "atlas_postgame_query_failed", failureReason: (result as { riftlitePostgameFailure: unknown }).riftlitePostgameFailure
+          }));
+        }
         if (generation !== atlasPostgameQueryGeneration || !atlasPostgameReady() || guest !== gameWebContentsByPlatform.get("atlas") || guest.getURL() !== url) {
-          throw new Error("Atlas replay collection paused because the game changed.");
+          throw new AtlasPostgameDeferredError();
         }
         return result as AtlasPostgameQueryResult;
+      } catch (error) {
+        if (generation !== atlasPostgameQueryGeneration || guest.isDestroyed() || !atlasPostgameReady()
+          || guest !== gameWebContentsByPlatform.get("atlas") || guest.getURL() !== url
+          || atlasPostgameQueryFailureReason(error) === "cancelled") throw new AtlasPostgameDeferredError();
+        throw error;
       } finally {
         if (generation === atlasPostgameQueryGeneration) atlasPostgameQueryGuest = null;
       }
@@ -1057,8 +1111,12 @@ function startAtlasPostgameCollection(): void {
   // This timer only checks a cheap main-process gate during gameplay. Disk and
   // network work starts after a quiet interval, with no active match. Recent
   // completed captures can also resume after restart once Atlas is idle.
+  automaticMaintenance.register("atlas-postgame", async (context) => {
+    context.checkpoint();
+    if (atlasPostgameReady()) await atlasPostgameAutoImport?.run();
+  });
   const timer = setInterval(() => {
-    if (atlasPostgameReady()) void atlasPostgameAutoImport?.run().catch(() => undefined);
+    if (atlasPostgameReady()) automaticMaintenance.request("atlas-postgame");
     else cancelAtlasPostgameQuery();
   }, 15_000);
   timer.unref();
@@ -1074,15 +1132,15 @@ function startRawCaptureUploadRetry(): void {
     clearInterval(rawCaptureUploadRetryTimer);
   }
   rawCaptureUploadRetryTimer = setInterval(() => {
-    void retryPendingRawCapturesAndMatchReports().catch((error) => {
-      void logStartupIssue("raw capture pending upload retry failed", error);
-    });
+    automaticMaintenance.request("pending-replays");
   }, 120_000);
   rawCaptureUploadRetryTimer.unref();
 }
 
-async function uploadPendingRawCapturesWithAccountRefresh(forceRetry = false): Promise<number> {
+async function uploadPendingRawCapturesWithAccountRefresh(forceRetry = false, checkpoint?: () => void): Promise<number> {
+  checkpoint?.();
   const settings = await store.getSettings();
+  checkpoint?.();
   const accountBoundUploadEnabled = settings.rawCapture.enabled && Boolean(
     (settings.rawCapture.webReplayAutoUploadEnabled &&
       settings.rawCapture.webReplayAutoUploadAccountUid === settings.accountUid) ||
@@ -1097,10 +1155,12 @@ async function uploadPendingRawCapturesWithAccountRefresh(forceRetry = false): P
   ) {
     await syncService.getAccountConnectionStatus();
   }
-  return rawCaptureService.uploadPendingRawCaptures(5, forceRetry);
+  checkpoint?.();
+  return rawCaptureService.uploadPendingRawCaptures(5, forceRetry, checkpoint);
 }
 
 async function syncSettledMatchReports(): Promise<{ syncedCount: number; blocked: boolean }> {
+  checkpointAutomaticMaintenance();
   const settings = await store.getSettings();
   const candidates = selectConfirmedMatchReportRetries(await store.getMatches(), 10, {
     community: publicCommunitySyncEnabled(settings),
@@ -1108,12 +1168,14 @@ async function syncSettledMatchReports(): Promise<{ syncedCount: number; blocked
     teamIds: new Set((settings.activeTeams ?? []).filter((team) => team.sync).map((team) => team.id))
   }).matches;
   const result = await runConfirmedMatchReportRetryBatch(candidates, async (match) => {
+    checkpointAutomaticMaintenance();
     const synced = await syncService.syncMatch(match, { quiet: true });
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send("match:draft", synced);
     }
     return synced;
   });
+  if (result.failure?.error instanceof GameplayMaintenanceDeferredError) throw result.failure.error;
   if (result.failure) {
     await logStartupIssue(
       `Pending match report retry failed (${result.failure.match.id})`,
@@ -1128,10 +1190,12 @@ async function syncSettledMatchReports(): Promise<{ syncedCount: number; blocked
 }
 
 const runPendingRawCaptureAndMatchReportRecovery = createSingleFlight(async (): Promise<number> => {
-  const uploaded = await uploadPendingRawCapturesWithAccountRefresh();
+  checkpointAutomaticMaintenance();
+  const uploaded = await uploadPendingRawCapturesWithAccountRefresh(false, checkpointAutomaticMaintenance);
+  checkpointAutomaticMaintenance();
   const reportResult = await syncSettledMatchReports();
   if (!reportResult.blocked) {
-    retryDeferredConfirmedMatchDeliveries();
+    await retryDeferredConfirmedMatchDeliveries();
   }
   return uploaded;
 });
@@ -1140,10 +1204,14 @@ function retryPendingRawCapturesAndMatchReports(): Promise<number> {
   return runPendingRawCaptureAndMatchReportRecovery();
 }
 
-function retryDeferredConfirmedMatchDeliveries(): void {
+async function retryDeferredConfirmedMatchDeliveries(): Promise<void> {
   for (const job of confirmedMatchDeliveryByMatchId.values()) {
     if (!job.pending) {
+      checkpointAutomaticMaintenance();
       queueConfirmedMatchDelivery(job.saved);
+      // Each confirmed delivery keeps its existing replay-before-report unit.
+      // Join it before starting another retry or another maintenance category.
+      await job.pending;
     }
   }
 }
@@ -3475,8 +3543,7 @@ function queueConfirmedMatchDelivery(saved: MatchDraft): void {
   // delivery. The match itself is already durable at this point.
   const pending = new Promise<void>((resolvePending) => setImmediate(resolvePending))
     .then(() => deliverConfirmedMatch(job.saved));
-  job.pending = pending;
-  void pending.then(
+  const completion: Promise<void> = pending.then(
     () => {
       if (confirmedMatchDeliveryByMatchId.get(saved.id) === job) {
         confirmedMatchDeliveryByMatchId.delete(saved.id);
@@ -3484,14 +3551,11 @@ function queueConfirmedMatchDelivery(saved: MatchDraft): void {
       capture.markConfirmedReplayFinalizationComplete(saved.id);
     },
     async (error) => {
-      if (confirmedMatchDeliveryByMatchId.get(saved.id) === job) {
-        job.pending = null;
-      }
-      // Durable local match/replay state remains retryable through the normal
-      // startup/two-minute upload and report recovery lanes.
-      capture.markConfirmedReplayDeliveryDeferred(saved.id);
-      await logStartupIssue(`${saved.platform} confirmed replay/report background delivery failed`, error);
       try {
+        // Retain the pending handle until fallback also finishes, so another
+        // retry cannot overlap this delivery's remaining writes.
+        capture.markConfirmedReplayDeliveryDeferred(saved.id);
+        await logStartupIssue(`${saved.platform} confirmed replay/report background delivery failed`, error);
         const latest = (await store.getMatches()).find((candidate) => candidate.id === saved.id) ?? saved;
         const synced = await capture.syncConfirmedMatch(latest);
         if (mainWindow && !mainWindow.isDestroyed()) {
@@ -3500,9 +3564,15 @@ function queueConfirmedMatchDelivery(saved: MatchDraft): void {
         queueAccountCloudSync("Match saved; Web Replay delivery pending");
       } catch (syncError) {
         await logStartupIssue("Match report fallback after replay delivery failure failed", syncError);
+      } finally {
+        if (confirmedMatchDeliveryByMatchId.get(saved.id) === job && job.pending === completion) {
+          job.pending = null;
+        }
       }
     }
   );
+  job.pending = completion;
+  void completion.catch((error) => logStartupIssue("Confirmed delivery completion failed", error).catch(() => undefined));
 }
 
 async function takeScreenshot(source: ScreenshotResult["source"] = "manual", options: ScreenshotOptions = {}): Promise<ScreenshotResult> {
@@ -7305,11 +7375,16 @@ async function runRiftLiteDataRestore<T>(
   // acquired. If an active upload makes this restore refuse, resume the exact
   // pending automatic sync instead of silently losing it.
   const resumeAccountCloudSync = accountCloudSyncQueue.suspend();
+  automaticMaintenanceHoldCount += 1;
   let releaseCaptureMaintenance: (() => void) | null = null;
   let discardedPendingSyncReason = "";
   let restoreCompleted = false;
   try {
-    const result = await syncService.runWithAccountCloudRestoreFence((restoreFence) => {
+    const result = await syncService.runWithAccountCloudRestoreFence(async (restoreFence) => {
+      // Acquire the service fence first: an in-flight cloud publication must
+      // still refuse restore, rather than replacing the selected generation
+      // while restore waits. Other atomic maintenance units can now drain.
+      await automaticMaintenance.wake();
       discardedPendingSyncReason = accountCloudSyncQueue.takePendingReason();
       return runAccountCloudRestore(() => restore(restoreFence), {
         prepareForRestore: async () => {
@@ -7339,6 +7414,7 @@ async function runRiftLiteDataRestore<T>(
     if (!restoreCompleted && discardedPendingSyncReason) {
       accountCloudSyncQueue.restorePendingReason(discardedPendingSyncReason);
     }
+    automaticMaintenanceHoldCount = Math.max(0, automaticMaintenanceHoldCount - 1);
     resumeAccountCloudSync();
   }
 }
@@ -7663,13 +7739,16 @@ async function importReplayMediaFromPath(sourcePath: string): Promise<ReplayReco
   return saved;
 }
 
-async function recoverInterruptedReplayVideosOnStartup(): Promise<number> {
+async function recoverInterruptedReplayVideosOnStartup(checkpoint?: () => void): Promise<number> {
+  checkpoint?.();
   const settings = await store.getSettings();
+  checkpoint?.();
   const directory = replayVideoDirectory(settings);
   const storedReplays = [...await store.getReplays(), ...await store.getDeletedReplays()];
   const knownVideoPaths = storedReplays
     .map((replay) => replay.video?.path?.trim())
     .filter((filePath): filePath is string => Boolean(filePath));
+  checkpoint?.();
   const candidates = [...new Set((await Promise.all(
     [...new Set([directory, replayVideoStagingDirectory()])]
       .map(async (root) => {
@@ -7684,6 +7763,7 @@ async function recoverInterruptedReplayVideosOnStartup(): Promise<number> {
   let recovered = 0;
 
   for (const filePath of candidates) {
+    checkpoint?.();
     try {
       const replay = await importReplayMediaFromPath(filePath);
       recovered += 1;
@@ -8693,9 +8773,7 @@ function registerIpc(): void {
         replayFrameDirectoryCache = null;
       }
       if (RIFTREPLAY_CAPTURE_FEATURE_ENABLED && Object.prototype.hasOwnProperty.call(patch, "rawCapture")) {
-        void uploadPendingRawCapturesWithAccountRefresh().catch((error) => {
-          void logStartupIssue("raw capture pending upload after settings save failed", error);
-        });
+        automaticMaintenance.request("pending-replays");
       }
       queueAccountCloudSync("Settings changed");
       return saved;
@@ -8725,9 +8803,7 @@ function registerIpc(): void {
     }));
     await configureTcgaWebReplayProductCapture();
     if (RIFTREPLAY_CAPTURE_FEATURE_ENABLED) {
-      void uploadPendingRawCapturesWithAccountRefresh().catch((error) => {
-        void logStartupIssue("raw capture pending upload after atomic settings update failed", error);
-      });
+      automaticMaintenance.request("pending-replays");
     }
     queueAccountCloudSync("Web Replay settings changed");
     return saved;
@@ -8742,9 +8818,7 @@ function registerIpc(): void {
     }));
     await configureTcgaWebReplayProductCapture();
     if (RIFTREPLAY_CAPTURE_FEATURE_ENABLED) {
-      void uploadPendingRawCapturesWithAccountRefresh().catch((error) => {
-        void logStartupIssue("raw capture pending upload after Discord destination update failed", error);
-      });
+      automaticMaintenance.request("pending-replays");
     }
     queueAccountCloudSync("Web Replay Discord settings changed");
     return saved;
@@ -8789,12 +8863,11 @@ function registerIpc(): void {
     }
   });
   const atlasHistoryAutoImport = new AtlasHistoryAutoImport({
-    refreshMany: (ids) => atlasHistoryService.refreshMany(ids),
-    ready: () => {
-      const guest = gameWebContentsByPlatform.get("atlas");
-      return Boolean(guest && isCurrentTrustedGameWebContents("atlas", guest) &&
-        !guest.isLoadingMainFrame() && new URL(guest.getURL()).origin === "https://play.riftatlas.com");
-    },
+    refreshMany: (ids) => atlasHistoryService.refreshMany(ids, () => {
+      checkpointAutomaticMaintenance();
+      if (!atlasPostgameReady()) throw new GameplayMaintenanceDeferredError();
+    }),
+    ready: atlasPostgameReady,
     report: (matchId, state) => {
       void diagnostics.record({
         id: randomUUID(), platform: "atlas", kind: "debug", capturedAt: new Date().toISOString(),
@@ -8802,8 +8875,15 @@ function registerIpc(): void {
       }).catch(() => undefined);
     }
   });
+  automaticMaintenance.register("atlas-history", async (context) => {
+    context.checkpoint();
+    if (!atlasPostgameReady()) return;
+    const matches = await store.getMatches();
+    context.checkpoint();
+    await atlasHistoryAutoImport.run(matches);
+  });
   const catchUpAtlasHistory = () => {
-    void store.getMatches().then((matches) => atlasHistoryAutoImport.run(matches)).catch(() => undefined);
+    automaticMaintenance.request("atlas-history");
   };
   // Covers automatic saves, delayed Atlas history, signing in later and app restarts.
   // Passes share one history scan, with finite retries/backoff and a 24-hour age limit.
@@ -8812,7 +8892,7 @@ function registerIpc(): void {
   app.once("before-quit", () => clearInterval(atlasHistoryTimer));
   handleTrustedAppIpc("matches:get", async () => {
     const matches = await store.getMatches();
-    void atlasHistoryAutoImport.run(matches).catch(() => undefined);
+    catchUpAtlasHistory();
     return matches;
   });
   handleTrustedAppIpc("matches:atlas-history", (_event,id:string) => atlasHistoryService.refresh(id));
@@ -9071,9 +9151,9 @@ function registerIpc(): void {
     assertTrustedAppIpcSender(event);
     return rawCaptureService.getStatus();
   });
-  handleTrustedAppIpc("raw-capture:diagnostics", (event) => {
+  handleTrustedAppIpc("raw-capture:diagnostics", (event, automatic?: boolean) => {
     assertTrustedAppIpcSender(event);
-    return rawCaptureService.getWebReplayUploadDiagnostics();
+    return replayDiagnosticsSnapshot.get(automatic === true);
   });
   handleTrustedAppIpc("raw-capture:retry-pending", (event) => {
     assertTrustedAppIpcSender(event);
@@ -9203,9 +9283,7 @@ function registerIpc(): void {
       await clearRiftLiteReplayEmbedCookies().catch(() => undefined);
       await configureTcgaWebReplayProductCapture();
       if (RIFTREPLAY_CAPTURE_FEATURE_ENABLED) {
-        void uploadPendingRawCapturesWithAccountRefresh().catch((error) => {
-          void logStartupIssue("raw capture pending upload after account link failed", error);
-        });
+        automaticMaintenance.request("pending-replays");
       }
     }
     return status;
@@ -9639,15 +9717,18 @@ function registerIpc(): void {
       }
     }).catch(() => undefined);
   });
-  const atlasRendererPerformanceReportedAt = new WeakMap<WebContents, number>();
+  const atlasRendererPerformanceReportLimiters = new WeakMap<WebContents, AtlasRendererPerformanceReportLimiter>();
   ipcMain.on(ATLAS_RENDERER_PERFORMANCE_IPC_CHANNEL, (ipcEvent, value: unknown) => {
     if (trustedGameIpcPlatform(ipcEvent) !== "atlas") return;
     const summary = validatedAtlasRendererPerformanceSummary(value);
     if (!summary) return;
     const now = performance.now();
-    const previous = atlasRendererPerformanceReportedAt.get(ipcEvent.sender);
-    if (previous !== undefined && now - previous < 10_000) return;
-    atlasRendererPerformanceReportedAt.set(ipcEvent.sender, now);
+    let limiter = atlasRendererPerformanceReportLimiters.get(ipcEvent.sender);
+    if (!limiter) {
+      limiter = new AtlasRendererPerformanceReportLimiter();
+      atlasRendererPerformanceReportLimiters.set(ipcEvent.sender, limiter);
+    }
+    if (!limiter.accept(now, summary.windowEnded)) return;
     void diagnostics.record({
       id: `atlas-renderer-performance-${randomUUID()}`,
       platform: "atlas",
@@ -9816,7 +9897,7 @@ app.whenReady().then(async () => {
         async (localMatchId, webReplayId, expectedAccountUid) => {
           // The original upload completes first. Optional post-game collection
           // has its own idle/retry budget and cannot delay match capture.
-          if (atlasPostgameReady()) void atlasPostgameAutoImport?.run().catch(() => undefined);
+          if (atlasPostgameReady()) automaticMaintenance.request("atlas-postgame");
           const match = (await store.getMatches()).find((candidate) => candidate.id === localMatchId);
           if (match?.platform === "tcga") {
             const synced = await syncService.syncMatch(match, { quiet: true });
@@ -9960,18 +10041,20 @@ app.whenReady().then(async () => {
     mainServicesReady = true;
     await runStartupStage("Opening the main window", () => createWindow());
     if (!IS_PACKAGED_SMOKE_TEST) {
-      void syncService.backfillPrivateHubWebReplayIds().catch((error) => {
-        void logStartupIssue("private hub web replay backfill failed", error);
+      automaticMaintenance.register("startup-hub-associations", async (context) => {
+        context.checkpoint();
+        await syncService.backfillPrivateHubWebReplayIds(context.checkpoint);
       });
+      automaticMaintenance.request("startup-hub-associations");
       if (RIFTREPLAY_CAPTURE_FEATURE_ENABLED) {
-        void retryPendingRawCapturesAndMatchReports().catch((error) => {
-          void logStartupIssue("raw capture pending upload on startup failed", error);
-        });
+        automaticMaintenance.request("pending-replays");
         startRawCaptureUploadRetry();
       }
-      void recoverInterruptedReplayVideosOnStartup().catch((error) => {
-        void logStartupIssue("interrupted replay video startup recovery failed", error);
+      automaticMaintenance.register("startup-video-recovery", async (context) => {
+        context.checkpoint();
+        await recoverInterruptedReplayVideosOnStartup(context.checkpoint);
       });
+      automaticMaintenance.request("startup-video-recovery");
     }
     if (UI_SNAPSHOT_PATH) {
       setTimeout(() => {
@@ -10028,12 +10111,12 @@ app.whenReady().then(async () => {
           if (UI_SNAPSHOT_PLATFORM === "atlas" || UI_SNAPSHOT_PLATFORM === "tcga") {
             const platformLiteral = JSON.stringify(UI_SNAPSHOT_PLATFORM);
             await mainWindow.webContents.executeJavaScript(`(() => {
-              const button = document.querySelector('.home-platform-option[data-platform=' + ${platformLiteral} + ']');
+              const button = document.querySelector('.home-default-platform');
               if (!(button instanceof HTMLButtonElement)) return false;
-              button.click();
+              if (button.dataset.platform !== ${platformLiteral}) button.click();
               return true;
             })()`);
-            await new Promise((resolvePlatform) => setTimeout(resolvePlatform, 180));
+            await waitForSnapshotState(`document.querySelector('.home-default-platform')?.getAttribute('data-platform') === ${platformLiteral}`, "default game provider to save");
           }
           const snapshotViewTitles: Record<string, string> = {
             home: "Home",

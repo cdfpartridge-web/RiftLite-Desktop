@@ -25,7 +25,9 @@ describe("crash-safe replay video recovery", () => {
 
     expect(mainSource).toContain("writeReplayVideoRecoverySidecar(filePath");
     expect(mainSource).toContain("clearReplayVideoRecoverySidecar(video.path)");
-    expect(mainSource).toContain("recoverInterruptedReplayVideosOnStartup()");
+    expect(mainSource).toContain('automaticMaintenance.register("startup-video-recovery"');
+    expect(mainSource).toContain("await recoverInterruptedReplayVideosOnStartup(context.checkpoint)");
+    expect(mainSource).toContain('automaticMaintenance.request("startup-video-recovery")');
     expect(rendererSource).toContain("installReplayVideoFailureGuard(runtime)");
     expect(rendererSource).toContain('stopForFailure("source-track-ended"');
     expect(rendererSource).toContain('retainForLater: true, reason');

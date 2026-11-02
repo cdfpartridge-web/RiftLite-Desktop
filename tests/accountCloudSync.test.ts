@@ -7,6 +7,7 @@ vi.mock("electron", () => ({
 }));
 
 import { FirebaseSyncService } from "../src/main/services/firebaseSync";
+import { GameplayMaintenanceDeferredError } from "../src/main/services/gameplayMaintenanceScheduler";
 import type { RiftLiteStore } from "../src/main/services/store";
 import type { RiftLiteBackupFile, UserSettings } from "../src/shared/types";
 
@@ -590,6 +591,136 @@ describe("FirebaseSyncService account cloud sync", () => {
     expect(status.message).toContain("queued background update was discarded");
     expect(store.exportBackupData).not.toHaveBeenCalled();
     expect(request).not.toHaveBeenCalled();
+  });
+
+  it("defers an automatic upload before reading data when gameplay is busy", async () => {
+    const { service, store, getSettings } = harness();
+    const checkpoint = () => { throw new GameplayMaintenanceDeferredError(); };
+    const request = replaceFirestoreRequest(service, async () => ({}));
+
+    await expect(service.uploadAccountCloudSync("Background update", { automatic: true, checkpoint }))
+      .rejects.toBeInstanceOf(GameplayMaintenanceDeferredError);
+
+    expect(store.getSettings).not.toHaveBeenCalled();
+    expect(store.exportBackupData).not.toHaveBeenCalled();
+    expect(request).not.toHaveBeenCalled();
+    expect(getSettings().accountCloudSyncLastError).toBe("");
+    // The rejected preparation must release the upload lane and restore fence.
+    await expect(service.runWithAccountCloudRestoreFence(async () => "restored")).resolves.toBe("restored");
+  });
+
+  it("defers after a pending manifest read before exporting or creating a generation", async () => {
+    const { service, store, getSettings } = harness();
+    await store.saveSettings({ accountCloudSyncEnabled: true, accountCloudSyncRemoteGenerationId: "generation-old" });
+    let ready = true;
+    const checkpoint = () => { if (!ready) throw new GameplayMaintenanceDeferredError(); };
+    const request = replaceFirestoreRequest(service, async () => {
+      ready = false;
+      return manifestDocument();
+    });
+
+    await expect(service.uploadAccountCloudSync("Background update", { automatic: true, checkpoint }))
+      .rejects.toBeInstanceOf(GameplayMaintenanceDeferredError);
+
+    expect(store.exportBackupData).not.toHaveBeenCalled();
+    expect(request.mock.calls.every(([, , options]) => options.method === "GET")).toBe(true);
+    expect(getSettings().accountCloudSyncLastError).toBe("");
+  });
+
+  it("discards an automatic upload when the account changes during its pending manifest read", async () => {
+    const { service, store } = harness();
+    await store.saveSettings({ accountCloudSyncEnabled: true, accountCloudSyncRemoteGenerationId: "generation-old" });
+    const request = replaceFirestoreRequest(service, async () => {
+      await store.saveSettings({ accountUid: "account-2", firebaseUid: "account-2" });
+      return manifestDocument();
+    });
+
+    const status = await service.uploadAccountCloudSync("Background update", { automatic: true, checkpoint: () => undefined });
+
+    expect(status.message).toContain("nothing was uploaded");
+    expect(store.exportBackupData).not.toHaveBeenCalled();
+    expect(request.mock.calls.every(([, , options]) => options.method === "GET")).toBe(true);
+  });
+
+  it("defers after local backup export before serialization, compression or generation writes", async () => {
+    const { service, store, getSettings } = harness();
+    await store.saveSettings({ accountCloudSyncEnabled: true, accountCloudSyncRemoteGenerationId: "generation-old" });
+    let ready = true;
+    const checkpoint = () => { if (!ready) throw new GameplayMaintenanceDeferredError(); };
+    const exported = backup(getSettings());
+    const serializeMatches = vi.fn(() => []);
+    Object.assign(exported.matches, { toJSON: serializeMatches });
+    vi.mocked(store.exportBackupData).mockImplementationOnce(async () => {
+      ready = false;
+      return exported;
+    });
+    const request = replaceFirestoreRequest(service, async () => manifestDocument());
+
+    await expect(service.uploadAccountCloudSync("Background update", { automatic: true, checkpoint }))
+      .rejects.toBeInstanceOf(GameplayMaintenanceDeferredError);
+
+    expect(store.exportBackupData).toHaveBeenCalledOnce();
+    expect(serializeMatches).not.toHaveBeenCalled();
+    expect(request.mock.calls.every(([, , options]) => options.method === "GET")).toBe(true);
+    expect(getSettings().accountCloudSyncLastError).toBe("");
+  });
+
+  it("rejects a changed account after pending local export before generation writes", async () => {
+    const { service, store, getSettings } = harness();
+    await store.saveSettings({ accountCloudSyncEnabled: true, accountCloudSyncRemoteGenerationId: "generation-old" });
+    const exported = backup(getSettings());
+    vi.mocked(store.exportBackupData).mockImplementationOnce(async () => {
+      await store.saveSettings({ accountUid: "account-2", firebaseUid: "account-2" });
+      return exported;
+    });
+    const request = replaceFirestoreRequest(service, async () => manifestDocument());
+
+    await expect(service.uploadAccountCloudSync("Background update", { automatic: true, checkpoint: () => undefined }))
+      .rejects.toThrow("account changed");
+
+    expect(request.mock.calls.every(([, , options]) => options.method === "GET")).toBe(true);
+  });
+
+  it("finishes the atomic generation once chunk publication starts even if gameplay begins", async () => {
+    const { service, store, getSettings } = harness();
+    await store.saveSettings({ accountCloudSyncEnabled: true, accountCloudSyncRemoteGenerationId: "generation-old" });
+    let ready = true;
+    const checkpoint = () => { if (!ready) throw new GameplayMaintenanceDeferredError(); };
+    let currentManifest = manifestDocument();
+    const request = replaceFirestoreRequest(service, async (path, _token, options) => {
+      if (options.method === "GET") return currentManifest;
+      if (options.method === "PATCH" && path.includes("/chunks/")) ready = false;
+      if (options.method === "PATCH" && path.endsWith("/manifest/current")) {
+        currentManifest = { fields: options.body?.fields ?? {}, updateTime: "new-update-time" };
+      }
+      return {};
+    });
+
+    await expect(service.uploadAccountCloudSync("Background update", { automatic: true, checkpoint }))
+      .resolves.toMatchObject({ enabled: true });
+
+    expect(ready).toBe(false);
+    expect(request.mock.calls.some(([path, , options]) => options.method === "PATCH" && path.endsWith("/manifest/current"))).toBe(true);
+    expect(getSettings().accountCloudSyncLastError).toBe("");
+    expect(getSettings().accountCloudSyncRemoteGenerationId).not.toBe("generation-old");
+  });
+
+  it("keeps an explicitly requested upload outside automatic gameplay checkpoints", async () => {
+    const { service, store } = harness();
+    const checkpoint = vi.fn(() => { throw new GameplayMaintenanceDeferredError(); });
+    let currentManifest = manifestDocument();
+    replaceFirestoreRequest(service, async (path, _token, options) => {
+      if (options.method === "GET") return currentManifest;
+      if (options.method === "PATCH" && path.endsWith("/manifest/current")) {
+        currentManifest = { fields: options.body?.fields ?? {}, updateTime: "new-update-time" };
+      }
+      return {};
+    });
+
+    await service.uploadAccountCloudSync("Sync now", { allowRemoteReplacement: true, checkpoint });
+
+    expect(checkpoint).not.toHaveBeenCalled();
+    expect(store.exportBackupData).toHaveBeenCalledOnce();
   });
 
   it("rejects restore instead of waiting behind an upload that could replace its source", async () => {

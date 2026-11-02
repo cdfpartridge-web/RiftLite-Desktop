@@ -2571,7 +2571,8 @@ export interface RiftLiteApi {
   exportReplayFlagsText(replayId: string): Promise<string>;
   uploadRawCapture(replayId: string): Promise<ReplayRecord | null>;
   getRawCaptureStatus(): Promise<RawCaptureStatus>;
-  getWebReplayUploadDiagnostics(): Promise<WebReplayUploadDiagnostics>;
+  /** Automatic reads may return a current-account cache or null while gameplay defers maintenance. */
+  getWebReplayUploadDiagnostics(automatic?: boolean): Promise<WebReplayUploadDiagnostics | null>;
   retryPendingWebReplayUploads(): Promise<number>;
   uploadIncompleteWebReplay(captureSessionId: string): Promise<RiftLiteReplayUploadResult>;
   removeWebReplayUploadFromQueue(captureSessionId: string): Promise<void>;

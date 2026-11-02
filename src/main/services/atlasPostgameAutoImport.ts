@@ -1,10 +1,20 @@
 import { atlasPlayerIdFromUrl, atlasRoomCodeFromUrl } from "../../shared/atlasSeatTracker.js";
 import type { AutomaticAtlasPostgameCapture } from "./rawCaptureService.js";
-import type { AtlasPostgameQueryResult, AtlasPostgameQueryTarget } from "./atlasPostgameQuery.js";
+import { atlasPostgameQueryFailureReason, type AtlasPostgameQueryFailureReason, type AtlasPostgameQueryResult, type AtlasPostgameQueryTarget } from "./atlasPostgameQuery.js";
 
 export type AtlasPostgameTarget = Omit<AtlasPostgameQueryTarget, "expectedPageUrl">;
 const MAX_AGE_MS = 6 * 60 * 60_000;
 const RETRY_DELAYS = [15_000, 30_000, 60_000, 120_000, 300_000];
+const MAX_GAME_RETRY_DELAY_MS = 10 * 60_000;
+
+/** Main uses this when a guest, route, or gameplay boundary cancels collection. */
+export class AtlasPostgameDeferredError extends Error {
+  readonly code = "atlas_postgame_deferred";
+  constructor() {
+    super("Atlas replay collection deferred until gameplay is idle.");
+    this.name = "AtlasPostgameDeferredError";
+  }
+}
 const record = (value: unknown): Record<string, unknown> | null => value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
 const text = (value: unknown): string => typeof value === "string" && value.length > 0 && value.length <= 160 && !/[\u0000-\u001f]/.test(value) ? value : "";
 const timestamp = (value: unknown): number => typeof value === "number" && Number.isSafeInteger(value) && value > 1_500_000_000_000 && value < 4_000_000_000_000 ? value : 0;
@@ -38,9 +48,9 @@ export async function extractAtlasPostgameTargets(input: unknown, canContinue: (
   let bytes = 0;
   for (let index = 0; index < raw.messages.length; index++) {
     if (index % 64 === 0) {
-      if (!canContinue()) throw new Error("Atlas post-game import deferred while a game is active.");
+      if (!canContinue()) throw new AtlasPostgameDeferredError();
       if (index) await new Promise<void>(resolve => setImmediate(resolve));
-      if (!canContinue()) throw new Error("Atlas post-game import deferred while a game is active.");
+      if (!canContinue()) throw new AtlasPostgameDeferredError();
     }
     const message = record(raw.messages[index]);
     if (!message || message.dir !== "in" || message.drop === true) continue;
@@ -108,7 +118,7 @@ export async function extractAtlasPostgameTargets(input: unknown, canContinue: (
     const target = { roomCode: code, roomCreatedAt: createdAt, gameNumber, gameHistoryStartedAt: startedAt, gameHistoryEndedAt: endedAt, localPlayerId: state.localPlayerId };
     found.set(atlasPostgameGameKey(target), { target, format: fields.matchFormat as "bo1" | "bo3", winner: String(winners[0]), seriesComplete });
   }
-  if (!canContinue()) throw new Error("Atlas post-game import deferred while a game is active.");
+  if (!canContinue()) throw new AtlasPostgameDeferredError();
   const completedSeries = completedBo3Targets(rooms, found);
   if (completedSeries) return completedSeries;
   const entries = [...found.values()].filter(entry => !rooms.get(entry.target.roomCode)?.blocked).sort((a, b) => a.target.gameNumber - b.target.gameNumber);
@@ -137,9 +147,11 @@ export async function extractAtlasPostgameTargets(input: unknown, canContinue: (
 
 /**
  * Atlas may move each BO3 game into a new room without sending its terminal
- * fields. The shared series identity and coherent final wins allow an idle
- * completion check, never a fabricated game outcome. Atlas must still return
- * an owned, unrestricted, completed export matching this exact game/series.
+ * fields. Shared series identity and coherent wins allow an idle completion
+ * check, including a final game whose win was not captured. A possible two-game
+ * sweep requires a separate terminal-winner proof before any game is attached.
+ * Never fabricate an outcome: Atlas must still return an owned, unrestricted,
+ * completed export matching this exact game/series, with a terminal third game.
  */
 function completedBo3Targets(rooms: Map<string, Room>, found: Map<string, Found>): AtlasPostgameTarget[] | null {
   if (rooms.size !== 2 && rooms.size !== 3) return null;
@@ -162,11 +174,24 @@ function completedBo3Targets(rooms: Map<string, Room>, found: Map<string, Found>
     if (!wins || Object.keys(wins).length !== 2 || participants.some(id => !Number.isInteger(wins[id]) || Number(wins[id]) < 0 || Number(wins[id]) > 2)) return null;
     const currentWins = participants.map(id => Number(wins[id]));
     const increments = currentWins.map((value, i) => value - priorWins[i]);
-    if (currentWins[0] + currentWins[1] !== gameNumber || increments.some(value => value !== 0 && value !== 1) || increments[0] + increments[1] !== 1
-      || (index < ordered.length - 1 ? currentWins.some(value => value === 2) : !currentWins.some(value => value === 2))) return null;
+    // A locally finished deciding game can stop before Atlas sends its final
+    // win/ending patch. Only an unchanged, coherent 1–1 third room qualifies;
+    // the query must independently confirm its owned, completed native export.
+    const missingDecidingWin = index === ordered.length - 1 && gameNumber === 3
+      && priorWins.every(value => value === 1) && currentWins.every(value => value === 1)
+      && fields.gameHistoryEndedAt === undefined && fields.gameOutcome === undefined;
+    // An unchanged 1–0 score is only an exact candidate, not proof of a sweep.
+    // The final export must show the first game's winner winning again; an
+    // archived/unfinished second game cannot unlock either attachment.
+    const missingSecondWin = ordered.length === 2 && gameNumber === 2
+      && priorWins[0] + priorWins[1] === 1 && currentWins.every((value, i) => value === priorWins[i])
+      && fields.gameHistoryEndedAt === undefined && fields.gameOutcome === undefined;
+    if (!missingDecidingWin && !missingSecondWin && (currentWins[0] + currentWins[1] !== gameNumber || increments.some(value => value !== 0 && value !== 1) || increments[0] + increments[1] !== 1
+      || (index < ordered.length - 1 ? currentWins.some(value => value === 2) : !currentWins.some(value => value === 2)))) return null;
     const target = { roomCode: code, roomCreatedAt: createdAt, gameNumber, gameHistoryStartedAt: startedAt, localPlayerId: state.localPlayerId };
     if (fields.gameHistoryEndedAt === undefined && fields.gameOutcome === undefined) {
-      targets.push({ ...target, completionCheck: "atlas", completionMatchFormat: "bo3", completionSeriesStartedAt: seriesStartedAt });
+      targets.push({ ...target, completionCheck: "atlas", completionMatchFormat: "bo3", completionSeriesStartedAt: seriesStartedAt,
+        ...(missingSecondWin ? { completionSeriesWinnerPlayerId: participants[priorWins.indexOf(1)] } : {}) });
       fallbackCount++;
     } else {
       const completed = found.get(atlasPostgameGameKey(target));
@@ -182,12 +207,13 @@ function completedBo3Targets(rooms: Map<string, Room>, found: Map<string, Found>
 }
 
 type Attempt = { count: number; nextAt: number; done: boolean };
-type Job = { completedAt: number; targets?: AtlasPostgameTarget[]; read: Attempt; games: Map<string, Attempt> };
+type Job = { completedAt: number; targets?: AtlasPostgameTarget[]; seriesConfirmed?: boolean; read: Attempt; games: Map<string, Attempt> };
 /** Fixed enums/counts only: never include capture/game/account IDs, payloads or exception text. */
 export type AtlasPostgameDiagnostic = {
   stage: "discovery" | "capture" | "query" | "attachment";
   outcome: "ready" | "attached" | "exists" | "pending" | "restricted" | "expired" | "unavailable" | "retry" | "exhausted";
   attempt: number;
+  failureReason?: AtlasPostgameQueryFailureReason;
 };
 export class AtlasPostgameAutoImport {
   private pending?: Promise<void>;
@@ -204,16 +230,19 @@ export class AtlasPostgameAutoImport {
     report?: (captureSessionId: string, state: "attached" | "exists" | "waiting" | "unavailable") => void;
     diagnostic?: (event: AtlasPostgameDiagnostic) => void;
   }) {}
-  private diagnose(stage: AtlasPostgameDiagnostic["stage"], outcome: AtlasPostgameDiagnostic["outcome"], attempt: number): void {
+  private diagnose(stage: AtlasPostgameDiagnostic["stage"], outcome: AtlasPostgameDiagnostic["outcome"], attempt: number, failureReason?: AtlasPostgameQueryFailureReason): void {
     // Optional observability must not change collection or its retry budget.
-    try { this.deps.diagnostic?.({ stage, outcome, attempt }); } catch { /* Diagnostic sink unavailable. */ }
+    try { this.deps.diagnostic?.({ stage, outcome, attempt, ...(failureReason ? { failureReason } : {}) }); } catch { /* Diagnostic sink unavailable. */ }
   }
   dispose(): void { this.disposed = true; this.jobs.clear(); }
   private ready(): boolean { return !this.disposed && this.deps.ready(); }
+  private recent(capture: AutomaticAtlasPostgameCapture, now = (this.deps.now ?? Date.now)()): boolean {
+    return Number.isFinite(capture.completedAt) && capture.completedAt > 0 && capture.completedAt <= now + 60_000 && now - capture.completedAt <= MAX_AGE_MS;
+  }
   private async current(capture: AutomaticAtlasPostgameCapture): Promise<boolean> {
-    if (!this.ready()) return false;
+    if (!this.ready() || !this.recent(capture)) return false;
     const latest = await this.deps.listCaptures();
-    return this.ready() && latest.some(item => item.captureSessionId === capture.captureSessionId && item.accountUid === capture.accountUid && item.remoteReplayId === capture.remoteReplayId && item.completedAt === capture.completedAt);
+    return this.ready() && this.recent(capture) && latest.some(item => item.captureSessionId === capture.captureSessionId && item.accountUid === capture.accountUid && item.remoteReplayId === capture.remoteReplayId && item.completedAt === capture.completedAt);
   }
   run(): Promise<void> {
     if (this.pending) return this.pending;
@@ -224,14 +253,23 @@ export class AtlasPostgameAutoImport {
     }).finally(() => { this.pending = undefined; });
     this.pending = task; return task;
   }
-  private retry(attempt: Attempt, now: number): void {
+  private retryRead(attempt: Attempt, now: number): void {
     attempt.nextAt = now + (RETRY_DELAYS[attempt.count - 1] ?? Infinity);
     if (attempt.count > RETRY_DELAYS.length) attempt.done = true;
+  }
+  private retryGame(attempt: Attempt, now: number): void {
+    // Provider readiness, sign-in and delivery can recover later. Keep bounded
+    // polling while the immutable capture remains inside its six-hour window.
+    attempt.nextAt = now + (RETRY_DELAYS[attempt.count - 1] ?? MAX_GAME_RETRY_DELAY_MS);
+  }
+  private defer(attempt: Attempt, now: number): void {
+    attempt.count--;
+    attempt.nextAt = now + RETRY_DELAYS[0];
   }
   private async runNow(): Promise<void> {
     const now = (this.deps.now ?? Date.now)();
     for (const [key, job] of this.jobs) if (now - job.completedAt > MAX_AGE_MS) this.jobs.delete(key);
-    const captures = (await this.deps.listCaptures()).filter(item => Number.isFinite(item.completedAt) && item.completedAt > 0 && item.completedAt <= now + 60_000 && now - item.completedAt <= MAX_AGE_MS).sort((a, b) => b.completedAt - a.completedAt).slice(0, 10);
+    const captures = (await this.deps.listCaptures()).filter(item => this.recent(item, now)).sort((a, b) => b.completedAt - a.completedAt).slice(0, 10);
     this.discoveryFailureReported = false;
     if (!this.ready()) return;
     let requests = 0, reads = 0;
@@ -244,46 +282,60 @@ export class AtlasPostgameAutoImport {
         if (job.read.done || now < job.read.nextAt) continue;
         job.read.count++; reads++;
         try {
-          if (!await this.current(capture)) { job.read.count--; return; }
+          if (!await this.current(capture)) { this.defer(job.read, now); return; }
           const raw = await this.deps.readCapture(capture.captureSessionId);
-          if (!this.ready()) { job.read.count--; return; }
+          if (!this.ready()) { this.defer(job.read, now); return; }
           job.targets = await extractAtlasPostgameTargets(raw, () => this.ready());
           this.diagnose("capture", job.targets.length ? "ready" : "unavailable", job.read.count);
           if (!job.targets.length) { job.read.done = true; this.deps.report?.(capture.captureSessionId, "unavailable"); }
-        } catch {
-          if (!this.ready()) { job.read.count--; return; }
-          this.retry(job.read, now);
+        } catch (error) {
+          if (!this.ready() || error instanceof AtlasPostgameDeferredError) { this.defer(job.read, now); return; }
+          this.retryRead(job.read, now);
           this.diagnose("capture", job.read.done ? "exhausted" : "retry", job.read.count); continue;
         }
       }
-      for (const target of job.targets ?? []) {
+      // A possible sweep with no captured final win is deliberately queried
+      // final-first. Only that exact owned terminal export, successfully
+      // attached to the current capture, can release its earlier game.
+      const seriesProofTarget = job.targets?.find(target => target.completionSeriesWinnerPlayerId !== undefined);
+      const orderedTargets = seriesProofTarget ? [seriesProofTarget, ...job.targets!.filter(target => target !== seriesProofTarget)] : job.targets ?? [];
+      for (const target of orderedTargets) {
+        if (seriesProofTarget && !job.seriesConfirmed && target !== seriesProofTarget) break;
         if (!this.ready() || requests >= 3) return;
         const gameKey = atlasPostgameGameKey(target), attempt = job.games.get(gameKey) ?? { count: 0, nextAt: 0, done: false };
         if (attempt.done || now < attempt.nextAt) continue;
         job.games.set(gameKey, attempt); attempt.count++; requests++;
         let stage: "query" | "attachment" = "query";
         try {
-          if (!await this.current(capture)) { attempt.count--; return; }
+          if (!await this.current(capture)) { this.defer(attempt, now); return; }
           const result = await this.deps.query(target);
           if (result.status === "deferred" && result.gameKey === gameKey) {
             // A fallback candidate cannot query while Atlas is still on /game.
             // Recheck on a later idle pass without spending its network retry
             // budget or repeatedly writing waiting diagnostics.
-            attempt.count--; attempt.nextAt = now + RETRY_DELAYS[0];
+            this.defer(attempt, now);
             if (!this.ready()) return;
             continue;
           }
-          if (!this.ready()) { this.retry(attempt, now); return; }
+          if (!this.ready()) { this.defer(attempt, now); return; }
           if (result.gameKey !== gameKey) throw new Error("Atlas returned a different game.");
           if (result.status === "ready" && result.replay) {
-            if (!await this.current(capture)) { this.retry(attempt, now); return; }
+            if (!await this.current(capture)) { this.defer(attempt, now); return; }
             stage = "attachment";
             const delivered = await this.deps.deliver(capture.captureSessionId, target.gameNumber, result.replay);
-            if (!this.ready()) { this.retry(attempt, now); return; }
+            if (!this.ready()) { this.defer(attempt, now); return; }
+            if (target === seriesProofTarget) {
+              if (!await this.current(capture)) { this.defer(attempt, now); return; }
+              job.seriesConfirmed = true;
+            }
             attempt.done = true; this.diagnose("attachment", delivered, attempt.count); this.deps.report?.(capture.captureSessionId, delivered);
-          } else if (result.status === "pending") { this.retry(attempt, now); this.diagnose("query", attempt.done ? "exhausted" : "pending", attempt.count); this.deps.report?.(capture.captureSessionId, "waiting"); }
+          } else if (result.status === "pending") { this.retryGame(attempt, now); this.diagnose("query", "pending", attempt.count); this.deps.report?.(capture.captureSessionId, "waiting"); }
           else { attempt.done = true; this.diagnose("query", result.status === "restricted" ? "restricted" : result.status === "expired" ? "expired" : "unavailable", attempt.count); this.deps.report?.(capture.captureSessionId, "unavailable"); }
-        } catch { this.retry(attempt, now); this.diagnose(stage, attempt.done ? "exhausted" : "retry", attempt.count); }
+        } catch (error) {
+          if (!this.ready() || error instanceof AtlasPostgameDeferredError) { this.defer(attempt, now); return; }
+          this.retryGame(attempt, now);
+          this.diagnose(stage, "retry", attempt.count, stage === "query" ? atlasPostgameQueryFailureReason(error) : undefined);
+        }
       }
     }
     // Finite recent-history cache, containing only small identifiers and retry budgets.

@@ -2633,6 +2633,7 @@
 
 .modern-home-rail {
   gap: 10px;
+  container: home-rail / inline-size;
 }
 
 .modern-panel {
@@ -3377,7 +3378,6 @@
   display: grid;
   align-content: start;
   gap: 10px;
-  min-height: 205px;
   padding: 14px;
   border-color: rgb(53 122 169 / 48%);
   background:
@@ -3388,60 +3388,6 @@
 .modern-play-now-card h2 {
   color: #f3f7fb;
   font-size: 18px;
-}
-
-.home-platform-options {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-}
-
-.home-platform-option {
-  display: grid;
-  grid-template-columns: 24px minmax(0, auto) auto;
-  min-width: 0;
-  min-height: 48px;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  padding: 8px 10px;
-  border: 1px solid rgb(69 103 143 / 43%);
-  border-radius: 9px;
-  background: rgb(7 20 34 / 86%);
-  color: #dce7f2;
-}
-
-.home-platform-option:hover {
-  border-color: rgb(55 190 225 / 58%);
-  background: rgb(12 40 61 / 85%);
-}
-
-.home-platform-option[data-active="true"] {
-  border-color: #31dff8;
-  background: linear-gradient(135deg, rgb(28 124 165 / 34%), rgb(10 42 65 / 80%));
-  color: #f3fbff;
-  box-shadow: inset 0 0 0 1px rgb(49 223 248 / 12%);
-}
-
-.home-platform-option > svg {
-  color: #53def7;
-}
-
-.home-platform-option strong {
-  overflow: hidden;
-  font-size: 14px;
-  text-overflow: ellipsis;
-}
-
-.home-platform-option small {
-  padding: 2px 5px;
-  border-radius: 4px;
-  background: #42dff5;
-  color: #06131e;
-  font-size: 7px;
-  font-weight: 950;
-  letter-spacing: .05em;
-  text-transform: uppercase;
 }
 
 .modern-play-now-action {
@@ -3694,6 +3640,12 @@
   background:
     radial-gradient(circle at 8% 100%, rgb(157 111 255 / 14%), transparent 42%),
     linear-gradient(145deg, rgb(11 25 42 / 97%), rgb(7 14 28 / 97%));
+}
+
+@container home-rail (max-width: 480px) {
+  .modern-creator-video-card {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .modern-creator-video-card[data-live="true"] {
@@ -10726,6 +10678,7 @@ button.floating-resize-handle {
 
 .spotlight-page {
   display: grid;
+  grid-auto-rows: max-content;
   flex: 1 1 auto;
   align-content: start;
   gap: 14px;
@@ -19787,23 +19740,6 @@ button.replay-export-card:hover {
 .app-shell[data-home-deck-theme] .modern-play-now-card {
   border-color: rgb(var(--home-theme-secondary-rgb) / 34%);
   box-shadow: inset 0 1px 0 rgb(var(--home-theme-secondary-rgb) / 7%);
-}
-
-.app-shell[data-home-deck-theme] .home-platform-option[data-active="true"] {
-  border-color: rgb(var(--home-theme-secondary-rgb) / 72%);
-  background: linear-gradient(135deg, rgb(var(--home-theme-primary-rgb) / 17%), rgb(var(--home-theme-secondary-rgb) / 17%));
-  box-shadow:
-    inset 3px 0 0 rgb(var(--home-theme-primary-rgb) / 48%),
-    inset -3px 0 0 rgb(var(--home-theme-secondary-rgb) / 48%);
-}
-
-.app-shell[data-home-deck-theme] .home-platform-option[data-active="true"] > svg {
-  color: var(--home-theme-primary);
-}
-
-.app-shell[data-home-deck-theme] .home-platform-option[data-active="true"] small {
-  background: var(--home-theme-secondary);
-  color: var(--home-theme-button-text);
 }
 
 .app-shell[data-home-deck-theme] .modern-home .modern-primary-action,

@@ -2,9 +2,10 @@ import { describe, expect, it } from "vitest";
 import { communitySpotlightTarget } from "../src/shared/communitySpotlightNavigation";
 
 describe("communitySpotlightTarget", () => {
-  const ids = ["riftlab", "frodan", "daemonxgg", "ritualtcg", "maskedswan", "arg0ntcg", "tronisbad", "zelonius", "x0tcg"] as const;
+  const ids = ["bmucasts", "riftlab", "frodan", "daemonxgg", "ritualtcg", "maskedswan", "arg0ntcg", "tronisbad", "zelonius", "x0tcg"] as const;
 
   it("opens an available creator profile directly", () => {
+    expect(communitySpotlightTarget("bmucasts", ids)).toBe("bmucasts");
     expect(communitySpotlightTarget("daemonxgg", ids)).toBe("daemonxgg");
     expect(communitySpotlightTarget("frodan", ids)).toBe("frodan");
     expect(communitySpotlightTarget("maskedswan", ids)).toBe("maskedswan");

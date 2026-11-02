@@ -229,6 +229,8 @@ interface AccountCloudSyncUploadResult {
 interface AccountCloudSyncUploadOptions {
   automatic?: boolean;
   allowRemoteReplacement?: boolean;
+  /** Automatic work may defer before preparation or an atomic cloud commit. */
+  checkpoint?: () => void;
 }
 
 export type AccountCloudRestoreFence = symbol;
@@ -1100,16 +1102,20 @@ export class FirebaseSyncService {
       : 0;
   }
 
-  async backfillPrivateHubWebReplayIds(): Promise<number> {
+  async backfillPrivateHubWebReplayIds(checkpoint?: () => void): Promise<number> {
+    checkpoint?.();
     let settings = await this.store.getSettings();
+    checkpoint?.();
     if (!settings.accountUid) return 0;
     const pinnedIdentity = await this.pinMatchSyncIdentity(settings);
+    checkpoint?.();
     settings = pinnedIdentity.settings;
     const [matches, replays] = await Promise.all([
       this.store.getMatches(),
       this.store.getReplays()
     ]);
     await this.requireMatchSyncIdentity(pinnedIdentity);
+    checkpoint?.();
     const activeHubIds = new Set(settings.activeHubs.filter(privateHubCanReceiveWebReplay).map((hub) => hub.id));
     let updated = 0;
     let attempted = 0;
@@ -1121,6 +1127,7 @@ export class FirebaseSyncService {
         .filter(([hubId, state]) => state === "synced" && activeHubIds.has(hubId))
         .map(([hubId]) => hubId);
       for (const hubId of hubIds) {
+        checkpoint?.();
         if (attempted >= PRIVATE_HUB_WEB_REPLAY_BACKFILL_ATTEMPT_LIMIT) return updated;
         const outcome = await this.ensurePrivateHubWebReplayGrant({
           hubId,
@@ -1889,7 +1896,12 @@ export class FirebaseSyncService {
     message: string,
     options: AccountCloudSyncUploadOptions
   ): Promise<AccountCloudSyncStatus> {
-    let settings = await this.ensureAccountCloudDevice(await this.store.getSettings());
+    const checkpoint = options.automatic === true ? options.checkpoint : undefined;
+    checkpoint?.();
+    let settings = await this.store.getSettings();
+    checkpoint?.();
+    settings = await this.ensureAccountCloudDevice(settings);
+    checkpoint?.();
     if (!settings.accountUid) {
       throw new Error("Link a RiftLite account before using cloud sync.");
     }
@@ -1901,10 +1913,12 @@ export class FirebaseSyncService {
       );
     }
     const canonicalAccount = await this.getCanonicalAccountAuth(settings);
+    checkpoint?.();
     settings = canonicalAccount.settings;
     const auth = canonicalAccount.auth;
     const authGeneration = this.linkedAccountAuthGeneration;
     const latestSettings = await this.store.getSettings();
+    checkpoint?.();
     if (
       options.automatic === true &&
       (!latestSettings.accountCloudSyncEnabled || latestSettings.accountUid !== settings.accountUid)
@@ -1916,7 +1930,9 @@ export class FirebaseSyncService {
       );
     }
     const oldManifest = await this.readAccountCloudManifest(settings.accountUid, auth.idToken);
+    checkpoint?.();
     const settingsAfterManifestRead = await this.store.getSettings();
+    checkpoint?.();
     if (
       options.automatic === true &&
       (!settingsAfterManifestRead.accountCloudSyncEnabled || settingsAfterManifestRead.accountUid !== settings.accountUid)
@@ -1933,17 +1949,19 @@ export class FirebaseSyncService {
       "The linked RiftLite account changed while account data was being synced.",
       settings.firebaseRefreshToken
     );
+    checkpoint?.();
     const uploadBase = await this.prepareAccountCloudUploadBase(
       settings,
       oldManifest,
       authGeneration,
       options.allowRemoteReplacement === true
     );
+    checkpoint?.();
     if (uploadBase.status) {
       return uploadBase.status;
     }
     settings = uploadBase.settings;
-    return (await this.uploadAccountCloudGeneration(settings, auth, oldManifest, message)).status;
+    return (await this.uploadAccountCloudGeneration(settings, auth, oldManifest, message, checkpoint)).status;
   }
 
   async restoreAccountCloudSync(
@@ -2494,13 +2512,27 @@ export class FirebaseSyncService {
     settings: UserSettings,
     auth: AuthState,
     oldManifest: AccountCloudSyncManifest | null,
-    message: string
+    message: string,
+    checkpoint?: () => void
   ): Promise<AccountCloudSyncUploadResult> {
     const authGeneration = this.linkedAccountAuthGeneration;
     if (oldManifest && !oldManifest.updateTime) {
       throw new Error("RiftLite could not verify the current cloud manifest version, so the existing backup was not overwritten. Check cloud status and try again.");
     }
+    checkpoint?.();
     const backup = await this.buildAccountCloudBackup(settings);
+    checkpoint?.();
+    if (checkpoint) {
+      await this.requireLinkedAccountIdentity(
+        authGeneration,
+        settings.accountUid,
+        "The linked RiftLite account changed while account data was being synced.",
+        settings.firebaseRefreshToken
+      );
+      checkpoint();
+    }
+    // After this checkpoint the generation's immutable chunks and conditional
+    // manifest switch finish as one existing atomic publication sequence.
     const json = JSON.stringify(backup);
     const compressed = deflateRawSync(Buffer.from(json, "utf8")).toString("base64");
     const chunks = chunkString(compressed, ACCOUNT_CLOUD_SYNC_CHUNK_SIZE);

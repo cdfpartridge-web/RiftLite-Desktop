@@ -1107,17 +1107,19 @@ export class CaptureCoordinator {
     }
   }
 
+  /** Gameplay protection excludes failed post-game delivery, which idle retries must repair. */
+  hasGameplayInProgress(): boolean {
+    return Boolean(this.tracker.get("atlas") || this.tracker.get("tcga") || this.tracker.get("sim") ||
+      this.closingPlatforms.size || this.pendingAtlasReviews.size);
+  }
+
   hasActiveMatchCapture(): boolean {
     const hasBlockingReplayFinalization = [...this.replayFinalizationByMatchId.keys()]
       .some((matchId) => !this.nonBlockingDeferredReplayFinalizationMatchIds.has(matchId));
     const hasBlockingDeferredReplayFinalization = [...this.deferredReplayFinalizationByMatchId.keys()]
       .some((matchId) => !this.nonBlockingDeferredReplayFinalizationMatchIds.has(matchId));
     return Boolean(
-      this.tracker.get("atlas") ||
-      this.tracker.get("tcga") ||
-      this.tracker.get("sim") ||
-      this.closingPlatforms.size ||
-      this.pendingAtlasReviews.size ||
+      this.hasGameplayInProgress() ||
       hasBlockingReplayFinalization ||
       hasBlockingDeferredReplayFinalization ||
       this.pendingConfirmedReplayFinalizationMatchIds.size

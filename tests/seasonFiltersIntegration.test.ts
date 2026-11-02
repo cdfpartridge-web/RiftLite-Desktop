@@ -36,8 +36,8 @@ describe("Radiance season filter surfaces", () => {
     expect(appSource).toContain('showSeason ? internalFilters : { ...internalFilters, season: "" }');
   });
 
-  it("adds season selection to Home, Matchup Lab, deck performance and private hubs", () => {
-    for (const name of ["HomeView", "MatchupLabView", "DeckDetail", "HubsView"]) {
+  it("adds season selection to Matchup Lab, deck performance and private hubs", () => {
+    for (const name of ["MatchupLabView", "DeckDetail", "HubsView"]) {
       const start = appSource.indexOf(`function ${name}(`);
       const end = appSource.indexOf("\nfunction ", start + 1);
       const component = appSource.slice(start, end);

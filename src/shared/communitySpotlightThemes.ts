@@ -1,4 +1,5 @@
 export const COMMUNITY_SPOTLIGHT_IDS = [
+  "bmucasts",
   "riftlab",
   "frodan",
   "runesandrift",
@@ -14,7 +15,8 @@ export const COMMUNITY_SPOTLIGHT_IDS = [
   "arg0ntcg",
   "tronisbad",
   "zelonius",
-  "x0tcg"
+  "x0tcg",
+  "emoetional"
 ] as const;
 
 export type CommunitySpotlightId = typeof COMMUNITY_SPOTLIGHT_IDS[number];
@@ -31,6 +33,7 @@ export const DEFAULT_COMMUNITY_SPOTLIGHT_THEME: CommunitySpotlightTheme = {
 };
 
 export const COMMUNITY_SPOTLIGHT_THEMES = {
+  bmucasts: { primary: "#FFCC32", secondary: "#063A58" },
   riftlab: { primary: "#0F7AF2", secondary: "#DB2629" },
   frodan: { primary: "#F28C00", secondary: "#17263A" },
   runesandrift: { primary: "#F3550F", secondary: "#1D2F43" },
@@ -46,7 +49,8 @@ export const COMMUNITY_SPOTLIGHT_THEMES = {
   arg0ntcg: { primary: "#3D8FB8", secondary: "#D2DEE8" },
   tronisbad: { primary: "#F28A24", secondary: "#7A2531" },
   zelonius: { primary: "#F5B51B", secondary: "#08784A" },
-  x0tcg: { primary: "#6D3FB3", secondary: "#21B8D6" }
+  x0tcg: { primary: "#6D3FB3", secondary: "#21B8D6" },
+  emoetional: { primary: "#9C6BFF", secondary: "#00CCB4" }
 } as const satisfies Record<CommunitySpotlightId, CommunitySpotlightTheme>;
 
 export function communitySpotlightTheme(value: unknown): CommunitySpotlightTheme {

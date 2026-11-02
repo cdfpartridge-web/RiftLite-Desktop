@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { AtlasHistoryAutoImport } from "../src/main/services/atlasHistoryAutoImport";
+import { GameplayMaintenanceDeferredError } from "../src/main/services/gameplayMaintenanceScheduler";
 import { needsAtlasHistoryImport } from "../src/shared/atlasHistory";
 import type { MatchDraft } from "../src/shared/types";
 import { history, marker, savedMatch } from "./fixtures/atlasHistory";
@@ -21,6 +22,61 @@ function harness() {
 }
 
 describe("automatic post-game Atlas decks", () => {
+  it("does not spend attempts or batch cooldown on repeated gameplay deferrals", async () => {
+    const h = harness();
+    h.refreshMany.mockRejectedValue(new GameplayMaintenanceDeferredError());
+    for (let pause = 0; pause < 12; pause++) {
+      await expect(h.importer.run([h.match])).rejects.toBeInstanceOf(GameplayMaintenanceDeferredError);
+    }
+    expect(h.refreshMany).toHaveBeenCalledTimes(12);
+    expect(h.report).not.toHaveBeenCalled();
+    h.refreshMany.mockClear();
+    h.waitForHistory();
+    await h.importer.run([h.match]);
+    for (const minutes of [2, 5, 15, 30, 60, 120, 240]) {
+      h.advance(minutes * MINUTE);
+      await h.importer.run([h.match]);
+    }
+    h.advance(5 * 60 * MINUTE);
+    await h.importer.run([h.match]);
+    expect(h.refreshMany).toHaveBeenCalledTimes(8);
+  });
+
+  it("restores only unfinished targets while preserving fulfilled partial work and ordinary failure backoff", async () => {
+    const h = harness();
+    const matches = ["complete", "paused", "failed"].map((id) => ({ ...savedMatch(), id }));
+    h.refreshMany.mockResolvedValueOnce([
+      fulfilled({ ...matches[0], atlasHistory: history() }),
+      { status: "rejected", reason: new GameplayMaintenanceDeferredError() },
+      { status: "rejected", reason: new Error("provider unavailable") },
+    ]);
+    await expect(h.importer.run(matches)).rejects.toBeInstanceOf(GameplayMaintenanceDeferredError);
+    expect(h.report.mock.calls).toEqual([["complete", "imported"], ["failed", "retrying"]]);
+    // Even stale input for the successfully completed target must retain its
+    // existing attempt cooldown; only the paused target can run immediately.
+    h.refreshMany.mockResolvedValueOnce([fulfilled(matches[1])]);
+    await h.importer.run(matches);
+    expect(h.refreshMany).toHaveBeenLastCalledWith(["paused"]);
+  });
+
+  it("does not extend the absolute age window for a match paused until tomorrow", async () => {
+    const h = harness();
+    h.refreshMany.mockRejectedValue(new GameplayMaintenanceDeferredError());
+    await expect(h.importer.run([h.match])).rejects.toBeInstanceOf(GameplayMaintenanceDeferredError);
+    h.advance(24 * 60 * MINUTE);
+    await h.importer.run([h.match]);
+    expect(h.refreshMany).toHaveBeenCalledOnce();
+  });
+
+  it("restores selection budgets if gameplay begins just before dispatch", async () => {
+    const h = harness();
+    h.ready.mockReturnValueOnce(true).mockReturnValueOnce(true).mockReturnValueOnce(false);
+    await expect(h.importer.run([h.match])).rejects.toBeInstanceOf(GameplayMaintenanceDeferredError);
+    expect(h.refreshMany).not.toHaveBeenCalled();
+    await h.importer.run([h.match]);
+    expect(h.refreshMany).toHaveBeenCalledOnce();
+  });
+
   it("imports a saved capture without a click, then stops once both lists are retained", async () => {
     const h = harness();
     await h.importer.run([h.match]);

@@ -1,3 +1,5 @@
+import { GameplayMaintenanceDeferredError } from "./gameplayMaintenanceScheduler.js";
+
 export type AccountCloudSyncRun = (reason: string) => Promise<void>;
 export type AccountCloudSyncErrorHandler = (error: unknown) => Promise<void> | void;
 
@@ -16,7 +18,8 @@ export class AccountCloudSyncQueue {
   constructor(
     private readonly run: AccountCloudSyncRun,
     private readonly onError: AccountCloudSyncErrorHandler,
-    private readonly delayMs = 20_000
+    private readonly delayMs = 20_000,
+    private readonly dispatch?: () => void
   ) {}
 
   queue(reason = "Local data changed"): void {
@@ -87,6 +90,19 @@ export class AccountCloudSyncQueue {
     }
   }
 
+  /** Run a dispatched upload only while its pending intent is still valid. */
+  flush(): Promise<void> {
+    // A previously dispatched job must not bypass a newer mutation's debounce
+    // (including new work retained while an account restore was suspended).
+    if (this.timer) return Promise.resolve();
+    return this.drain();
+  }
+
+  private requestDrain(): void {
+    if (this.dispatch) this.dispatch();
+    else void this.drain();
+  }
+
   private schedule(): void {
     if (this.suspensionCount > 0) {
       return;
@@ -96,7 +112,7 @@ export class AccountCloudSyncQueue {
     }
     this.timer = setTimeout(() => {
       this.timer = null;
-      void this.drain();
+      this.requestDrain();
     }, this.delayMs);
   }
 
@@ -106,6 +122,7 @@ export class AccountCloudSyncQueue {
     }
     if (this.inFlight) {
       this.followUpDue = true;
+      await this.inFlight.catch(() => undefined);
       return;
     }
     if (!this.pendingReason) {
@@ -116,10 +133,18 @@ export class AccountCloudSyncQueue {
     this.pendingReason = "";
     const operation = Promise.resolve().then(() => this.run(reason));
     this.inFlight = operation;
+    let deferred = false;
     try {
       await operation;
     } catch (error) {
-      await this.onError(error);
+      if (error instanceof GameplayMaintenanceDeferredError) {
+        // A newly started game postpones work; it is neither a failed backup
+        // nor permission to lose the mutation that requested this upload.
+        if (!this.pendingReason) this.pendingReason = reason;
+        deferred = true;
+      } else {
+        await this.onError(error);
+      }
     } finally {
       if (this.inFlight === operation) {
         this.inFlight = null;
@@ -128,9 +153,12 @@ export class AccountCloudSyncQueue {
         this.followUpDue = false;
         return;
       }
-      if (this.followUpDue && this.pendingReason) {
+      if (deferred && this.pendingReason) {
         this.followUpDue = false;
-        void this.drain();
+        this.schedule();
+      } else if (this.followUpDue && this.pendingReason) {
+        this.followUpDue = false;
+        this.requestDrain();
       } else {
         this.followUpDue = false;
       }

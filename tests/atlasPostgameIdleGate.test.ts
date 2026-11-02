@@ -3,6 +3,23 @@ import { AtlasPostgameIdleGate } from "../src/main/services/atlasPostgameIdleGat
 import { AtlasAutomaticRecoverySafetyFence } from "../src/main/services/atlasAutomaticRecoverySafetyFence.js";
 
 describe("automatic Atlas post-game idle gate", () => {
+  it("lets generic maintenance use idle sign-in/deck routes while protecting live rooms and startup", () => {
+    let now = 0;
+    const gate = new AtlasPostgameIdleGate(() => now);
+    const page = { loading: false, url: "https://play.riftatlas.com/sign-in" };
+    expect(gate.allowsMaintenance(page)).toBe(false);
+    now = 15_000;
+    for (const path of ["/", "/game", "/sign-in", "/decks", "/fr/decks", "/replays/saved"]) {
+      expect(gate.allowsMaintenance({ ...page, url: `https://play.riftatlas.com${path}` })).toBe(true);
+    }
+    for (const path of ["/game/fixture", "/fr/game/fixture", "/room/fixture", "/ko/play/fixture"]) {
+      expect(gate.allowsMaintenance({ ...page, url: `https://play.riftatlas.com${path}` })).toBe(false);
+    }
+    expect(gate.allowsMaintenance({ ...page, loading: true })).toBe(false);
+    expect(gate.allowsMaintenance({ ...page, url: "invalid" })).toBe(false);
+    gate.observeRealtimeActivity({ type: "join_game" });
+    expect(gate.allowsMaintenance(page)).toBe(false);
+  });
   const idle = { trusted: true, loading: false, capturing: false, platformSwitchAllowed: true, url: "https://play.riftatlas.com/" };
   it("waits through startup and each new matchmaking/room activity", () => {
     let now = 0; const gate = new AtlasPostgameIdleGate(() => now);

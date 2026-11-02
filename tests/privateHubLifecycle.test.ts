@@ -5,6 +5,7 @@ vi.mock("electron", () => ({
 }));
 
 import { FirebaseSyncService } from "../src/main/services/firebaseSync";
+import { GameplayMaintenanceDeferredError } from "../src/main/services/gameplayMaintenanceScheduler";
 import type { RiftLiteStore } from "../src/main/services/store";
 import type { MatchDraft, ReplayRecord, UserSettings } from "../src/shared/types";
 
@@ -268,6 +269,39 @@ describe("FirebaseSyncService private hub lifecycle", () => {
 
     await expect(service.backfillPrivateHubWebReplayIds()).resolves.toBe(10);
     expect(websiteRequest).toHaveBeenCalledTimes(10);
+  });
+
+  it("defers automatic startup backfill before settings or network reads during gameplay", async () => {
+    const { service, store, websiteRequest } = harness();
+    await expect(service.backfillPrivateHubWebReplayIds(() => {
+      throw new GameplayMaintenanceDeferredError();
+    })).rejects.toBeInstanceOf(GameplayMaintenanceDeferredError);
+    expect(store.getSettings).not.toHaveBeenCalled();
+    expect(store.getMatches).not.toHaveBeenCalled();
+    expect(websiteRequest).not.toHaveBeenCalled();
+  });
+
+  it("finishes the active hub grant then pauses and resumes without repeating that grant", async () => {
+    const matches = ["first", "second"].map((id) => ({
+      id: `idle-backfill-${id}`, myName: "Player",
+      sync: { community: "disabled", hubs: { "member-hub": "synced" }, teams: {} }
+    })) as MatchDraft[];
+    const replays = matches.map((match) => uploadedReplay(match.id, `local-${match.id}`, `rl2_${match.id}`));
+    const { service, websiteRequest, current } = harness(matches, replays);
+    let ready = true;
+    websiteRequest.mockImplementationOnce(async () => { ready = false; return { ok: true }; });
+    const checkpoint = () => { if (!ready) throw new GameplayMaintenanceDeferredError(); };
+
+    await expect(service.backfillPrivateHubWebReplayIds(checkpoint)).rejects.toBeInstanceOf(GameplayMaintenanceDeferredError);
+    expect(websiteRequest).toHaveBeenCalledOnce();
+    expect(current().privateHubWebReplayGrantKeys).toHaveLength(1);
+    expect(current().privateHubWebReplayGrantRetries ?? {}).toEqual({});
+
+    ready = true;
+    await expect(service.backfillPrivateHubWebReplayIds(checkpoint)).resolves.toBe(1);
+    expect(websiteRequest).toHaveBeenCalledTimes(2);
+    expect(new Set(websiteRequest.mock.calls.map(([path]) => path)).size).toBe(2);
+    expect(current().privateHubWebReplayGrantKeys).toHaveLength(2);
   });
 
   it("durably associates a TCGA Web Replay even when no local ReplayRecord was kept", async () => {

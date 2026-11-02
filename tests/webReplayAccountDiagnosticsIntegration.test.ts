@@ -13,7 +13,7 @@ describe("Web Replay desktop centre", () => {
     expect(mainSource).toContain('handleTrustedAppIpc("raw-capture:remove-from-queue"');
     expect(mainSource).toContain('handleTrustedAppIpc("raw-capture:stop-discord-retries"');
     expect(mainSource).toContain("uploadPendingRawCapturesWithAccountRefresh(true)");
-    expect(preloadSource).toContain('getWebReplayUploadDiagnostics: () => ipcRenderer.invoke("raw-capture:diagnostics")');
+    expect(preloadSource).toContain('getWebReplayUploadDiagnostics: (automatic = false) => ipcRenderer.invoke("raw-capture:diagnostics", automatic === true)');
     expect(preloadSource).toContain('retryPendingWebReplayUploads: () => ipcRenderer.invoke("raw-capture:retry-pending")');
     expect(preloadSource).toContain('uploadIncompleteWebReplay: (captureSessionId) => ipcRenderer.invoke("raw-capture:upload-incomplete"');
     expect(preloadSource).toContain('removeWebReplayUploadFromQueue: (captureSessionId) => ipcRenderer.invoke("raw-capture:remove-from-queue"');
@@ -57,7 +57,7 @@ describe("Web Replay desktop centre", () => {
     expect(appSource).toContain("nav-status-badge");
     expect(appSource).toContain("webReplayNavBadgeTone");
     expect(appSource).toContain("refreshIntervalMs = waiting || webReplayDiagnostics?.retryInProgress ? 4_000 : 20_000");
-    expect(appSource).toContain("void refreshWebReplayDiagnostics();");
+    expect(appSource).toContain("void refreshWebReplayDiagnostics(false, true);");
     expect(appSource).toContain("homeWebReplayStatus(settings, webReplayDiagnostics, settings.defaultGamePlatform)");
     expect(appSource).toContain("function homeWebReplayStatus");
     expect(appSource).toContain('label: `${totals.failed} upload${totals.failed === 1 ? "" : "s"} failed`');

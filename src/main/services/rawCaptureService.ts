@@ -1,4 +1,5 @@
 import { app } from "electron";
+import { GameplayMaintenanceDeferredError } from "./gameplayMaintenanceScheduler.js";
 import { mkdir, open, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
@@ -1748,7 +1749,7 @@ export class RawCaptureService {
     };
   }
 
-  async uploadPendingRawCaptures(limit = 5, forceRetry = false): Promise<number> {
+  async uploadPendingRawCaptures(limit = 5, forceRetry = false, checkpoint?: () => void): Promise<number> {
     if (this.pendingUploadPromise) {
       if (forceRetry) {
         // Do not let a foreground retry disappear into an already-running
@@ -1758,15 +1759,22 @@ export class RawCaptureService {
       }
       return this.pendingUploadPromise;
     }
-    this.pendingUploadPromise = this.runPendingUploadPasses(limit, forceRetry)
+    this.pendingUploadPromise = this.runPendingUploadPasses(limit, forceRetry, checkpoint)
       .finally(() => {
         this.pendingUploadPromise = null;
       });
     return this.pendingUploadPromise;
   }
 
-  private async runPendingUploadPasses(limit: number, forceRetry: boolean): Promise<number> {
-    let completed = await this.uploadPendingRawCapturesNow(limit, forceRetry);
+  private async runPendingUploadPasses(limit: number, forceRetry: boolean, checkpoint?: () => void): Promise<number> {
+    let completed = 0;
+    try {
+      completed = await this.uploadPendingRawCapturesNow(limit, forceRetry, checkpoint);
+    } catch (error) {
+      // A foreground retry joining a paused background pass still owns a full
+      // forced pass. Do not lose it behind the automatic gameplay checkpoint.
+      if (!(error instanceof GameplayMaintenanceDeferredError) || !this.pendingForcedUploadRequested) throw error;
+    }
     while (this.pendingForcedUploadRequested) {
       const forcedLimit = Math.max(1, this.pendingForcedUploadLimit || limit);
       this.pendingForcedUploadRequested = false;
@@ -1946,9 +1954,12 @@ export class RawCaptureService {
     });
   }
 
-  private async uploadPendingRawCapturesNow(limit: number, forceRetry: boolean): Promise<number> {
+  private async uploadPendingRawCapturesNow(limit: number, forceRetry: boolean, checkpoint?: () => void): Promise<number> {
+    checkpoint?.();
     const settings = await this.store.getSettings();
+    checkpoint?.();
     await this.ensureInterruptedCaptureRecovery(settings);
+    checkpoint?.();
     const legacyAutoUploadEnabled = rawCaptureUploadEnabled(settings);
     const atlasWebReplayAutoUploadEnabled = riftLiteWebReplayAutoUploadEnabled(settings);
     const tcgaWebReplayAutoUploadEnabled = Boolean(riftLiteTcgaWebReplayAutoUploadAccountUid(settings));
@@ -1961,6 +1972,7 @@ export class RawCaptureService {
       return 0;
     }
     const replays = await this.store.getReplays();
+    checkpoint?.();
     const reviewedResults = new Map((await this.store.getMatches())
       .filter((match) => !match.deletedAt && match.status === "saved" && rawCaptureMatchSummaryResolved(rawCaptureMatchSummaryFromDraft(match)))
       .map((match) => [match.id, rawCaptureMatchSummarySignature(rawCaptureMatchSummaryFromDraft(match))]));
@@ -1999,6 +2011,7 @@ export class RawCaptureService {
     let uploaded = 0;
     const attemptedCaptureIds = new Set<string>();
     for (const replay of pending) {
+      checkpoint?.();
       let saved: ReplayRecord | null = replay;
       if (replay.rawCapture?.captureSessionId) {
         attemptedCaptureIds.add(replay.rawCapture.captureSessionId);
@@ -2017,6 +2030,7 @@ export class RawCaptureService {
         rawCaptureWebReplayAutoUploadEligibleForPlatform(replay.platform, replay.rawCapture, settings) &&
         (forceRetry || rawCaptureAutoUploadRetryReady(replay.rawCapture))
       ) {
+        checkpoint?.();
         try {
           await this.uploadRawCaptureToRiftLite(
             replay.id,
@@ -2033,6 +2047,7 @@ export class RawCaptureService {
       }
     }
 
+    checkpoint?.();
     if (canUploadRiftLite && pending.length < Math.max(1, limit)) {
       const candidateManifests = (await readRawCaptureManifests(settings))
         .filter((manifest) => !attemptedCaptureIds.has(manifest.metadata.captureSessionId))
@@ -2056,6 +2071,7 @@ export class RawCaptureService {
       const manifests: PersistedRawCaptureManifest[] = [];
       const remaining = Math.max(0, Math.max(1, limit) - pending.length);
       for (const manifest of candidateManifests) {
+        checkpoint?.();
         if (manifests.length >= remaining) {
           break;
         }
@@ -2064,6 +2080,7 @@ export class RawCaptureService {
         }
       }
       for (const manifest of manifests) {
+        checkpoint?.();
         try {
           const uploadedManifest = await this.uploadPersistedCaptureToRiftLite(
             manifest,
@@ -2078,17 +2095,21 @@ export class RawCaptureService {
         }
       }
     }
+    checkpoint?.();
     if (canUploadRiftLite) {
       // Publication is deliberately isolated from upload status: a temporary
       // SQLite/private-hub failure must never turn an already-created remote
       // replay into a failed upload. Successful orphan manifests remain the
       // durable retry source until their active match records the association.
-      await this.reconcilePublishedManifestAssociations(settings, limit).catch(() => undefined);
+      await this.reconcilePublishedManifestAssociations(settings, limit, checkpoint).catch((error) => {
+        if (error instanceof GameplayMaintenanceDeferredError) throw error;
+      });
     }
     return uploaded;
   }
 
-  private async reconcilePublishedManifestAssociations(settings: UserSettings, limit: number): Promise<void> {
+  private async reconcilePublishedManifestAssociations(settings: UserSettings, limit: number, checkpoint?: () => void): Promise<void> {
+    checkpoint?.();
     const [matches, replays, manifests] = await Promise.all([
       this.store.getMatches(),
       this.store.getReplays(),
@@ -2116,7 +2137,9 @@ export class RawCaptureService {
       .slice(0, Math.max(1, limit));
 
     for (const manifest of candidates) {
+      checkpoint?.();
       if (!await this.hasActiveManifestParent(manifest)) continue;
+      checkpoint?.();
       const localMatchId = manifest.localMatchId || manifest.identity.localMatchId || "";
       const replayId = manifest.metadata.uploadId || "";
       if (!localMatchId || !replayId) continue;

@@ -16,7 +16,7 @@ import { AccountDisclosure, AccountIdentityCard } from "./AccountOverview";
 import { accountOverview } from "../shared/accountOverview";
 import { installRendererCrashLogging, reportRendererCrash } from "./rendererCrashLogging";
 import { DateFilter } from "./DateFilter";
-import { RadianceSeasonNotice, StatSeasonFilter } from "./RadianceSeasonNotice";
+import { StatSeasonFilter } from "./RadianceSeasonNotice";
 import { STAT_SEASONS, CURRENT_STAT_SEASON, isInStatSeason, statMatchTimestamp, type StatSeasonId } from "../shared/statSeasons";
 import { TeamInvitationInbox, TeamInvitationManager } from "./TeamInvitations";
 import { selectGroupTeams } from "../shared/yourGroups";
@@ -1549,6 +1549,86 @@ type CommunitySpotlight = {
   overviewBanner?: string;
   overviewLogo?: string;
   routes?: Array<{ key: SpotlightAssetKey; title: string; subtitle: string; linkId: string }>;
+};
+
+const BMUCASTS_SPOTLIGHT: CommunitySpotlight = {
+  id: "bmucasts",
+  name: "BMUCasts",
+  kicker: "Community spotlight",
+  location: "United Kingdom",
+  description: "UK Riftbound caster, content creator and the developer of RiftLite. Explore rules guides, deck testing and replay breakdowns that explain the decisions behind the plays.",
+  primaryCta: {
+    id: "youtube",
+    label: "Watch on YouTube",
+    url: "https://www.youtube.com/@BMUCasts",
+    description: "Riftbound rules guides, gameplay and replay breakdowns.",
+    icon: Video,
+    featured: true
+  },
+  links: [
+    {
+      id: "youtube",
+      label: "YouTube",
+      url: "https://www.youtube.com/@BMUCasts",
+      description: "Rules guides, gameplay and a closer look at the decisions in each match.",
+      icon: Video,
+      featured: true
+    },
+    {
+      id: "twitch",
+      label: "Twitch",
+      url: "https://www.twitch.tv/bmucasts",
+      description: "Live Riftbound gameplay, deck testing and casting.",
+      icon: Radio,
+      featured: true
+    },
+    {
+      id: "x",
+      label: "X",
+      url: "https://x.com/BMUCasts",
+      description: "Riftbound discussion, new videos and RiftLite updates.",
+      icon: X
+    },
+    {
+      id: "website",
+      label: "RiftLite",
+      url: "https://www.riftlite.com",
+      description: "The desktop companion built by BMUCasts for recording, reviewing and improving your games.",
+      icon: Globe2,
+      featured: true
+    }
+  ],
+  tags: ["Casting", "Rules guides", "Replay analysis", "RiftLite creator"],
+  highlights: [
+    {
+      title: "Riftbound casting",
+      text: "Match commentary with a player's eye for the choices that shape the game."
+    },
+    {
+      title: "Learn the decisions",
+      text: "Rules guides and replay breakdowns that explain why a play matters."
+    },
+    {
+      title: "Live deck testing",
+      text: "Follow new decks and matchups as they are tested on stream."
+    },
+    {
+      title: "Creator of RiftLite",
+      text: "Building tools that turn recorded matches, stats and interactive replays into useful review."
+    }
+  ],
+  assets: {
+    logo: "community/bmucasts-logo.png",
+    banner: "community/bmucasts-banner.png",
+    youtube: "community/bmucasts-banner.png",
+    twitch: "community/bmucasts-banner.png",
+    tiktok: "community/bmucasts-banner.png"
+  },
+  routes: [
+    { key: "youtube", title: "Rules and gameplay guides", subtitle: "Watch on YouTube", linkId: "youtube" },
+    { key: "twitch", title: "Live Riftbound testing", subtitle: "Watch on Twitch", linkId: "twitch" },
+    { key: "tiktok", title: "Review with RiftLite", subtitle: "Explore the desktop companion", linkId: "website" }
+  ]
 };
 
 const RIFTLAB_SPOTLIGHT: CommunitySpotlight = {
@@ -3115,7 +3195,76 @@ const X0TCG_SPOTLIGHT: CommunitySpotlight = {
   ]
 };
 
+const EMOETIONAL_SPOTLIGHT: CommunitySpotlight = {
+  id: "emoetional",
+  name: "EMOEtional",
+  kicker: "Creator spotlight",
+  location: "Riftbound creator and coach",
+  description: "Competitive Riftbound player, creator and coach. Watch live gameplay, explore deck guides and VOD reviews, or sharpen your game with coaching on Metafy.",
+  primaryCta: {
+    id: "twitch",
+    label: "Watch on Twitch",
+    url: "https://www.twitch.tv/emoetional",
+    description: "Live Riftbound gameplay and discussion.",
+    icon: Radio,
+    featured: true
+  },
+  links: [
+    {
+      id: "twitch",
+      label: "Twitch",
+      url: "https://www.twitch.tv/emoetional",
+      description: "Live Riftbound gameplay and discussion.",
+      icon: Radio,
+      featured: true
+    },
+    {
+      id: "youtube",
+      label: "YouTube",
+      url: "https://www.youtube.com/@eMOEtional",
+      description: "Deck guides, strategy and gameplay videos.",
+      icon: Video,
+      featured: true
+    },
+    {
+      id: "metafy",
+      label: "Metafy",
+      url: "https://metafy.gg/@emoetional",
+      description: "Coaching, VOD reviews and tournament preparation.",
+      icon: Users,
+      featured: true
+    },
+    {
+      id: "x",
+      label: "X",
+      url: "https://x.com/MreMOEtional",
+      description: "Follow Moe's updates and Riftbound conversation.",
+      icon: X
+    }
+  ],
+  tags: ["Live gameplay", "Deck guides", "Coaching", "VOD reviews"],
+  highlights: [
+    { title: "Live gameplay", text: "Watch Riftbound matches and join the conversation on Twitch." },
+    { title: "Learn the decisions", text: "Explore deck guides and strategy videos on YouTube." },
+    { title: "Focused coaching", text: "Work on fundamentals and review your play through Metafy." },
+    { title: "Tournament preparation", text: "Build matchup knowledge, sideboard plans and a clearer gameplan." }
+  ],
+  assets: {
+    logo: "community/emoetional-profile.jpg",
+    banner: "community/emoetional-banner.jpg",
+    youtube: "community/emoetional-banner.jpg",
+    twitch: "community/emoetional-banner.jpg",
+    tiktok: "community/emoetional-profile.jpg"
+  },
+  routes: [
+    { key: "twitch", title: "Live Riftbound gameplay", subtitle: "Watch on Twitch", linkId: "twitch" },
+    { key: "youtube", title: "Deck guides and strategy", subtitle: "Watch on YouTube", linkId: "youtube" },
+    { key: "tiktok", title: "Coaching and VOD reviews", subtitle: "Explore Metafy", linkId: "metafy" }
+  ]
+};
+
 const COMMUNITY_SPOTLIGHTS: CommunitySpotlight[] = [
+  BMUCASTS_SPOTLIGHT,
   RIFTLAB_SPOTLIGHT,
   FRODAN_SPOTLIGHT,
   RUNESANDRIFT_SPOTLIGHT,
@@ -3131,7 +3280,8 @@ const COMMUNITY_SPOTLIGHTS: CommunitySpotlight[] = [
   ARG0NTCG_SPOTLIGHT,
   TRONISBAD_SPOTLIGHT,
   ZELONIUS_SPOTLIGHT,
-  X0TCG_SPOTLIGHT
+  X0TCG_SPOTLIGHT,
+  EMOETIONAL_SPOTLIGHT
 ];
 
 interface CaptureNotice {
@@ -3249,6 +3399,7 @@ function App() {
   const diagnosticsRefreshTimerRef = useRef<number | undefined>(undefined);
   const diagnosticsRefreshInFlightRef = useRef(false);
   const webReplayDiagnosticsRequestRef = useRef<Promise<WebReplayUploadDiagnostics | null> | null>(null);
+  const webReplayDiagnosticsRequestAutomaticRef = useRef(false);
   const communityLoadedRef = useRef(false);
   const communityMatchesLoadedForTrackerRef = useRef(false);
   const communityAccountUidRef = useRef("");
@@ -3331,31 +3482,42 @@ function App() {
     [testingSessions, activeTestingSessionId]
   );
 
-  const refreshWebReplayDiagnostics = useCallback((afterCurrent = false): Promise<WebReplayUploadDiagnostics | null> => {
+  const refreshWebReplayDiagnostics = useCallback((afterCurrent = false, automatic = false): Promise<WebReplayUploadDiagnostics | null> => {
     if (webReplayDiagnosticsRequestRef.current) {
       // An account link can finish while an anonymous diagnostics read is
-      // still in flight. Wait for it, then check the newly linked identity.
-      if (afterCurrent) {
-        return webReplayDiagnosticsRequestRef.current.then(() => refreshWebReplayDiagnostics());
+      // still in flight. Manual refreshes must also run after a deferred
+      // automatic read instead of inheriting its cached or null result.
+      if (afterCurrent || (!automatic && webReplayDiagnosticsRequestAutomaticRef.current)) {
+        return webReplayDiagnosticsRequestRef.current.then(() => refreshWebReplayDiagnostics(false, automatic));
       }
       return webReplayDiagnosticsRequestRef.current;
     }
+    const accountUid = settingsRef.current?.accountUid ?? "";
     setWebReplayDiagnosticsRefreshing(true);
-    const request = window.riftlite.getWebReplayUploadDiagnostics()
+    const request = window.riftlite.getWebReplayUploadDiagnostics(automatic)
       .then((next) => {
-        setWebReplayDiagnostics(next);
-        setWebReplayDiagnosticsError("");
+        if (webReplayDiagnosticsRequestRef.current !== request || (settingsRef.current?.accountUid ?? "") !== accountUid) return null;
+        // A deferred read has no newer state; retain the last valid view.
+        if (next !== null) {
+          setWebReplayDiagnostics(next);
+          setWebReplayDiagnosticsError("");
+        }
         return next;
       })
       .catch((error) => {
-        setWebReplayDiagnosticsError(error instanceof Error ? error.message : "Could not check Web Replay uploads.");
+        if (webReplayDiagnosticsRequestRef.current === request && (settingsRef.current?.accountUid ?? "") === accountUid) {
+          setWebReplayDiagnosticsError(error instanceof Error ? error.message : "Could not check Web Replay uploads.");
+        }
         return null;
       })
       .finally(() => {
-        webReplayDiagnosticsRequestRef.current = null;
-        setWebReplayDiagnosticsRefreshing(false);
+        if (webReplayDiagnosticsRequestRef.current === request) {
+          webReplayDiagnosticsRequestRef.current = null;
+          setWebReplayDiagnosticsRefreshing(false);
+        }
       });
     webReplayDiagnosticsRequestRef.current = request;
+    webReplayDiagnosticsRequestAutomaticRef.current = automatic;
     return request;
   }, []);
 
@@ -3766,6 +3928,13 @@ function App() {
       return;
     }
     communityAccountUidRef.current = accountUid;
+    // A previous account's pending read must not populate or clear the new
+    // account's diagnostics, including when it settles after a newer request.
+    webReplayDiagnosticsRequestRef.current = null;
+    webReplayDiagnosticsRequestAutomaticRef.current = false;
+    setWebReplayDiagnostics(null);
+    setWebReplayDiagnosticsError("");
+    setWebReplayDiagnosticsRefreshing(false);
     setGameDetailsTarget(null);
     setHubMatches({});
     setTeamMatches({});
@@ -3775,7 +3944,7 @@ function App() {
 
   useEffect(() => {
     if (!settings) return;
-    void refreshWebReplayDiagnostics();
+    void refreshWebReplayDiagnostics(false, true);
   }, [
     refreshWebReplayDiagnostics,
     settings?.accountUid,
@@ -3800,7 +3969,7 @@ function App() {
     // Keep checking even while the queue looks idle: manifest-only failures do
     // not emit replay-library updates and must still become visible promptly.
     const refreshIntervalMs = waiting || webReplayDiagnostics?.retryInProgress ? 4_000 : 20_000;
-    const timer = window.setInterval(() => void refreshWebReplayDiagnostics(), refreshIntervalMs);
+    const timer = window.setInterval(() => void refreshWebReplayDiagnostics(false, true), refreshIntervalMs);
     return () => window.clearInterval(timer);
   }, [
     refreshWebReplayDiagnostics,
@@ -3813,7 +3982,7 @@ function App() {
   ]);
 
   useEffect(() => {
-    const refreshWhenAvailable = () => void refreshWebReplayDiagnostics();
+    const refreshWhenAvailable = () => void refreshWebReplayDiagnostics(false, true);
     window.addEventListener("online", refreshWhenAvailable);
     window.addEventListener("focus", refreshWhenAvailable);
     return () => {
@@ -4040,7 +4209,7 @@ function App() {
     });
     const offReplayUpdated = window.riftlite.onReplayUpdated((replay) => {
       setReplays((current) => upsertReplayPreservingOrder(current, replay));
-      void refreshWebReplayDiagnostics();
+      void refreshWebReplayDiagnostics(false, true);
     });
     const offMatchUpdated = window.riftlite.onMatchUpdated((match) => {
       // Deck enrichment updates history quietly; it must never enter the
@@ -7919,7 +8088,6 @@ function App() {
             onOpenFirstRunSetup={startFirstRunSetup}
             onNavigate={openView}
             onPlayPlatform={(platform) => void chooseGamePlatform(platform, true)}
-            onSetDefaultGamePlatform={saveDefaultGamePlatform}
             communityTab={activeCommunityTab}
             communityDeckLegendTarget={communityDeckLegendTarget}
             spotlightTargetId={spotlightTargetId}
@@ -9784,7 +9952,6 @@ function HomeView({
   activeTestingSession,
   onNavigate,
   onPlayPlatform,
-  onSetDefaultGamePlatform,
   onOpenReplayForMatch,
   onOpenGameDetails
 }: {
@@ -9798,12 +9965,11 @@ function HomeView({
   activeTestingSession: TestingSession | null;
   onNavigate: (view: ActiveView, options?: NavigationOptions) => void;
   onPlayPlatform: (platform: GamePlatform) => void;
-  onSetDefaultGamePlatform: (platform: GameProvider) => Promise<void>;
   onOpenReplayForMatch: (matchId: string) => void;
   onOpenGameDetails: (target: GameDetailsTarget) => void;
 }) {
-  const [dateFilter, setDateFilter] = useState<DateFilterValue>(DEFAULT_DATE_FILTER);
-  const [seasonFilter, setSeasonFilter] = useState<CommunitySeasonId>(CURRENT_COMMUNITY_SEASON);
+  const dateFilter = DEFAULT_DATE_FILTER;
+  const seasonFilter = CURRENT_COMMUNITY_SEASON;
   const datedMatches = useMemo(() => matches.filter((match) => matchInCommunitySeason(match, seasonFilter) && isInDateFilter(match.capturedAt, dateFilter)), [matches, seasonFilter, dateFilter]);
   const datedCommunityMatches = useMemo(() => communityMatches.filter((match) => matchInCommunitySeason(match, seasonFilter) && isInDateFilter(communityMatchDate(match), dateFilter)), [communityMatches, seasonFilter, dateFilter]);
   const activeDeck = settings.activeDeckId ? decks.find((deck) => deck.id === settings.activeDeckId) ?? null : null;
@@ -9862,14 +10028,11 @@ function HomeView({
   const webReplayStatus = homeWebReplayStatus(settings, webReplayDiagnostics, settings.defaultGamePlatform);
   const EmbedWebview = "webview" as unknown as React.ElementType;
   const featuredCreators = COMMUNITY_SPOTLIGHTS;
-  const [featuredCreatorIndex, setFeaturedCreatorIndex] = useState(() => {
-    const riftlabIndex = COMMUNITY_SPOTLIGHTS.findIndex((item) => item.id === RIFTLAB_SPOTLIGHT.id);
-    return riftlabIndex >= 0 ? riftlabIndex : 0;
-  });
+  const [featuredCreatorIndex, setFeaturedCreatorIndex] = useState(0);
   const [featuredCreatorPaused, setFeaturedCreatorPaused] = useState(false);
   const [featuredCreatorInteracting, setFeaturedCreatorInteracting] = useState(false);
   const [creatorMotionAllowed, setCreatorMotionAllowed] = useState(true);
-  const featuredCreator = featuredCreators[featuredCreatorIndex % Math.max(1, featuredCreators.length)] ?? RIFTLAB_SPOTLIGHT;
+  const featuredCreator = featuredCreators[featuredCreatorIndex % Math.max(1, featuredCreators.length)] ?? BMUCASTS_SPOTLIGHT;
   const [homeVideoFeed, setHomeVideoFeed] = useState<HomeCreatorVideoFeed>(() => homeCreatorVideoFeedFromConfig({
     featuredVideos: DEFAULT_HOME_FEATURED_VIDEOS
   }));
@@ -10240,7 +10403,6 @@ function HomeView({
 
   return (
     <section className="dashboard-page home-page modern-home">
-      <RadianceSeasonNotice />
       <section className="modern-readiness-strip" aria-label="RiftLite readiness" data-tour-target="home">
         <div className="modern-status-item">
           <span className="modern-status-icon"><Globe2 size={20} /></span>
@@ -10260,7 +10422,6 @@ function HomeView({
         </button>
       </section>
 
-      <div className="data-date-toolbar"><StatSeasonFilter value={seasonFilter} onChange={setSeasonFilter} /><DateFilter label="Stats dates" value={dateFilter} onChange={setDateFilter} /><span className="muted">Deck performance, recent matches and community deck data.</span></div>
       <section className="modern-home-layout" data-live-takeover={Boolean(activeLiveTakeover)}>
         <div className="modern-home-main">
           <section className="modern-home-feature-row" aria-label="Deck tools">
@@ -10418,53 +10579,9 @@ function HomeView({
         </div>
 
         <aside className="modern-home-rail" aria-label="RiftLite partners and community">
-          <article
-            className={`modern-panel modern-sponsor ${featuredPartner ? "has-partner" : ""}`}
-            style={featuredPartner?.imageUrl ? { backgroundImage: `linear-gradient(120deg, rgb(5 12 23 / 96%), rgb(15 27 31 / 78%)), url(${featuredPartner.imageUrl})` } : undefined}
-          >
-            <div>
-              <span className="modern-kicker">{featuredPartner?.eyebrow || "Partnerships"}</span>
-              <h2>{featuredPartner?.title || "Partner with RiftLite"}</h2>
-              <p>{featuredPartner?.description || "Have an idea for the Riftbound community? Let's build something great together — bmucasts@gmail.com"}</p>
-              {featuredPartner ? (
-                <button className="secondary" onClick={() => void window.riftlite.openExternalResource(featuredPartner.url)}>
-                  <ExternalLink size={16} /> {featuredPartner.ctaLabel}
-                </button>
-              ) : null}
-            </div>
-            <span className="modern-sponsor-art" aria-hidden="true"><Mail size={38} /></span>
-            {featuredPartners.length > 1 ? (
-              <div className="modern-partner-controls" aria-label="Featured partner carousel controls">
-                <button type="button" onClick={() => setPartnerCarouselOffset(-1)} aria-label="Previous partner"><ChevronLeft size={16} /></button>
-                <span>{featuredPartnerIndex + 1} / {featuredPartners.length}</span>
-                <button type="button" onClick={() => setPartnerCarouselOffset(1)} aria-label="Next partner"><ChevronRight size={16} /></button>
-              </div>
-            ) : null}
-          </article>
-
           <article className="modern-panel modern-play-now-card">
             <span className="modern-kicker">Play now</span>
-            <h2>Where are you playing?</h2>
-            <div className="home-platform-options" role="group" aria-label="Default game provider">
-              {(["atlas", "tcga"] as const).map((platform) => {
-                const selected = settings.defaultGamePlatform === platform;
-                return (
-                  <button
-                    type="button"
-                    className="home-platform-option"
-                    data-platform={platform}
-                    data-active={selected}
-                    aria-pressed={selected}
-                    onClick={() => void onSetDefaultGamePlatform(platform)}
-                    key={platform}
-                  >
-                    <Globe2 size={19} />
-                    <strong>{platform === "atlas" ? "Atlas" : "TCGA"}</strong>
-                    {selected ? <small>Default</small> : null}
-                  </button>
-                );
-              })}
-            </div>
+            <h2>Ready to play?</h2>
             <button className="primary modern-play-now-action" onClick={() => onPlayPlatform(settings.defaultGamePlatform)}>
               <Play size={17} />
               Play on {settings.defaultGamePlatform === "atlas" ? "Atlas" : "TCGA"}
@@ -10624,6 +10741,30 @@ function HomeView({
                 </>
               )}
             </div>
+          </article>
+
+          <article
+            className={`modern-panel modern-sponsor ${featuredPartner ? "has-partner" : ""}`}
+            style={featuredPartner?.imageUrl ? { backgroundImage: `linear-gradient(120deg, rgb(5 12 23 / 96%), rgb(15 27 31 / 78%)), url(${featuredPartner.imageUrl})` } : undefined}
+          >
+            <div>
+              <span className="modern-kicker">{featuredPartner?.eyebrow || "Partnerships"}</span>
+              <h2>{featuredPartner?.title || "Partner with RiftLite"}</h2>
+              <p>{featuredPartner?.description || "Have an idea for the Riftbound community? Let's build something great together — bmucasts@gmail.com"}</p>
+              {featuredPartner ? (
+                <button className="secondary" onClick={() => void window.riftlite.openExternalResource(featuredPartner.url)}>
+                  <ExternalLink size={16} /> {featuredPartner.ctaLabel}
+                </button>
+              ) : null}
+            </div>
+            <span className="modern-sponsor-art" aria-hidden="true"><Mail size={38} /></span>
+            {featuredPartners.length > 1 ? (
+              <div className="modern-partner-controls" aria-label="Featured partner carousel controls">
+                <button type="button" onClick={() => setPartnerCarouselOffset(-1)} aria-label="Previous partner"><ChevronLeft size={16} /></button>
+                <span>{featuredPartnerIndex + 1} / {featuredPartners.length}</span>
+                <button type="button" onClick={() => setPartnerCarouselOffset(1)} aria-label="Next partner"><ChevronRight size={16} /></button>
+              </div>
+            ) : null}
           </article>
         </aside>
       </section>
@@ -12390,7 +12531,6 @@ function DashboardView({
   onOpenFirstRunSetup,
   onNavigate,
   onPlayPlatform,
-  onSetDefaultGamePlatform,
   communityTab,
   communityDeckLegendTarget,
   spotlightTargetId,
@@ -12483,7 +12623,6 @@ function DashboardView({
   onOpenFirstRunSetup: () => void;
   onNavigate: (view: ActiveView, options?: NavigationOptions) => void;
   onPlayPlatform: (platform: GamePlatform) => void;
-  onSetDefaultGamePlatform: (platform: GameProvider) => Promise<void>;
   communityTab: CommunityTab;
   communityDeckLegendTarget: string;
   spotlightTargetId: string;
@@ -12563,7 +12702,6 @@ function DashboardView({
         activeTestingSession={activeTestingSession}
         onNavigate={onNavigate}
         onPlayPlatform={onPlayPlatform}
-        onSetDefaultGamePlatform={onSetDefaultGamePlatform}
         onOpenReplayForMatch={onOpenReplayForMatch}
         onOpenGameDetails={onOpenGameDetails}
       />
@@ -17759,7 +17897,6 @@ function MatchesView({
 
   return (
     <section className="dashboard-page matches-page review-workspace review-matches" data-tour-target="review">
-      <RadianceSeasonNotice />
       <div className="review-page-heading">
         <div>
           <span className="review-kicker">Review / Matches</span>
@@ -18726,7 +18863,6 @@ function StatsView({ matches, onOpenGameDetails }: { matches: MatchDraft[]; onOp
   return (
     <GameDetailsNavigationContext.Provider value={(id) => onOpenGameDetails({ kind: "match", id })}>
     <section className="dashboard-page analytics-page">
-      <RadianceSeasonNotice />
       <section className="metric-grid">
         <Metric
           label="Matches"
@@ -21793,7 +21929,6 @@ function ReplayView({
 
   return (
     <section className="dashboard-page replay-page review-workspace review-replays">
-      <RadianceSeasonNotice />
       <header className="review-page-heading review-replays-heading">
         <div>
           <span className="review-kicker">Your replay library</span>
@@ -29635,7 +29770,6 @@ function CommunityView({ matches, communityMatches, hubMatches, settings, status
 
   return (
     <section ref={communityRef} className={`dashboard-page community-dashboard ${activeTab === "match-matrix" ? "matrix-focus" : ""}`}>
-      <RadianceSeasonNotice />
       <div className="community-toolbar">
         <div>
           <h2>Community submitted matches</h2>

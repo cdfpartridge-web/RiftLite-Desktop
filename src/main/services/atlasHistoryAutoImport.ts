@@ -1,5 +1,6 @@
 import { atlasHistoryTimestamp, needsAtlasHistoryImport, normalizeAtlasHistoryMarkers } from "../../shared/atlasHistory.js";
 import type { MatchDraft } from "../../shared/types.js";
+import { GameplayMaintenanceDeferredError } from "./gameplayMaintenanceScheduler.js";
 
 const MINUTE = 60_000;
 const MAX_MATCH_AGE_MS = 24 * 60 * MINUTE;
@@ -9,6 +10,7 @@ const RETRY_DELAYS_MS = [2, 5, 15, 30, 60, 120, 240].map((minutes) => minutes * 
 // above applies after relaunch too, without persisting retry state on matches.
 const MAX_NORMAL_ATTEMPTS = RETRY_DELAYS_MS.length + 1;
 const MAX_ATTEMPTS_WITH_CORRECTIONS = MAX_NORMAL_ATTEMPTS + 2;
+type ImportAttempt = { signature: string; count: number; nextAt: number };
 
 // Start the absolute window from the latest recorded game, so a long BO3 is
 // still eligible. updatedAt is deliberately excluded: importing history or
@@ -32,7 +34,7 @@ function importSignature(match: MatchDraft): string {
 /** Serial, bounded catch-up for completed matches. Never navigates the guest or opens a review. */
 export class AtlasHistoryAutoImport {
   private pending?: Promise<void>;
-  private attempts = new Map<string, { signature: string; count: number; nextAt: number }>();
+  private attempts = new Map<string, ImportAttempt>();
   private nextPassAt = 0;
 
   constructor(private readonly deps: {
@@ -60,6 +62,7 @@ export class AtlasHistoryAutoImport {
     for (const id of this.attempts.keys()) if (!ids.has(id)) this.attempts.delete(id);
     if (now < this.nextPassAt) return;
     const selected: MatchDraft[] = [];
+    const previousAttempts = new Map<string, ImportAttempt | undefined>();
     for (const { match } of recent.filter(({ match }) => needsAtlasHistoryImport(match))
       .sort((a, b) => b.timestamp - a.timestamp)) {
       if (!this.deps.ready() || selected.length === 3) break;
@@ -69,23 +72,45 @@ export class AtlasHistoryAutoImport {
       if (previous && (previous.count >= MAX_ATTEMPTS_WITH_CORRECTIONS ||
         (!corrected && (previous.count >= MAX_NORMAL_ATTEMPTS || now < previous.nextAt)))) continue;
       const count = (previous?.count ?? 0) + 1;
+      previousAttempts.set(match.id, previous);
       this.attempts.set(match.id, {
         signature, count, nextAt: now + (RETRY_DELAYS_MS[count - 1] ?? Infinity),
       });
       selected.push(match);
     }
     if (!selected.length) return;
+    const previousNextPassAt = this.nextPassAt;
     this.nextPassAt = now + MIN_PASS_INTERVAL_MS;
+    let partiallyDeferred = false;
+    const defer = (match: MatchDraft) => {
+      const previous = previousAttempts.get(match.id);
+      if (previous) this.attempts.set(match.id, previous);
+      else this.attempts.delete(match.id);
+      // The per-match budget still protects genuine failures/completed work.
+      // A gameplay pause itself must not spend attempts or the batch cooldown.
+      this.nextPassAt = previousNextPassAt;
+    };
     try {
+      if (!this.deps.ready()) throw new GameplayMaintenanceDeferredError();
       // One shared history listing per pass, even when three matches need it.
       const results = await this.deps.refreshMany(selected.map((match) => match.id));
       selected.forEach((match, index) => {
         const result = results[index];
+        if (result?.status === "rejected" && result.reason instanceof GameplayMaintenanceDeferredError) {
+          defer(match);
+          partiallyDeferred = true;
+          return;
+        }
         this.deps.report?.(match.id, result?.status === "fulfilled"
           ? needsAtlasHistoryImport(result.value) ? "waiting" : "imported"
           : "retrying");
       });
-    } catch {
+      if (partiallyDeferred) throw new GameplayMaintenanceDeferredError();
+    } catch (error) {
+      if (error instanceof GameplayMaintenanceDeferredError) {
+        if (!partiallyDeferred) selected.forEach(defer);
+        throw error;
+      }
       // A failed batch consumes an attempt too. Manual refresh remains available
       // after automatic attempts or the absolute, restart-safe age window end.
       for (const match of selected) this.deps.report?.(match.id, "retrying");

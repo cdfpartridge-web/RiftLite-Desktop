@@ -9,8 +9,8 @@ import {
 describe("community spotlight themes", () => {
   it("defines a theme for every spotlight and no unknown entries", () => {
     expect(Object.keys(COMMUNITY_SPOTLIGHT_THEMES).sort()).toEqual([...COMMUNITY_SPOTLIGHT_IDS].sort());
-    expect(COMMUNITY_SPOTLIGHT_IDS).toHaveLength(16);
-    expect(COMMUNITY_SPOTLIGHT_IDS.slice(0, 2)).toEqual(["riftlab", "frodan"]);
+    expect(COMMUNITY_SPOTLIGHT_IDS).toHaveLength(18);
+    expect(COMMUNITY_SPOTLIGHT_IDS.slice(0, 3)).toEqual(["bmucasts", "riftlab", "frodan"]);
   });
 
   it("uses valid six-digit CSS hex colors", () => {
@@ -23,6 +23,10 @@ describe("community spotlight themes", () => {
   });
 
   it("returns the curated theme for a normalized creator id", () => {
+    expect(communitySpotlightTheme("  BMUCASTS ")).toEqual({
+      primary: "#FFCC32",
+      secondary: "#063A58"
+    });
     expect(communitySpotlightTheme("  RIFTLAB ")).toEqual({
       primary: "#0F7AF2",
       secondary: "#DB2629"

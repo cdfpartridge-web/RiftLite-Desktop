@@ -22,7 +22,7 @@ describe("Home launchpad", () => {
     expect(homeSource).toContain("Explore decks");
     expect(homeSource).toContain("View my replays");
     expect(homeSource).toContain("Train sideboarding");
-    expect(homeSource).toContain("Where are you playing?");
+    expect(homeSource).toContain("Ready to play?");
     expect(homeSource).toContain('onNavigate("replays")');
     expect(homeSource).toContain('onNavigate("community", { communityTab: "community-decks" })');
     expect(homeSource).toContain('onNavigate("sideboard-lab")');
@@ -85,9 +85,10 @@ describe("Home launchpad", () => {
     expect(appSource).toContain('className="segmented home-default-platform"');
     expect(appSource).toContain('saveDefaultGamePlatform(settings.defaultGamePlatform === "atlas" ? "tcga" : "atlas")');
     expect(appSource).toContain("Switch default game to");
-    expect(homeSource).toContain('data-platform={platform}');
-    expect(homeSource).toContain("onSetDefaultGamePlatform(platform)");
-    expect(mainSource).toContain(".home-platform-option[data-platform=");
+    expect(homeSource).not.toContain('className="home-platform-options"');
+    expect(homeSource).not.toContain("onSetDefaultGamePlatform");
+    expect(mainSource).toContain("document.querySelector('.home-default-platform')");
+    expect(mainSource).not.toContain(".home-platform-option[data-platform=");
   });
 
   it("ships responsive styles for the new launchpad surfaces", () => {

@@ -3513,7 +3513,7 @@ installAtlasEditableFocusBridge();
 if (platform === "atlas") {
   installAtlasRendererPerformanceMonitor((summary) => {
     ipcRenderer.send(ATLAS_RENDERER_PERFORMANCE_IPC_CHANNEL, summary);
-  });
+  }, () => debugEnabled);
 }
 installNetworkHooks();
 installDebugCapture();

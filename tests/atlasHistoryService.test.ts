@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { AtlasHistoryService } from "../src/main/services/atlasHistoryService";
+import { GameplayMaintenanceDeferredError } from "../src/main/services/gameplayMaintenanceScheduler";
 import { deckText, history, historyRow, savedMatch, startedAt } from "./fixtures/atlasHistory";
 import type { AtlasHistoryMarker, AtlasMatchHistory } from "../src/shared/atlasHistory";
 import type { MatchDraft } from "../src/shared/types";
@@ -61,6 +62,83 @@ function batchHarness(
   };
 }
 describe("Atlas history import", () => {
+  it("defers automatic work before reading local matches or captures when gameplay is busy", async () => {
+    const current = target(1);
+    const h = batchHarness([current.match], [{ page: [current.row], isDone: true }]);
+    const results = await h.service.refreshMany([current.match.id], () => { throw new GameplayMaintenanceDeferredError(); });
+    expect(results).toEqual([{ status: "rejected", reason: expect.any(GameplayMaintenanceDeferredError) }]);
+    expect(h.getMatch).not.toHaveBeenCalled();
+    expect(h.readRawForMatch).not.toHaveBeenCalled();
+    expect(h.query).not.toHaveBeenCalled();
+    expect(h.save).not.toHaveBeenCalled();
+  });
+
+  it("stops pagination when gameplay begins during the first history request", async () => {
+    const current = target(1);
+    const h = batchHarness([current.match], [
+      { page: [current.row], continueCursor: "next-page" },
+      { page: [], isDone: true },
+    ]);
+    let busy = false;
+    h.query.mockImplementationOnce(async () => {
+      busy = true;
+      return { sessionId: "session-1", value: { page: [current.row], continueCursor: "next-page" } };
+    });
+    const results = await h.service.refreshMany([current.match.id], () => {
+      if (busy) throw new GameplayMaintenanceDeferredError();
+    });
+    expect(results[0]).toMatchObject({ status: "rejected", reason: expect.any(GameplayMaintenanceDeferredError) });
+    expect(h.lists()).toHaveLength(1);
+    expect(h.decks()).toHaveLength(0);
+    expect(h.save).not.toHaveBeenCalled();
+  });
+
+  it("starts no further deck lookup or save when gameplay begins during a deck request", async () => {
+    const first = target(1), second = target(2);
+    const h = batchHarness([first.match, second.match], [{ page: [second.row, first.row], isDone: true }]);
+    let busy = false;
+    h.query.mockResolvedValueOnce({ sessionId: "session-1", value: { page: [second.row, first.row], isDone: true } });
+    h.query.mockImplementationOnce(async () => {
+      busy = true;
+      return { sessionId: "session-1", value: [{ playerId: "me", decklist: deckText }] };
+    });
+    const results = await h.service.refreshMany([first.match.id, second.match.id], () => {
+      if (busy) throw new GameplayMaintenanceDeferredError();
+    });
+    expect(results).toHaveLength(2);
+    for (const result of results) expect(result).toMatchObject({ status: "rejected", reason: expect.any(GameplayMaintenanceDeferredError) });
+    expect(h.decks()).toHaveLength(1);
+    expect(h.save).not.toHaveBeenCalled();
+  });
+
+  it("lets an already-started local save finish while checking before subsequent saves", async () => {
+    const first = target(1), second = target(2);
+    const h = batchHarness([first.match, second.match], [{ page: [second.row, first.row], isDone: true }]);
+    let busy = false;
+    h.save.mockImplementationOnce(async (id, atlasHistory, atlasHistoryMarkers) => {
+      busy = true;
+      return { ...first.match, id, atlasHistory, atlasHistoryMarkers };
+    });
+    const results = await h.service.refreshMany([first.match.id, second.match.id], () => {
+      if (busy) throw new GameplayMaintenanceDeferredError();
+    });
+    expect(results[0]).toMatchObject({ status: "fulfilled", value: { id: first.match.id } });
+    expect(results[1]).toMatchObject({ status: "rejected", reason: expect.any(GameplayMaintenanceDeferredError) });
+    expect(h.save).toHaveBeenCalledOnce();
+  });
+
+  it("clears a deferred automatic refresh so an explicit manual retry stays available", async () => {
+    const current = target(1);
+    const h = batchHarness([current.match], [{ page: [current.row], isDone: true }]);
+    const automatic = await h.service.refreshMany([current.match.id], () => { throw new GameplayMaintenanceDeferredError(); });
+    expect(automatic[0]).toMatchObject({ status: "rejected", reason: expect.any(GameplayMaintenanceDeferredError) });
+    const manual = await h.service.refresh(current.match.id);
+    expect(manual.atlasHistory?.games[0].opponent.availability).toBe("available");
+    expect(h.lists()).toHaveLength(1);
+    expect(h.decks()).toHaveLength(1);
+    expect(h.save).toHaveBeenCalledOnce();
+  });
+
   it("coalesces repeated clicks and fetches decks only for exact completed matches", async () => {
     const h = harness([
       historyRow({ id: "other", startedAt: historyRow().startedAt - 10 }),

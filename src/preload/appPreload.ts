@@ -107,7 +107,7 @@ const api: RiftLiteApi = {
   exportReplayFlagsText: (replayId) => ipcRenderer.invoke("replays:export-flags-text", replayId) as ReturnType<RiftLiteApi["exportReplayFlagsText"]>,
   uploadRawCapture: (replayId) => ipcRenderer.invoke("raw-capture:upload", replayId) as ReturnType<RiftLiteApi["uploadRawCapture"]>,
   getRawCaptureStatus: () => ipcRenderer.invoke("raw-capture:status") as ReturnType<RiftLiteApi["getRawCaptureStatus"]>,
-  getWebReplayUploadDiagnostics: () => ipcRenderer.invoke("raw-capture:diagnostics") as ReturnType<RiftLiteApi["getWebReplayUploadDiagnostics"]>,
+  getWebReplayUploadDiagnostics: (automatic = false) => ipcRenderer.invoke("raw-capture:diagnostics", automatic === true) as ReturnType<RiftLiteApi["getWebReplayUploadDiagnostics"]>,
   retryPendingWebReplayUploads: () => ipcRenderer.invoke("raw-capture:retry-pending") as ReturnType<RiftLiteApi["retryPendingWebReplayUploads"]>,
   uploadIncompleteWebReplay: (captureSessionId) => ipcRenderer.invoke("raw-capture:upload-incomplete", captureSessionId) as ReturnType<RiftLiteApi["uploadIncompleteWebReplay"]>,
   removeWebReplayUploadFromQueue: (captureSessionId) => ipcRenderer.invoke("raw-capture:remove-from-queue", captureSessionId) as ReturnType<RiftLiteApi["removeWebReplayUploadFromQueue"]>,

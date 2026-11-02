@@ -35,13 +35,13 @@ export class AtlasHistoryService {
     // Explicit refresh can recheck privacy/decks, even after automatic retries have stopped.
     return this.schedule([matchId], false)[0];
   }
-  refreshMany(matchIds: string[]): Promise<PromiseSettledResult<MatchDraft>[]> {
-    return Promise.allSettled(this.schedule(matchIds, true));
+  refreshMany(matchIds: string[], checkpoint?: () => void): Promise<PromiseSettledResult<MatchDraft>[]> {
+    return Promise.allSettled(this.schedule(matchIds, true, checkpoint));
   }
-  private schedule(matchIds: string[], onlyMissing: boolean): Promise<MatchDraft>[] {
+  private schedule(matchIds: string[], onlyMissing: boolean, checkpoint?: () => void): Promise<MatchDraft>[] {
     const fresh = [...new Set(matchIds)].filter((id) => !this.pending.has(id));
     if (fresh.length) {
-      const batch = this.refreshBatch(fresh, onlyMissing);
+      const batch = this.refreshBatch(fresh, onlyMissing, checkpoint);
       fresh.forEach((id, index) => {
         const task = batch.then((results) => {
           const result = results[index];
@@ -55,14 +55,17 @@ export class AtlasHistoryService {
     }
     return matchIds.map((id) => this.pending.get(id)!);
   }
-  private async prepare(matchId: string, onlyMissing: boolean): Promise<HistoryTarget> {
+  private async prepare(matchId: string, onlyMissing: boolean, checkpoint?: () => void): Promise<HistoryTarget> {
+    checkpoint?.();
     const match = await this.deps.getMatch(matchId);
+    checkpoint?.();
     if (!match || !canImportAtlasHistory(match))
       throw new Error("Save the original Atlas match before refreshing its decks.");
     const retained = normalizeAtlasHistoryMarkers(match.atlasHistoryMarkers);
     const markers = retained.length
       ? retained
       : atlasHistoryMarkersFromRaw(await this.deps.readRawForMatch(matchId));
+    checkpoint?.();
     if (!markers.length)
       throw new Error(
         "This older match has no retained Atlas history identifiers. New captures retain them automatically.",
@@ -74,12 +77,14 @@ export class AtlasHistoryService {
     }) : markers;
     return { match, markers, missing };
   }
-  private async refreshBatch(matchIds: string[], onlyMissing: boolean): Promise<PromiseSettledResult<MatchDraft>[]> {
-    const prepared = await Promise.allSettled(matchIds.map((id) => this.prepare(id, onlyMissing)));
+  private async refreshBatch(matchIds: string[], onlyMissing: boolean, checkpoint?: () => void): Promise<PromiseSettledResult<MatchDraft>[]> {
+    const prepared = await Promise.allSettled(matchIds.map((id) => this.prepare(id, onlyMissing, checkpoint)));
     const targets = prepared.flatMap((result) => result.status === "fulfilled" ? result.value.missing : []);
     let sessionId = "";
     const query: HistoryQuery = async (path, args) => {
+      checkpoint?.();
       const result = atlasRecord(await this.deps.query(atlasHistoryQueryScript(path, args)));
+      checkpoint?.();
       if (
         !result ||
         typeof result.sessionId !== "string" ||
@@ -144,6 +149,7 @@ export class AtlasHistoryService {
         ...(match.atlasHistory?.games || []).filter((g) => !matches.some((n) => n.gameNumber === g.gameNumber)),
         ...matches,
       ].sort((a, b) => a.gameNumber - b.gameNumber);
+      checkpoint?.();
       return this.deps.save(match.id, { version: 1, updatedAt: new Date().toISOString(), games }, markers);
     }));
   }

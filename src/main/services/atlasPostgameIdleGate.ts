@@ -14,6 +14,16 @@ export class AtlasPostgameIdleGate {
     this.idleAfter = now() + quietMs;
   }
   observeActivity(): void { this.idleAfter = this.now() + this.quietMs; }
+  isQuiet(): boolean { return this.now() >= this.idleAfter; }
+  /** Generic disk/cloud work does not query Atlas and can run on sign-in/deck
+   * pages. Keep live room routes protected even before capture recognises one. */
+  allowsMaintenance(input: { loading: boolean; url: string }): boolean {
+    if (input.loading || !this.isQuiet()) return false;
+    try {
+      const path = new URL(input.url).pathname.replace(/^\/(?:en|zh-CN|fr|ko)(?=\/|$)/, "");
+      return !/^\/(?:game|room|play)\/[^/]+/i.test(path);
+    } catch { return false; }
+  }
   /**
    * Call only after the existing recovery fence has established trusted Atlas
    * room/matchmaking traffic. Recovery intentionally treats all room traffic
@@ -26,7 +36,7 @@ export class AtlasPostgameIdleGate {
     return true;
   }
   allows(input: { trusted: boolean; loading: boolean; capturing: boolean; platformSwitchAllowed: boolean; url: string }): boolean {
-    if (!input.trusted || input.loading || input.capturing || !input.platformSwitchAllowed || this.now() < this.idleAfter) return false;
+    if (!input.trusted || input.loading || input.capturing || !input.platformSwitchAllowed || !this.isQuiet()) return false;
     try {
       const url = new URL(input.url);
       const path = url.pathname.replace(/^\/(?:en|zh-CN|fr|ko)(?=\/|$)/, "") || "/";

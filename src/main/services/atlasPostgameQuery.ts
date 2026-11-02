@@ -7,6 +7,8 @@ export interface AtlasPostgameQueryTarget {
   completionCheck?: "atlas";
   completionMatchFormat?: "bo3";
   completionSeriesStartedAt?: number;
+  /** A two-game sweep whose final win update was absent needs native ending proof. */
+  completionSeriesWinnerPlayerId?: string;
   localPlayerId: string;
   expectedPageUrl: string;
 }
@@ -25,9 +27,52 @@ export type AtlasPostgameQueryResult = {
   replay?: { format: "riftatlas-replay"; version: 2; nodes: unknown[]; root: { r: number } };
 };
 
+export type AtlasPostgameQueryFailureReason =
+  | "authentication" | "network" | "provider-unavailable" | "timeout" | "cancelled"
+  | "permission-or-identity" | "identity" | "format" | "incomplete" | "too-large" | "unknown";
+
+export class AtlasPostgameQueryError extends Error {
+  readonly code = "atlas_postgame_query_failed";
+  constructor(readonly failureReason: AtlasPostgameQueryFailureReason) {
+    super("Atlas replay collection failed.");
+  }
+}
+
+/** Only fixed categories leave this boundary; never log provider exception text. */
+export function atlasPostgameQueryFailureReason(error: unknown): AtlasPostgameQueryFailureReason {
+  const reasons: AtlasPostgameQueryFailureReason[] = ["authentication", "network", "provider-unavailable", "timeout", "cancelled", "permission-or-identity", "identity", "format", "incomplete", "too-large", "unknown"];
+  try {
+    if (error && typeof error === "object") {
+      const failure = error as { code?: unknown; failureReason?: unknown };
+      if (failure.code === "atlas_postgame_query_failed" && reasons.includes(failure.failureReason as AtlasPostgameQueryFailureReason)) return failure.failureReason as AtlasPostgameQueryFailureReason;
+    }
+  } catch { return "unknown"; }
+  let message: unknown;
+  try { message = typeof error === "string" ? error : error && typeof error === "object" ? (error as { message?: unknown }).message : undefined; }
+  catch { return "unknown"; }
+  if (typeof message !== "string") return "unknown";
+  const known: Array<[AtlasPostgameQueryFailureReason, string[]]> = [
+    ["authentication", ["Atlas sign-in is unavailable. Sign in to Atlas before collecting the replay.", "Sign in to Atlas before collecting the replay.", "Atlas account token is unavailable.", "Atlas account token is invalid."]],
+    ["network", ["Failed to fetch", "fetch failed", "NetworkError when attempting to fetch resource."]],
+    ["provider-unavailable", ["Atlas replay is temporarily unavailable. Retry collection later."]],
+    ["timeout", ["Atlas replay collection timed out."]],
+    ["cancelled", ["Atlas replay collection was cancelled because the game or account changed."]],
+    ["permission-or-identity", ["Atlas returned a restricted or mismatched replay."]],
+    ["identity", ["Invalid completed Atlas game.", "Atlas replay does not match this completed duel.", "Atlas replay metadata did not match the completed game.", "The signed-in Atlas account does not own this replay.", "Atlas account changed during replay collection."]],
+    ["incomplete", ["Atlas replay completion could not be confirmed.", "Atlas replay has no completed ending."]],
+    ["too-large", ["Atlas replay response exceeded its safe size limit.", "Atlas replay exceeds safe expansion limits.", "Atlas replay exceeds safe import limits.", "Atlas replay is too large to attach safely.", "Atlas replay has too many entries.", "Atlas replay has too many nodes."]],
+    ["format", ["Atlas replay has an invalid property.", "Atlas replay has an invalid root.", "Atlas replay has invalid nested data.", "Atlas replay has invalid nodes.", "Atlas replay has invalid references.", "Atlas replay response was empty.", "Atlas returned an invalid replay response.", "Atlas replay request unexpectedly redirected."]],
+  ];
+  for (const [reason, messages] of known) if (messages.some(value => message === value || message === "Error: " + value)) return reason;
+  return "unknown";
+}
+
 /** Run only after the caller's authoritative idle/completed-game fence. No polling occurs in the guest. */
-export function atlasPostgameQueryScript(target: AtlasPostgameQueryTarget): string {
-  return `(${queryAtlasPostgameInPage.toString()})(${JSON.stringify(target)})`;
+export function atlasPostgameQueryScript(target: AtlasPostgameQueryTarget, reportFailure = false): string {
+  const script = `(${queryAtlasPostgameInPage.toString()})(${JSON.stringify(target)})`;
+  // Electron can replace guest exceptions with a generic execution error.
+  // Return only a fixed reason across that boundary, never the raw message.
+  return reportFailure ? `${script}.catch(error => ({ riftlitePostgameFailure: (${atlasPostgameQueryFailureReason.toString()})(error) }))` : script;
 }
 
 /** Main calls this when a new game begins, the guest changes, or the collection job is cancelled. */
@@ -42,9 +87,11 @@ async function queryAtlasPostgameInPage(target: AtlasPostgameQueryTarget): Promi
   const identifier = (value: unknown): value is string => typeof value === "string" && /^[A-Za-z0-9_-]{1,256}$/.test(value);
   const verifyCompletion = target.completionCheck === "atlas";
   const verifyBo3 = verifyCompletion && target.completionMatchFormat === "bo3";
+  const verifySeriesWinner = target.completionSeriesWinnerPlayerId !== undefined;
   if (!identifier(target.roomCode) || !identifier(target.localPlayerId) || !integer(target.roomCreatedAt) || !integer(target.gameHistoryStartedAt)
     || (target.completionCheck !== undefined && !verifyCompletion)
     || (target.completionMatchFormat !== undefined && !verifyBo3)
+    || (verifySeriesWinner && (!verifyBo3 || target.gameNumber !== 2 || !identifier(target.completionSeriesWinnerPlayerId)))
     || (verifyBo3 ? !integer(target.completionSeriesStartedAt) || target.completionSeriesStartedAt > target.gameHistoryStartedAt
       : target.completionSeriesStartedAt !== undefined)
     || (target.gameHistoryEndedAt === undefined ? !verifyCompletion : !integer(target.gameHistoryEndedAt) || target.gameHistoryEndedAt < target.gameHistoryStartedAt)
@@ -165,7 +212,14 @@ async function queryAtlasPostgameInPage(target: AtlasPostgameQueryTarget): Promi
     const last = view.frames[view.frames.length - 1];
     if (!record(last) || !record(last.state)) throw new Error("Atlas replay has no completed ending.");
     const state = last.state;
-    if (state.roomCode !== target.roomCode || state.createdAt !== target.roomCreatedAt || state.gameHistoryStartedAt !== target.gameHistoryStartedAt || (state.gameNumber ?? 1) !== target.gameNumber || state.gameVariant !== "duel" || !Array.isArray(state.players) || state.players.length !== 2 || !record(state.gameOutcome) || !Array.isArray(state.gameOutcome.winnerPlayerIds) || state.gameOutcome.winnerPlayerIds.length !== 1) throw new Error("Atlas replay does not match this completed duel.");
+    // Atlas archives earlier BO3 games before appending terminal board fields.
+    // Their owned ready metadata, completed export envelope and exact series
+    // frames below prove completion; never synthesize an outcome or end time.
+    const archivedBo3Game = verifyBo3 && target.gameNumber < 3 && !verifySeriesWinner
+      && state.gameOutcome === undefined && state.gameHistoryEndedAt === undefined;
+    const outcome = record(state.gameOutcome) ? state.gameOutcome : null;
+    const winners = outcome && Array.isArray(outcome.winnerPlayerIds) ? outcome.winnerPlayerIds : null;
+    if (state.roomCode !== target.roomCode || state.createdAt !== target.roomCreatedAt || state.gameHistoryStartedAt !== target.gameHistoryStartedAt || (state.gameNumber ?? 1) !== target.gameNumber || state.gameVariant !== "duel" || !Array.isArray(state.players) || state.players.length !== 2 || (!archivedBo3Game && (!winners || winners.length !== 1))) throw new Error("Atlas replay does not match this completed duel.");
     if (verifyCompletion) {
       // Atlas's ready metadata supplies finalFrameIndex, not completedAt. The
       // full export must independently prove completion for that exact frame.
@@ -174,23 +228,49 @@ async function queryAtlasPostgameInPage(target: AtlasPostgameQueryTarget): Promi
       if (view.createdAt !== target.gameHistoryStartedAt || !integer(completedAt) || completedAt < target.gameHistoryStartedAt || completedAt > Date.now() + 60_000
         || ids.length !== 2 || new Set(ids).size !== 2 || ids.includes("") || !ids.includes(target.localPlayerId)
         || expectedFinalFrameIndex !== view.frames.length - 1 || last.index !== expectedFinalFrameIndex
-        || !["score", "concession"].includes(String(state.gameOutcome.reason)) || typeof state.gameOutcome.winnerPlayerIds[0] !== "string" || !ids.includes(state.gameOutcome.winnerPlayerIds[0])
+        || (!archivedBo3Game && (!["score", "concession"].includes(String(outcome?.reason)) || !winners || typeof winners[0] !== "string" || !ids.includes(winners[0])))
         || (state.gameHistoryEndedAt !== undefined && state.gameHistoryEndedAt !== completedAt)) throw new Error("Atlas replay completion could not be confirmed.");
-      let previousSequence = -1, previousElapsed = -1;
+      let previousSequence = -1, previousElapsed = -1, historyStarted = false;
       for (const [index, frame] of view.frames.entries()) {
+        // Native exports retain their initial setup before the gameplay clock
+        // exists. Accept only this contiguous zero-time prefix; never infer a
+        // start timestamp or permit the history anchor to disappear afterward.
+        const frameState = record(frame) && record(frame.state) ? frame.state : null;
+        const exactHistory = frameState !== null && frameState.gameHistoryStartedAt === target.gameHistoryStartedAt;
+        const setupPrefix = !historyStarted && record(frame) && frameState !== null && frame.elapsedMs === 0
+          && !Object.hasOwn(frameState, "gameHistoryStartedAt")
+          && ["sideboarding", "battlefield_pick", "initiative_roll", "first_player_choice", "mulligan"].includes(String(frameState.phase))
+          && ["gameHistoryEndedAt", "gameOutcome", "turnNumber", "activeTurnPlayerId"].every(key => !Object.hasOwn(frameState, key));
         if (!record(frame) || !record(frame.state) || frame.index !== index || !Number.isSafeInteger(frame.sequence) || (frame.sequence as number) < 0 || (frame.sequence as number) < previousSequence
           || typeof frame.elapsedMs !== "number" || !Number.isFinite(frame.elapsedMs) || frame.elapsedMs < previousElapsed || frame.elapsedMs < 0 || frame.elapsedMs > completedAt - target.gameHistoryStartedAt + 1000
-          || frame.state.roomCode !== target.roomCode || frame.state.createdAt !== target.roomCreatedAt || frame.state.gameHistoryStartedAt !== target.gameHistoryStartedAt
+          || frame.state.roomCode !== target.roomCode || frame.state.createdAt !== target.roomCreatedAt || (!exactHistory && !setupPrefix)
           || (frame.state.gameNumber ?? 1) !== target.gameNumber || frame.state.matchFormat !== (verifyBo3 ? "bo3" : "bo1")
           || (verifyBo3 && frame.state.seriesStartedAt !== target.completionSeriesStartedAt)
+          || (archivedBo3Game && (frame.state.gameOutcome !== undefined || frame.state.gameHistoryEndedAt !== undefined))
           || frame.state.gameVariant !== "duel" || frame.state.testMode !== false || frame.state.rewindProtocolVersion !== 5
           || !Array.isArray(frame.state.players) || frame.state.players.length !== 2
           || new Set(frame.state.players.map(player => record(player) ? player.id : undefined)).size !== 2
           || frame.state.players.some(player => !record(player) || typeof player.id !== "string" || !ids.includes(player.id))) throw new Error("Atlas replay completion could not be confirmed.");
+        historyStarted ||= exactHistory;
         previousSequence = frame.sequence as number; previousElapsed = frame.elapsedMs;
         if (index % 128 === 127) await yieldIfNeeded();
       }
-      if (Math.abs(previousElapsed - (completedAt - target.gameHistoryStartedAt)) > 1000) throw new Error("Atlas replay completion could not be confirmed.");
+      if (!historyStarted) throw new Error("Atlas replay completion could not be confirmed.");
+      // An archived game's last board action precedes its envelope completion;
+      // its final index and all frame times are still bounded above by that end.
+      if (!archivedBo3Game && Math.abs(previousElapsed - (completedAt - target.gameHistoryStartedAt)) > 1000) throw new Error("Atlas replay completion could not be confirmed.");
+      if (verifySeriesWinner) {
+        // A completed Game 2 alone could mean a tied, unfinished series. Its
+        // genuine native winner must be the player with the captured first win.
+        // Atlas can retain the prior 1–0 cumulative score even in this terminal
+        // export; accept that or 2–0, never manufacture the missing increment.
+        const winner = target.completionSeriesWinnerPlayerId!;
+        const opponent = ids.find(id => id !== winner);
+        const wins = record(state.winsByPlayerId) ? state.winsByPlayerId : null;
+        if (winners?.[0] !== winner || state.gameHistoryEndedAt !== completedAt
+          || !opponent || !wins || Object.keys(wins).length !== 2
+          || (wins[winner] !== 1 && wins[winner] !== 2) || wins[opponent] !== 0) throw new Error("Atlas replay completion could not be confirmed.");
+      }
     }
     const keys = (words: string) => new Set(words.split(" "));
     const allowed: Record<string, Set<string>> = {

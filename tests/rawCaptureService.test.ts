@@ -15,6 +15,7 @@ import {
   webReplayIncompleteOverrideAllowed
 } from "../src/main/services/rawCaptureService";
 import type { RiftLiteStore } from "../src/main/services/store";
+import { GameplayMaintenanceDeferredError } from "../src/main/services/gameplayMaintenanceScheduler";
 import type {
   MatchDraft,
   RawCaptureAppendFramePayload,
@@ -1301,7 +1302,106 @@ describe("RawCaptureService", () => {
 
     await expect(automatic).resolves.toBe(3);
     await expect(forced).resolves.toBe(3);
-    expect(uploadPass.mock.calls).toEqual([[1, false], [4, true]]);
+    expect(uploadPass.mock.calls).toEqual([[1, false, undefined], [4, true]]);
+  });
+
+  it("defers automatic upload before reading settings when gameplay is busy", async () => {
+    const store = fakeStore(settings({}, await tempReplayDirectory()));
+    const getSettings = vi.spyOn(store, "getSettings");
+    const getReplays = vi.spyOn(store, "getReplays");
+    const service = new RawCaptureService(store);
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    const checkpoint = () => { throw new GameplayMaintenanceDeferredError(); };
+
+    await expect(service.uploadPendingRawCaptures(5, false, checkpoint)).rejects.toBeInstanceOf(GameplayMaintenanceDeferredError);
+
+    expect(getSettings).not.toHaveBeenCalled();
+    expect(getReplays).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+    // A paused request releases single-flight ownership so an explicit retry can run.
+    await expect(service.uploadPendingRawCaptures(5, true)).resolves.toBe(0);
+    expect(getSettings).toHaveBeenCalled();
+  });
+
+  it("does not start interrupted-capture recovery when gameplay begins during settings lookup", async () => {
+    const store = fakeStore(settings({ enabled: true }, await tempReplayDirectory()));
+    let ready = true;
+    vi.spyOn(store, "getSettings").mockImplementationOnce(async () => {
+      ready = false;
+      return settings({ enabled: true }, "unused-capture-directory");
+    });
+    const service = new RawCaptureService(store);
+    const recover = vi.spyOn(service as any, "ensureInterruptedCaptureRecovery");
+
+    await expect(service.uploadPendingRawCaptures(5, false, () => {
+      if (!ready) throw new GameplayMaintenanceDeferredError();
+    })).rejects.toBeInstanceOf(GameplayMaintenanceDeferredError);
+    expect(recover).not.toHaveBeenCalled();
+  });
+
+  it("finishes one in-flight upload then pauses before the next replay and resumes without repeating it", async () => {
+    const replayDirectory = await tempReplayDirectory();
+    const store = fakeStore({
+      ...settings({ enabled: true, webReplayAutoUploadEnabled: true, webReplayAutoUploadAccountUid: "account-1" }, replayDirectory),
+      accountUid: "account-1", firebaseRefreshToken: "refresh-token"
+    } as UserSettings);
+    for (const id of ["first-idle-upload", "second-idle-upload"]) {
+      await store.saveReplay({ ...replay(id), rawCapture: {
+        provider: "riftlite-v2", captureSessionId: id, messageCount: 1,
+        uploadStatus: "not-uploaded", localPath: join(replayDirectory, `${id}.json`), visibility: "private",
+        webReplayAutoUploadEligible: true, webReplayAutoUploadAccountUid: "account-1"
+      } });
+    }
+    const service = new RawCaptureService(store);
+    let ready = true;
+    const uploadedIds: string[] = [];
+    const upload = vi.spyOn(service, "uploadRawCaptureToRiftLite").mockImplementation(async (id) => {
+      const record = (await store.getReplays()).find((item) => item.id === id)!;
+      const url = `https://www.riftlite.com/replays/${id}`;
+      await store.saveReplay({ ...record, rawCapture: { ...record.rawCapture!,
+        uploadStatus: "uploaded", processingStatus: "ready", uploadId: id, uploadUrl: url } });
+      uploadedIds.push(id);
+      if (uploadedIds.length === 1) ready = false;
+      return { replayId: id, url, visibility: "private", status: "ready" };
+    });
+    const reconcile = vi.spyOn(service as any, "reconcilePublishedManifestAssociations");
+    const checkpoint = () => { if (!ready) throw new GameplayMaintenanceDeferredError(); };
+
+    await expect(service.uploadPendingRawCaptures(5, false, checkpoint)).rejects.toBeInstanceOf(GameplayMaintenanceDeferredError);
+    expect(upload).toHaveBeenCalledOnce();
+    expect(reconcile).not.toHaveBeenCalled();
+    const paused = await store.getReplays();
+    expect(paused.filter((record) => record.rawCapture?.uploadStatus === "uploaded")).toHaveLength(1);
+    expect(paused.filter((record) => record.rawCapture?.uploadStatus === "not-uploaded")).toHaveLength(1);
+    expect(paused.every((record) => !record.rawCapture?.error && !record.rawCapture?.attemptCount)).toBe(true);
+
+    ready = true;
+    await service.uploadPendingRawCaptures(5, false, checkpoint);
+    expect(upload).toHaveBeenCalledTimes(2);
+    expect(new Set(uploadedIds).size).toBe(2);
+    expect((await store.getReplays()).every((record) => record.rawCapture?.uploadStatus === "uploaded")).toBe(true);
+    expect(reconcile).toHaveBeenCalledOnce();
+  });
+
+  it("honours a foreground forced retry that joins a gameplay-deferred automatic pass", async () => {
+    const service = new RawCaptureService(fakeStore(settings({}, await tempReplayDirectory())));
+    let releaseAutomatic!: () => void;
+    const automaticGate = new Promise<void>((resolve) => { releaseAutomatic = resolve; });
+    const checkpoint = vi.fn(() => { throw new GameplayMaintenanceDeferredError(); });
+    const uploadPass = vi.spyOn(service as any, "uploadPendingRawCapturesNow")
+      .mockImplementationOnce(async (_limit, _forced, automaticCheckpoint) => {
+        await automaticGate;
+        (automaticCheckpoint as () => void)();
+      })
+      .mockResolvedValueOnce(2);
+    const automatic = service.uploadPendingRawCaptures(1, false, checkpoint);
+    const forced = service.uploadPendingRawCaptures(4, true);
+    releaseAutomatic();
+
+    await expect(automatic).resolves.toBe(2);
+    await expect(forced).resolves.toBe(2);
+    expect(uploadPass.mock.calls).toEqual([[1, false, checkpoint], [4, true]]);
+    expect(checkpoint).toHaveBeenCalledOnce();
   });
 
   it("releases the global upload queue when a request never settles", async () => {

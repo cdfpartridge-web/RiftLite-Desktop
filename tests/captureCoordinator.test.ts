@@ -563,6 +563,7 @@ describe("CaptureCoordinator", () => {
   it("blocks provider switching during active capture but not for a durable pending review", async () => {
     const { coordinator } = coordinatorHarness();
     expect(coordinator.getGamePlatformSwitchStatus().allowed).toBe(true);
+    expect(coordinator.hasGameplayInProgress()).toBe(false);
 
     await coordinator.handleEvent(event("match-start", {
       active: true,
@@ -572,14 +573,62 @@ describe("CaptureCoordinator", () => {
       opponentChampion: "Kennen"
     }));
     expect(coordinator.getGamePlatformSwitchStatus()).toMatchObject({ allowed: false });
+    expect(coordinator.hasGameplayInProgress()).toBe(true);
 
     await coordinator.forceReview("tcga");
     await coordinator.waitForAllReplayFinalizations();
     expect(coordinator.getHealth().state).toBe("review-needed");
     expect(coordinator.getGamePlatformSwitchStatus()).toMatchObject({ allowed: true });
+    expect(coordinator.hasGameplayInProgress()).toBe(false);
 
     coordinator.dismissMatchReview();
     expect(coordinator.getGamePlatformSwitchStatus().allowed).toBe(true);
+  });
+
+  it("allows maintenance to repair failed finalization while keeping provider switching blocked", () => {
+    const { coordinator } = coordinatorHarness();
+    coordinator.markConfirmedReplayFinalizationPending("repairable-finalization", new Error("manifest write failed"));
+
+    expect(coordinator.getGamePlatformSwitchStatus().allowed).toBe(false);
+    expect(coordinator.hasActiveMatchCapture()).toBe(true);
+    expect(coordinator.hasGameplayInProgress()).toBe(false);
+
+    coordinator.markConfirmedReplayFinalizationQueued("repairable-finalization");
+    expect(coordinator.hasGameplayInProgress()).toBe(false);
+    coordinator.markConfirmedReplayFinalizationComplete("repairable-finalization");
+    expect(coordinator.getGamePlatformSwitchStatus().allowed).toBe(true);
+  });
+
+  it("protects closing Atlas capture after its tracker clears until local finalization settles", async () => {
+    let releaseFinalization!: () => void;
+    const finalizeRawCaptureForMatch = vi.fn(() => new Promise<null>((resolve) => {
+      releaseFinalization = () => resolve(null);
+    }));
+    const { coordinator, saved } = coordinatorHarness({ finalizeRawCaptureForMatch });
+    const base = { active: true, format: "Auto", myName: "BMU", opponentName: "Closing Rival",
+      myChampion: "Riven", opponentChampion: "Riven" };
+    await coordinator.handleEvent(event("match-start", {
+      ...base, score: { me: "0", opp: "0", source: "atlas-score-track" }
+    }, "2026-10-26T13:00:00.000Z", "atlas"));
+    await coordinator.handleEvent(event("match-snapshot", {
+      ...base, score: { me: "8", opp: "5", source: "atlas-score-track" }
+    }, "2026-10-26T13:10:00.000Z", "atlas"));
+    const landing = (at: string) => event("match-end", {
+      active: false, reason: "inactive-debounce", format: "Auto", myName: "BMU",
+      opponentName: "", score: { me: "", opp: "", source: "none" }
+    }, at, "atlas", "https://play.riftatlas.com/");
+    await coordinator.handleEvent(landing("2026-10-26T13:10:01.000Z"));
+    expect(saved).toHaveLength(0);
+    expect(coordinator.hasGameplayInProgress()).toBe(true);
+
+    const closing = coordinator.handleEvent(landing("2026-10-26T13:10:31.000Z"));
+    await vi.waitFor(() => expect(finalizeRawCaptureForMatch).toHaveBeenCalledOnce());
+    expect(coordinator.hasActiveCaptureSession("atlas")).toBe(false);
+    expect(coordinator.hasGameplayInProgress()).toBe(true);
+    releaseFinalization();
+    await closing;
+    expect(coordinator.hasGameplayInProgress()).toBe(false);
+    expect(saved).toHaveLength(1);
   });
 
   it("holds new capture events during data maintenance and rejects maintenance once a match is active", async () => {
@@ -1149,6 +1198,7 @@ describe("CaptureCoordinator", () => {
 
     await expect(finalized).rejects.toThrow("second replay write failure");
     expect(coordinator.hasActiveMatchCapture()).toBe(true);
+    expect(coordinator.hasGameplayInProgress()).toBe(false);
     expect(savedReplays).toHaveLength(0);
 
     // The prepared material remains available for the next confirmation/retry.
@@ -1781,9 +1831,11 @@ describe("CaptureCoordinator", () => {
 
       expect(saved).toHaveLength(0);
       expect(sent.filter((item) => item.channel === "match:draft")).toHaveLength(0);
+      expect(coordinator.hasGameplayInProgress()).toBe(true);
 
       await vi.advanceTimersByTimeAsync(20_000);
       expect(saved).toHaveLength(0);
+      expect(coordinator.hasGameplayInProgress()).toBe(true);
 
       await coordinator.handleEvent(event("match-start", {
         ...base,

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AccountCloudSyncQueue } from "../src/main/services/accountCloudSyncQueue.js";
+import { GameplayMaintenanceDeferredError, GameplayMaintenanceScheduler } from "../src/main/services/gameplayMaintenanceScheduler.js";
 
 describe("AccountCloudSyncQueue", () => {
   beforeEach(() => {
@@ -184,5 +185,99 @@ describe("AccountCloudSyncQueue", () => {
 
     expect(run).toHaveBeenCalledOnce();
     expect(run).toHaveBeenCalledWith("New mutation made during failed restore");
+  });
+
+  it("keeps a debounced upload pending until the shared scheduler is idle", async () => {
+    let ready = false;
+    const run = vi.fn(async () => undefined);
+    const scheduler = new GameplayMaintenanceScheduler({ ready: () => ready });
+    const queue = new AccountCloudSyncQueue(run, vi.fn(), 20_000, () => scheduler.request("cloud"));
+    scheduler.register("cloud", () => queue.flush());
+
+    queue.queue("Match saved");
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(run).not.toHaveBeenCalled();
+    ready = true;
+    await scheduler.wake();
+    expect(run).toHaveBeenCalledExactlyOnceWith("Match saved");
+    scheduler.dispose();
+  });
+
+  it("lets restore discard an already-dispatched upload without discarding new mutations", async () => {
+    const run = vi.fn(async () => undefined);
+    const dispatch = vi.fn();
+    const queue = new AccountCloudSyncQueue(run, vi.fn(), 20_000, dispatch);
+    queue.queue("Pre-restore mutation");
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(dispatch).toHaveBeenCalledOnce();
+
+    const resume = queue.suspend();
+    expect(queue.takePendingReason()).toBe("Pre-restore mutation");
+    queue.queue("Mutation during restore");
+    await queue.flush();
+    expect(run).not.toHaveBeenCalled();
+    resume();
+    await queue.flush();
+    expect(run).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(20_000);
+    await queue.flush();
+    expect(run).toHaveBeenCalledExactlyOnceWith("Mutation during restore");
+  });
+
+  it("preserves already-dispatched intent when restore acquisition fails", async () => {
+    const run = vi.fn(async () => undefined);
+    const queue = new AccountCloudSyncQueue(run, vi.fn(), 20_000, vi.fn());
+    queue.queue("Saved before refused restore");
+    await vi.advanceTimersByTimeAsync(20_000);
+    const resume = queue.suspend();
+    await queue.flush();
+    resume();
+    await vi.advanceTimersByTimeAsync(20_000);
+    await queue.flush();
+    expect(run).toHaveBeenCalledExactlyOnceWith("Saved before refused restore");
+  });
+
+  it("retains gameplay-deferred intent and retries without reporting a backup failure", async () => {
+    const onError = vi.fn();
+    const run = vi.fn()
+      .mockRejectedValueOnce(new GameplayMaintenanceDeferredError())
+      .mockResolvedValueOnce(undefined);
+    const dispatch = vi.fn();
+    const queue = new AccountCloudSyncQueue(run, onError, 20_000, dispatch);
+    queue.queue("Match saved");
+    await vi.advanceTimersByTimeAsync(20_000);
+    await queue.flush();
+    expect(run).toHaveBeenCalledOnce();
+    expect(onError).not.toHaveBeenCalled();
+    await queue.flush();
+    expect(run).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(20_000);
+    await queue.flush();
+    expect(dispatch).toHaveBeenCalledTimes(2);
+    expect(run).toHaveBeenLastCalledWith("Match saved");
+    expect(run).toHaveBeenCalledTimes(2);
+  });
+
+  it("retains the newest mutation and routes deferred follow-up through the dispatcher", async () => {
+    let rejectFirst!: (error: unknown) => void;
+    const first = new Promise<void>((_resolve, reject) => { rejectFirst = reject; });
+    const run = vi.fn().mockReturnValueOnce(first).mockResolvedValueOnce(undefined);
+    const onError = vi.fn();
+    const dispatch = vi.fn();
+    const queue = new AccountCloudSyncQueue(run, onError, 20_000, dispatch);
+    queue.queue("Old mutation");
+    await vi.advanceTimersByTimeAsync(20_000);
+    const pending = queue.flush();
+    await Promise.resolve();
+    queue.queue("New mutation");
+    await vi.advanceTimersByTimeAsync(20_000);
+    rejectFirst(new GameplayMaintenanceDeferredError());
+    await pending;
+    expect(run).toHaveBeenCalledOnce();
+    expect(onError).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(20_000);
+    await queue.flush();
+    expect(run).toHaveBeenLastCalledWith("New mutation");
+    expect(run).toHaveBeenCalledTimes(2);
   });
 });

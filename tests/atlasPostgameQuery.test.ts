@@ -7,7 +7,7 @@ import type { AtlasPostgameQueryTarget, AtlasPostgameQueryResult } from "../src/
 const compiled = ts.transpileModule(readFileSync(new URL("../src/main/services/atlasPostgameQuery.ts", import.meta.url), "utf8"), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
 }).outputText;
-const exported = {} as { atlasPostgameQueryScript: (target: AtlasPostgameQueryTarget) => string; atlasPostgameCancelScript: () => string };
+const exported = {} as { atlasPostgameQueryScript: (target: AtlasPostgameQueryTarget, reportFailure?: boolean) => string; atlasPostgameCancelScript: () => string };
 vm.runInNewContext(compiled, { exports: exported });
 const start = Date.now() - 120_000;
 const target: AtlasPostgameQueryTarget = { roomCode: "ROOM", roomCreatedAt: start - 1000, gameNumber: 1, gameHistoryStartedAt: start, gameHistoryEndedAt: start + 60_000, localPlayerId: "player-a", expectedPageUrl: "https://play.riftatlas.com/game" };
@@ -80,11 +80,172 @@ describe("Atlas completed replay guest query", () => {
     h.setPayload(envelope(payload));
     return { h, input, payload };
   }
+  function sweepProofHarness(winner = "player-a", winCount = 1) {
+    const { h, input, payload } = bo3Harness({ ...pendingBo3(), completionSeriesWinnerPlayerId: winner });
+    const opponent = winner === "player-a" ? "player-b" : "player-a";
+    payload.frames = payload.frames.map(frame => ({ ...frame, state: structuredClone(frame.state) }));
+    for (const frame of payload.frames) {
+      delete (frame.state as Record<string, unknown>).gameOutcome;
+      Object.assign(frame.state, { winsByPlayerId: { [winner]: winCount, [opponent]: 0 } });
+    }
+    Object.assign(payload.frames[1].state, { gameHistoryEndedAt: payload.completedAt, gameOutcome: { reason: "score", winnerPlayerIds: [winner] } });
+    h.setPayload(envelope(payload));
+    return { h, input, payload, winner, opponent };
+  }
+  it.each([["player-a", 1], ["player-b", 1], ["player-a", 2], ["player-b", 2]] as const)("proves a two-game sweep from the native winner %s with cumulative wins %i", async (winner, wins) => {
+    const { h, input, payload } = sweepProofHarness(winner, wins);
+    const before = JSON.stringify(payload);
+    const result = await h.run(input);
+    expect(result.status).toBe("ready");
+    const final = decode(result.replay!).frames.at(-1).state;
+    expect(final.gameOutcome.winnerPlayerIds).toEqual([winner]);
+    expect(final.winsByPlayerId[winner]).toBe(wins);
+    expect(JSON.stringify(payload)).toBe(before);
+  });
+  it.each(["archive only", "opposite winner", "missing end", "tied wins", "opposite wins", "missing wins", "null wins", "extra participant", "invalid wins", "early final frame", "restricted cards"])("does not confirm a missing series win from insufficient or contradictory native evidence: %s", async invalid => {
+    const { h, input, payload, winner, opponent } = sweepProofHarness();
+    const final = payload.frames[1].state as Record<string, unknown>;
+    if (invalid === "archive only") { delete final.gameOutcome; delete final.gameHistoryEndedAt; }
+    if (invalid === "opposite winner") final.gameOutcome = { reason: "score", winnerPlayerIds: [opponent] };
+    if (invalid === "missing end") delete final.gameHistoryEndedAt;
+    if (invalid === "tied wins") final.winsByPlayerId = { [winner]: 1, [opponent]: 1 };
+    if (invalid === "opposite wins") final.winsByPlayerId = { [winner]: 0, [opponent]: 2 };
+    if (invalid === "missing wins") delete final.winsByPlayerId;
+    if (invalid === "null wins") final.winsByPlayerId = null;
+    if (invalid === "extra participant") final.winsByPlayerId = { [winner]: 1, [opponent]: 0, third: 0 };
+    if (invalid === "invalid wins") final.winsByPlayerId = { [winner]: 3, [opponent]: 0 };
+    if (invalid === "early final frame") payload.frames[1].elapsedMs -= 6000;
+    if (invalid === "restricted cards") payload.canSwitchPerspective = false;
+    h.setPayload(envelope(payload));
+    await expect(h.run(input)).rejects.toThrow();
+  });
+  it.each(["BO1", "game one", "game three", "invalid winner"])("rejects an invalid two-game sweep proof request before networking: %s", async invalid => {
+    const { h, input } = sweepProofHarness();
+    if (invalid === "BO1") { delete input.completionMatchFormat; delete input.completionSeriesStartedAt; input.gameNumber = 1; }
+    if (invalid === "game one") input.gameNumber = 1;
+    if (invalid === "game three") input.gameNumber = 3;
+    if (invalid === "invalid winner") input.completionSeriesWinnerPlayerId = "bad winner";
+    await expect(h.run(input)).rejects.toThrow("Invalid completed Atlas game");
+    expect(h.fetcher).not.toHaveBeenCalled();
+  });
+  it("keeps an unavailable native sweep proof pending without exposing a replay", async () => {
+    const { h, input } = sweepProofHarness();
+    h.metadata.status = "pending";
+    const result = await h.run(input);
+    expect(result.status).toBe("pending");
+    expect(result.replay).toBeUndefined();
+    expect(h.fetcher).toHaveBeenCalledTimes(3);
+  });
+  it("returns only a fixed diagnostic reason across Electron's guest boundary", async () => {
+    const input = pendingCompletion(), h = harness(input);
+    h.context.location.href = input.expectedPageUrl;
+    const payload = view(); payload.frames[1].elapsedMs = 1;
+    h.setPayload(envelope(payload));
+    await expect(vm.runInContext(exported.atlasPostgameQueryScript(input, true), h.context)).resolves.toEqual({ riftlitePostgameFailure: "incomplete" });
+    h.fetcher.mockRejectedValue(new Error("secret-token-room-account-payload-must-not-leave-guest"));
+    await expect(vm.runInContext(exported.atlasPostgameQueryScript(input, true), h.context)).resolves.toEqual({ riftlitePostgameFailure: "unknown" });
+    h.fetcher.mockRejectedValue(new TypeError("Failed to fetch"));
+    await expect(vm.runInContext(exported.atlasPostgameQueryScript(input, true), h.context)).resolves.toEqual({ riftlitePostgameFailure: "network" });
+  });
+  function setupPrefixHarness(gameNumber = 2) {
+    const { h, input, payload } = bo3Harness(pendingBo3(gameNumber));
+    if (gameNumber < 3) {
+      for (const frame of payload.frames) delete (frame.state as Record<string, unknown>).gameOutcome;
+      payload.frames[1].elapsedMs -= 6000;
+    }
+    const phases = ["sideboarding", "battlefield_pick", "initiative_roll", "first_player_choice", "mulligan"];
+    const prefix = phases.map((phase, index) => {
+      const state = structuredClone(payload.frames[0].state);
+      delete (state as Record<string, unknown>).gameHistoryStartedAt;
+      delete (state as Record<string, unknown>).gameOutcome;
+      return { index, sequence: index, elapsedMs: 0, actionType: phase, state: { ...state, phase } };
+    });
+    payload.frames = [...prefix, ...payload.frames.map((frame, offset) => ({ ...frame, index: prefix.length + offset, sequence: prefix.length + offset }))];
+    h.metadata.finalFrameIndex = payload.frames.length - 1;
+    return { h, input, payload, prefixLength: prefix.length };
+  }
+  it.each([1, 2, 3])("retains the native setup prefix before exact gameplay starts in BO3 Game %i", async gameNumber => {
+    const { h, input, payload, prefixLength } = setupPrefixHarness(gameNumber);
+    h.setPayload(envelope(payload));
+    const result = await h.run(input);
+    expect(result.status).toBe("ready");
+    const frames = decode(result.replay!).frames;
+    expect(frames).toHaveLength(payload.frames.length);
+    expect(frames.map((frame: any) => frame.index)).toEqual(payload.frames.map(frame => frame.index));
+    for (const frame of frames.slice(0, prefixLength)) {
+      expect(frame.elapsedMs).toBe(0);
+      expect(frame.state).not.toHaveProperty("gameHistoryStartedAt");
+      expect(frame.state).not.toHaveProperty("gameOutcome");
+    }
+    expect(frames[prefixLength].state.gameHistoryStartedAt).toBe(input.gameHistoryStartedAt);
+  });
+  it.each(["null history", "wrong history", "nonzero elapsed", "gameplay phase", "unknown phase", "null outcome", "end field", "turn field", "active player", "wrong room", "wrong series", "wrong game", "wrong participant", "history disappears", "setup after history"])("rejects a contradictory or non-prefix setup frame: %s", async invalid => {
+    const { h, input, payload, prefixLength } = setupPrefixHarness();
+    const first = payload.frames[0];
+    if (invalid === "null history") Object.assign(first.state, { gameHistoryStartedAt: null });
+    if (invalid === "wrong history") Object.assign(first.state, { gameHistoryStartedAt: start - 1 });
+    if (invalid === "nonzero elapsed") first.elapsedMs = 1;
+    if (invalid === "gameplay phase") first.state.phase = "in_game";
+    if (invalid === "unknown phase") first.state.phase = "unknown";
+    if (invalid === "null outcome") Object.assign(first.state, { gameOutcome: null });
+    if (invalid === "end field") Object.assign(first.state, { gameHistoryEndedAt: null });
+    if (invalid === "turn field") Object.assign(first.state, { turnNumber: 0 });
+    if (invalid === "active player") Object.assign(first.state, { activeTurnPlayerId: "player-a" });
+    if (invalid === "wrong room") first.state.roomCode = "OTHER";
+    if (invalid === "wrong series") Object.assign(first.state, { seriesStartedAt: start - 3000 });
+    if (invalid === "wrong game") first.state.gameNumber = 1;
+    if (invalid === "wrong participant") first.state.players[1].id = "outsider";
+    if (invalid === "history disappears") delete (payload.frames[prefixLength].state as Record<string, unknown>).gameHistoryStartedAt;
+    if (invalid === "setup after history") Object.assign(first.state, { gameHistoryStartedAt: start });
+    h.setPayload(envelope(payload));
+    await expect(h.run(input)).rejects.toThrow();
+  });
   it.each([1, 2, 3])("confirms missing-ending BO3 Game %i against its exact series and completed Atlas export", async gameNumber => {
     const { h, input } = bo3Harness(pendingBo3(gameNumber));
     const result = await h.run(input);
     expect(result.status).toBe("ready");
     expect(decode(result.replay!).frames.every((frame: any) => frame.state.gameNumber === gameNumber && frame.state.seriesStartedAt === input.completionSeriesStartedAt)).toBe(true);
+  });
+  it.each([[1, 3199], [2, 5866]])("accepts a completed native BO3 Game %i archive without inventing terminal board fields", async (gameNumber, completionGapMs) => {
+    const { h, input, payload } = bo3Harness(pendingBo3(gameNumber));
+    for (const frame of payload.frames) {
+      delete (frame.state as Record<string, unknown>).gameOutcome;
+      delete (frame.state as Record<string, unknown>).gameHistoryEndedAt;
+    }
+    payload.frames[1].elapsedMs -= completionGapMs;
+    h.setPayload(envelope(payload));
+    const result = await h.run(input);
+    expect(result.status).toBe("ready");
+    const projected = decode(result.replay!);
+    expect(projected.completedAt).toBe(payload.completedAt);
+    expect(projected.frames[1].elapsedMs).toBe(60_000 - completionGapMs);
+    for (const frame of projected.frames) {
+      expect(frame.state).not.toHaveProperty("gameOutcome");
+      expect(frame.state).not.toHaveProperty("gameHistoryEndedAt");
+    }
+  });
+  it.each(["BO1", "game three", "null outcome", "partial ending", "earlier partial ending", "earlier null outcome", "missing completed", "future completed", "frame past end", "wrong final index", "wrong series", "wrong owner"])("keeps completion and ownership fences for native archives: %s", async invalid => {
+    const { h, input, payload } = bo3Harness(pendingBo3(invalid === "game three" ? 3 : invalid === "BO1" ? 1 : 2));
+    for (const frame of payload.frames) delete (frame.state as Record<string, unknown>).gameOutcome;
+    payload.frames[1].elapsedMs = 54_134;
+    if (invalid === "BO1") {
+      delete input.completionMatchFormat; delete input.completionSeriesStartedAt;
+      for (const frame of payload.frames) Object.assign(frame.state, { gameNumber: 1, matchFormat: "bo1" });
+    }
+    if (invalid === "null outcome") Object.assign(payload.frames[1].state, { gameOutcome: null });
+    if (invalid === "partial ending") Object.assign(payload.frames[1].state, { gameHistoryEndedAt: payload.completedAt });
+    if (invalid === "earlier partial ending" || invalid === "earlier null outcome") {
+      payload.frames[0].state = structuredClone(payload.frames[0].state);
+      Object.assign(payload.frames[0].state, invalid === "earlier partial ending" ? { gameHistoryEndedAt: payload.completedAt } : { gameOutcome: null });
+    }
+    if (invalid === "missing completed") delete (payload as Record<string, unknown>).completedAt;
+    if (invalid === "future completed") payload.completedAt = Date.now() + 120_000;
+    if (invalid === "frame past end") payload.frames[1].elapsedMs = 61_001;
+    if (invalid === "wrong final index") payload.frames[1].index = 2;
+    if (invalid === "wrong series") Object.assign(payload.frames[0].state, { seriesStartedAt: start - 3000 });
+    if (invalid === "wrong owner") h.metadata.ownPlayerIds = ["another-player"];
+    h.setPayload(envelope(payload));
+    await expect(h.run(input)).rejects.toThrow();
   });
   it.each(["missing series", "bad series", "series after start", "format without check", "series without format", "unknown format"])("rejects malformed BO3 confirmation target: %s before auth", async invalid => {
     const { h, input } = bo3Harness();
@@ -106,7 +267,10 @@ describe("Atlas completed replay guest query", () => {
     if (invalid === "wrong game") payload.frames[0].state.gameNumber = 1;
     if (invalid === "wrong participant") payload.frames[0].state.players[1].id = "outside-player";
     if (invalid === "missing completion") delete (payload as Record<string, unknown>).completedAt;
-    if (invalid === "unfinished outcome") delete (payload.frames[1].state as Record<string, unknown>).gameOutcome;
+    if (invalid === "unfinished outcome") {
+      delete (payload.frames[1].state as Record<string, unknown>).gameOutcome;
+      Object.assign(payload.frames[1].state, { gameHistoryEndedAt: payload.completedAt });
+    }
     h.setPayload(envelope(payload));
     await expect(h.run(input)).rejects.toThrow();
   });
@@ -119,6 +283,20 @@ describe("Atlas completed replay guest query", () => {
     expect((await h.run(input)).status).toBe("restricted");
     expect(h.fetcher.mock.calls.every(call => !call[0].includes("/api/replays/") || call[0].endsWith("/metadata"))).toBe(true);
   });
+  it("rejects a private-deck Game 3 export even when its ready owned metadata permits collection", async () => {
+    const { h, input, payload } = bo3Harness(pendingBo3(3));
+    Object.assign(payload, { canSwitchPerspective: false, canFork: false, forkBlockedReason: "private_deck" });
+    expect(payload).not.toHaveProperty("privateDeckPlayerIds");
+    expect(h.metadata).toMatchObject({ status: "ready", canFork: true, ownPlayerIds: [input.localPlayerId] });
+    h.setPayload(envelope(payload));
+    await expect(h.run(input)).rejects.toThrow("restricted or mismatched replay");
+    expect(h.fetcher.mock.calls.map(call => call[0])).toEqual([
+      "https://auth.riftatlas.com/api/auth/get-session", "https://auth.riftatlas.com/api/auth/token",
+      `https://realtime.riftatlas-workers.com/api/replays/${encodeURIComponent(payload.replayId)}/metadata`,
+      `https://realtime.riftatlas-workers.com/api/replays/${encodeURIComponent(payload.replayId)}`,
+    ]);
+  });
+
   it.each(["/", "/lobby", "/lobby/", "/en/lobby", `/replays/${encodeURIComponent(key)}`])("confirms an exact missing-ending game from %s through ready metadata and a completed export", async path => {
     const h = harness(), input = pendingCompletion(`https://play.riftatlas.com${path}`);
     h.context.location.href = input.expectedPageUrl;
