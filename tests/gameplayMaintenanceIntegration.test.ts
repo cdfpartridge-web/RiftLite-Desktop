@@ -26,12 +26,18 @@ function harness() {
     rawCapture: { enabled: false, visibility: "private" },
   } as UserSettings;
   let manifest: Record<string, unknown> | null = null;
+  let receipt = "";
   const events: string[] = [];
   const hooks: {
     readSettings?: () => Promise<void>; readManifest?: () => Promise<void>;
     writeChunk?: () => Promise<void>; export?: () => Promise<void>;
   } = {};
   const store = {
+    readCloudPublicationReceipt: async () => receipt,
+    writeCloudPublicationReceipt: async (value: string) => { receipt = value; },
+    discardCloudPublicationReceipt: async (value: string) => { if (receipt === value) receipt = ""; },
+    getPendingAccountCloudRevision: vi.fn(async () => null),
+    acknowledgeAccountCloudRevision: vi.fn(async () => undefined),
     getSettings: vi.fn(async () => { await hooks.readSettings?.(); return settings; }),
     saveSettings: vi.fn(async (patch: Partial<UserSettings>) => (settings = { ...settings, ...patch })),
     updateSettings: vi.fn(async (mutation: (current: Readonly<UserSettings>) => Partial<UserSettings>) => (

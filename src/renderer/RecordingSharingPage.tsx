@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ArrowRight, Check, ChevronDown, Copy, ExternalLink, Layers, MessageCircle, RefreshCw, Shield, Video } from "lucide-react";
 import { hasVerifiedRiftLiteAccount } from "../shared/accountIdentity";
-import { activeDiscordReplayHubIds } from "../shared/replaySharing";
+import { activeDiscordReplayHubIds, uploadLaneEnabledForAccount } from "../shared/replaySharing";
 import { discordDestinationReadiness, discordReportsChannelUrl } from "../shared/recordingSharingReadiness";
 import type { HubHealthStatus, RiftLiteApi, UserSettings, WebReplayUploadDiagnostics } from "../shared/types";
 import "./styles/recording-sharing.css";
 
 export type RecordingSharingSection = "replays" | "video" | "discord";
+export type RecordingSettingsFocus = "atlas" | "tcga" | "video" | "microphone";
 export type RecordingSharingApi = Pick<RiftLiteApi, "getHubHealth" | "setWebReplayDiscordShareHub" | "openExternalResource">;
 export type RecordingSharingPageProps = {
   settings: UserSettings;
@@ -21,28 +22,41 @@ export type RecordingSharingPageProps = {
   onSettingsChanged: (settings: UserSettings) => void;
   onRefreshDiagnostics?: () => void | Promise<unknown>;
   initialSection?: RecordingSharingSection;
+  focusTarget?: RecordingSettingsFocus;
   api?: RecordingSharingApi;
 };
 
 const RESULTS_BOT_INSTALL_URL = "https://discord.com/oauth2/authorize?client_id=1524708623790510241";
 
 export function RecordingSharingPage({ settings, diagnostics, replayControls, videoControls, advancedControls,
-  onOpenAccount, onOpenHubs, onOpenLibrary, onManageReplayVisibility, onSettingsChanged, onRefreshDiagnostics, initialSection, api = window.riftlite
+  onOpenAccount, onOpenHubs, onOpenLibrary, onManageReplayVisibility, onSettingsChanged, onRefreshDiagnostics, initialSection, focusTarget, api = window.riftlite
 }: RecordingSharingPageProps) {
-  const [expanded, setExpanded] = useState<RecordingSharingSection | null>(initialSection ?? "replays");
+  const requestedSection = focusTarget === "video" || focusTarget === "microphone" ? "video"
+    : focusTarget ? "replays" : initialSection;
+  const [expanded, setExpanded] = useState<RecordingSharingSection | null>(requestedSection ?? "replays");
+  const pageRef = useRef<HTMLElement>(null);
   const currentAccount = useRef(settings.accountUid);
   currentAccount.current = settings.accountUid;
-  useEffect(() => { if (initialSection) setExpanded(initialSection); }, [initialSection]);
+  useEffect(() => {
+    if (requestedSection) setExpanded(requestedSection);
+    if (!focusTarget) return;
+    const frame = window.requestAnimationFrame(() => {
+      const label = pageRef.current?.querySelector<HTMLElement>(`[data-recording-focus="${focusTarget}"]`);
+      if (label) (label.querySelector<HTMLInputElement>("input:enabled") ?? label).focus();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [focusTarget, requestedSection]);
   const verified = hasVerifiedRiftLiteAccount(settings) && diagnostics?.accountVerified !== false;
-  const atlas = settings.rawCapture.webReplayAutoUploadEnabled && settings.rawCapture.webReplayAutoUploadAccountUid === settings.accountUid;
-  const tcga = settings.rawCapture.tcgaWebReplayAutoUploadEnabled && settings.rawCapture.tcgaWebReplayAutoUploadAccountUid === settings.accountUid;
+  const accountUid = String(settings.accountUid ?? "").trim();
+  const atlas = uploadLaneEnabledForAccount(settings.rawCapture, "atlas", accountUid);
+  const tcga = uploadLaneEnabledForAccount(settings.rawCapture, "tcga", accountUid);
   const platforms = [atlas ? "Atlas" : "", tcga ? "TCGA" : ""].filter(Boolean).join(" and ");
   const destinations = activeDiscordReplayHubIds(settings);
   const videoOn = settings.replayCaptureEnabled && settings.replayVideoEnabled;
   const attention = diagnostics?.queue.filter((item) => item.stage === "failed" || item.stage === "paused" || item.canUploadAnyway || item.recommendedAction === "review-result" || item.discordShareStatus === "failed" || item.discordShareStatus === "partial").length ?? 0;
   const replaySummary = platforms
     ? `${platforms} · ${settings.rawCapture.visibility === "unlisted" ? "Unlisted links" : settings.rawCapture.visibility === "public" ? "Public" : "Private"}${!verified ? " · Account needs attention" : !settings.rawCapture.enabled ? " · Capture is off" : ""}`
-    : settings.rawCapture.enabled ? "Replay data saved locally · Online uploads off" : "Interactive replay capture off";
+    : settings.rawCapture.enabled ? "Atlas replay data saved locally · Online uploads off" : "Interactive replay capture off";
 
   function section(id: RecordingSharingSection, title: string, description: string, summary: string, icon: ReactNode, content: ReactNode) {
     const open = expanded === id;
@@ -58,7 +72,7 @@ export function RecordingSharingPage({ settings, diagnostics, replayControls, vi
     </section>;
   }
 
-  return <section className="dashboard-page recording-sharing-page">
+  return <section ref={pageRef} className="dashboard-page recording-sharing-page">
     <header className="recording-sharing-heading"><div><span className="eyebrow">Set up once</span><h2>Recording &amp; sharing</h2><p>Start with interactive replays to review your games. Add video or Discord sharing whenever you want.</p></div><button className="secondary" type="button" onClick={onOpenLibrary}>Open replay library<ArrowRight size={16} /></button></header>
     <div className="recording-sharing-account" data-ready={verified}>
       <Shield size={18} aria-hidden="true" /><div><strong>{verified ? `Connected as ${settings.accountHandle ? `@${settings.accountHandle}` : settings.accountDisplayName || "your RiftLite account"}` : "Connect your RiftLite account for online replays"}</strong><span>{verified ? "Choose which games to upload below. Your saved review notes stay private unless you choose to share them." : "Replay data can be saved on this computer. Sign in and enable uploads to watch your games online."}</span></div>

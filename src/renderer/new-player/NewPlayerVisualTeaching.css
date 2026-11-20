@@ -1,0 +1,67 @@
+.nph-lesson-illustration{min-width:0;width:100%;align-self:center;color:#e4eaf0;--nph-illustration-gold:#dfc187}
+.nph-lesson-illustration>header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:22px}
+.nph-lesson-illustration>header>span{font-size:10px;letter-spacing:1.5px;color:var(--nph-illustration-gold)}
+.nph-lesson-illustration>header>button{display:flex;align-items:center;gap:5px;min-height:32px;padding:5px 8px;background:transparent;border:1px solid #93a9bb44;border-radius:5px;color:#c9d4df;font-size:11px}
+.nph-illustration-scene{display:grid;grid-template-columns:minmax(0,1fr) 24px minmax(0,1fr);align-items:center;gap:10px}
+.nph-illustration-position{display:flex;flex-direction:column;align-items:center;gap:13px;min-width:0;text-align:center}
+.nph-illustration-position>span:first-child{min-height:36px;display:grid;place-items:center;font-size:12px;font-weight:600;line-height:1.5;color:#e3cba1}
+.nph-illustration-position>small{font-size:11px;line-height:1.5;min-height:34px;color:#afc1cf}
+.nph-illustration-card{width:min(100%,145px);aspect-ratio:744/1039;display:grid;place-items:center;position:relative}
+.nph-illustration-card img{width:100%;height:100%;object-fit:contain;border-radius:7px;filter:drop-shadow(0 8px 14px #0005);transition:transform .6s ease}
+.nph-illustration-card[data-sideways=true] img{transform:rotate(90deg) scale(.72)}
+.nph-illustration-arrow{color:var(--nph-illustration-gold);justify-self:center}
+.nph-illustration-battlefield{position:relative;display:grid;place-items:center;gap:9px;min-height:160px;width:100%;padding:10px 3px;border-block:1px solid #8099ac4d}
+.nph-illustration-battlefield>img{width:100%;max-height:145px;object-fit:contain;border-radius:5px}
+.nph-illustration-battlefield>div{display:grid;place-items:center;color:#e9ce9b}
+.nph-illustration-battlefield>small{font-size:10px;color:#b6c6d3}
+.nph-illustration-battlefield>.nph-illustration-card{width:70px;min-height:98px}
+.nph-illustration-rune{width:42px;height:59px;object-fit:contain}
+.nph-illustration-ability{display:grid;place-items:center;align-content:center;gap:13px;min-height:170px;padding:15px;border:1px solid #b7a0da66;border-radius:8px;color:#d3bdec;background:#3f325033}
+.nph-illustration-ability strong{font-size:13px}.nph-illustration-ability small{font-size:11px}
+.nph-illustration-abcd{grid-column:1/-1;display:grid;gap:10px}
+.nph-illustration-abcd>div{display:flex;align-items:center;gap:15px;padding:10px 14px;background:#213649;border:1px solid #7596b344;border-radius:6px}
+.nph-illustration-abcd strong{font-family:Georgia,serif;color:#e8cb92;font-size:29px}.nph-illustration-abcd span{font-size:13px;flex:1}.nph-illustration-abcd small{display:block;margin-top:5px;font-size:11px;color:#b5c8d5}.nph-illustration-abcd img{width:26px;height:37px;object-fit:contain}
+.nph-illustration-meaning{display:flex;align-items:flex-start;gap:9px;margin:20px 0 10px;padding:12px 0;border-top:1px solid #dfc18740;color:#d8e3e9;font-size:12px;line-height:1.65}
+.nph-illustration-meaning>svg{flex:none;margin-top:3px;color:var(--nph-illustration-gold)}
+.nph-illustration-caption{display:block;color:#98afbf;font-size:10px;line-height:1.6}
+.nph-illustration-cause{display:flex;align-items:center;justify-content:center;gap:10px;margin-top:15px;font-size:11px;color:#dfc38d}.nph-illustration-cause img{width:31px;height:44px;object-fit:contain}.nph-illustration-cause small{display:block;margin-top:5px;color:#abc0ce;font-size:10px}
+.nph-illustration-change-strip{display:flex;flex-wrap:wrap;gap:14px;justify-content:center;margin-top:13px;font-size:10px;color:#afc4d3}.nph-illustration-change-strip>span{display:grid;gap:5px;text-align:center}.nph-illustration-change-strip b{display:flex;align-items:center;justify-content:center;gap:7px;font-size:12px;color:#e3cd9f}
+.nph-illustration-stats{display:flex;flex-direction:column;gap:5px;color:#bfd2dd;font-size:11px;line-height:1.5;min-height:36px}
+.nph-illustration-stats>span{display:flex;justify-content:center;align-items:center;gap:5px}
+.nph-lesson-illustration:is([data-kind=read],[data-kind=pay],[data-kind=power]) .nph-illustration-scene{grid-template-columns:minmax(0,1fr) minmax(0,.85fr);gap:20px}
+.nph-illustration-cost-card{position:relative;margin:0;min-width:0;display:flex;flex-direction:column;align-items:center;gap:12px}
+.nph-illustration-cost-card>.nph-illustration-card{width:100%;max-width:175px}
+.nph-illustration-cost-focus{position:absolute;left:2%;top:3%;width:22%;height:23%;border:2px solid #f1cf8b;border-radius:20%;box-shadow:0 0 0 3px #1c2d3de0;pointer-events:none}
+.nph-illustration-cost-card figcaption{font-size:11px;line-height:1.5;text-align:center;color:#c7d6e0}
+.nph-illustration-cost-route{display:flex;flex-direction:column;gap:14px;align-items:flex-start}
+.nph-illustration-cost-route>span{display:flex;gap:8px;align-items:center;font-size:12px;line-height:1.6}
+.nph-illustration-cost-route>svg{transform:rotate(90deg);color:var(--nph-illustration-gold)}
+.nph-illustration-cost-route>strong{font-size:14px;line-height:1.6;color:#eed4a6}
+.nph-illustration-cost-route small{display:block;font-weight:400;color:#9fb4c3;font-size:11px}
+.nph-step-picture{display:flex;align-items:center;gap:10px;padding:10px 0 12px;margin:10px 0 14px;border-bottom:1px solid #9ab3c227}
+.nph-step-picture>img{width:43px;height:61px;object-fit:contain;border-radius:3px;flex:none}
+.nph-step-picture[data-kind=turn]>img{transform:rotate(12deg)}
+.nph-step-picture>svg{flex:none;color:#e1c490}
+.nph-step-picture>div{display:flex;flex-direction:column;gap:5px;font-size:12px;line-height:1.5;color:#b9cbd6;min-width:0}
+.nph-step-picture>div>svg{color:#dfc187;width:14px;height:14px}
+.nph-step-picture strong{font-size:12px;font-weight:600;color:#e4d3b4}
+.nph-cinematic-coach .nph-gesture-detail{font-size:11px;color:#adc0cc;line-height:1.65}
+.nph-gesture-detail>summary{cursor:pointer;padding:5px 0}
+.nph-gesture-detail p{font-size:11px;line-height:1.65;margin-top:5px}
+.nph-step-changes{margin-top:16px;padding:12px 0;border-top:1px solid #9ab3c227}
+.nph-step-changes>summary{cursor:pointer;font-size:11px;color:#cbdce4;list-style:none;display:flex;align-items:center;justify-content:space-between;gap:8px}
+.nph-step-changes>summary:after{content:'+';color:#e8cc95}
+.nph-step-changes[open]>summary:after{content:'−'}
+.nph-step-changes ul{list-style:none;padding:0;margin:10px 0 0;display:grid;gap:10px}
+.nph-step-changes li{display:flex;align-items:center;gap:8px;font-size:11px;line-height:1.55;color:#bbccd7}
+.nph-step-changes li>img{width:27px;height:38px;object-fit:contain;border-radius:2px;flex:none}
+.nph-step-changes li>span{min-width:0;display:grid;gap:3px}
+.nph-step-changes li strong{font-size:11px;color:#e4d6bb;font-weight:500}
+.nph-step-changes li em{font-style:normal;display:flex;align-items:center;gap:5px;flex-wrap:wrap}
+.nph-complete-picture{display:flex;align-items:center;justify-content:center;margin:8px 0 16px;gap:15px}
+.nph-complete-picture img{width:78px;height:110px;object-fit:contain;border-radius:5px;box-shadow:0 6px 18px #0004}
+.nph-complete-picture svg{color:#dfc187}
+.nph-cinematic-coach .nph-completion-next{border-top:1px solid #9ab3c227;margin-top:16px;padding-top:13px;font-size:12px;line-height:1.65}
+.nph-completion-next>strong{display:block;color:#e3cda4;margin-bottom:6px;font-size:10px;letter-spacing:1px}
+@media(max-height:760px){.nph-illustration-card{max-width:116px}.nph-lesson-illustration>header{margin-bottom:14px}.nph-illustration-meaning{margin-top:14px}.nph-illustration-cost-card>.nph-illustration-card{max-width:150px}.nph-illustration-battlefield{min-height:140px}}
+@media(prefers-reduced-motion:no-preference){.nph-illustration-scene[data-replay=true] .nph-illustration-position[data-result=true]>.nph-illustration-card,.nph-illustration-scene[data-replay=true] .nph-illustration-battlefield{animation:nph-teaching-arrive .75s ease both}.nph-illustration-scene[data-replay=true] .nph-illustration-cost-route{animation:nph-teaching-arrive .75s ease both}@keyframes nph-teaching-arrive{from{opacity:.3;transform:translateX(-22px)}to{opacity:1;transform:translateX(0)}}}

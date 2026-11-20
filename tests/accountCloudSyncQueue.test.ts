@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AccountCloudSyncQueue } from "../src/main/services/accountCloudSyncQueue.js";
+import { HttpStatusError } from "../src/main/services/httpDeadline.js";
 import { GameplayMaintenanceDeferredError, GameplayMaintenanceScheduler } from "../src/main/services/gameplayMaintenanceScheduler.js";
 
 describe("AccountCloudSyncQueue", () => {
@@ -10,6 +11,99 @@ describe("AccountCloudSyncQueue", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it("retries the last dirty backup after connectivity returns without another edit", async () => {
+    const run = vi.fn().mockRejectedValueOnce(new TypeError("fetch failed")).mockResolvedValue(undefined);
+    const onError = vi.fn();
+    const scheduler = new GameplayMaintenanceScheduler({ ready: () => true });
+    const queue = new AccountCloudSyncQueue(run, onError, 20_000, () => scheduler.request("cloud"));
+    scheduler.register("cloud", () => queue.flush());
+    queue.queue("Last deck edit");
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(onError).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(29_999);
+    expect(run).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(run).toHaveBeenLastCalledWith("Last deck edit");
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(run).toHaveBeenCalledTimes(2);
+    scheduler.dispose();
+  });
+
+  it("caps repeated outage backoff and still respects the gameplay scheduler", async () => {
+    let ready = true;
+    const run = vi.fn().mockRejectedValue(new HttpStatusError("Firestore 503", 503));
+    const scheduler = new GameplayMaintenanceScheduler({ ready: () => ready });
+    const queue = new AccountCloudSyncQueue(run, vi.fn(), 20_000, () => scheduler.request("cloud"));
+    scheduler.register("cloud", () => queue.flush());
+    queue.queue("Saved match");
+    await vi.advanceTimersByTimeAsync(20_000);
+    for (const [index, delay] of [30_000, 60_000, 120_000, 240_000, 300_000, 300_000].entries()) {
+      await vi.advanceTimersByTimeAsync(delay - 1);
+      expect(run).toHaveBeenCalledTimes(index + 1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(run).toHaveBeenCalledTimes(index + 2);
+    }
+    ready = false;
+    await vi.advanceTimersByTimeAsync(300_000);
+    expect(run).toHaveBeenCalledTimes(7);
+    run.mockResolvedValue(undefined);
+    ready = true; await scheduler.wake();
+    expect(run).toHaveBeenCalledTimes(8);
+    scheduler.dispose();
+  });
+
+  it.each([401, 403, 409, 412])("does not retry terminal HTTP %i or overwrite remote conflicts", async status => {
+    const run = vi.fn().mockRejectedValue(new HttpStatusError("Account or cloud conflict", status));
+    const queue = new AccountCloudSyncQueue(run, vi.fn());
+    queue.queue("Saved match");
+    await vi.advanceTimersByTimeAsync(3_600_000);
+    expect(run).toHaveBeenCalledOnce();
+    expect(queue.takePendingReason()).toBe("");
+  });
+
+  it("keeps a newer mutation through failure and does not let error reporting lose it", async () => {
+    let fail!: (error: Error) => void;
+    const run = vi.fn().mockImplementationOnce(() => new Promise<void>((_resolve, reject) => { fail = reject; })).mockResolvedValue(undefined);
+    const queue = new AccountCloudSyncQueue(run, () => { throw new Error("logging failed"); });
+    queue.queue("Old mutation");
+    await vi.advanceTimersByTimeAsync(20_000);
+    queue.queue("New mutation");
+    fail(new TypeError("fetch failed"));
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(run).toHaveBeenLastCalledWith("New mutation");
+  });
+
+  it("a successful restore discards an outage retry and a failed restore retains it", async () => {
+    const run = vi.fn().mockRejectedValueOnce(new TypeError("fetch failed")).mockResolvedValue(undefined);
+    const queue = new AccountCloudSyncQueue(run, vi.fn());
+    queue.queue("Before restore");
+    await vi.advanceTimersByTimeAsync(20_000);
+    const resume = queue.suspend();
+    const reason = queue.takePendingReason();
+    expect(reason).toBe("Before restore");
+    resume();
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(run).toHaveBeenCalledOnce();
+    queue.restorePendingReason(reason);
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(run).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not resurrect discarded intent when an older in-flight request fails", async () => {
+    let fail!: (error: Error) => void;
+    const run = vi.fn(() => new Promise<void>((_resolve, reject) => { fail = reject; }));
+    const queue = new AccountCloudSyncQueue(run, vi.fn());
+    queue.queue("Discarded mutation");
+    await vi.advanceTimersByTimeAsync(20_000);
+    queue.discardPending();
+    fail(new TypeError("fetch failed"));
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(run).toHaveBeenCalledOnce();
+    expect(queue.takePendingReason()).toBe("");
   });
 
   it("debounces mutations and uploads the most recent reason", async () => {

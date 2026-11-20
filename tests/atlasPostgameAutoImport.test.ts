@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { AtlasPostgameAutoImport, AtlasPostgameDeferredError, atlasPostgameGameKey, extractAtlasPostgameTargets, type AtlasPostgameTarget } from "../src/main/services/atlasPostgameAutoImport";
 import type { AtlasPostgameQueryResult } from "../src/main/services/atlasPostgameQuery";
+import { AtlasPostgameQueryError } from "../src/main/services/atlasPostgameQuery";
 
 const startedAt = Date.parse("2026-10-24T20:00:00Z"), createdAt = startedAt - 10_000;
 const snapshot = (gameNumber = 1, format = "bo1", extra: Record<string, unknown> = {}) => ({
@@ -297,6 +298,27 @@ describe("completed BO3 rooms without captured ending packets", () => {
 });
 
 describe("automatic post-game attachment queue", () => {
+  it("retries expired Atlas authentication without restarting and keeps its cooldown and six-hour cutoff", async () => {
+    const h = harness(), readyQuery = h.query.getMockImplementation()!;
+    h.query.mockRejectedValue(new AtlasPostgameQueryError("authentication"));
+    await h.importer.run();
+    expect(h.diagnostic).toHaveBeenLastCalledWith({ stage: "query", outcome: "retry", gameNumber: 1, attempt: 1, failureReason: "authentication" });
+    h.query.mockImplementation(readyQuery);
+    h.advance(14_999); await h.importer.run();
+    expect(h.query).toHaveBeenCalledOnce();
+    h.advance(1); await h.importer.run();
+    expect(h.deliver).toHaveBeenCalledOnce();
+    expect(h.diagnostic).toHaveBeenLastCalledWith({ stage: "attachment", outcome: "attached", gameNumber: 1, attempt: 2 });
+
+    const expired = harness();
+    expired.query.mockRejectedValue(new AtlasPostgameQueryError("authentication"));
+    await expired.importer.run();
+    expired.query.mockImplementation(readyQuery);
+    expired.advance(6 * 60 * 60_000); await expired.importer.run();
+    expect(expired.query).toHaveBeenCalledOnce();
+    expect(expired.deliver).not.toHaveBeenCalled();
+  });
+
   it.each<[number, number]>([[1, 0], [0, 1]])("attaches the proven final game before releasing Game 1 after %j", async (mine, theirs) => {
     const h = harness();
     h.readCapture.mockResolvedValue(bo3Capture(completedBo3Room(1, [mine, theirs]), completedBo3Room(2, [mine, theirs])));
@@ -334,7 +356,7 @@ describe("automatic post-game attachment queue", () => {
     await h.importer.run(); h.advance(600_000); await h.importer.run();
     expect(h.query.mock.calls.map(([target]) => target.gameNumber)).toEqual([2]);
     expect(h.deliver).not.toHaveBeenCalled();
-    expect(h.diagnostic).toHaveBeenLastCalledWith({ stage: "query", outcome: status, attempt: 1 });
+    expect(h.diagnostic).toHaveBeenLastCalledWith({ stage: "query", outcome: status, gameNumber: 2, attempt: 1 });
   });
 
   it.each(["query", "attachment"] as const)("keeps the final proof locked after repeated %s cancellations without spending attempts", async stage => {
@@ -397,7 +419,7 @@ describe("automatic post-game attachment queue", () => {
     expect(h.query).toHaveBeenCalledTimes(6);
     expect(h.diagnostic).toHaveBeenLastCalledWith({
       stage: failure === "attachment" ? "attachment" : "query",
-      outcome: failure === "pending" ? "pending" : "retry", attempt: 6,
+      outcome: failure === "pending" ? "pending" : "retry", gameNumber: 1, attempt: 6,
       ...(failure === "query" ? { failureReason: "unknown" } : {}),
     });
     expect(JSON.stringify(h.diagnostic.mock.calls)).not.toMatch(/private|token|player|capture-test|riftlite-owner|rl2_test/);
@@ -405,7 +427,7 @@ describe("automatic post-game attachment queue", () => {
     h.advance(599_999); await h.importer.run(); expect(h.query).toHaveBeenCalledTimes(6);
     h.advance(1); await h.importer.run();
     expect(h.query).toHaveBeenCalledTimes(7); expect(h.readCapture).toHaveBeenCalledOnce();
-    expect(h.diagnostic).toHaveBeenLastCalledWith({ stage: "attachment", outcome: "attached", attempt: 7 });
+    expect(h.diagnostic).toHaveBeenLastCalledWith({ stage: "attachment", outcome: "attached", gameNumber: 1, attempt: 7 });
     h.advance(600_000); await h.importer.run(); expect(h.query).toHaveBeenCalledTimes(7);
   });
   it("reports a persistent discovery failure once and does not let diagnostic failures interrupt collection", async () => {
@@ -433,12 +455,12 @@ describe("automatic post-game attachment queue", () => {
     expect(h.query).toHaveBeenCalledTimes(3);
     expect(h.query.mock.calls.every(([target]) => target.completionCheck === "atlas" && target.completionMatchFormat === "bo3")).toBe(true);
     expect(h.deliver.mock.calls.map((call: unknown[]) => call[1])).toEqual([1, 2]);
-    expect(h.diagnostic).toHaveBeenLastCalledWith({ stage: "query", outcome: "pending", attempt: 1 });
+    expect(h.diagnostic).toHaveBeenLastCalledWith({ stage: "query", outcome: "pending", gameNumber: 3, attempt: 1 });
     thirdReady = true; h.advance(15_000); await h.importer.run();
     expect(h.readCapture).toHaveBeenCalledOnce();
     expect(h.query).toHaveBeenCalledTimes(4);
     expect(h.deliver.mock.calls.map((call: unknown[]) => call[1])).toEqual([1, 2, 3]);
-    expect(h.diagnostic).toHaveBeenLastCalledWith({ stage: "attachment", outcome: "attached", attempt: 2 });
+    expect(h.diagnostic).toHaveBeenLastCalledWith({ stage: "attachment", outcome: "attached", gameNumber: 3, attempt: 2 });
   });
   it("does no listing, reading or network work during gameplay", async () => {
     const h = harness(); h.ready.mockReturnValue(false); await h.importer.run();
@@ -499,7 +521,7 @@ describe("automatic post-game attachment queue", () => {
     expect(h.diagnostic.mock.calls.every(([event]) => event.stage === "capture" && event.outcome === "ready")).toBe(true);
     h.ready.mockReturnValue(true); h.readCapture.mockImplementation(read); h.query.mockImplementation(query); h.deliver.mockResolvedValue("exists");
     await h.importer.run();
-    expect(h.diagnostic).toHaveBeenLastCalledWith({ stage: "attachment", outcome: "exists", attempt: 1 });
+    expect(h.diagnostic).toHaveBeenLastCalledWith({ stage: "attachment", outcome: "exists", gameNumber: 1, attempt: 1 });
     expect(h.report).toHaveBeenCalledExactlyOnceWith("capture-test", "exists");
     if (stage === "read") expect(h.diagnostic).toHaveBeenCalledWith({ stage: "capture", outcome: "ready", attempt: 1 });
   });
@@ -514,10 +536,10 @@ describe("automatic post-game attachment queue", () => {
     h.query.mockImplementation(async target => ({ status: "pending", gameKey: atlasPostgameGameKey(target), accountId: "a", sessionId: "s" }));
     h.advance(14_999); await h.importer.run(); expect(h.query).toHaveBeenCalledTimes(11);
     h.advance(1); await h.importer.run();
-    expect(h.diagnostic).toHaveBeenLastCalledWith({ stage: "query", outcome: "pending", attempt: 1 });
+    expect(h.diagnostic).toHaveBeenLastCalledWith({ stage: "query", outcome: "pending", gameNumber: 1, attempt: 1 });
     h.query.mockImplementation(async target => ({ status: "ready", gameKey: atlasPostgameGameKey(target), accountId: "a", sessionId: "s", replay: { format: "riftatlas-replay", version: 2, nodes: [], root: { r: 0 } } }));
     h.advance(15_000); await h.importer.run(); expect(h.deliver).toHaveBeenCalledOnce();
-    expect(h.diagnostic).toHaveBeenLastCalledWith({ stage: "attachment", outcome: "attached", attempt: 2 });
+    expect(h.diagnostic).toHaveBeenLastCalledWith({ stage: "attachment", outcome: "attached", gameNumber: 1, attempt: 2 });
   });
   it("does not attach fallback candidates on unknown or restricted provider results and expires deferred work", async () => {
     const unknown = harness(); unknown.readCapture.mockResolvedValue({ schema: "unknown", version: 1, messages: [] } as never);
@@ -565,7 +587,7 @@ describe("automatic post-game attachment queue", () => {
     h.listCaptures.mockResolvedValue([h.descriptor]); h.query.mockImplementation(query);
     h.advance(15_000); await h.importer.run();
     expect(h.deliver).toHaveBeenCalledOnce();
-    expect(h.diagnostic).toHaveBeenLastCalledWith({ stage: "attachment", outcome: "attached", attempt: 1 });
+    expect(h.diagnostic).toHaveBeenLastCalledWith({ stage: "attachment", outcome: "attached", gameNumber: 1, attempt: 1 });
   });
   it("rechecks capture ownership before reading local data", async () => {
     const h = harness(); h.listCaptures.mockResolvedValue([]).mockResolvedValueOnce([h.descriptor]);

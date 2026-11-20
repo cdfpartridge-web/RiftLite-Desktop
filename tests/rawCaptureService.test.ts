@@ -438,6 +438,35 @@ async function readyDiscordQueueHarness() {
 }
 
 describe("RawCaptureService", () => {
+
+  it("cancels a timed-out response body before retrying a pending visibility update", async () => {
+    const harness = await readyDiscordQueueHarness();
+    await harness.add("body-deadline", { visibility: "unlisted", pendingVisibility: "private",
+      webReplayDiscordShareEligible: false, discordShareStatus: undefined,
+      deliveryStage: "paused", error: "Visibility change is waiting." });
+    const cancel = vi.fn();
+    const stream = new ReadableStream<Uint8Array>({ cancel });
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(stream, { status: 503 }))
+      .mockImplementationOnce(async () => {
+        expect(cancel).toHaveBeenCalledOnce();
+        expect(stream.locked).toBe(false);
+        expect(fetchMock.mock.calls[0][1]?.signal?.aborted).toBe(true);
+        return new Response(JSON.stringify({ replay: { replayId: "rl2_body-deadline", status: "ready", visibility: "private" } }));
+      });
+    vi.useFakeTimers();
+    const task = harness.service.uploadPendingRawCaptures(5, true);
+    for (let tries = 0; !fetchMock.mock.calls.length && tries < 200; tries++) await realDelay(5);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(30_000);
+    for (let tries = 0; fetchMock.mock.calls.length < 2 && tries < 100; tries++) {
+      await vi.advanceTimersByTimeAsync(250);
+      await realDelay(5);
+    }
+    expect(await task).toBe(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect((await harness.store.getReplays())[0].rawCapture).toMatchObject({ visibility: "private", deliveryStage: "ready" });
+  });
   it.each(["private", "unlisted", "public"] as const)("keeps a healthy finished %s replay out of the queue when future defaults change", async (visibility) => {
     const harness = await readyDiscordQueueHarness();
     const entry = await harness.add("finished-privacy", { visibility, webReplayDiscordShareEligible: false, discordShareStatus: undefined });
@@ -1381,6 +1410,108 @@ describe("RawCaptureService", () => {
     expect(new Set(uploadedIds).size).toBe(2);
     expect((await store.getReplays()).every((record) => record.rawCapture?.uploadStatus === "uploaded")).toBe(true);
     expect(reconcile).toHaveBeenCalledOnce();
+  });
+
+  it.each(["init", "raw", "retry"] as const)("pauses automatic delivery after %s and resumes the exact remote capture without a failure budget", async (pauseAt) => {
+    const harness = await failedMulliganUploadHarness();
+    let ready = true;
+    let paused = false;
+    let remoteHasSource = false;
+    const calls: Array<{ endpoint: string; body: unknown }> = [];
+    const checkpoint = () => { if (!ready) throw new GameplayMaintenanceDeferredError(); };
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const endpoint = String(input);
+      calls.push({ endpoint, body: init?.body });
+      if (endpoint.endsWith("/status")) return new Response(JSON.stringify({
+        replay: { replayId: "rl2_stage_pause", visibility: "private", status: remoteHasSource ? "pending" : "uploading" },
+        stage: remoteHasSource ? "processing-required" : "source-upload-required",
+        recommendedAction: remoteHasSource ? "retry-processing" : "upload-source"
+      }));
+      if (endpoint.endsWith("/init")) {
+        if (!paused && (pauseAt === "init" || pauseAt === "retry")) { ready = false; paused = true; }
+        if (pauseAt === "retry" && calls.length === 1) return new Response("Temporary service failure", { status: 503 });
+        return new Response(JSON.stringify({ replay: { replayId: "rl2_stage_pause", visibility: "private" },
+          uploadRequired: !remoteHasSource,
+          upload: { endpoint: "/api/v2/replays/rl2_stage_pause/raw" },
+          completeEndpoint: "/api/v2/replays/rl2_stage_pause/complete",
+          statusEndpoint: "/api/v2/replays/rl2_stage_pause/status" }));
+      }
+      if (endpoint.endsWith("/raw")) {
+        remoteHasSource = true;
+        if (!paused && pauseAt === "raw") { ready = false; paused = true; }
+        return new Response("{}");
+      }
+      if (endpoint.endsWith("/complete")) return new Response(JSON.stringify({
+        replay: { replayId: "rl2_stage_pause", status: "ready", visibility: "private" }
+      }));
+      throw new Error(`Unexpected synthetic endpoint: ${endpoint}`);
+    });
+
+    await expect(harness.service.uploadPendingRawCaptures(5, false, checkpoint)).rejects.toBeInstanceOf(GameplayMaintenanceDeferredError);
+    expect(calls.map((call) => call.endpoint.split("/").at(-1))).toEqual(pauseAt === "raw" ? ["init", "raw"] : ["init"]);
+    const pausedManifest = JSON.parse(await readFile(harness.indexPath, "utf8"));
+    expect(pausedManifest.metadata.processingStatus).not.toBe("failed");
+    expect(pausedManifest.metadata.error).toBeUndefined();
+    expect(pausedManifest.metadata.lastErrorClass).toBeUndefined();
+    expect(pausedManifest.metadata.attemptCount).toBeUndefined();
+    expect(Date.parse(pausedManifest.metadata.nextRetryAt)).toBeLessThanOrEqual(Date.now());
+    if (pauseAt !== "retry") expect(pausedManifest.metadata.uploadId).toBe("rl2_stage_pause");
+
+    ready = true;
+    await harness.service.uploadPendingRawCaptures(5, false, checkpoint);
+    const completed = JSON.parse(await readFile(harness.indexPath, "utf8"));
+    expect(completed.metadata.processingStatus).toBe("ready");
+    expect(completed.metadata.uploadId).toBe("rl2_stage_pause");
+    expect(calls.filter((call) => call.endpoint.endsWith("/raw"))).toHaveLength(1);
+    expect(calls.filter((call) => call.endpoint.endsWith("/complete"))).toHaveLength(1);
+    const declarations = calls.filter((call) => call.endpoint.endsWith("/init")).map((call) => JSON.parse(String(call.body)));
+    expect(new Set(declarations.map((value) => `${value.captureId}:${value.sha256}:${value.bytes}`)).size).toBe(1);
+  });
+
+  it("uses the default gameplay guard for automatic direct uploads but lets explicit retry retain account checks", async () => {
+    const harness = await failedMulliganUploadHarness();
+    const checkpoint = vi.fn(() => { throw new GameplayMaintenanceDeferredError(); });
+    const service = new RawCaptureService(harness.store, async () => "id-token", undefined, undefined, undefined, checkpoint);
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
+      error: "Synthetic terminal capture failure", code: "replay_capture_incomplete", errorClass: "capture", retryable: false
+    }), { status: 422 }));
+    await expect(service.uploadRawCaptureToRiftLite(harness.replay.id, "private", { automatic: true })).rejects.toBeInstanceOf(GameplayMaintenanceDeferredError);
+    expect(fetchMock).not.toHaveBeenCalled();
+    await expect(service.uploadRawCaptureToRiftLite(harness.replay.id, "private", { automatic: true, forceRetry: true })).rejects.toThrow("Synthetic terminal capture failure");
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(checkpoint).toHaveBeenCalledOnce();
+  });
+
+  it.each(["visibility", "discord"] as const)("defers ready replay %s work without losing its intent or advancing its retry clock", async (kind) => {
+    const harness = await readyDiscordQueueHarness();
+    const entry = await harness.add(`paused-${kind}`, kind === "visibility" ? {
+      pendingVisibility: "private", webReplayDiscordShareEligible: false, discordShareStatus: undefined
+    } : {});
+    let ready = true;
+    let firstToken = true;
+    const checkpoint = () => { if (!ready) throw new GameplayMaintenanceDeferredError(); };
+    const service = new RawCaptureService(harness.store, async () => {
+      if (firstToken) { firstToken = false; ready = false; }
+      return "id-token";
+    }, undefined, undefined, undefined, checkpoint);
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(JSON.stringify(kind === "visibility"
+      ? { replay: { visibility: "private" } }
+      : { visibility: "unlisted", results: [{ hubId: "hub-1", status: "shared" }] })));
+    await expect(service.uploadPendingRawCaptures(5, false, checkpoint)).rejects.toBeInstanceOf(GameplayMaintenanceDeferredError);
+    expect(fetchMock).not.toHaveBeenCalled();
+    const paused = JSON.parse(await readFile(entry.indexPath, "utf8")).metadata;
+    expect(paused.processingStatus).toBe("ready");
+    expect(paused.error).toBeUndefined();
+    if (kind === "visibility") expect(paused.pendingVisibility).toBe("private");
+    else expect(paused.discordLastAttemptAt).toBe(entry.manifest.metadata.discordLastAttemptAt);
+    ready = true;
+    await service.uploadPendingRawCaptures(5, false, checkpoint);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const completed = JSON.parse(await readFile(entry.indexPath, "utf8")).metadata;
+    if (kind === "visibility") {
+      expect(completed.visibility).toBe("private");
+      expect(completed.pendingVisibility).toBeUndefined();
+    } else expect(completed.discordShareStatus).toBe("shared");
   });
 
   it("honours a foreground forced retry that joins a gameplay-deferred automatic pass", async () => {

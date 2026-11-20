@@ -1,4 +1,6 @@
 import { app } from "electron";
+import { notebookAfterReviewSave } from "../../shared/reviewPlayNotes.js";
+import type { ReplayLibraryMetadataPatch } from "../../shared/types.js";
 import { copyFile, mkdir, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { existsSync, renameSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -19,6 +21,7 @@ import { sanitizeBackupFile } from "./backupSanitizer.js";
 import { redactCorruptSettingsText, redactSensitiveSettings, sensitiveCredentialPatch, stripLegacyHubSecrets, type ProtectedSettingsResult, type SecureCredentialVault } from "./secureCredentialVault.js";
 import {
   ReplayPayloadStore,
+  assertReplayPayloadAvailable,
   replayPayloadFieldsShareIdentity,
   replayPayloadReference,
   storedReplayWithReference,
@@ -32,11 +35,19 @@ interface PersistedState {
 }
 
 interface AtomicDatabaseMutationOptions<T> {
+  recordCloudEdit?: boolean;
   invalidateMatches?: boolean;
   invalidateReplays?: boolean;
   onCommitted?: (result: T) => void;
   skipPrewriteBackup?: boolean;
   operationName?: string;
+}
+
+const pendingCloudEditKey = (accountUid: string) => `account-cloud-pending-edit-v1:${accountUid}`;
+
+function recordPendingCloudEdit(db: Database, settings: UserSettings): void {
+  db.run("INSERT OR REPLACE INTO store_metadata (key, value, updated_at) VALUES (?, ?, ?)",
+    [pendingCloudEditKey(settings.accountUid), randomUUID(), Date.now()]);
 }
 
 export interface StorePerformanceEvent {
@@ -53,6 +64,7 @@ const REPLAY_PAYLOAD_FILE_PATTERN = /^[a-f0-9]{20}-[a-f0-9]{64}\.json\.gz$/;
 const ENHANCED_INSIGHTS_CLEAR_CUTOFF_METADATA_KEY = "enhanced-insights-clear-cutoff-v1";
 const UUID_FILE_PART_PATTERN = "[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}";
 const LEGACY_IMPORT_METADATA_KEY = "legacy-import-fingerprint-v1";
+const CLOUD_PUBLICATION_KEY = "pending-account-cloud-publication-v1";
 const STORED_PAYLOAD_MIGRATION_METADATA_KEY = "stored-payload-migration-version";
 const STORED_PAYLOAD_MIGRATION_VERSION = "1";
 const OLD_RAW_CAPTURE_ENDPOINT = "https://test.riftreplay.com/api/v1/replays";
@@ -409,8 +421,49 @@ export class RiftLiteStore {
     await writeFile(backupPath, redactCorruptSettingsText(value), "utf8").catch(() => undefined);
   }
 
-  async saveSettings(patch: Partial<UserSettings>): Promise<UserSettings> {
-    return this.enqueueSettingsMutation(() => patch);
+  async saveSettings(patch: Partial<UserSettings>, options: { recordCloudEdit?: boolean } = {}): Promise<UserSettings> {
+    return this.enqueueSettingsMutation(() => patch, options.recordCloudEdit);
+  }
+
+  private onAccountCloudEdit?: () => void;
+
+  async observeAccountCloudEdits(listener: () => void): Promise<void> {
+    this.onAccountCloudEdit = listener;
+    const settings = await this.getSettings();
+    if (settings.accountCloudSyncEnabled && settings.accountUid && await this.getPendingAccountCloudRevision(settings.accountUid)) listener();
+  }
+
+  async getPendingAccountCloudRevision(accountUid: string): Promise<string | null> {
+    return this.enqueueDatabaseRead("read-pending-cloud-edit", db => {
+      const value = db.exec("SELECT value FROM store_metadata WHERE key=?", [pendingCloudEditKey(accountUid)])[0]?.values[0]?.[0];
+      return typeof value === "string" ? value : null;
+    });
+  }
+
+  async acknowledgeAccountCloudRevision(accountUid: string, revision: string): Promise<void> {
+    await this.enqueueAtomicDatabaseMutation("acknowledge-cloud-edit", db => {
+      db.run("DELETE FROM store_metadata WHERE key=? AND value=?", [pendingCloudEditKey(accountUid), revision]);
+    });
+  }
+
+  async readCloudPublicationReceipt(): Promise<string> {
+    return this.enqueueDatabaseRead("read-cloud-publication", db =>
+      String(db.exec("SELECT value FROM store_metadata WHERE key=?", [CLOUD_PUBLICATION_KEY])[0]?.values[0]?.[0] ?? ""));
+  }
+
+  /** Local to this installation. Backup exports and renderer settings omit store_metadata. */
+  async writeCloudPublicationReceipt(value: string, guard: () => boolean): Promise<void> {
+    await this.enqueueAtomicDatabaseMutation("record-cloud-publication", db => {
+      if (!guard()) throw new Error("The linked account changed before recording the cloud upload.");
+      db.run("INSERT OR REPLACE INTO store_metadata (key,value,updated_at) VALUES (?,?,?)",
+        [CLOUD_PUBLICATION_KEY, value, Date.now()]);
+    });
+  }
+
+  async discardCloudPublicationReceipt(value: string): Promise<void> {
+    await this.enqueueAtomicDatabaseMutation("discard-cloud-publication", db => {
+      db.run("DELETE FROM store_metadata WHERE key=? AND value=?", [CLOUD_PUBLICATION_KEY, value]);
+    });
   }
 
   setPerformanceReporter(reporter: ((event: StorePerformanceEvent) => void) | null): void {
@@ -418,18 +471,20 @@ export class RiftLiteStore {
   }
 
   async updateSettings(
-    mutation: (current: Readonly<UserSettings>) => Partial<UserSettings>
+    mutation: (current: Readonly<UserSettings>) => Partial<UserSettings>,
+    options: { recordCloudEdit?: boolean } = {}
   ): Promise<UserSettings> {
-    return this.enqueueSettingsMutation(mutation);
+    return this.enqueueSettingsMutation(mutation, options.recordCloudEdit);
   }
 
   private enqueueSettingsMutation(
-    mutation: (current: Readonly<UserSettings>) => Partial<UserSettings>
+    mutation: (current: Readonly<UserSettings>) => Partial<UserSettings>,
+    recordCloudEdit = false
   ): Promise<UserSettings> {
     const operation = this.settingsMutationQueue.then(() => this.enqueueDatabaseOperation(async () => {
       const current = await this.getSettings();
       return this.withDatabaseRepair("save-settings", () => (
-        this.saveSettingsUnlocked(mutation(current), current)
+        this.saveSettingsUnlocked(mutation(current), current, recordCloudEdit)
       ));
     }));
     this.settingsMutationQueue = operation.then(
@@ -441,13 +496,41 @@ export class RiftLiteStore {
 
   private async saveSettingsUnlocked(
     patch: Partial<UserSettings>,
-    current: UserSettings
+    current: UserSettings,
+    recordCloudEdit: boolean
   ): Promise<UserSettings> {
     const protectedSettings = await this.prepareSettingsForSave(patch, current);
+    const nextSettings = protectedSettings.runtimeSettings;
+    const removedFolders = new Set(patch.replayFolders
+      ? (current.replayFolders ?? []).filter(folder => !nextSettings.replayFolders?.some(next => next.id === folder.id)).map(folder => folder.id)
+      : []);
+    const sameAccount = current.accountUid === nextSettings.accountUid;
+    const cloudEdit = recordCloudEdit && sameAccount && Boolean(current.accountUid && current.accountCloudSyncEnabled && nextSettings.accountCloudSyncEnabled);
     let databaseCommitted = false;
     try {
       return await this.runAtomicDatabaseMutation(
         async (db) => {
+          if (current.accountUid && (!sameAccount || !nextSettings.accountCloudSyncEnabled)) {
+            db.run("DELETE FROM store_metadata WHERE key=?", [pendingCloudEditKey(current.accountUid)]);
+          }
+          if (cloudEdit) recordPendingCloudEdit(db, nextSettings);
+          if (removedFolders.size) {
+            // Unfile current members, including recycled recordings, in the
+            // same transaction as removing the folder from Settings.
+            const rows = db.exec("SELECT id, data_json FROM replays")[0]?.values ?? [];
+            for (const [id, raw] of rows) {
+              const stored = this.parseStoredReplayMetadata(raw);
+              if (!stored?.folderId || !removedFolders.has(stored.folderId)) continue;
+              delete stored.folderId;
+              db.run("UPDATE replays SET data_json=? WHERE id=?", [JSON.stringify(stored), id]);
+            }
+          }
+          const next = protectedSettings.runtimeSettings;
+          if (next.accountUid !== current.accountUid || next.accountCloudSyncDeviceId !== current.accountCloudSyncDeviceId ||
+              next.accountCloudSyncRemoteGenerationId !== current.accountCloudSyncRemoteGenerationId ||
+              (current.firebaseRefreshToken && !next.firebaseRefreshToken)) {
+            db.run("DELETE FROM store_metadata WHERE key=?", [CLOUD_PUBLICATION_KEY]);
+          }
           db.run("INSERT OR REPLACE INTO settings (key, value_json, updated_at) VALUES (?, ?, ?)", [
             "settings",
             JSON.stringify(protectedSettings.persistedSettings),
@@ -456,9 +539,11 @@ export class RiftLiteStore {
           return protectedSettings.runtimeSettings;
         },
         {
+          invalidateReplays: removedFolders.size > 0,
           onCommitted: (runtimeSettings) => {
             databaseCommitted = true;
             this.settingsCache = runtimeSettings;
+            if (cloudEdit) this.onAccountCloudEdit?.();
           }
         }
       );
@@ -545,13 +630,40 @@ export class RiftLiteStore {
       .sort((a, b) => Date.parse(b.updatedAt || b.capturedAt) - Date.parse(a.updatedAt || a.capturedAt));
   }
 
-  async saveMatch(draft: MatchDraft): Promise<MatchDraft> {
+  async saveMatch(draft: MatchDraft, confirmPlayNotes = false): Promise<MatchDraft> {
+    const result = await this.writeMatch(draft, confirmPlayNotes ? "confirm" : "save");
+    return result.match;
+  }
+
+  async importPhoneScorepadMatch(draft: MatchDraft): Promise<boolean> {
+    if (draft.source !== "scorepad" || draft.status !== "pending-review" || !/^scorepad-phone-[a-z0-9-]{1,80}$/i.test(draft.id)) {
+      throw new Error("Invalid phone Scorepad entry.");
+    }
+    const result = await this.writeMatch(draft, "phone-import");
+    return result.created;
+  }
+
+  private writeMatch(draft: MatchDraft, mode: "save" | "confirm" | "phone-import"): Promise<{ match: MatchDraft; created: boolean }> {
     const now = new Date().toISOString();
-    return this.enqueueAtomicDatabaseMutation("save-match", (db) => {
+    return this.enqueueAccountDataMutation("save-match", (db) => {
       const current = this.parseStoredMatch(db.exec("SELECT data_json FROM matches WHERE id=?", [draft.id])[0]?.values[0]?.[0]);
+      // A phone may redeliver after a lost acknowledgement, including after
+      // the player has edited, reviewed or deleted their local match.
+      if (mode === "phone-import" && current) return { match: current, created: false };
+      const candidate = { ...draft };
+      if (mode === "confirm" && draft.status === "saved" && draft.importedPlayNotes) {
+        const deckId = draft.importedPlayNotes.deckId;
+        const deck = this.readSavedDeckFromDatabase(db, deckId);
+        if (deck && current?.status !== "saved") {
+          const notebook = this.readDeckNotebook(db, deckId);
+          const cleaned = notebookAfterReviewSave(draft, notebook, deck);
+          if (cleaned !== notebook) this.writeDeckNotebook(db, deckId, cleaned);
+        }
+        delete candidate.importedPlayNotes;
+      }
       const next = compactMatchForStorage(applyEnhancedInsightsClearCutoffToMatch(
         db,
-        normalizeStoredMatch({ ...draft, atlasHistory: current?.atlasHistory ?? draft.atlasHistory, atlasHistoryMarkers: current?.atlasHistoryMarkers ?? draft.atlasHistoryMarkers, updatedAt: now })
+        normalizeStoredMatch({ ...candidate, atlasHistory: current?.atlasHistory ?? draft.atlasHistory, atlasHistoryMarkers: current?.atlasHistoryMarkers ?? draft.atlasHistoryMarkers, updatedAt: now })
       ));
       db.run(
         `INSERT OR REPLACE INTO matches
@@ -559,7 +671,7 @@ export class RiftLiteStore {
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
         [next.id, next.platform, next.status, next.result, next.capturedAt, next.updatedAt, JSON.stringify(next)]
       );
-      return next;
+      return { match: next, created: !current };
     }, { invalidateMatches: true });
   }
 
@@ -570,7 +682,7 @@ export class RiftLiteStore {
 
   async combineMatches(payload: MatchCombineSavePayload): Promise<MatchDraft> {
     const orderedMatchIds = payload.orderedMatchIds.filter(Boolean).slice(0, 3);
-    return this.enqueueAtomicDatabaseMutation("combine-matches", (db) => {
+    return this.enqueueAccountDataMutation("combine-matches", (db) => {
       const matches = this.getMatchesByIdsFromDatabase(db, orderedMatchIds);
       const preview = buildMatchCombinePreview(matches);
       if (!preview.canSave) {
@@ -599,7 +711,7 @@ export class RiftLiteStore {
   async attachAtlasHistory(id: string, input: AtlasMatchHistory, markers: AtlasHistoryMarker[]): Promise<MatchDraft> {
     const history = normalizeAtlasMatchHistory(input);
     if (!history?.games.length) throw new Error("Atlas returned an invalid deck history.");
-    return this.enqueueAtomicDatabaseMutation("attach-atlas-history", (db) => {
+    return this.enqueueAccountDataMutation("attach-atlas-history", (db) => {
       const current = this.parseStoredMatch(db.exec("SELECT data_json FROM matches WHERE id=?", [id])[0]?.values[0]?.[0]);
       if (!current || current.deletedAt || current.platform !== "atlas") throw new Error("This match is no longer available.");
       for (const h of history.games) {
@@ -619,7 +731,7 @@ export class RiftLiteStore {
    * fails, so Review later must also be able to create the missing pending row.
    */
   async deferMatchReview(draft: MatchDraft): Promise<MatchDraft> {
-    return this.enqueueAtomicDatabaseMutation("defer-match-review", (db) => {
+    return this.enqueueAccountDataMutation("defer-match-review", (db) => {
       const result = db.exec("SELECT data_json FROM matches WHERE id=?", [draft.id]);
       const hasStoredRow = Boolean(result[0]?.values.length);
       const row = result[0]?.values[0]?.[0];
@@ -662,7 +774,7 @@ export class RiftLiteStore {
     combinedMatchId: string,
     guard: (combined: Readonly<MatchDraft>) => boolean = () => true
   ): Promise<MatchDraft[]> {
-    return this.enqueueAtomicDatabaseMutation("undo-combined-match", (db) => {
+    return this.enqueueAccountDataMutation("undo-combined-match", (db) => {
       const row = db.exec("SELECT data_json FROM matches WHERE id=?", [combinedMatchId])[0]?.values[0]?.[0];
       if (typeof row !== "string") {
         throw new Error("Combined match was not found.");
@@ -751,7 +863,7 @@ export class RiftLiteStore {
     if (fallbackDraft && fallbackDraft.id !== id) {
       throw new Error("The captured match did not match the requested deletion.");
     }
-    await this.enqueueAtomicDatabaseMutation("delete-match", (db) => {
+    await this.enqueueAccountDataMutation("delete-match", (db) => {
       const result = db.exec("SELECT data_json FROM matches WHERE id=?", [id]);
       const hasStoredRow = Boolean(result[0]?.values.length);
       const row = result[0]?.values[0]?.[0];
@@ -786,7 +898,7 @@ export class RiftLiteStore {
   }
 
   async restoreMatch(id: string): Promise<MatchDraft | null> {
-    return this.enqueueAtomicDatabaseMutation("restore-match", (db) => {
+    return this.enqueueAccountDataMutation("restore-match", (db) => {
       const row = db.exec("SELECT data_json FROM matches WHERE id=?", [id])[0]?.values[0]?.[0];
       if (typeof row !== "string") {
         return null;
@@ -801,7 +913,7 @@ export class RiftLiteStore {
   }
 
   async purgeMatch(id: string): Promise<void> {
-    await this.enqueueAtomicDatabaseMutation("purge-match", (db) => {
+    await this.enqueueAccountDataMutation("purge-match", (db) => {
       const replayIds = db.exec("SELECT id FROM replays WHERE match_id=?", [id])[0]?.values ?? [];
       const purgedAt = new Date().toISOString();
       for (const row of replayIds) {
@@ -869,12 +981,12 @@ export class RiftLiteStore {
   }
 
   async upsertSavedDeck(deck: Partial<SavedDeck> & Pick<SavedDeck, "title" | "legend" | "snapshotJson">): Promise<SavedDeck> {
-    return this.enqueueAtomicDatabaseMutation("upsert-saved-deck", (db) => this.upsertSavedDeckInDatabase(db, deck));
+    return this.enqueueAccountDataMutation("upsert-saved-deck", (db) => this.upsertSavedDeckInDatabase(db, deck));
   }
 
   /** The duplicate check and the chosen write share one queue/transaction. */
   async importSavedDeck(deck: Omit<SavedDeck, "id" | "lastImportedAt">, choice?: DeckImportChoice): Promise<DeckImportResult> {
-    return this.enqueueAtomicDatabaseMutation("import-saved-deck", (db): DeckImportResult => {
+    return this.enqueueAccountDataMutation("import-saved-deck", (db): DeckImportResult => {
       const decks = this.readSavedDecksFromDatabase(db);
       const snapshot = deckImportSnapshot(deck.snapshotJson);
       const fingerprint = deckContentFingerprint(snapshot);
@@ -946,7 +1058,7 @@ export class RiftLiteStore {
     if (!cleanTitle) {
       throw new Error("Deck name is required.");
     }
-    return this.enqueueAtomicDatabaseMutation("rename-saved-deck", (db) => {
+    return this.enqueueAccountDataMutation("rename-saved-deck", (db) => {
       const existing = this.readSavedDeckFromDatabase(db, id);
       if (!existing) {
         throw new Error("Deck not found.");
@@ -970,7 +1082,7 @@ export class RiftLiteStore {
   }
 
   async deleteSavedDeck(id: string): Promise<void> {
-    await this.enqueueAtomicDatabaseMutation("delete-saved-deck", async (db) => {
+    await this.enqueueAccountDataMutation("delete-saved-deck", async (db) => {
       // Hydrate device-bound credentials before deriving the replacement
       // runtime cache. The SQLite row is intentionally redacted by the secure
       // vault and must never become the live settings object on a cold cache.
@@ -1021,7 +1133,7 @@ export class RiftLiteStore {
   }
 
   async saveDeckNotebook(deckId: string, notebook: DeckNotebook): Promise<DeckNotebook> {
-    return this.enqueueAtomicDatabaseMutation("save-deck-notebook", (db) => {
+    return this.enqueueAccountDataMutation("save-deck-notebook", (db) => {
       const deck = this.readSavedDeckFromDatabase(db, deckId);
       let next = normalizeDeckNotebook(deckId, notebook);
       if (deck) {
@@ -1054,6 +1166,25 @@ export class RiftLiteStore {
     return (await this.readAllReplays()).filter((replay) => Boolean(replay.deletedAt));
   }
 
+  async updateReplayLibraryMetadata(id: string, patch: ReplayLibraryMetadataPatch): Promise<void> {
+    await this.enqueueAtomicDatabaseMutation("update-replay-library-metadata", async (db) => {
+      const row = db.exec("SELECT data_json FROM replays WHERE id=?", [id])[0]?.values[0]?.[0];
+      const stored = this.parseStoredReplayMetadata(row);
+      if (!stored || stored.deletedAt) throw new Error("This replay is no longer in the library.");
+      // Update only the requested fields in the current record. Its payload
+      // reference survives even when the recording is temporarily unavailable.
+      if (typeof patch.title === "string" && patch.title.trim()) stored.title = patch.title.trim().slice(0, 160);
+      if (typeof patch.favourite === "boolean") stored.favourite = patch.favourite;
+      if (patch.folderId === null) delete stored.folderId;
+      else if (typeof patch.folderId === "string") {
+        const settings = await this.getSettings();
+        if (!settings.replayFolders?.some(folder => folder.id === patch.folderId)) throw new Error("This replay folder no longer exists.");
+        stored.folderId = patch.folderId;
+      }
+      db.run("UPDATE replays SET data_json=? WHERE id=?", [JSON.stringify(stored), id]);
+    }, { invalidateReplays: true });
+  }
+
   async saveReplay(replay: ReplayRecord): Promise<ReplayRecord> {
     const committed = await this.enqueueAtomicDatabaseMutation("save-replay", async (db) => {
       const next = compactReplayForStorage(replayWithIntelligence(
@@ -1080,6 +1211,7 @@ export class RiftLiteStore {
   async clearEnhancedInsightsData(): Promise<{ matchesUpdated: number; replaysUpdated: number }> {
     const matches = await this.readAllMatches();
     const replays = await this.readAllReplays();
+    replays.forEach(assertReplayPayloadAvailable);
     const enhancedMatchIds = new Set(matches.filter((match) => Boolean(match.insightContext)).map((match) => match.id));
     let matchesUpdated = 0;
     let replaysUpdated = 0;
@@ -1104,7 +1236,7 @@ export class RiftLiteStore {
         // payload. If that unlink alone fails, keep clearing the remaining rows;
         // the unreferenced-payload sweep below retries it from durable state.
         const persisted = (await this.readAllReplays()).find((candidate) => candidate.id === replay.id);
-        if (!persisted || !enhancedReplayDataIsCleared(persisted)) {
+        if (!persisted || persisted.payloadUnavailable || !enhancedReplayDataIsCleared(persisted)) {
           throw error;
         }
       }
@@ -1126,7 +1258,7 @@ export class RiftLiteStore {
 
   /** Saves sync state only while the latest persisted match is still active. */
   async saveMatchIf(draft: MatchDraft, guard: () => boolean): Promise<MatchDraft | null> {
-    return this.enqueueAtomicDatabaseMutation("save-match-if-current", (db) => {
+    return this.enqueueAccountDataMutation("save-match-if-current", (db) => {
       const row = db.exec("SELECT data_json FROM matches WHERE id=?", [draft.id])[0]?.values[0]?.[0];
       const current = this.parseStoredMatch(row);
       if (!current || current.deletedAt) {
@@ -1177,7 +1309,7 @@ export class RiftLiteStore {
     localReplayId: string,
     guard: () => boolean
   ): Promise<MatchDraft | null> {
-    return this.enqueueAtomicDatabaseMutation("attach-web-replay-to-active-match", (db) => {
+    return this.enqueueAccountDataMutation("attach-web-replay-to-active-match", (db) => {
       const row = db.exec("SELECT data_json FROM matches WHERE id=?", [matchId])[0]?.values[0]?.[0];
       const current = this.parseStoredMatch(row);
       if (!current || current.deletedAt || !guard()) {
@@ -1475,20 +1607,27 @@ export class RiftLiteStore {
   }
 
   private async readAllReplays(): Promise<ReplayRecord[]> {
-    if (this.replaysCache) {
-      return this.replaysCache;
-    }
+    const cached = this.replaysCache;
+    if (cached && !cached.some(replay => replay.payloadUnavailable)) return cached;
     if (this.replaysLoadPromise) {
       return this.replaysLoadPromise;
     }
     const generation = this.replaysCacheGeneration;
     const loadPromise = (async () => {
       const db = await this.database();
-      const result = db.exec("SELECT data_json FROM replays ORDER BY captured_at DESC");
-      const storedReplays = (result[0]?.values ?? [])
-        .map((row) => this.parseStoredReplayMetadata(row[0]))
+      // Snapshot the metadata before awaiting any file IO. On retry, only the
+      // unreadable entries need a database lookup and another payload read.
+      const rows = cached
+        ? cached.filter(replay => replay.payloadUnavailable)
+            .flatMap(replay => db.exec("SELECT data_json FROM replays WHERE id=?", [replay.id])[0]?.values ?? [])
+        : db.exec("SELECT data_json FROM replays ORDER BY captured_at DESC")[0]?.values ?? [];
+      const storedReplays = rows.map(row => this.parseStoredReplayMetadata(row[0]))
         .filter((replay): replay is StoredReplayRecord => Boolean(replay));
-      const replays = await mapWithConcurrency(storedReplays, 4, (stored) => this.hydrateStoredReplay(stored));
+      let replays = await mapWithConcurrency(storedReplays, 4, stored => this.hydrateStoredReplay(stored, true));
+      if (cached) {
+        const retried = new Map(replays.map(replay => [replay.id, replay]));
+        replays = cached.map(replay => retried.get(replay.id) ?? replay);
+      }
       // A save or restore may commit while payload files are being hydrated.
       // Its invalidation must outlive this older snapshot's completion.
       if (generation === this.replaysCacheGeneration) {
@@ -1528,6 +1667,10 @@ export class RiftLiteStore {
   ): Promise<RiftLiteBackupFile> {
     const includeRecycleBin = options.includeRecycleBin !== false;
     const includeReplays = options.includeReplays !== false;
+    const replays = includeReplays ? await this.getReplays() : [];
+    const deletedReplays = includeReplays && includeRecycleBin ? await this.getDeletedReplays() : [];
+    replays.forEach(assertReplayPayloadAvailable);
+    deletedReplays.forEach(assertReplayPayloadAvailable);
     return sanitizeBackupFile({
       format: "riftlite.backup",
       version: 1,
@@ -1538,12 +1681,12 @@ export class RiftLiteStore {
       deletedMatches: includeRecycleBin ? await this.getDeletedMatches() : [],
       decks: await this.getSavedDecks(),
       notebooks: await this.getDeckNotebooks(),
-      replays: includeReplays ? await this.getReplays() : [],
-      deletedReplays: includeReplays && includeRecycleBin ? await this.getDeletedReplays() : []
+      replays,
+      deletedReplays
     });
   }
 
-  async restoreBackupData(backup: RiftLiteBackupFile, options: { preserveAccount?: boolean; preserveReplays?: boolean } = {}): Promise<void> {
+  async restoreBackupData(backup: RiftLiteBackupFile, options: { preserveAccount?: boolean; preserveReplays?: boolean; fromAccountCloud?: boolean } = {}): Promise<void> {
     if (this.restoreInProgress) {
       throw new Error("A RiftLite data restore is already in progress.");
     }
@@ -1578,6 +1721,7 @@ export class RiftLiteStore {
 
     try {
       candidateDb.run("DELETE FROM matches");
+      candidateDb.run("DELETE FROM store_metadata WHERE key=?", [CLOUD_PUBLICATION_KEY]);
       if (!options.preserveReplays) {
         candidateDb.run("DELETE FROM replays");
         candidateDb.run("DELETE FROM replay_purge_tombstones");
@@ -1628,6 +1772,14 @@ export class RiftLiteStore {
         JSON.stringify(redactSensitiveSettings(settings)),
         Date.now()
       ]);
+      // The old intent belongs to the replaced snapshot. Include the new
+      // revision only for a local import into the same opted-in account.
+      if (currentSettings.accountUid) {
+        candidateDb.run("DELETE FROM store_metadata WHERE key=?", [pendingCloudEditKey(currentSettings.accountUid)]);
+      }
+      const cloudEdit = !options.fromAccountCloud && currentSettings.accountCloudSyncEnabled &&
+        settings.accountCloudSyncEnabled && Boolean(settings.accountUid) && settings.accountUid === currentSettings.accountUid;
+      if (cloudEdit) recordPendingCloudEdit(candidateDb, settings);
 
       const matches = [...(backup.matches ?? []), ...(backup.deletedMatches ?? [])];
       for (const match of matches) {
@@ -1738,6 +1890,7 @@ export class RiftLiteStore {
           // post-restore read that would reconcile/self-heal the active DB
           // outside the serialized restore swap.
           this.settingsCache = settings;
+          if (cloudEdit) this.onAccountCloudEdit?.();
         });
       } finally {
         if (stagedCandidatePath) {
@@ -1774,7 +1927,7 @@ export class RiftLiteStore {
       // cached, the current settings are refreshed by any earlier queued
       // settings mutation before this candidate action runs.
       await this.getSettings();
-      const imported = await this.enqueueAtomicDatabaseMutation("import-legacy-data", async (db) => {
+      const imported = await this.enqueueAccountDataMutation("import-legacy-data", async (db) => {
         const summary: ImportSummary = { ...emptySummary };
         const legacySettings = readLegacySettings(legacy);
         const current = await this.getSettings();
@@ -1870,7 +2023,18 @@ export class RiftLiteStore {
       await this.finalizeLegacyJsonMigration();
       await this.createLastKnownGoodBackup("startup-ok", true).catch(() => undefined);
     } catch (error) {
-      await this.recoverFromStartupOpenFailure(error);
+      try {
+        await this.recoverFromStartupOpenFailure(error);
+      } catch (recoveryError) {
+        // A partially opened database must not bypass the rejected load
+        // promise on a later call after recovery failed to preserve it.
+        this.db?.close();
+        this.db = null;
+        this.settingsCache = null;
+        this.invalidateMatchCache();
+        this.invalidateReplayCache();
+        throw recoveryError;
+      }
     }
   }
 
@@ -2137,13 +2301,15 @@ export class RiftLiteStore {
     }
   }
 
-  private async hydrateStoredReplay(stored: StoredReplayRecord): Promise<ReplayRecord> {
+  private async hydrateStoredReplay(stored: StoredReplayRecord, allowMetadataOnly = false): Promise<ReplayRecord> {
     try {
       return compactReplayForStorage(await this.replayPayloadStore.hydrate(stored));
     } catch (error) {
+      if (!allowMetadataOnly) throw error;
       console.warn(`Replay payload for ${stored.id} could not be loaded`, error);
       return compactReplayForStorage({
         ...withoutReplayPayloadReference(stored),
+        payloadUnavailable: true,
         events: [],
         structuredEvents: [],
         visualFrames: [],
@@ -2219,6 +2385,15 @@ export class RiftLiteStore {
     ));
   }
 
+  /** Persist the change and its upload revision in one SQLite commit. */
+  private enqueueAccountDataMutation<T>(
+    context: string,
+    action: (database: Database) => T | Promise<T>,
+    options: AtomicDatabaseMutationOptions<T> = {}
+  ): Promise<T> {
+    return this.enqueueAtomicDatabaseMutation(context, action, { ...options, recordCloudEdit: true });
+  }
+
   /**
    * Runs while databaseOperationQueue is held. Mutations are made against an
    * isolated sql.js clone and only become visible after the staged file rename
@@ -2234,11 +2409,17 @@ export class RiftLiteStore {
     if (!this.sql) {
       throw new Error("RiftLite database did not initialize");
     }
+    const account = options.recordCloudEdit ? await this.getSettings() : undefined;
     const startingMutationVersion = this.databaseMutationVersion;
     const activeBytes = activeDb.export();
     let candidateDb: Database | null = new this.sql.Database(activeBytes);
     try {
       const result = await action(candidateDb);
+      // Each candidate is a fresh sql.js connection. A duplicate import or
+      // rejected guard performs no row writes and must not create a revision.
+      const cloudEdit = account?.accountUid && account.accountCloudSyncEnabled &&
+        Number(candidateDb.exec("SELECT total_changes()")[0]?.values[0][0]) > 0;
+      if (cloudEdit) recordPendingCloudEdit(candidateDb, account);
       const candidateBytes = candidateDb.export();
       if (Buffer.compare(candidateBytes, activeBytes) === 0) {
         candidateDb.close();
@@ -2281,6 +2462,7 @@ export class RiftLiteStore {
             this.invalidateReplayCache();
           }
           options.onCommitted?.(result);
+          if (cloudEdit) this.onAccountCloudEdit?.();
         });
       this.persistQueue = persistAfterPrevious;
       await persistAfterPrevious;
@@ -2510,7 +2692,15 @@ export class RiftLiteStore {
     }
     const safeContext = context.replace(/[^a-z0-9-]+/gi, "-").slice(0, 40) || "repair";
     const backupPath = join(dirname(this.dbPath), `riftlite-v06-${safeContext}-backup-${Date.now()}.sqlite`);
-    await copyFile(this.dbPath, backupPath).catch(() => undefined);
+    const temporaryPath = `${backupPath}.${randomUUID()}.tmp`;
+    try {
+      await copyFile(this.dbPath, temporaryPath);
+      await rename(temporaryPath, backupPath);
+    } catch (error) {
+      throw new Error("RiftLite could not preserve the existing database. Recovery stopped before replacing it.", { cause: error });
+    } finally {
+      await unlink(temporaryPath).catch(() => undefined);
+    }
     return backupPath;
   }
 
@@ -2781,6 +2971,7 @@ function mergeDeferredReviewFields(current: MatchDraft, draft: MatchDraft, updat
     deckSnapshotJson: draft.deckSnapshotJson,
     flags: draft.flags,
     notes: draft.notes,
+    importedPlayNotes: draft.importedPlayNotes ?? current.importedPlayNotes,
     insightContext: draft.insightContext ?? current.insightContext,
     games: draft.games,
     keepReplay: draft.keepReplay,

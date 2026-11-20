@@ -1,0 +1,207 @@
+/* Three stable spaces: narration, the actual Atlas table, and card reading. */
+.new-player-hub.nph-play-overlay { background: var(--nph-bg,#101c29); }
+.nph-play-overlay .nph-play-topbar { height: 62px; background: #0c1722; border-bottom-color: var(--nph-line); gap: 18px; }
+.nph-play-overlay .nph-play-topbar h2 { color: var(--nph-ink); font-size: 16px; font-weight: 600; }
+.nph-play-overlay .nph-play-topbar>div>span { color: var(--nph-gold); }
+.nph-play-overlay .nph-reading-pace select { background: #182a39; border-color: #92aab638; color: #e5e9ed; }
+.nph-play-topbar .nph-return-short, .nph-play-topbar .nph-compact-status { display: none; }
+@media (max-width: 1000px) {
+  .nph-play-topbar .nph-compact-status { display: inline; font-weight: 600; }
+}
+@media (max-width: 760px), (max-width: 900px) and (max-height: 500px) {
+  .nph-play-overlay header.nph-play-topbar {
+    position: relative; z-index: 42; height: auto; min-height: 46px;
+    display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 8px; padding: 2px 8px;
+  }
+  .nph-play-topbar .nph-leave-lesson { min-height: 40px; gap: 4px; }
+  .nph-play-topbar .nph-leave-lesson .nph-return-wide { display: none; }
+  .nph-play-topbar .nph-leave-lesson .nph-return-short { display: inline; }
+  .nph-play-topbar .nph-current-lesson { display: grid; gap: 1px; }
+  .nph-play-topbar .nph-current-lesson > span { display: block; font-size: 9px; letter-spacing: .05em; }
+  .nph-play-overlay .nph-current-lesson h2 { font-size: 12px; line-height: 1.2; white-space: normal; }
+  .nph-lesson-options { position: relative; }
+  .nph-lesson-options > summary {
+    display: flex; align-items: center; gap: 5px; min-height: 40px; padding: 0 6px;
+    list-style: none; cursor: pointer; font-size: 12px; color: var(--nph-gold);
+  }
+  .nph-lesson-options > summary::-webkit-details-marker { display: none; }
+  .nph-lesson-options > summary:focus-visible { outline: 2px solid var(--nph-gold); }
+  .nph-lesson-options-panel {
+    position: absolute; top: 100%; right: 0; display: grid; gap: 4px;
+    min-width: 190px; max-width: calc(100vw - 16px); padding: 10px;
+    max-height: calc(100dvh - 100px); overflow: auto;
+    color: var(--nph-ink); background: #142635; border: 1px solid #536875;
+    border-radius: 6px; box-shadow: 0 8px 24px #0008;
+  }
+  .nph-lesson-options-panel .nph-reading-pace { display: grid; gap: 4px; }
+  .nph-lesson-options-panel .nph-reading-pace > span, .nph-lesson-options-panel .nph-play-saved { display: flex; }
+  .nph-lesson-options-panel .nph-reading-pace select { max-width: 100%; width: 100%; }
+  .nph-lesson-options-panel > button { min-height: 40px; justify-content: flex-start; }
+}
+.nph-play-overlay .nph-position-banner { background: #132330; border-bottom-color: var(--nph-line); }
+.nph-play-overlay .nph-position-banner>strong { color: var(--nph-gold); }
+.nph-play-overlay .nph-position-banner>span { color: #afc2cd; }
+.nph-play-overlay .nph-classroom-layout {
+  --nph-coach-width: clamp(236px,19vw,286px);
+  background: #0c1722;
+  height: auto;
+  min-height: 0;
+  flex: 1;
+}
+.nph-play-overlay .nph-board-and-guide,
+.nph-play-overlay .nph-classroom-layout:has(>.nph-cinematic-coach) {
+  display: grid;
+  grid-template-columns: var(--nph-coach-width) minmax(0,1fr);
+  grid-template-rows: minmax(0,1fr);
+  gap: 0;
+  align-items: stretch;
+}
+.nph-play-overlay .nph-board-and-guide:not(:has(>.nph-cinematic-coach)) { grid-template-columns: minmax(0,1fr); }
+.nph-play-overlay :is(.nph-board-and-guide,.nph-classroom-layout):has(>.nph-cinematic-coach)>.atlas-tutorial-board {
+  grid-column: 2;
+  grid-row: 1;
+  min-width: 0;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  aspect-ratio: auto;
+  border: 0;
+  border-radius: 0;
+}
+.nph-play-overlay .nph-board-and-guide:not(:has(>.nph-cinematic-coach))>.atlas-tutorial-board { grid-column: 1; grid-row: 1; }
+.nph-play-overlay .nph-cinematic-coach {
+  grid-column: 1;
+  grid-row: 1;
+  position: relative;
+  inset: auto;
+  z-index: 28;
+  width: 100%;
+  max-width: none;
+  height: 100%;
+  max-height: none;
+  min-height: 0;
+  border: 0;
+  border-right: 1px solid #819cad2b;
+  border-radius: 0;
+  background: linear-gradient(160deg,#1c2d3d,#111f2e 80%);
+  box-shadow: none;
+  overflow: hidden;
+}
+.nph-cinematic-coach .nph-floating-toolbar { min-height: 72px; gap: 9px; padding: 15px 16px; align-items: center; background: #11202d; }
+.nph-coach-identity { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }
+.nph-coach-emblem { width: 32px; height: 32px; display: grid; place-items: center; border: 1px solid #dfc1874d; border-radius: 50%; color: var(--nph-gold); background: #dfc1870a; flex: none; }
+.nph-coach-identity>div { display: grid; gap: 5px; }
+.nph-coach-identity small { color: var(--nph-gold); font-size: 10px; font-weight: 700; letter-spacing: 1.3px; }
+.nph-coach-identity strong { color: #b2c3cf; font-size: 11px; font-weight: 400; }
+.new-player-hub .nph-cinematic-coach .nph-floating-toolbar button { color: #b6c6d2; min-width: 28px; padding: 5px 2px; font-size: 11px; }
+.nph-cinematic-coach .nph-floating-content { flex: 1; min-height: 0; padding: 19px 18px; overflow-y: auto; scrollbar-color: #627787 #132332; }
+.nph-cinematic-coach .nph-floating-content h3 { font-size: 20px; line-height: 1.35; letter-spacing: -.5px; color: #f4f0e9; }
+.nph-cinematic-coach .nph-floating-instruction { font-size: 14px; color: #bacbd6; line-height: 1.7; margin-bottom: 19px; }
+.nph-cinematic-coach .nph-floating-content>progress { height: 3px; margin-bottom: 22px; }
+.nph-cinematic-coach .nph-floating-move { padding: 14px 0 14px 12px; border: 0; border-left: 2px solid var(--nph-gold); border-radius: 0; background: transparent; gap: 9px; }
+.nph-cinematic-coach .nph-floating-move>svg { display: none; }
+.nph-cinematic-coach .nph-floating-move strong { font-size: 13px; color: #e9d6b3; }
+.nph-cinematic-coach .nph-floating-move span { font-size: 9px; }
+.nph-cinematic-coach .nph-floating-move .nph-board-gesture { font-size: 12px; line-height: 1.65; color: #adc0cc; }
+.nph-cinematic-coach .nph-floating-actions { margin-top: 15px; }
+.nph-cinematic-coach .nph-floating-actions>.nph-primary { width: 100%; min-height: 44px; justify-content: space-between; }
+.nph-cinematic-coach .nph-floating-navigation { display: flex; flex-wrap: wrap; gap: 8px; padding: 13px; background: #0f1b28; border-top-color: #9ab3c227; }
+.new-player-hub .nph-cinematic-coach .nph-floating-navigation button { min-height: 40px; border-radius: 5px; border-color: #8aa4b43d; background: #1b3041; color: #d6e0e6; font-size: 12px; padding: 8px 10px; }
+.new-player-hub .nph-cinematic-coach .nph-floating-navigation .nph-guide-advance { max-width: none; background: var(--nph-gold); color: #192733; border-color: var(--nph-gold); flex: 1; }
+.new-player-hub .nph-cinematic-coach .nph-floating-navigation .nph-guide-pause { flex-basis: 100%; justify-content: center; background: transparent; border-color: #bba1dc4d; color: #ddc9f6; }
+.new-player-hub .nph-cinematic-coach .nph-floating-navigation .nph-practice-help { flex: 1; justify-content: center; color: #efdab3; }
+.nph-cinematic-coach .nph-context-terms { margin-top: 22px; padding-top: 15px; border-top-color: #9ab3c227; }
+.nph-cinematic-coach .nph-context-terms>summary { font-size: 12px; color: #b9cbd4; cursor: pointer; }
+.nph-cinematic-coach .nph-context-terms[open]>summary { margin-bottom: 14px; color: #eed4a4; }
+.nph-cinematic-coach .nph-context-terms>div { display: flex; flex-wrap: wrap; gap: 6px; }
+.new-player-hub .nph-cinematic-coach .nph-context-terms button { background: #20394a; border-color: #8ba7b63a; }
+.new-player-hub .nph-cinematic-coach .nph-context-terms>.nph-text-button { background: transparent; }
+.nph-cinematic-coach .nph-lesson-context { font-size: 12px; margin-top: 16px; padding-top: 15px; }
+.nph-cinematic-coach .nph-lesson-context p { font-size: 12px; line-height: 1.7; }
+.nph-cinematic-coach .nph-guide-status { margin: 0 0 18px; padding: 0 0 14px; border: 0; border-bottom: 1px solid #c8afff30; background: transparent; border-radius: 0; color: #e3d4ff; font-size: 10px; line-height: 1.5; }
+.nph-cinematic-coach .nph-guide-status>span { animation: none; background: #c8afff; }
+.nph-cinematic-coach .nph-guide-status>em { margin-left: 0; font-size: 12px; }
+.nph-cinematic-coach .nph-guide-status>small { margin-left: 0; font-size: 11px; line-height: 1.55; }
+.nph-play-overlay .nph-cinematic-coach[data-automatic=true] { height: 100%; max-height: none; border: 0; border-right: 2px solid #b89ce07a; box-shadow: none; background: linear-gradient(160deg,#332a49,#211d35 90%); }
+.nph-cinematic-coach[data-automatic=true] .nph-floating-toolbar { background: #2c2340; }
+.nph-cinematic-coach[data-automatic=true] .nph-coach-identity small { color: #d6bfff; }
+.nph-cinematic-coach[data-automatic=true] .nph-coach-emblem { color: #d6bfff; border-color: #c8afff66; background: #c8afff0c; }
+.nph-cinematic-coach[data-automatic=true] .nph-floating-instruction { color: #e0d8ed; }
+.nph-cinematic-coach[data-automatic=true] .nph-floating-navigation { background: #211b32; }
+.nph-play-overlay .nph-cinematic-coach[data-rules-event=true] { background: linear-gradient(160deg,#243b4d,#162b3a); border-right-color: #91bfd16b; }
+.nph-cinematic-coach[data-rules-event=true] .nph-floating-toolbar,.nph-cinematic-coach[data-rules-event=true] .nph-floating-navigation { background: #162c3b; }
+.nph-cinematic-coach[data-rules-event=true] .nph-coach-identity small { color: #c3e2ed; }
+.nph-cinematic-coach .nph-collapsed-note { flex: 1; padding: 20px 17px; color: #acbdc9; font-size: 13px; line-height: 1.7; }
+.nph-cinematic-coach .nph-floating-complete>svg { color: var(--nph-gold); }
+.nph-cinematic-coach .nph-floating-complete>.nph-primary { width: 100%; justify-content: space-between; }
+@media(max-width:1100px) {
+  .nph-play-overlay .nph-classroom-layout { --nph-coach-width: 220px; }
+  .nph-cinematic-coach .nph-floating-content { padding: 15px 13px; }
+  .nph-cinematic-coach .nph-floating-content h3 { font-size: 18px; }
+  .nph-cinematic-coach .nph-floating-instruction { font-size: 13px; }
+  .nph-play-overlay .nph-play-topbar { gap: 12px; padding: 0 12px; }
+}
+@media(max-width:850px) {
+  .nph-play-overlay .nph-classroom-layout { overflow-y: auto; }
+  .nph-play-overlay .nph-board-and-guide,
+  .nph-play-overlay .nph-classroom-layout:has(>.nph-cinematic-coach) { grid-template-columns: minmax(0,1fr); grid-template-rows: minmax(460px,65dvh) minmax(290px,auto); overflow-y: auto; }
+  .nph-play-overlay .nph-board-and-guide:not(:has(>.nph-cinematic-coach)) { grid-template-rows: minmax(0,1fr); }
+  .nph-play-overlay :is(.nph-board-and-guide,.nph-classroom-layout):has(>.nph-cinematic-coach)>.atlas-tutorial-board { grid-column: 1; grid-row: 1; }
+  .nph-play-overlay .nph-cinematic-coach { grid-column: 1; grid-row: 2; max-height: 440px; border-top: 1px solid var(--nph-line); }
+  .nph-play-overlay .nph-cinematic-coach[data-automatic=true] { max-height: 440px; }
+}
+
+/* Use the learning workspace left by the app sidebar. Keep each chapter's lessons in reading order. */
+.new-player-hub[data-section="lessons"] { container: guided-library / inline-size; }
+.new-player-hub[data-section="lessons"] .nph-page-heading p,
+.new-player-hub[data-section="lessons"] .nph-resume-copy p,
+.new-player-hub[data-section="lessons"] .nph-course-group .nph-section-heading p,
+.new-player-hub[data-section="lessons"] .nph-first-game-milestone p { font-size: clamp(14px, 1.05cqi, 18px); max-width: 68ch; }
+.new-player-hub[data-section="lessons"] .nph-capabilities { grid-template-columns: repeat(auto-fit, minmax(min(100%, 210px), 1fr)); }
+.new-player-hub[data-section="lessons"] .nph-capabilities h3,
+.new-player-hub[data-section="lessons"] .nph-lesson-list h3 { font-size: clamp(16px, 1.18cqi, 21px); }
+.new-player-hub[data-section="lessons"] .nph-capabilities p,
+.new-player-hub[data-section="lessons"] .nph-lesson-list p { font-size: clamp(14px, .95cqi, 17px); line-height: 1.55; }
+.new-player-hub[data-section="lessons"] .nph-lesson-list > button { min-width: 0; align-items: center; }
+.new-player-hub[data-section="lessons"] .nph-lesson-list > button > div { min-width: 0; }
+.new-player-hub[data-section="lessons"] :is(.nph-lesson-time,.nph-lesson-cta,.nph-resume-copy > small) { font-size: clamp(12px, .83cqi, 14px); }
+@container guided-library (min-width: 1250px) {
+  .new-player-hub[data-section="lessons"] .nph-lesson-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1px;
+    background: var(--nph-line);
+  }
+  .new-player-hub[data-section="lessons"] .nph-lesson-list > button { border: 0; padding: clamp(18px, 1.5cqi, 25px); }
+}
+@container guided-library (max-width: 915px) {
+  .new-player-hub[data-section="lessons"] .nph-capabilities { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@container guided-library (max-width: 520px) {
+  .new-player-hub[data-section="lessons"] .nph-capabilities { grid-template-columns: minmax(0, 1fr); }
+}
+
+@media (min-width: 1250px) {
+  .nph-play-overlay .nph-classroom-layout { --nph-coach-width: clamp(246px, 18vw, 360px); }
+  .nph-play-overlay .atlas-tutorial-board[data-mode="tutorial"] { --atb-reader-width: clamp(220px, 16vw, 324px); }
+  .nph-play-overlay .nph-floating-content h3 { font-size: clamp(21px, 1.45vw, 28px); }
+  .nph-play-overlay .nph-floating-instruction,
+  .nph-play-overlay .nph-floating-move .nph-board-gesture,
+  .nph-play-overlay .nph-completion-next { font-size: clamp(14px, .95vw, 18px); }
+  .nph-play-overlay .nph-floating-move strong,
+  .nph-play-overlay .atb-inspection .atb-preview > strong { font-size: clamp(14px, .95vw, 18px); }
+  .nph-play-overlay .atb-inspection .atb-preview > p,
+  .nph-play-overlay .nph-floating-navigation button { font-size: clamp(13px, .84vw, 16px); }
+  .nph-play-overlay .atlas-tutorial-board .atb-reader-expanded { width: min(clamp(420px, 31vw, 620px), calc(100% - 24px)); }
+}
+
+@container guided-library (min-width: 1120px) {
+  .new-player-hub .nph-guided-start {
+    display: grid;
+    grid-template-columns: minmax(0, .82fr) minmax(0, 1.18fr);
+    align-items: center;
+    gap: clamp(28px, 3cqi, 60px);
+  }
+  .new-player-hub .nph-guided-start > .nph-page-heading,
+  .new-player-hub .nph-guided-start > .nph-lesson-resume,
+  .new-player-hub .nph-guided-start > .nph-first-game-milestone { margin: 0; }
+}

@@ -25,14 +25,15 @@ describe("RiftJudge rules search integration", () => {
     expect(rulesAction).toContain("ariaExpanded={rulesSearchOpen}");
     expect(rulesAction).not.toContain("openNavigationTarget");
     expect(rulesAction).not.toContain("setActiveView");
-    expect(appSource).toContain("{RULES_SEARCH_FEATURE_VISIBLE && rulesSearchOpen && !firstRunSetupOpen ? (");
+    expect(appSource).toContain("{RULES_SEARCH_FEATURE_VISIBLE && rulesSearchOpen && !firstRunModalOpen ? (");
   });
 
   it("supports host and embedded Escape while preventing Atlas focus recovery from stealing rules input", () => {
     expect(drawerSource).toContain('window.addEventListener("keydown", closeOnEscape, true)');
     expect(drawerSource).toContain('webview.addEventListener("before-input-event", closeOnGuestEscape)');
     expect(drawerSource).toContain('input?.type !== "keyDown" || input.key !== "Escape"');
-    expect(appSource).toContain("Boolean(reviewDraft || rulesSearchOpen || firstRunSetupOpen)");
+    expect(appSource).toContain("Boolean(reviewDraft || rulesSearchOpen || firstRunModalOpen)");
+    expect(appSource).toContain("const firstRunModalOpen = firstRunSetupOpen || newPlayerWelcomeOpen;");
     const focusHelpers = appSource.slice(
       appSource.indexOf("function focusNativeGameWebview"),
       appSource.indexOf("async function setGameZoom")

@@ -34,10 +34,10 @@ describe("Home launchpad", () => {
     const releaseNotesSource = appSource.slice(releaseNotesStart, releaseNotesEnd);
 
     expect(releaseNotesSource).toContain("version: APP_VERSION_META");
-    expect(releaseNotesSource).toContain("Official Radiance stats");
-    expect(releaseNotesSource).toContain("Quick setup");
-    expect(releaseNotesSource).toContain("Interactive replays");
-    expect(releaseNotesSource).toContain("Save as separate deck");
+    expect(releaseNotesSource).toContain("Learn Riftbound");
+    expect(releaseNotesSource).toContain("Your path");
+    expect(releaseNotesSource).toContain("All cards");
+    expect(releaseNotesSource).toContain("notes");
     expect(releaseNotesSource).not.toContain("Search Rules");
     expect(releaseNotesSource).not.toContain("Deck Insights is now the default Insights view");
   });

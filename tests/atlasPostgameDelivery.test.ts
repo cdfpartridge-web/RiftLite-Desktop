@@ -7,6 +7,11 @@ import { RawCaptureService } from "../src/main/services/rawCaptureService";
 import type { RiftLiteStore } from "../src/main/services/store";
 import type { UserSettings } from "../src/shared/types";
 
+vi.mock("node:fs/promises", async importOriginal => {
+  const fs = await importOriginal<typeof import("node:fs/promises")>();
+  return { ...fs, readFile: vi.fn(fs.readFile) };
+});
+
 const temporary: string[] = [];
 const remoteId = "rl2_" + "a".repeat(32);
 const envelope = { format: "riftatlas-replay", version: 2, nodes: [["o", []]], root: { r: 0 } };
@@ -56,6 +61,21 @@ async function harness() {
 }
 
 describe("automatic Atlas post-game capture delivery", () => {
+  it("indexes historical manifests once across idle polls and targeted capture checks", async () => {
+    const h = await harness();
+    const old = await h.capture("old", 24 * 60 * 60 * 1000, false);
+    const current = await h.capture();
+    expect(await h.service.listAutomaticAtlasPostgameCaptures()).toHaveLength(1);
+    vi.mocked(readFile).mockClear();
+    expect(await h.service.listAutomaticAtlasPostgameCaptures()).toHaveLength(1);
+    expect(await h.service.readAutomaticAtlasPostgameCapture("capture-1")).toEqual(current.payload);
+    expect(vi.mocked(readFile).mock.calls.some(([path]) => path === old.indexPath)).toBe(false);
+
+    // An in-place change to an archived file must still invalidate uniqueness before delivery.
+    old.manifest.metadata.captureSessionId = "capture-1";
+    await old.persist();
+    await expect(h.service.readAutomaticAtlasPostgameCapture("capture-1")).rejects.toThrow(/ambiguous/);
+  });
   it("discovers at most ten recent ready captures from metadata without opening raw files or the replay library", async () => {
     const h = await harness();
     for (let index = 0; index < 12; index++) await h.capture("recent-" + index, (index + 1) * 1000, false);

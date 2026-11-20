@@ -179,6 +179,8 @@ export interface InsightNotebookSnapshot {
 }
 
 export interface MatchDraft {
+  /** Pending local review ownership. Cleared atomically on confirmation. */
+  importedPlayNotes?: import("./reviewPlayNotes.js").ImportedPlayNotes;
   id: string;
   platform: GamePlatform;
   source?: MatchSource;
@@ -924,7 +926,16 @@ export interface RiftboundSimEvent {
   result?: MatchDraft["result"];
 }
 
+export type ReplayLibraryMetadataPatch = {
+  title?: string;
+  favourite?: boolean;
+  /** null moves the replay to Unfiled. */
+  folderId?: string | null;
+};
+
 export interface ReplayRecord {
+  /** A library entry whose payload could not be read. Never persist as a full replay. */
+  payloadUnavailable?: true;
   id: string;
   matchId: string;
   platform: GamePlatform;
@@ -1605,6 +1616,7 @@ export interface WebReplayQueueRemovalReceipt {
 
 export interface RawCaptureReplayMetadata {
   provider: "riftlite-v2" | "riftreplay";
+  captureLoss?: import("./rawCaptureLoss.js").RawCaptureLoss;
   captureSessionId: string;
   messageCount: number;
   firstSeenAt?: number;
@@ -2407,7 +2419,7 @@ export interface SocialTeamDetail {
 export type SocialTeamDraft = Partial<Pick<
   SocialTeamProfile,
   "slug" | "name" | "description" | "region" | "locationMode" | "visibility" | "purposes" | "recruitmentStatus" | "logoUrl" | "bannerUrl" | "website" | "discord" | "socials"
->>;
+>> & { expectedUpdatedAt?: number };
 
 export interface SocialTeamApplicationDraft {
   message: string;
@@ -2508,6 +2520,7 @@ export interface RiftLiteApi {
   sendAtlasHistoryToReplay(matchId: string): Promise<void>;
   getDeletedMatches(): Promise<MatchDraft[]>;
   saveMatchDraft(draft: MatchDraft): Promise<MatchDraft>;
+  importPhoneScorepadMatch(draft: MatchDraft): Promise<boolean>;
   deferMatchReview(draft: MatchDraft): Promise<MatchDraft>;
   confirmMatch(draft: MatchDraft): Promise<MatchDraft>;
   previewCombinedMatches(matchIds: string[]): Promise<import("./matchCombine.js").MatchCombinePreview>;
@@ -2559,6 +2572,7 @@ export interface RiftLiteApi {
   getReplays(): Promise<ReplayRecord[]>;
   getDeletedReplays(): Promise<ReplayRecord[]>;
   saveReplay(replay: ReplayRecord): Promise<ReplayRecord>;
+  updateReplayLibraryMetadata(id: string, patch: ReplayLibraryMetadataPatch): Promise<void>;
   deleteReplay(id: string): Promise<void>;
   deleteReplays(ids: string[]): Promise<void>;
   restoreReplay(id: string): Promise<ReplayRecord | null>;
@@ -2583,6 +2597,7 @@ export interface RiftLiteApi {
   shareRawCaptureToDiscord(replayId: string, hubIds?: string[]): Promise<RiftLiteReplayDiscordShareResult>;
   prepareReplayEmbed(replayId: string): Promise<ReplayEmbedSessionResult>;
   prepareReplayLibraryEmbed(): Promise<ReplayEmbedSessionResult>;
+  getLocalReplayTestCapability(): Promise<{ enabled: boolean }>;
   importReplayBundle(): Promise<ReplayRecord | null>;
   importReplayFolder(): Promise<ReplayRecord[]>;
   openReplayFolder(): Promise<void>;
@@ -2614,6 +2629,7 @@ export interface RiftLiteApi {
   syncTeams(): Promise<PrivateHubSyncResult>;
   syncMatchesToTeams(matchIds: string[], teamIds: string[]): Promise<PrivateHubSyncResult>;
   deleteTeamMatch(teamId: string, matchId: string): Promise<void>;
+  getDiscordSignInAvailability(): Promise<"available" | "unconfigured" | "offline">;
   startAccountLink(): Promise<AccountLinkSession>;
   getAccountLinkStatus(sessionId: string): Promise<AccountLinkStatus>;
   getAccountConnectionStatus(): Promise<AccountConnectionStatus>;
@@ -2721,6 +2737,8 @@ export interface RiftLiteApi {
   onReplayUpdated(callback: (replay: ReplayRecord) => void): () => void;
   onScreenshotSaved(callback: (result: ScreenshotResult) => void): () => void;
   onReplayShadowClipHotkey(callback: () => void): () => void;
+  getDecisionShortcutLabel(): Promise<string>;
+  onDecisionShortcutChanged(callback: (label: string) => void): () => void;
   onReplayQuickFlagHotkey(callback: () => void): () => void;
   onReplayMp4ExportProgress(callback: (progress: ReplayMp4ExportProgress) => void): () => void;
   onAtlasKnownOpponentHandUpdated(callback: (state: AtlasKnownOpponentHandState) => void): () => void;

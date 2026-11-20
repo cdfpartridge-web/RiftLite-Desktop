@@ -1,0 +1,584 @@
+.atlas-tutorial-board{--atb-line:rgba(151,187,213,.32);--atb-cyan:#a5e7ec;position:relative;isolation:isolate;container-type:inline-size;width:100%;aspect-ratio:1.8;overflow:hidden;border:1px solid #456075;border-radius:10px;color:#e2eaf2;background:#15283b;font-family:Inter,"Segoe UI",sans-serif;outline:none}
+.atlas-tutorial-board:focus-visible{outline:2px solid #a5e7ec;outline-offset:3px}
+.atlas-tutorial-board:fullscreen{width:100vw;height:100vh;aspect-ratio:auto;background:#15283b}
+.atlas-tutorial-board *{box-sizing:border-box}
+.atlas-tutorial-board button,.atlas-tutorial-board input{font:inherit;color:inherit}
+.atlas-tutorial-board button{cursor:pointer}
+.atlas-tutorial-board button:disabled{cursor:default;opacity:.45}
+.atlas-tutorial-board button:focus-visible,.atlas-tutorial-board [tabindex="0"]:focus-visible{outline:2px solid #b8f7ff;outline-offset:2px}
+.atlas-tutorial-board kbd{font:inherit;opacity:.8}
+.atlas-tutorial-board .atb-table{position:absolute;inset:0 15% 0 0;overflow:hidden;background:radial-gradient(ellipse at 45% 48%,#28475b55,transparent 60%),repeating-linear-gradient(90deg,#203a4a22 0px,#203a4a22 1px,transparent 1px,transparent 3px),#182f43}
+.atlas-tutorial-board .atb-card{position:relative;flex:none;width:5cqw;height:7cqw;padding:0;border:1px solid #b7c5d335;border-radius:.28cqw;background:#07141c;box-shadow:0 .16cqw .24cqw #02070b99;transition:transform 120ms,border-color 120ms;overflow:visible;touch-action:manipulation}
+.atlas-tutorial-board .atb-card img{display:block;width:100%;height:100%;object-fit:cover;border-radius:inherit;pointer-events:none}
+.atlas-tutorial-board .atb-card[data-ready="false"]{transform:rotate(90deg);margin-inline:1cqw}
+.atlas-tutorial-board .atb-card[data-selected="true"]{outline:.2cqw solid #a9f4e6;outline-offset:.16cqw;z-index:30}
+.atlas-tutorial-board .atb-buff-counter{position:absolute;right:-5px;top:-7px;padding:3px 6px;border:1px solid #e2d387;border-radius:12px;background:#27594b;color:#fff3b8;font-size:clamp(9px,.72cqw,12px);font-weight:750;white-space:nowrap;box-shadow:0 2px 8px #0008;z-index:5}
+.atlas-tutorial-board .atb-group-move{padding:9px;border:1px solid #9bdcca88;border-radius:6px;background:#163c46;font-size:12px;line-height:1.45}.atlas-tutorial-board .atb-group-move strong{color:#c6f5e9}.atlas-tutorial-board .atb-group-move p{margin:5px 0 9px}.atlas-tutorial-board .atb-group-move button{padding:6px 9px;border:1px solid #789da8;border-radius:4px;background:#264d5b;font-size:12px;min-height:32px}
+.atlas-tutorial-board .atb-card[data-focus="true"]{box-shadow:0 0 0 .12cqw #ccebdc,0 0 1cqw #95f6e444}
+.atlas-tutorial-board .atb-card[data-concealed="true"]{border-color:#a5bca888}
+.atlas-tutorial-board .atb-card-back{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:.3cqw;overflow:hidden;background:repeating-linear-gradient(45deg,transparent 0,transparent .7cqw,#a0bb9c09 .7cqw,#a0bb9c09 .8cqw),linear-gradient(145deg,#164357,#0a2939);border:.2cqw double #8b9f8d;color:#aabbaa;border-radius:inherit}
+.atlas-tutorial-board .atb-card-back>span{font-size:2.5cqw;font-weight:300;line-height:1}.atlas-tutorial-board .atb-card-back small{font-size:.48cqw;text-transform:uppercase;letter-spacing:.09em;text-align:center;padding:.1cqw}
+.atlas-tutorial-board .atb-might,.atlas-tutorial-board .atb-damage{position:absolute;bottom:-.15cqw;left:-.25cqw;display:grid;place-items:center;min-width:1.2cqw;height:1.4cqw;border-radius:.2cqw;background:#f4eee1;color:#222;font-size:.9cqw;font-weight:800;box-shadow:0 .1cqw .3cqw #0009}
+.atlas-tutorial-board .atb-damage{left:auto;right:-.2cqw;background:#933c43;color:#fff}
+.atlas-tutorial-board .atb-name{position:absolute;width:9%;height:5.8%;display:flex;flex-direction:column;justify-content:center;align-items:center;gap:.2cqw;border:1px solid var(--atb-line);border-radius:.25cqw;background:linear-gradient(#213c50,#102435);font-size:.78cqw;font-weight:650;text-align:center;overflow:hidden}
+.atlas-tutorial-board .atb-name small{font-size:.47cqw;font-weight:400;color:#94aebe;white-space:nowrap}.atlas-tutorial-board .atb-name.atb-player{bottom:1%;left:.6%}.atlas-tutorial-board .atb-name.atb-opponent{top:1%;right:.7%}
+.atlas-tutorial-board .atb-score-track{position:absolute;width:8%;height:35%;display:flex;flex-direction:column;align-items:center;justify-content:space-between;z-index:3}
+.atlas-tutorial-board .atb-score-track.atb-player{left:1%;bottom:10%;flex-direction:column-reverse}.atlas-tutorial-board .atb-score-track.atb-opponent{right:1%;top:9%}
+.atlas-tutorial-board .atb-score-track span{display:grid;place-items:center;width:2.6cqw;height:2.6cqw;flex:none;border-radius:50%;border:1px solid #587084;background:radial-gradient(circle at 40% 20%,#395267,#142b40);box-shadow:0 .15cqw .3cqw #07151dcc,inset 0 0 0 .18cqw #1c344a;color:#869cb0;font-size:1.2cqw;font-weight:700}
+.atlas-tutorial-board .atb-score-track span:nth-child(even){align-self:flex-end}.atlas-tutorial-board .atb-score-track span.is-current{color:#fff;border-color:#b1e5db;box-shadow:0 0 .6cqw #a7f3da88,inset 0 0 0 .18cqw #3d7279}
+.atlas-tutorial-board .atb-pile{position:absolute;width:5.1cqw;height:7.1cqw;padding:0;border:1px solid #b0c1cb44;border-radius:.25cqw;background:#12293c;z-index:4}
+.atlas-tutorial-board .atb-pile img{width:100%;height:100%;object-fit:cover;border-radius:inherit}.atlas-tutorial-board .atb-pile b{position:absolute;left:0;bottom:-.2cqw;min-width:1.7cqw;padding:.05cqw .3cqw;border-radius:.25cqw;background:#25445a;border:1px solid #adc4d680;box-shadow:0 .12cqw .3cqw #0008;font-size:1.15cqw;line-height:1.1}
+.atlas-tutorial-board .atb-deck.atb-player{right:8.8%;bottom:1%}.atlas-tutorial-board .atb-deck.atb-opponent{left:9%;top:1%}.atlas-tutorial-board .atb-rune-deck.atb-player{left:12%;bottom:1%}.atlas-tutorial-board .atb-rune-deck.atb-opponent{right:11.8%;top:1%}.atlas-tutorial-board .atb-rune-deck .atb-card-back{background:linear-gradient(140deg,#eeeadd,#abc2cf);color:#435769;border-color:#c9d9db}
+.atlas-tutorial-board .atb-trash.atb-player{right:1%;bottom:1%}.atlas-tutorial-board .atb-trash.atb-opponent{left:1%;top:1%}.atlas-tutorial-board .atb-trash{background:transparent;border-style:dashed;opacity:.9}.atlas-tutorial-board .atb-trash .atb-card-back{background:transparent;border:0;color:#8ea3b3}
+.atlas-tutorial-board .atb-float{position:absolute;display:flex;flex-direction:column;gap:.2cqw;color:#9eb5c7;font-size:.65cqw;width:6.5%}.atlas-tutorial-board .atb-float small{font-size:.45cqw;letter-spacing:.1em}.atlas-tutorial-board .atb-float span{display:flex;justify-content:space-between}.atlas-tutorial-board .atb-float b{color:#e4ebee}.atlas-tutorial-board .atb-float.atb-player{left:19%;bottom:9.5%}.atlas-tutorial-board .atb-float.atb-opponent{right:19.2%;top:9.5%}
+.atlas-tutorial-board .atb-runes,.atlas-tutorial-board .atb-base{position:absolute;height:15.5%;border:1px solid var(--atb-line);border-radius:.1cqw;min-width:0}
+.atlas-tutorial-board .atb-runes{width:33%}.atlas-tutorial-board .atb-runes.atb-player{left:10.5%;bottom:17.5%}.atlas-tutorial-board .atb-runes.atb-opponent{right:10.5%;top:17.5%}
+.atlas-tutorial-board .atb-runes>div{position:absolute;inset:.7cqw .6cqw;display:flex;align-items:center;justify-content:center;gap:.2cqw}.atlas-tutorial-board .atb-runes .atb-card+.atb-card{margin-left:-1cqw}.atlas-tutorial-board .atb-runes .atb-card{width:4.9cqw;height:6.8cqw}.atlas-tutorial-board .atb-runes .atb-card[data-ready="false"]{margin-inline:.7cqw}
+.atlas-tutorial-board .atb-runes>small{position:absolute;right:.3cqw;bottom:-.1cqw;font-size:.6cqw;color:#9eb2c3;background:#1c3548}
+.atlas-tutorial-board .atb-base{width:40%}.atlas-tutorial-board .atb-base.atb-player{left:44%;bottom:17.5%}.atlas-tutorial-board .atb-base.atb-opponent{right:44%;top:17.5%}.atlas-tutorial-board .atb-base>div{position:absolute;inset:.4cqw .6cqw;display:flex;align-items:center;justify-content:center;gap:.6cqw}.atlas-tutorial-board .atb-zone-label{position:absolute;left:.4cqw;top:.3cqw;font-size:.42cqw;letter-spacing:.2em;color:#9eb5c75c;pointer-events:none}
+.atlas-tutorial-board .atb-heroes{position:absolute;display:flex;gap:1cqw;width:14%;height:14%}.atlas-tutorial-board .atb-heroes.atb-player{right:1%;bottom:17.5%}.atlas-tutorial-board .atb-heroes.atb-opponent{left:1%;top:17.5%;flex-direction:row-reverse}.atlas-tutorial-board .atb-heroes>div{position:relative;width:5cqw;height:7cqw}.atlas-tutorial-board .atb-empty-card{display:grid;place-items:center;height:100%;border:1px dashed #aac5d333;border-radius:.2cqw;text-align:center;font-size:.5cqw;color:#adc4d480}
+.atlas-tutorial-board .atb-base.atb-player{width:39%;left:43.5%}.atlas-tutorial-board .atb-base.atb-opponent{width:39%;right:43.5%}
+.atlas-tutorial-board .atb-hand{position:absolute;display:flex;align-items:flex-start;justify-content:center;width:43%;left:28%;height:14%;z-index:8;pointer-events:none}.atlas-tutorial-board .atb-hand.atb-player{bottom:-2.3%}.atlas-tutorial-board .atb-hand.atb-opponent{top:-2.3%;transform:rotate(180deg)}
+.atlas-tutorial-board .atb-hand .atb-card{pointer-events:auto;width:5.5cqw;height:7.7cqw;transform:translateY(calc(var(--fan-index) * var(--fan-index) * .06cqw)) rotate(calc(var(--fan-index) * 3deg));transform-origin:50% 100%}.atlas-tutorial-board .atb-hand .atb-card+.atb-card{margin-left:-1.2cqw}.atlas-tutorial-board .atb-hand.atb-player .atb-card:hover{transform:translateY(-1.7cqw) scale(1.1);z-index:50}.atlas-tutorial-board .atb-hand .atb-card[data-selected="true"]{transform:translateY(-1.2cqw)}
+.atlas-tutorial-board .atb-battlefields{position:absolute;left:10.5%;right:10.5%;top:34%;height:32.5%;display:grid;grid-template-columns:1fr 1fr;gap:.6cqw}
+.atlas-tutorial-board .atb-battlefield{position:relative;min-width:0;border:1px solid #a9c6d35a;border-radius:.1cqw;background:#142b3c22;cursor:pointer;outline:none}
+.atlas-tutorial-board .atb-field-side{position:absolute;left:.5cqw;right:.5cqw;height:45%;display:flex;justify-content:center;align-items:center;gap:.65cqw;z-index:3}.atlas-tutorial-board .atb-field-side.atb-opponent{top:0;align-items:flex-start;padding-top:.5cqw}.atlas-tutorial-board .atb-field-side.atb-player{bottom:0;align-items:flex-end;padding-bottom:.5cqw}
+.atlas-tutorial-board .atb-field-side .atb-card{width:4.7cqw;height:6.5cqw}.atlas-tutorial-board .atb-field-side .atb-card+.atb-card{margin-left:-.5cqw}
+.atlas-tutorial-board .atb-battlefield-card{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:8.5cqw;height:5.3cqw;overflow:hidden;padding:0;border:3px solid #0b131b;border-radius:.3cqw;background:#0e1c27;box-shadow:0 .2cqw .3cqw #000b;z-index:2}.atlas-tutorial-board .atb-battlefield-card img{width:100%;height:100%;object-fit:cover}.atlas-tutorial-board .atb-battlefield-card span{position:absolute;bottom:0;left:0;right:0;background:#09131ccc;color:#e5ecec;font-size:.49cqw;padding:.13cqw;text-align:left}
+.atlas-tutorial-board .atb-field-control{position:absolute;bottom:.2cqw;left:.3cqw;font-size:.44cqw;letter-spacing:.06em;color:#a4beca88}.atlas-tutorial-board .atb-showdown{position:absolute;top:46%;right:.3cqw;padding:.28cqw;background:#172d42f5;border:1px solid #95e5d8;color:#bde6de;z-index:5;font-size:.47cqw;max-width:40%}
+.atlas-tutorial-board .atb-battlefield-actions{position:absolute;left:calc(50% + min(5cqw,9cqh) + 9px);right:7px;top:50%;transform:translateY(-50%);z-index:25;animation:atb-battlefield-action-in 160ms ease-out}
+.atlas-tutorial-board .atb-battlefield-actions button{display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:5px;width:100%;min-height:36px;padding:8px 6px;border:1px solid #9de4df;border-radius:6px;background:linear-gradient(#315b69,#193e4c);color:#f0ffff;font-size:clamp(11px,.85cqw,14px);font-weight:650;line-height:1.25;box-shadow:0 4px 16px #061823a6}
+.atlas-tutorial-board .atb-battlefield-actions button:hover{background:#356779}
+.atlas-tutorial-board .atb-battlefield-actions .atb-score-action{border-color:#e6c783;background:linear-gradient(#675832,#423b25);color:#fff1ce}
+.atlas-tutorial-board .atb-battlefield-actions .atb-score-action:hover{background:#766238}
+.atlas-tutorial-board .atb-battlefield-actions kbd{display:grid;place-items:center;min-width:19px;height:19px;border:1px solid #c8e4e64f;border-radius:3px;font-size:10px;font-weight:400}
+.atlas-tutorial-board .atb-chain > .atb-approve{min-height:36px;padding:8px;margin-top:7px;border-color:#9de4df;border-radius:6px;background:#254e5d;font-size:clamp(11px,.85cqw,14px)}
+.atlas-tutorial-board .atb-battlefield[data-action-open=true] .atb-showdown{display:none}
+@keyframes atb-battlefield-action-in{from{opacity:0;transform:translateY(calc(-50% + 5px))}to{opacity:1;transform:translateY(-50%)}}
+@media(prefers-reduced-motion:reduce){.atlas-tutorial-board .atb-battlefield-actions{animation:none}}
+.atlas-tutorial-board .atb-turn-actions{position:absolute;right:.5%;top:57%;width:9%;display:flex;flex-direction:column;gap:.25cqw;z-index:6}.atlas-tutorial-board .atb-turn-actions button{border:1px solid #809ab15c;border-radius:.15cqw;background:linear-gradient(#29455b,#142c40);font-size:.52cqw;letter-spacing:.06em;min-height:2cqw;padding:.35cqw .1cqw;display:flex;gap:.2cqw;align-items:center;justify-content:center;flex-wrap:wrap}.atlas-tutorial-board .atb-turn-actions button:last-child{display:flex;flex-direction:column}.atlas-tutorial-board .atb-turn-actions svg{width:1.2cqw;height:1.2cqw}.atlas-tutorial-board .atb-turn-actions .atb-score-action{border-color:#b2b981;color:#e9e9b7}
+.atlas-tutorial-board .atb-sidebar{position:absolute;right:0;top:0;bottom:0;width:15%;background:linear-gradient(90deg,#142d40,#182f43);padding:.4cqw .35cqw;border-left:1px solid #adc3d21f;display:grid;grid-template-rows:9% 18% 47% 1fr;gap:.4cqw}
+.atlas-tutorial-board .atb-sidebar header{position:relative;display:flex;flex-direction:column;gap:.4cqw;overflow:hidden}.atlas-tutorial-board .atb-sidebar header>div:first-child{display:flex;align-items:center;justify-content:space-between;gap:.3cqw;padding-right:3cqw}.atlas-tutorial-board .atb-sidebar strong{font-size:.75cqw}.atlas-tutorial-board .atb-sidebar header span{font-size:.5cqw;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.atlas-tutorial-board .atb-sidebar header>small{font-size:.47cqw;color:#b8cad5;text-transform:uppercase;letter-spacing:.035em}.atlas-tutorial-board .atb-tools{position:absolute;right:0;top:0;display:flex;gap:.15cqw}.atlas-tutorial-board .atb-tools button{width:1.35cqw;height:1.35cqw;display:grid;place-items:center;padding:.1cqw;background:#1d374a;border:1px solid #859fb94f;border-radius:.3cqw}.atlas-tutorial-board .atb-tools svg{width:.8cqw;height:.8cqw}
+.atlas-tutorial-board .atb-log{min-height:0;overflow:auto;border:1px solid var(--atb-line);padding:.2cqw}.atlas-tutorial-board .atb-log p{margin:0 0 .15cqw;padding:.17cqw .24cqw;background:#263e523b;border-bottom:1px solid #90b2c622;font-size:.52cqw;line-height:1.4;color:#cedde5}
+.atlas-tutorial-board .atb-chain{min-height:0;display:flex;flex-direction:column;gap:.45cqw;overflow:hidden;border-bottom:1px solid var(--atb-line);padding-bottom:.2cqw}.atlas-tutorial-board .atb-chain>small,.atlas-tutorial-board .atb-table-notes>small{font-size:.43cqw;letter-spacing:.1em;color:#9cb4c5}.atlas-tutorial-board .atb-resolve{flex:none;background:linear-gradient(#5a819c,#35546e);border:1px solid #a4c0d6;border-radius:.25cqw;padding:.38cqw;font-size:.75cqw;font-weight:700;box-shadow:inset 0 0 .3cqw #b7e3f544}
+.atlas-tutorial-board .atb-preview{min-height:0;overflow:auto;text-align:center}.atlas-tutorial-board .atb-preview>img{display:block;width:100%;max-height:19cqw;object-fit:contain;border-radius:.4cqw}.atlas-tutorial-board .atb-preview>strong{display:block;margin-top:.25cqw;font-size:.65cqw}.atlas-tutorial-board .atb-preview>p{font-size:.5cqw;line-height:1.4;margin:.25cqw 0;color:#b6cbd7;text-align:left}.atlas-tutorial-board .atb-inspect-empty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:.6cqw;color:#89a6bb;font-size:.64cqw;text-align:center}.atlas-tutorial-board .atb-inspect-empty svg{width:1.5cqw;height:1.5cqw}.atlas-tutorial-board .atb-approve{font-size:.55cqw;border:1px solid #7e9bae;background:#26445a;border-radius:.2cqw;padding:.25cqw}
+.atlas-tutorial-board .atb-table-notes{display:flex;flex-direction:column;min-height:0;gap:.4cqw;border:1px solid var(--atb-line);padding:.3cqw}.atlas-tutorial-board .atb-table-notes p{font-size:.55cqw;line-height:1.6;margin:0;color:#a8c0d0}.atlas-tutorial-board .atb-table-notes>button{display:flex;align-items:center;justify-content:center;gap:.3cqw;font-size:.52cqw;background:#213d52;border:1px solid #809cbf55;padding:.4cqw .15cqw;border-radius:.2cqw}.atlas-tutorial-board .atb-table-notes svg{width:1cqw;height:1cqw}.atlas-tutorial-board .atb-table-notes>span{margin-top:auto;font-size:.45cqw;color:#7e9caf}
+.atlas-tutorial-board .atb-base[data-drop-active="true"],.atlas-tutorial-board .atb-battlefield[data-drop-active="true"]{border-color:#a7e7d8;background:#679e9130}.atlas-tutorial-board .atb-base[data-drop-active="true"]:hover,.atlas-tutorial-board .atb-battlefield[data-drop-active="true"]:hover{background:#7cbcac55}
+.atlas-tutorial-board .atb-dismiss{position:absolute;inset:0;width:100%;height:100%;z-index:70;border:0;background:transparent}
+.atlas-tutorial-board .atb-card-menu{position:absolute;z-index:71;width:clamp(172px,20cqw,270px);max-height:64%;overflow:auto;display:flex;flex-direction:column;padding:6px;border:1px solid #9ab6cb;border-radius:6px;background:#1d3448;box-shadow:0 8px 30px #06111ecc;font-size:clamp(11px,.85cqw,14px)}
+.atlas-tutorial-board .atb-card-menu>strong{padding:7px;font-size:inherit;color:#cbebe9}.atlas-tutorial-board .atb-card-menu button{display:flex;align-items:center;gap:7px;border:0;background:transparent;text-align:left;padding:8px;border-radius:3px}.atlas-tutorial-board .atb-card-menu button:hover{background:#395970}.atlas-tutorial-board .atb-card-menu button small{margin-left:auto;color:#aac2ce;font-size:10px}.atlas-tutorial-board .atb-card-menu button svg{width:14px;height:14px;flex:none}
+.atlas-tutorial-board .atb-target-prompt,.atlas-tutorial-board .atb-mulligan-confirm{position:absolute;left:28%;bottom:15%;display:flex;gap:.6cqw;align-items:center;justify-content:center;padding:.5cqw .7cqw;border:1px solid #aadfd2;background:#122c3df2;border-radius:.3cqw;z-index:60;font-size:.72cqw;box-shadow:0 4px 18px #0007}.atlas-tutorial-board .atb-target-prompt button,.atlas-tutorial-board .atb-mulligan-confirm button{background:#375f70;border:1px solid #a0c8cd;border-radius:3px;padding:.35cqw .6cqw}.atlas-tutorial-board .atb-mulligan-mark{position:absolute;top:1cqw;left:0;right:0;background:#1b6867e8;padding:.25cqw;color:white;font-size:.7cqw}
+.atlas-tutorial-board .atb-pile-dialog{position:absolute;inset:16% 19%;z-index:80;display:flex;flex-direction:column;background:#112638f5;border:1px solid #abc4d7;border-radius:7px;box-shadow:0 8px 50px #0008;padding:16px;font-size:14px}.atlas-tutorial-board .atb-pile-dialog header{display:flex;justify-content:space-between;align-items:center;margin-bottom:18px}.atlas-tutorial-board .atb-pile-dialog header button{background:#2a475d;border:1px solid #7999af;border-radius:4px;padding:6px 12px}.atlas-tutorial-board .atb-pile-dialog>div{display:flex;flex-wrap:wrap;gap:12px;overflow:auto}.atlas-tutorial-board .atb-pile-dialog .atb-card{width:90px;height:126px}
+.atlas-tutorial-board .atb-sidebar[data-preview="false"]{grid-template-rows:9% 38% 18% 1fr}
+.atlas-tutorial-board .atb-target-arrow{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:50;filter:drop-shadow(0 0 4px #83e7eb55)}
+.atlas-tutorial-board .atb-help-dialog{position:absolute;inset:12% 25%;z-index:85;background:#152d40fa;border:1px solid #aac4d6;border-radius:8px;padding:18px;box-shadow:0 14px 60px #000b;font-size:clamp(11px,.9cqw,15px);overflow:auto}.atlas-tutorial-board .atb-help-dialog header{display:flex;justify-content:space-between;align-items:center}.atlas-tutorial-board .atb-help-dialog header button{background:#36546b;border:1px solid #89a7ba;border-radius:4px;padding:6px 12px}.atlas-tutorial-board .atb-help-dialog dl{display:grid;grid-template-columns:auto 1fr;gap:7px 20px}.atlas-tutorial-board .atb-help-dialog dt{color:#b5e5dd}.atlas-tutorial-board .atb-help-dialog dd{margin:0;color:#c3d3dd}.atlas-tutorial-board .atb-help-dialog p{color:#a7bdcc;font-size:.9em}
+.atlas-tutorial-board .atb-log p{font-size:.65cqw}.atlas-tutorial-board .atb-sidebar header span{font-size:.6cqw}.atlas-tutorial-board .atb-sidebar header>small{font-size:.55cqw}.atlas-tutorial-board .atb-table-notes p{font-size:.64cqw}.atlas-tutorial-board .atb-table-notes>button{font-size:.6cqw}.atlas-tutorial-board .atb-turn-actions button{font-size:.6cqw}
+.atlas-tutorial-board .atb-turn-actions{top:auto;bottom:33.5%}
+.atlas-tutorial-board .atb-turn-actions .atb-switch-seat{opacity:.7}
+.atlas-tutorial-board .atb-name{overflow:visible}
+.atlas-tutorial-board .atb-timer{position:absolute;left:50%;bottom:-.65cqw;transform:translateX(-50%);border:1px solid #a5a17b88;border-radius:.4cqw;padding:.04cqw .55cqw;background:#202b30;color:#c3c5ae;font-size:.65cqw;line-height:1.15;white-space:nowrap}
+[data-atb-fullscreen="true"]:fullscreen{width:100vw;height:100vh;padding:20px;overflow:auto;background:#0b1624;align-content:start}
+@media (prefers-reduced-motion:reduce){.atlas-tutorial-board *{transition:none!important}}
+
+/* The classroom supplies its viewport height. Card artwork is rendered at its
+   native aspect ratio; enlargement uses actual layout dimensions, never scale. */
+.atlas-tutorial-board{container-type:size;height:100%;min-height:min(640px,calc(100dvh - 70px));aspect-ratio:auto;border-radius:6px;--atb-card-width:min(6.15cqw,11.2cqh);--atb-card-height:calc(var(--atb-card-width) * 1039 / 744)}
+.atlas-tutorial-board .atb-table{right:16%}
+.atlas-tutorial-board .atb-sidebar{width:16%;grid-template-rows:8% 17% 51% 1fr;padding:.5cqw;gap:.45cqw}
+.atlas-tutorial-board .atb-sidebar[data-preview="false"]{grid-template-rows:8% 34% 21% 1fr}
+.atlas-tutorial-board .atb-card,.atlas-tutorial-board .atb-heroes>div{width:var(--atb-card-width);height:var(--atb-card-height);aspect-ratio:744/1039}
+.atlas-tutorial-board .atb-card img,.atlas-tutorial-board .atb-pile img,.atlas-tutorial-board .atb-battlefield-card img{object-fit:contain;image-rendering:auto}
+.atlas-tutorial-board .atb-pile{width:var(--atb-card-width);height:var(--atb-card-height);aspect-ratio:744/1039}
+.atlas-tutorial-board .atb-runes .atb-card{width:calc(var(--atb-card-width) * .92);height:calc(var(--atb-card-height) * .92)}
+.atlas-tutorial-board .atb-runes .atb-card+.atb-card{margin-left:calc(-1 * max(.8cqw,(var(--fan-total) - 4) * .4cqw))}
+.atlas-tutorial-board .atb-runes .atb-card[data-ready="false"]{margin-inline:.45cqw}
+.atlas-tutorial-board .atb-field-side .atb-card{width:var(--atb-card-width);height:var(--atb-card-height)}
+.atlas-tutorial-board .atb-hand{width:46%;left:26%;height:19%}
+.atlas-tutorial-board .atb-hand.atb-player{bottom:-5%}.atlas-tutorial-board .atb-hand.atb-opponent{top:-5%}
+.atlas-tutorial-board .atb-hand .atb-card{width:calc(var(--atb-card-width) * 1.25);height:calc(var(--atb-card-height) * 1.25);transform:translateY(calc(var(--fan-index) * var(--fan-index) * .06cqw)) rotate(calc(var(--fan-index) * 2deg))}
+.atlas-tutorial-board .atb-hand .atb-card+.atb-card{margin-left:-2cqw}
+.atlas-tutorial-board .atb-hand.atb-player .atb-card:hover{transform:translateY(-1.5cqw);z-index:50}
+.atlas-tutorial-board .atb-heroes{width:max-content;gap:.8cqw;height:var(--atb-card-height)}
+.atlas-tutorial-board .atb-heroes.atb-player{right:1%;bottom:18%}.atlas-tutorial-board .atb-heroes.atb-opponent{left:1%;top:18%}
+.atlas-tutorial-board .atb-runes.atb-player,.atlas-tutorial-board .atb-base.atb-player{bottom:18%}
+.atlas-tutorial-board .atb-runes.atb-opponent,.atlas-tutorial-board .atb-base.atb-opponent{top:18%}
+.atlas-tutorial-board .atb-base.atb-player{width:35%;left:44%}.atlas-tutorial-board .atb-base.atb-opponent{width:35%;right:44%}
+.atlas-tutorial-board .atb-runes,.atlas-tutorial-board .atb-base{height:16%}
+.atlas-tutorial-board .atb-battlefields{top:35%;height:30%;left:10.5%;right:10.5%}
+.atlas-tutorial-board .atb-battlefield-card{width:min(10cqw,18cqh);height:auto;aspect-ratio:1038/744;border-width:2px}
+.atlas-tutorial-board .atb-battlefield-card span{font-size:clamp(7px,.58cqw,11px)}
+.atlas-tutorial-board .atb-field-side{height:43%;padding:0}.atlas-tutorial-board .atb-field-side.atb-opponent{padding-top:.45cqw}.atlas-tutorial-board .atb-field-side.atb-player{padding-bottom:.45cqw}
+.atlas-tutorial-board .atb-field-side .atb-card+.atb-card{margin-left:-1cqw}
+.atlas-tutorial-board .atb-score-track{height:38%}
+.atlas-tutorial-board .atb-score-track span{width:min(3cqw,4.4cqh);height:min(3cqw,4.4cqh);font-size:clamp(11px,1.35cqw,22px)}
+.atlas-tutorial-board .atb-turn-actions{bottom:35%;width:10%}
+.atlas-tutorial-board .atb-turn-actions button{font-size:clamp(8px,.7cqw,13px);min-height:2.1cqw}
+.atlas-tutorial-board .atb-log p{font-size:clamp(8px,.69cqw,12px);line-height:1.4}
+.atlas-tutorial-board .atb-sidebar strong{font-size:clamp(10px,.85cqw,15px)}
+.atlas-tutorial-board .atb-preview{overflow:auto;flex:1}
+.atlas-tutorial-board .atb-preview>img{width:100%;height:auto;max-height:none;aspect-ratio:744/1039;object-fit:contain}
+.atlas-tutorial-board .atb-preview>p{font-size:clamp(9px,.67cqw,12px)}
+.atlas-tutorial-board .atb-preview>strong{font-size:clamp(10px,.8cqw,15px)}
+.atlas-tutorial-board .atb-resolve{font-size:clamp(10px,.9cqw,16px);padding:.5cqw}
+.atlas-tutorial-board .atb-approve{font-size:clamp(9px,.7cqw,13px)}
+.atlas-tutorial-board .atb-card-inspector{position:absolute;z-index:58;pointer-events:none;border:2px solid #b9dcd8;border-radius:9px;box-shadow:0 14px 55px #020b13b8;background:#08141e;overflow:hidden}
+.atlas-tutorial-board .atb-card-inspector img,.atlas-tutorial-board .atb-card-flight img{display:block;width:100%;height:100%;object-fit:contain}
+.atlas-tutorial-board .atb-card-inspector>.atb-battlefield-art{position:relative;display:block;width:100%;height:100%;overflow:hidden}
+.atlas-tutorial-board .atb-card-inspector .atb-battlefield-art[data-portrait=true] img{position:absolute;left:50%;top:50%;width:calc(100% * 744 / 1039);height:auto;aspect-ratio:744/1039;max-width:none;max-height:none;transform:translate(-50%,-50%) rotate(90deg)}
+.atlas-tutorial-board .atb-card-flight{position:absolute;z-index:65;pointer-events:none;border-radius:5px;box-shadow:0 8px 20px #0008;background:#091823;overflow:hidden}
+.atlas-tutorial-board .atb-card[data-in-flight="true"]{opacity:0}
+.atlas-tutorial-board [data-guide-target="true"]{outline:3px solid #ffda79!important;outline-offset:5px;box-shadow:0 0 0 8px #ffda7924,0 0 25px #ffc84a66;animation:atb-guide-pulse 1.6s ease-in-out infinite;z-index:20}
+.atlas-tutorial-board .atb-guide-cue{position:absolute;max-width:260px;width:max-content;padding:7px 11px;border-radius:7px;border:1px solid #ffdb82;background:#172b37;color:#ffeab5;font:600 clamp(10px,.85cqw,14px)/1.3 Inter,"Segoe UI",sans-serif;letter-spacing:0;box-shadow:0 4px 15px #00101b80;pointer-events:none;text-align:center;white-space:normal;z-index:70}
+.atlas-tutorial-board .atb-field-side .atb-card[data-guide-target="true"]{z-index:25}
+.atlas-tutorial-board .atb-card[data-ready="false"][data-guide-target="true"]::after{transform:translateX(-50%) rotate(-90deg)}
+.atlas-tutorial-board .atb-turn-actions [data-guide-target="true"]::after,.atlas-tutorial-board .atb-resolve[data-guide-target="true"]::after{left:auto;right:calc(100% + 12px);bottom:0;transform:none;max-width:190px}
+@keyframes atb-guide-pulse{0%,100%{outline-color:#ffe7a7;box-shadow:0 0 0 7px #ffda7922,0 0 18px #ffc84a44}50%{outline-color:#ffc74b;box-shadow:0 0 0 11px #ffda7935,0 0 30px #ffc84a77}}
+.atlas-tutorial-board .atb-opening{position:absolute;inset:0;padding:clamp(18px,3cqw,48px);overflow:auto;background:radial-gradient(ellipse at 50% 65%,#284b5c88,transparent 65%),#12293c;color:#eaf3f5}
+.atlas-tutorial-board .atb-opening-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:25px}
+.atlas-tutorial-board .atb-opening-heading small{font-size:12px;font-weight:700;letter-spacing:.18em;color:#e7c87f}
+.atlas-tutorial-board .atb-opening-heading h2{margin:9px 0;font-size:clamp(24px,2.6cqw,42px);line-height:1.15;letter-spacing:-.03em}
+.atlas-tutorial-board .atb-opening-heading p{font-size:clamp(12px,1.05cqw,16px);color:#b0c8d3;max-width:620px;margin:0;line-height:1.6}
+.atlas-tutorial-board .atb-opening-heading>button{display:flex;align-items:center;gap:8px;background:#1b394a;border:1px solid #7697a566;border-radius:7px;padding:9px 13px;font-size:12px}
+.atlas-tutorial-board .atb-opening-heading>button svg{width:15px;height:15px}
+.atlas-tutorial-board .atb-setup-progress{list-style:none;display:flex;gap:clamp(8px,2cqw,30px);padding:0;margin:24px 0;color:#7e9cae;font-size:clamp(10px,.9cqw,14px)}
+.atlas-tutorial-board .atb-setup-progress li{display:flex;align-items:center;gap:8px}.atlas-tutorial-board .atb-setup-progress b{display:grid;place-items:center;border:1px solid #6e8b9b77;border-radius:50%;width:24px;height:24px;font-size:11px}
+.atlas-tutorial-board .atb-setup-progress [data-current="true"]{color:#ffdf90}.atlas-tutorial-board .atb-setup-progress [data-current="true"] b{border-color:#ffdf90;background:#a0802738}.atlas-tutorial-board .atb-setup-progress [data-complete="true"]{color:#a0daca}
+.atlas-tutorial-board .atb-setup-stage{display:flex;align-items:center;justify-content:center;gap:clamp(35px,7cqw,110px);min-height:55%;padding:30px 0}
+.atlas-tutorial-board .atb-setup-card{position:relative;width:min(23cqw,34cqh);padding:0;background:transparent;border:0;border-radius:10px;aspect-ratio:744/1039}
+.atlas-tutorial-board .atb-setup-card img{display:block;width:100%;height:100%;object-fit:contain;border-radius:10px;box-shadow:0 12px 40px #00111e99}
+.atlas-tutorial-board .atb-setup-card>span{position:absolute;left:10%;right:10%;top:calc(100% + 14px);border:1px solid #efd48a;border-radius:7px;background:#142f40f2;padding:12px;font-size:14px;color:#ffe3a1;font-weight:700}
+.atlas-tutorial-board .atb-setup-explanation{max-width:340px}.atlas-tutorial-board .atb-setup-explanation small{letter-spacing:.16em;color:#ddb96d;font-size:11px}.atlas-tutorial-board .atb-setup-explanation h3{font-size:clamp(20px,2cqw,32px);margin:12px 0}.atlas-tutorial-board .atb-setup-explanation p{font-size:clamp(12px,1.05cqw,16px);line-height:1.8;color:#b1c7d2}
+.atlas-tutorial-board .atb-placement-outline{display:grid;place-items:center;width:130px;aspect-ratio:744/1039;border:2px dashed #8cb7c46b;border-radius:9px;color:#91b2c0;font-size:14px;margin-top:20px}
+.atlas-tutorial-board .atb-battlefield-choices{display:flex;align-items:center;justify-content:center;gap:2.5cqw;padding:80px 0}
+.atlas-tutorial-board .atb-setup-battlefield{position:relative;display:flex;flex-direction:column;align-items:center;gap:13px;width:27%;border:1px solid #829fbc66;border-radius:10px;padding:12px;background:#1c3749;box-shadow:0 10px 30px #00111e55}
+.atlas-tutorial-board .atb-setup-battlefield img{display:block;width:100%;height:auto;aspect-ratio:1038/744;object-fit:contain;border-radius:7px}.atlas-tutorial-board .atb-setup-battlefield strong{font-size:clamp(12px,1.2cqw,20px)}.atlas-tutorial-board .atb-setup-battlefield span{font-size:12px;color:#b7ced8}
+.atlas-tutorial-board .atb-setup-battlefield .atb-battlefield-art{position:relative;display:block;width:100%;aspect-ratio:1038/744;overflow:hidden;border-radius:7px}
+.atlas-tutorial-board .atb-setup-battlefield .atb-battlefield-art img{position:absolute;inset:0;width:100%;height:100%;aspect-ratio:auto;object-fit:contain}
+.atlas-tutorial-board .atb-setup-battlefield .atb-battlefield-art[data-portrait="true"] img{inset:auto;left:50%;top:50%;width:calc(100% * 744 / 1039);height:auto;aspect-ratio:744/1039;max-width:none;max-height:none;transform:translate(-50%,-50%) rotate(90deg)}
+.atlas-tutorial-board .atb-setup-decks{position:relative;display:flex;align-items:start;justify-content:center;gap:28px;flex-wrap:wrap;max-width:48%;padding:20px;background:transparent;border:0;border-radius:12px}
+.atlas-tutorial-board .atb-setup-decks>span{display:flex;flex-direction:column;align-items:center;gap:8px;width:min(16cqw,26cqh)}.atlas-tutorial-board .atb-setup-decks img{width:100%;aspect-ratio:744/1039;object-fit:contain;border-radius:8px;box-shadow:6px 5px 0 #0e1d2a,10px 9px 0 #294653,0 13px 30px #00111e77}.atlas-tutorial-board .atb-setup-decks strong{font-size:16px;margin-top:8px}.atlas-tutorial-board .atb-setup-decks small{font-size:12px;color:#b9ced6}.atlas-tutorial-board .atb-setup-decks>b{flex-basis:100%;font-size:15px;color:#ffe3a1;padding-top:16px}
+.atlas-tutorial-board .atb-turn-order-choices{display:flex;justify-content:center;gap:4cqw;padding:65px 0}
+.atlas-tutorial-board .atb-turn-order-choices>button{position:relative;display:flex;flex-direction:column;align-items:center;gap:20px;width:28%;min-height:280px;border:1px solid #8cb3c599;background:linear-gradient(#2b4e62,#183445);border-radius:14px;padding:32px;text-align:center}.atlas-tutorial-board .atb-turn-order-choices b{font-size:clamp(40px,5cqw,76px);color:#d8ecee}.atlas-tutorial-board .atb-turn-order-choices strong{font-size:clamp(19px,1.8cqw,28px)}.atlas-tutorial-board .atb-turn-order-choices span{font-size:clamp(12px,1cqw,16px);line-height:1.7;color:#b8d0db}
+.atlas-tutorial-board .atb-opening-hand{display:flex;justify-content:center;align-items:flex-start;gap:clamp(12px,2cqw,32px);padding:70px 2cqw 25px;min-height:52%}
+.atlas-tutorial-board .atb-opening-choice{display:flex;flex-direction:column;align-items:center;gap:10px;width:min(19cqw,32cqh);min-width:0;text-align:center}
+.atlas-tutorial-board .atb-opening .atb-opening-card{width:100%;height:auto;aspect-ratio:744/1039;transform:none;margin:0;flex-shrink:0;border-radius:9px}
+.atlas-tutorial-board .atb-opening .atb-opening-card img{object-fit:contain}.atlas-tutorial-board .atb-opening-choice>strong{font-size:clamp(12px,1.05cqw,17px)}.atlas-tutorial-board .atb-opening-choice>small{font-size:clamp(10px,.85cqw,14px);color:#a9c3d1}
+.atlas-tutorial-board .atb-opening .atb-card[data-selected="true"]{outline:3px solid #a0e5d5;outline-offset:6px;transform:translateY(-10px)}
+.atlas-tutorial-board .atb-opening .atb-mulligan-mark{top:auto;bottom:16px;left:10px;right:10px;border:1px solid #a6e9db;background:#164d48ee;border-radius:5px;font-size:14px;padding:9px}
+.atlas-tutorial-board .atb-opening-footer{display:flex;align-items:center;justify-content:space-between;gap:20px;margin:15px auto;padding:24px;max-width:1000px;border-top:1px solid #88aabd44}
+.atlas-tutorial-board .atb-opening-footer>div{display:flex;flex-direction:column;gap:8px}.atlas-tutorial-board .atb-opening-footer strong{font-size:18px}.atlas-tutorial-board .atb-opening-footer span{font-size:13px;color:#a9c3d1}
+.atlas-tutorial-board .atb-opening-footer .atb-opening-deck{width:56px;flex:none;gap:5px;text-align:center}.atlas-tutorial-board .atb-opening-deck img{display:block;width:100%;aspect-ratio:744/1039;object-fit:contain;border-radius:4px}.atlas-tutorial-board .atb-opening-deck small{font-size:9px;color:#a9c3d1}
+.atlas-tutorial-board .atb-opening-footer>button{position:relative;display:flex;align-items:center;justify-content:center;gap:15px;background:#e6c789;color:#142a37;border:1px solid #f5dfa7;border-radius:8px;padding:15px 24px;font-size:15px;font-weight:700;min-width:190px}.atlas-tutorial-board .atb-opening-footer svg{width:19px;height:19px}
+@media(max-width:900px){.atlas-tutorial-board .atb-opening{padding:20px}.atlas-tutorial-board .atb-setup-progress{gap:10px;flex-wrap:wrap}.atlas-tutorial-board .atb-setup-stage{gap:30px}.atlas-tutorial-board .atb-setup-explanation{max-width:260px}.atlas-tutorial-board .atb-placement-outline{display:none}.atlas-tutorial-board .atb-opening-hand{gap:13px;padding-top:65px}.atlas-tutorial-board .atb-turn-order-choices>button{width:38%;padding:20px}.atlas-tutorial-board .atb-setup-decks{gap:18px;max-width:50%}.atlas-tutorial-board .atb-battlefield-choices{gap:15px}.atlas-tutorial-board .atb-setup-battlefield{width:31%;padding:8px}}
+@media(prefers-reduced-motion:reduce){.atlas-tutorial-board [data-guide-target="true"]{animation:none}.atlas-tutorial-board .atb-card-flight{display:none}.atlas-tutorial-board .atb-card[data-in-flight="true"]{opacity:1}}
+
+.atlas-tutorial-board .atb-base{isolation:isolate}
+.atlas-tutorial-board .atb-brand-mark{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);display:flex;align-items:center;gap:.45cqw;opacity:.2;pointer-events:none;z-index:-1;user-select:none;filter:grayscale(.3)}
+.atlas-tutorial-board .atb-brand-mark img{display:block;width:2.6cqw;height:2.6cqw;object-fit:contain}
+.atlas-tutorial-board .atb-brand-mark>span{font-size:1.2cqw;font-weight:700;letter-spacing:.02em;color:#b6cbd5}
+.atlas-tutorial-board .atb-turn-start{position:absolute;inset:0;display:flex;flex-direction:column;justify-content:center;gap:clamp(18px,3cqh,36px);padding:clamp(25px,5cqw,80px);overflow:auto;background:radial-gradient(ellipse at 50% 50%,#34536488,transparent 75%),#10283a}
+.atlas-tutorial-board .atb-turn-start header>small{font-size:12px;color:#dfc186;letter-spacing:.16em;font-weight:700}
+.atlas-tutorial-board .atb-turn-start h2{font-size:clamp(28px,3.4cqw,54px);line-height:1.12;letter-spacing:-.025em;margin:14px 0}
+.atlas-tutorial-board .atb-turn-start h2 em{font-style:normal;color:#f2d18b}
+.atlas-tutorial-board .atb-turn-start header>p{margin:0;font-size:clamp(13px,1.2cqw,18px);color:#acc8d7}
+.atlas-tutorial-board .atb-turn-start ol{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));list-style:none;gap:18px;margin:6px 0;padding:0}
+.atlas-tutorial-board .atb-turn-start li{display:flex;flex-direction:column;gap:20px;border:1px solid #88a7b55c;border-radius:13px;padding:clamp(16px,2cqw,32px);background:linear-gradient(160deg,#26495a,#142f42);box-shadow:0 8px 26px #00121f3b}
+.atlas-tutorial-board .atb-turn-start li>b{font-size:clamp(45px,6cqw,94px);line-height:1;font-weight:800;color:#f2d18b}
+.atlas-tutorial-board .atb-turn-start li svg{width:22px;height:22px;color:#9dd6d3;float:right}
+.atlas-tutorial-board .atb-turn-start h3{margin:0 0 12px;font-size:clamp(18px,1.8cqw,27px);font-weight:700}
+.atlas-tutorial-board .atb-turn-start li p{margin:0;font-size:clamp(12px,1.05cqw,16px);line-height:1.7;color:#c0d4de}
+.atlas-tutorial-board .atb-main-phase{display:flex;align-items:center;gap:18px;padding:18px 24px;border:1px solid #8abfb566;border-radius:10px;background:#27514955}
+.atlas-tutorial-board .atb-main-phase>svg{width:26px;height:26px;color:#a5e2ce;flex:none}
+.atlas-tutorial-board .atb-main-phase div{display:flex;gap:20px;align-items:center;flex-wrap:wrap}
+.atlas-tutorial-board .atb-main-phase strong{font-size:clamp(17px,1.5cqw,24px);color:#c6ecdf}
+.atlas-tutorial-board .atb-main-phase span{font-size:clamp(12px,1cqw,16px);color:#b1d2d0}
+.atlas-tutorial-board .atb-turn-start footer{display:flex;justify-content:space-between;align-items:center;gap:25px;margin-top:10px}
+.atlas-tutorial-board .atb-turn-start footer>span{font-size:clamp(12px,1cqw,16px);color:#a8c3d0}
+.atlas-tutorial-board .atb-turn-start footer button{display:flex;align-items:center;justify-content:center;gap:20px;flex:none;border:1px solid #f8e2af;border-radius:9px;background:#edcf91;color:#122b3b;padding:17px 26px;font-size:16px;font-weight:700}
+.atlas-tutorial-board .atb-turn-start footer button svg{width:20px;height:20px}
+.atlas-tutorial-board .atb-combat-demo{position:absolute;left:22%;top:4%;width:43%;max-width:650px;max-height:30cqh;overflow:auto;display:flex;flex-direction:column;gap:9px;padding:18px 22px;border:1px solid #a8c9ce;border-radius:12px;background:#122e40f5;box-shadow:0 8px 30px #00121c88;z-index:57;font-size:clamp(11px,.95cqw,15px)}
+.atlas-tutorial-board .atb-combat-demo>small{font-size:10px;letter-spacing:.12em;color:#d8ba7d;font-weight:700}
+.atlas-tutorial-board .atb-combat-demo>strong{font-size:clamp(17px,1.4cqw,22px);color:#e7f2f5}
+.atlas-tutorial-board .atb-combat-demo p{margin:0;line-height:1.65;color:#c2d7df}
+.atlas-tutorial-board .atb-combat-demo>span{font-size:clamp(10px,.8cqw,13px);color:#a5c5d2;line-height:1.5}
+.atlas-tutorial-board .atb-combat-demo>button{display:flex;align-items:center;justify-content:center;gap:16px;border:1px solid #f1d79a;background:#e5c98d;color:#173041;font-weight:700;font-size:14px;border-radius:7px;padding:12px;margin:6px 0}
+.atlas-tutorial-board .atb-combat-demo>button svg{width:18px;height:18px}
+.atlas-tutorial-board .atb-combat-demo ol{display:flex;flex-direction:column;gap:8px;margin:3px 0;padding:0;list-style:none}
+.atlas-tutorial-board .atb-combat-demo li{display:flex;align-items:center;gap:9px;animation:atb-assignment-reveal .5s both;animation-delay:var(--assignment-delay,0ms)}
+.atlas-tutorial-board .atb-combat-demo li>b{display:grid;place-items:center;width:24px;height:24px;border-radius:50%;border:1px solid #e7c47e;color:#f7dca2;flex:none}
+.atlas-tutorial-board .atb-assigned-damage{position:absolute;right:4px;top:4px;display:flex;align-items:center;flex-direction:column;padding:5px 7px;min-width:47px;border:2px solid #ffbd87;border-radius:8px;background:#6e3326;color:#fff1d7;z-index:38;box-shadow:0 2px 12px #0009;pointer-events:none}
+.atlas-tutorial-board .atb-assigned-damage b{font-size:clamp(20px,2cqw,31px);line-height:1}
+.atlas-tutorial-board .atb-assigned-damage small{font-size:8px;line-height:1.8}
+.atlas-tutorial-board .atb-assigned-damage[data-animate="true"]{animation:atb-assignment-reveal .5s both;animation-delay:var(--assignment-delay,0ms)}
+.atlas-tutorial-board .atb-card[data-combat-assigned="true"]{z-index:25;outline:2px solid #f1b485;outline-offset:3px}
+.atlas-tutorial-board .atb-card[data-ready="false"] .atb-assigned-damage{transform:rotate(-90deg)}
+@keyframes atb-assignment-reveal{from{opacity:0;filter:brightness(2)}to{opacity:1;filter:brightness(1)}}
+.atlas-tutorial-board .atb-combat-demo[data-animate="false"] li{animation:none}
+@media(max-height:800px){.atlas-tutorial-board .atb-combat-demo{top:2%;max-height:32cqh;padding:12px 16px;gap:6px}}
+@media(max-width:900px){.atlas-tutorial-board .atb-turn-start{justify-content:flex-start;gap:20px;padding:25px}.atlas-tutorial-board .atb-turn-start ol{grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.atlas-tutorial-board .atb-turn-start li{flex-direction:row;gap:18px;padding:18px}.atlas-tutorial-board .atb-turn-start li>b{font-size:48px}.atlas-tutorial-board .atb-turn-start footer{align-items:flex-start}.atlas-tutorial-board .atb-turn-start footer button{padding:14px 18px;font-size:13px}.atlas-tutorial-board .atb-combat-demo{left:17%;width:49%;padding:12px}}
+@media(prefers-reduced-motion:reduce){.atlas-tutorial-board .atb-assigned-damage,.atlas-tutorial-board .atb-combat-demo li{animation:none!important}}
+
+.atlas-tutorial-board .atb-might[data-modified="true"]{background:#ffe1a0;color:#442d07;border:1px solid #ffd16a}
+.atlas-tutorial-board .atb-empowered{position:absolute;left:50%;top:-8px;transform:translateX(-50%);border:1px solid #d6adff;border-radius:4px;background:#422264;color:#efd9ff;padding:3px 5px;font-size:clamp(8px,.58cqw,11px);font-weight:700;white-space:nowrap;pointer-events:none}
+.atlas-tutorial-board .atb-card[data-ready="false"] .atb-empowered{transform:translateX(-50%) rotate(-90deg)}
+.atlas-tutorial-board .atb-equipped-card{position:relative;flex:none;width:var(--atb-card-width);height:var(--atb-card-height);margin-right:calc(var(--atb-card-width) * .45)}
+.atlas-tutorial-board .atb-equipped-card>.atb-card:not(.atb-attached-card){z-index:2}
+.atlas-tutorial-board .atb-equipped-card>.atb-attached-card{position:absolute;left:60%;top:25%;width:calc(var(--atb-card-width) * .75);height:calc(var(--atb-card-height) * .75);z-index:1;transform:none;margin:0;border-color:#d9c18a}
+.atlas-tutorial-board .atb-equipped-card>.atb-attached-card:hover,.atlas-tutorial-board .atb-equipped-card>.atb-attached-card:focus-visible{z-index:4}
+.atlas-tutorial-board .atb-attached-label{position:absolute;left:55%;bottom:-15px;z-index:3;padding:2px 5px;background:#163a47;border:1px solid #98b8b655;border-radius:4px;white-space:nowrap;color:#c9e6df;font-size:9px;pointer-events:none}
+.atlas-tutorial-board .atb-banishment{position:absolute;width:var(--atb-card-width);border:1px solid #a6b8c355;border-radius:4px;background:#243748;padding:3px 2px;color:#c6d4e2;font-size:clamp(8px,.6cqw,11px);z-index:5;white-space:nowrap}
+.atlas-tutorial-board .atb-banishment.atb-player{right:1.4%;bottom:15.5%}.atlas-tutorial-board .atb-banishment.atb-opponent{left:1.4%;top:15.5%}
+.atlas-tutorial-board .atb-float .atb-xp{color:#e8cf91;border-top:1px solid #ac935140;margin-top:3px;padding-top:2px}
+.atlas-tutorial-board .atb-pile-card{display:flex;flex-direction:column;gap:7px;align-items:center;width:135px;text-align:center;font-size:12px}
+.atlas-tutorial-board .atb-pile-card>strong{font-size:12px;color:#e0ecf0}.atlas-tutorial-board .atb-pile-card>small{font-size:11px;line-height:1.5;color:#abc4cf}
+.atlas-tutorial-board .atb-pile-dialog .atb-pile-card .atb-card{width:110px;height:calc(110px * 1039 / 744);transform:none;margin:0}
+.atlas-tutorial-board .atb-deck-check-note{margin:0 0 18px;border-left:2px solid #dfc88a;padding-left:12px;color:#e4d7b0;font-size:13px;line-height:1.6}
+.atlas-tutorial-board .atb-preview .atb-preview-annotation{border-left:2px solid #dfc88a;padding:6px 8px;background:#2d4149;color:#f0ddb0;font-size:12px;line-height:1.6}
+.atlas-tutorial-board .atb-preview[role="button"]{cursor:crosshair}
+.atlas-tutorial-board .atb-stunned{position:absolute;left:50%;top:-8px;transform:translateX(-50%);border:1px solid #a8e0f6;border-radius:4px;background:#214966;color:#def7ff;padding:3px 5px;font-size:clamp(8px,.58cqw,11px);font-weight:700;white-space:nowrap;pointer-events:none}
+.atlas-tutorial-board .atb-card[data-ready="false"] .atb-stunned{transform:translateX(-50%) rotate(-90deg)}
+.atlas-tutorial-board .atb-hand-count{position:absolute;left:50%;transform:translateX(-50%);font-size:clamp(8px,.65cqw,11px);font-weight:600;white-space:nowrap;background:#152e40dd;color:#b3ced9;border:1px solid #839fa44d;border-radius:4px;padding:3px 7px;pointer-events:none}
+.atlas-tutorial-board .atb-hand.atb-player .atb-hand-count{top:-22px}.atlas-tutorial-board .atb-hand.atb-opponent .atb-hand-count{bottom:-22px}
+.atlas-tutorial-board .atb-remove-draft{border:1px solid #ead196;border-radius:5px;background:#e0c58b;color:#183242;padding:8px 10px;font-size:12px;font-weight:700}
+
+.atlas-tutorial-board .atb-keyword-intro{height:100%;width:100%;display:grid;grid-template-columns:minmax(230px,.85fr) minmax(330px,1.15fr);gap:5cqw;align-items:center;padding:4cqw 7cqw;overflow:auto;background:radial-gradient(ellipse at 22% 40%,#31536766,transparent 55%),linear-gradient(130deg,#142d40,#0c1e2d)}
+.atlas-tutorial-board .atb-keyword-intro-art{display:flex;align-items:center;justify-content:center;min-width:0}
+.atlas-tutorial-board .atb-keyword-intro figure{width:min(25cqw,calc((100dvh - 210px) * 744 / 1039),350px);margin:0;min-width:170px}
+.atlas-tutorial-board .atb-keyword-intro figure img{display:block;width:100%;height:auto;aspect-ratio:744/1039;object-fit:contain;border-radius:10px;box-shadow:0 18px 55px #0008}
+.atlas-tutorial-board .atb-keyword-intro figcaption{margin-top:13px;text-align:center;font-size:clamp(12px,1.05cqw,16px);font-weight:650;color:#e8f2f4}
+.atlas-tutorial-board .atb-keyword-intro figcaption span{display:block;margin-top:4px;font-size:clamp(10px,.78cqw,12px);font-weight:400;color:#8facbc}
+.atlas-tutorial-board .atb-keyword-intro-copy{max-width:580px;min-width:0}
+.atlas-tutorial-board .atb-keyword-intro-copy>small{font-size:clamp(10px,.85cqw,13px);font-weight:650;letter-spacing:.18em;color:#d4bf8d}
+.atlas-tutorial-board .atb-keyword-intro h2{margin:12px 0 16px;font-size:clamp(32px,4cqw,62px);line-height:1.08;font-weight:650;letter-spacing:-.04em;color:#f2e5c9}
+.atlas-tutorial-board .atb-keyword-definition{margin:0 0 25px;font-size:clamp(17px,1.6cqw,23px);line-height:1.5;color:#d6e6eb}
+.atlas-tutorial-board .atb-keyword-preview{padding:16px 20px;border-left:2px solid #8bc3c9;background:#78b8bc0a;color:#b8ccd6}
+.atlas-tutorial-board .atb-keyword-preview strong{display:block;font-size:12px;color:#b7dedc;margin-bottom:7px}
+.atlas-tutorial-board .atb-keyword-preview p{margin:0;font-size:clamp(12px,1.05cqw,15px);line-height:1.65}
+.atlas-tutorial-board .atb-keyword-intro-note{margin:20px 0;color:#8da9b8;font-size:clamp(10px,.9cqw,13px);line-height:1.65}
+.atlas-tutorial-board .atb-keyword-intro footer{display:flex;gap:12px;align-items:center;justify-content:space-between;margin-top:25px}
+.atlas-tutorial-board .atb-keyword-intro button,.atlas-tutorial-board .atb-splash-back{display:flex;align-items:center;justify-content:center;gap:10px;min-height:43px;padding:11px 17px;border:1px solid #91b7c24a;border-radius:7px;background:#173748;color:#c7dfe5;font-size:clamp(12px,1cqw,15px)}
+.atlas-tutorial-board .atb-keyword-intro .atb-keyword-start{color:#102a36;border-color:#e4c28d;background:#e4c28d;font-weight:650}
+.atlas-tutorial-board .atb-keyword-intro button svg,.atlas-tutorial-board .atb-splash-back svg{width:17px;height:17px}
+.atlas-tutorial-board [data-guide-acting=true]{outline:2px solid #9bcfce;outline-offset:5px;box-shadow:0 0 22px #9bcfce33}
+@media(max-width:900px){.atlas-tutorial-board .atb-keyword-intro{padding:25px 30px;gap:25px;grid-template-columns:minmax(180px,.7fr) minmax(250px,1.3fr)}.atlas-tutorial-board .atb-keyword-intro-note{margin:12px 0}.atlas-tutorial-board .atb-keyword-intro footer{margin-top:15px}.atlas-tutorial-board .atb-keyword-definition{margin-bottom:15px}}
+@media(max-width:650px){.atlas-tutorial-board .atb-keyword-intro{grid-template-columns:1fr;align-content:start}.atlas-tutorial-board .atb-keyword-intro figure{width:180px}.atlas-tutorial-board .atb-keyword-intro-copy{max-width:none}}
+
+.atlas-tutorial-board .atb-float[role=button]{cursor:pointer;min-width:70px;min-height:42px;padding:5px;border-radius:5px}
+.atlas-tutorial-board .atb-float[role=button]:focus-visible{outline:2px solid #b8f7ff;outline-offset:3px}
+
+.atlas-tutorial-board .atb-predict-controls{display:flex;flex-direction:column;gap:8px;width:100%;margin-top:8px}
+.atlas-tutorial-board .atb-predict-controls>span{font-size:10px;color:#a9cad5}
+.atlas-tutorial-board .atb-predict-controls button{padding:8px;border:1px solid #b5cdcd66;border-radius:5px;background:#214355;color:#e0ecef;font-size:11px;min-height:34px}
+
+.atlas-tutorial-board .atb-chain-items{list-style:none;padding:0;margin:5px 0;display:flex;flex-direction:column;gap:4px;max-height:100px;overflow:auto;flex-shrink:0}
+.atlas-tutorial-board .atb-chain-items li{padding:6px 7px;border-left:2px solid #88bdc2;background:#84bbbd0d}
+.atlas-tutorial-board .atb-chain-items small{display:block;font-size:7px;letter-spacing:.07em;color:#8eb2bf}
+.atlas-tutorial-board .atb-chain-items strong{display:block;margin-top:3px;font-size:clamp(9px,.75cqw,12px);font-weight:550;line-height:1.35;color:#d4e8ed}
+
+.atlas-tutorial-board .atb-effect-callout{position:absolute;z-index:46;pointer-events:none;padding:7px 9px;border:1px solid #ecc684;border-radius:7px;background:#142e3bf5;color:#ecf3ed;box-shadow:0 4px 15px #0010188c;text-align:center}
+.atlas-tutorial-board .atb-effect-callout>small{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font-size:10px;line-height:1.25;color:#f0d6a6;font-weight:650}
+.atlas-tutorial-board .atb-effect-values{display:flex;align-items:center;justify-content:center;gap:7px;margin-top:4px;font-size:13px;line-height:1.1}
+.atlas-tutorial-board .atb-effect-values>span{color:#9fb9c4}.atlas-tutorial-board .atb-effect-values>strong{color:#e6fbec;font-size:16px}.atlas-tutorial-board .atb-effect-values svg{width:13px;height:13px;flex-shrink:0;color:#d5bc8e}
+.atlas-tutorial-board .atb-might-formula{display:flex;align-items:center;justify-content:center;gap:6px;margin-top:4px}.atlas-tutorial-board .atb-might-formula>span{display:flex;flex-direction:column;align-items:center}.atlas-tutorial-board .atb-might-formula b{font-size:17px;color:#b5c9cd}.atlas-tutorial-board .atb-might-formula strong{font-size:24px;line-height:1;color:#fff2c5}.atlas-tutorial-board .atb-might-formula em{font-size:7px;line-height:1.15;font-style:normal;color:#96b3bf}.atlas-tutorial-board .atb-might-formula i{font-size:15px;font-style:normal;font-weight:700;color:#8ee4c0}.atlas-tutorial-board .atb-might-formula svg{width:13px;height:13px;color:#bdcfcf}
+.atlas-tutorial-board .atb-effect-callout[data-kind=damage],.atlas-tutorial-board .atb-effect-callout[data-kind=zone]{border-color:#e4ad8b}.atlas-tutorial-board .atb-effect-callout[data-kind=damage] .atb-effect-values>strong{color:#ffc0a5}
+.atlas-tutorial-board .atb-effect-arrows{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:44;overflow:visible}.atlas-tutorial-board .atb-effect-arrows>path{fill:none;stroke:#e9be78;stroke-width:2.2;stroke-dasharray:5 3;opacity:.8;filter:drop-shadow(0 1px 2px #000)}
+.atlas-tutorial-board .atb-card[data-impact-source=true]{box-shadow:0 0 0 2px #d5ad715c,0 0 18px #e4bd6938}.atlas-tutorial-board .atb-card[data-impact-target=true]{outline:2px solid #9ce2c4;outline-offset:3px}
+
+.atlas-tutorial-board .atb-keyword-comparison{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:14px 0 0}.atlas-tutorial-board .atb-keyword-comparison>div{padding:9px 12px;border:1px solid #a5bac333;border-radius:6px;background:#102b3a80}.atlas-tutorial-board .atb-keyword-comparison>div+div{border-color:#86cbb55c;background:#2a554b2e}.atlas-tutorial-board .atb-keyword-comparison dt{font-size:10px;font-weight:650;color:#b4c6cc;margin-bottom:5px}.atlas-tutorial-board .atb-keyword-comparison>div+div dt{color:#aae2c9}.atlas-tutorial-board .atb-keyword-comparison dd{margin:0;font-size:clamp(10px,.86cqw,13px);line-height:1.5;color:#c8d7dd}
+
+.atlas-tutorial-board .atb-deck-provenance{margin:0 0 14px;padding:11px 13px;border:1px solid #a7c5cc36;border-radius:6px;background:#0f2b3a;flex-shrink:0}.atlas-tutorial-board .atb-deck-provenance>small{display:block;font-size:8px;letter-spacing:.06em;color:#d9bf8f}.atlas-tutorial-board .atb-deck-provenance>strong{display:block;margin-top:5px;font-size:13px;color:#e3ecee}.atlas-tutorial-board .atb-deck-provenance p{margin:6px 0;font-size:11px;line-height:1.5;color:#aac2cc}.atlas-tutorial-board .atb-deck-provenance>span{display:block;font-size:10px;color:#94b2bf}.atlas-tutorial-board .atb-deck-provenance button{margin-top:7px;border:0;padding:0;background:none;color:#f0d6a0;text-decoration:underline;font-size:11px}
+
+.atlas-tutorial-board .atb-full-deck{font-size:11px;margin-top:8px}.atlas-tutorial-board .atb-full-deck>summary{cursor:pointer;color:#ead4a7}.atlas-tutorial-board .atb-full-deck[open]{max-height:190px;overflow:auto}.atlas-tutorial-board .atb-full-deck section{padding-top:8px}.atlas-tutorial-board .atb-full-deck ul{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));padding:0;list-style:none;gap:4px 12px}.atlas-tutorial-board .atb-full-deck li{line-height:1.45;color:#c5d8df}.atlas-tutorial-board .atb-full-deck li b{color:#eed19b}
+
+.atlas-tutorial-board .atb-effect-callout[data-kind=status] .atb-effect-values{display:grid;grid-template-columns:minmax(0,1fr);justify-items:center;font-size:11px;line-height:1.25;gap:3px;overflow-wrap:normal}.atlas-tutorial-board .atb-effect-callout[data-kind=status] .atb-effect-values>strong{font-size:12px;min-width:0}
+
+.atlas-tutorial-board .atb-effect-callout[data-kind=status] .atb-effect-values svg{transform:rotate(90deg);width:10px;height:10px}
+
+/* Physical setup uses the same table zones as the rest of the course. */
+.atlas-tutorial-board .atb-setup-tray{position:absolute;left:18%;bottom:2%;width:50%;z-index:34;padding:10px 14px;border:1px solid #b8b58c99;border-radius:10px;background:#102b3af7;box-shadow:0 5px 22px #00131b99}
+.atlas-tutorial-board .atb-setup-tray header{display:flex;flex-direction:column;gap:4px;margin-bottom:9px;font-size:12px;color:#f2d7a2}.atlas-tutorial-board .atb-setup-tray header span{font-size:10px;color:#b7ced6}
+.atlas-tutorial-board .atb-setup-tray>div{display:flex;justify-content:center;gap:15px}.atlas-tutorial-board .atb-setup-tray[data-battlefields=true]>div{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.atlas-tutorial-board .atb-setup-piece{display:flex;flex-direction:column;align-items:center;gap:6px;background:#193745;border:1px solid #a4b4b766;border-radius:7px;padding:7px;color:#e5ece8;cursor:grab;min-width:0;max-width:100%;position:relative}
+.atlas-tutorial-board .atb-setup-piece:active{cursor:grabbing}.atlas-tutorial-board .atb-setup-piece[data-selected=true]{outline:2px solid #ffdc87;outline-offset:3px}
+.atlas-tutorial-board .atb-setup-piece>img{height:min(18cqh,155px);width:auto;aspect-ratio:744/1039;object-fit:contain;border-radius:4px}.atlas-tutorial-board .atb-setup-piece>strong{font-size:11px;line-height:1.3}.atlas-tutorial-board .atb-setup-piece>.atb-battlefield-art{width:100%;height:auto;aspect-ratio:1039/744}
+.atlas-tutorial-board .atb-setup-slot-label{display:flex;align-items:center;justify-content:center;width:100%;height:100%;padding:5px;font-size:clamp(10px,.9cqw,14px)!important;line-height:1.4;color:#b6cbd3;text-align:center}
+.atlas-tutorial-board [data-setup-empty=true]{border:1px dashed #aac1c788;background:#0e293740;cursor:pointer}
+.atlas-tutorial-board[data-setup=true] .atb-heroes>div{width:var(--atb-card-width);height:var(--atb-card-height);border:1px dashed #7797a377;border-radius:5px}.atlas-tutorial-board[data-setup=true] .atb-empty-card{display:flex;align-items:center;justify-content:center;width:100%;height:100%;font-size:12px;color:#b9cbd2;text-align:center}
+.atlas-tutorial-board[data-setup=true] .atb-base>.atb-zone-label{font-size:12px;color:#b8d1da;letter-spacing:.05em}.atlas-tutorial-board[data-setup=true] .atb-hand.atb-player{border:1px dashed #6d8f9f66;border-radius:6px;bottom:1%;height:13%;cursor:pointer}.atlas-tutorial-board[data-setup=true] .atb-hand.atb-opponent .atb-setup-hand-label{display:none}
+.atlas-tutorial-board .atb-setup-hand-label{display:flex;align-items:center;justify-content:center;width:100%;height:100%;font-size:12px;color:#aac8d4}
+.atlas-tutorial-board .atb-setup-order{position:absolute;left:23%;bottom:4%;width:41%;padding:15px;background:#112f3ff5;border:1px solid #b9b38c;border-radius:9px;z-index:34;text-align:center}.atlas-tutorial-board .atb-setup-order p{font-size:12px;margin:0 0 13px}.atlas-tutorial-board .atb-setup-order button{padding:10px 18px;margin:0 8px;border:1px solid #bfc4a0;border-radius:5px;background:#284b59}
+.atlas-tutorial-board .atb-float{cursor:default}.atlas-tutorial-board .atb-opening-footer>div>span{max-width:440px;line-height:1.5}
+@media(prefers-reduced-motion:reduce){.atlas-tutorial-board .atb-setup-piece{scroll-behavior:auto}}
+.atlas-tutorial-board[data-setup=true] .atb-hand.atb-player{pointer-events:auto}
+
+.atlas-tutorial-board [data-setup-destination=true]{outline:2px solid #f4d391;outline-offset:4px;background-color:#bba15412}
+.atlas-tutorial-board [data-setup-destination=true]::after{content:"Drop here";position:absolute;top:-23px;left:50%;transform:translateX(-50%);background:#233843;border:1px solid #e5c383;border-radius:5px;padding:3px 7px;color:#ffe1a4;white-space:nowrap;font-size:10px;line-height:1.3;pointer-events:none;z-index:22}
+
+.atlas-tutorial-board .atb-setup-piece .atb-battlefield-art{position:relative;display:block;overflow:hidden;aspect-ratio:1039/744;width:100%;height:auto}
+.atlas-tutorial-board .atb-setup-piece .atb-battlefield-art img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}
+.atlas-tutorial-board .atb-setup-piece .atb-battlefield-art[data-portrait=true] img{inset:auto;left:50%;top:50%;width:calc(100% * 744 / 1039);height:auto;aspect-ratio:744/1039;max-width:none;max-height:none;transform:translate(-50%,-50%) rotate(90deg)}
+
+/* Explain the opening-hand choice before any card can be selected. */
+.atlas-tutorial-board .atb-mulligan-intro{position:absolute;inset:0;display:flex;flex-direction:column;justify-content:center;gap:clamp(14px,2.5cqh,24px);padding:clamp(24px,3.4cqw,52px) clamp(30px,5cqw,80px);overflow:auto;background:radial-gradient(ellipse at 50% 45%,#31556866,transparent 70%),#10283a}
+.atlas-tutorial-board .atb-mulligan-intro header>small{font-size:11px;letter-spacing:.17em;font-weight:700;color:#e2c58c}.atlas-tutorial-board .atb-mulligan-intro h2{margin:9px 0;font-size:clamp(28px,3cqw,46px);line-height:1.1;letter-spacing:-.025em;color:#f2e7d1}.atlas-tutorial-board .atb-mulligan-intro header>p{max-width:880px;margin:0;color:#bdd3dd;font-size:clamp(13px,1.1cqw,17px);line-height:1.55}
+.atlas-tutorial-board .atb-mulligan-rules{display:flex;gap:10px;flex-wrap:wrap}.atlas-tutorial-board .atb-mulligan-rules>span{display:flex;gap:7px;padding:8px 12px;border:1px solid #839da84f;border-radius:7px;background:#193b4c;color:#bfd3dd;font-size:clamp(11px,.95cqw,14px)}.atlas-tutorial-board .atb-mulligan-rules b{color:#edcf92;font-weight:700}
+.atlas-tutorial-board .atb-mulligan-sequence{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px;margin:0;padding:0;list-style:none}.atlas-tutorial-board .atb-mulligan-sequence li{padding:16px 20px;border:1px solid #84a6b34f;border-radius:12px;background:linear-gradient(145deg,#284c5d88,#132e4199)}.atlas-tutorial-board .atb-mulligan-sequence li>b{display:block;font-size:clamp(14px,1.2cqw,18px);color:#e9e4d7}.atlas-tutorial-board .atb-mulligan-sequence p{font-size:clamp(12px,1cqw,15px);line-height:1.55;color:#bad1dc;margin:8px 0 0}
+.atlas-tutorial-board .atb-mulligan-diagram{display:flex;align-items:center;justify-content:center;gap:18px;height:76px;margin-bottom:13px}.atlas-tutorial-board .atb-mulligan-diagram img{display:block;width:42px;aspect-ratio:744/1039;object-fit:contain;border-radius:3px}.atlas-tutorial-board .atb-mulligan-diagram>svg{width:24px;color:#edcd8f}.atlas-tutorial-board .atb-set-aside-card{padding:4px;border:1px dashed #e6c78b;border-radius:5px}.atlas-tutorial-board .atb-mini-deck{box-shadow:3px 3px #647f8f,6px 6px #385365;border-radius:3px}.atlas-tutorial-board .atb-deck-bottom{border-bottom:4px solid #edcd8f;padding-bottom:3px}
+.atlas-tutorial-board .atb-mulligan-why{display:flex;gap:18px;align-items:center;padding:13px 18px;border-left:3px solid #d9bd82;background:#24415180;border-radius:0 8px 8px 0}.atlas-tutorial-board .atb-mulligan-why>img{width:55px;height:auto;aspect-ratio:744/1039;object-fit:contain;border-radius:4px;flex:none}.atlas-tutorial-board .atb-mulligan-why strong{font-size:clamp(13px,1.1cqw,17px);color:#edd6a7}.atlas-tutorial-board .atb-mulligan-why p{margin:5px 0 0;color:#c3d6df;font-size:clamp(12px,1cqw,15px);line-height:1.55}
+.atlas-tutorial-board .atb-mulligan-intro footer{display:flex;align-items:center;justify-content:space-between;gap:20px}.atlas-tutorial-board .atb-mulligan-intro footer>span{font-size:12px;color:#9dbac9}.atlas-tutorial-board .atb-mulligan-start{display:flex;align-items:center;justify-content:center;gap:12px;flex:none;border:1px solid #eed5a1;border-radius:8px;background:#e5c68b;color:#112d3d;font-size:14px;font-weight:700;padding:13px 20px}.atlas-tutorial-board .atb-mulligan-start svg{width:18px;height:18px}
+@media(max-height:760px){.atlas-tutorial-board .atb-mulligan-intro{justify-content:flex-start;gap:15px;padding-top:25px;padding-bottom:25px}.atlas-tutorial-board .atb-mulligan-diagram{height:59px;margin-bottom:10px}.atlas-tutorial-board .atb-mulligan-diagram img{width:34px}.atlas-tutorial-board .atb-mulligan-sequence li{padding:13px 17px}.atlas-tutorial-board .atb-mulligan-why>img{width:46px}}
+@media(max-width:760px){.atlas-tutorial-board .atb-mulligan-intro{justify-content:flex-start;padding:22px;gap:17px}.atlas-tutorial-board .atb-mulligan-sequence{grid-template-columns:1fr;gap:10px}.atlas-tutorial-board .atb-mulligan-diagram{float:right;width:130px;margin:0 0 4px 14px}.atlas-tutorial-board .atb-mulligan-intro footer{flex-wrap:wrap}.atlas-tutorial-board .atb-mulligan-intro footer>span{order:3;width:100%}}
+
+.atlas-tutorial-board .atb-lesson-intro{position:absolute;inset:0;display:grid;grid-template-columns:minmax(0,1.6fr) minmax(180px,.7fr);align-items:center;gap:5cqw;padding:4cqw 6cqw;overflow:auto;background:radial-gradient(ellipse at 80% 45%,#42607366,transparent 60%),linear-gradient(135deg,#142f42,#0c202f)}
+.atlas-tutorial-board .atb-lesson-intro-copy>small{font-size:11px;letter-spacing:.18em;font-weight:700;color:#dfc28a}.atlas-tutorial-board .atb-lesson-intro h2{font-size:clamp(30px,3.4cqw,52px);line-height:1.13;letter-spacing:-.025em;color:#f0e4cb;margin:13px 0}.atlas-tutorial-board .atb-lesson-intro-copy>p{font-size:clamp(13px,1.15cqw,18px);line-height:1.6;color:#b9d0dc;margin:0 0 24px}
+.atlas-tutorial-board .atb-lesson-purpose{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin:0;padding:0}.atlas-tutorial-board .atb-lesson-purpose>div{padding:13px 16px;border-left:2px solid #c9b17d;background:#25465666;border-radius:0 7px 7px 0}.atlas-tutorial-board .atb-lesson-purpose dt{font-size:12px;font-weight:700;color:#ead19d;margin-bottom:6px}.atlas-tutorial-board .atb-lesson-purpose dd{margin:0;font-size:clamp(12px,1cqw,15px);line-height:1.55;color:#c4d7df}
+.atlas-tutorial-board .atb-lesson-intro .atb-lesson-purpose{grid-template-columns:1fr;gap:13px}.atlas-tutorial-board .atb-lesson-intro .atb-lesson-purpose>div{padding:13px 18px}.atlas-tutorial-board .atb-lesson-intro figure{margin:0;text-align:center}.atlas-tutorial-board .atb-lesson-intro figure img{display:block;margin:auto;width:100%;max-width:280px;max-height:49cqh;aspect-ratio:744/1039;object-fit:contain;border-radius:10px;filter:drop-shadow(0 18px 28px #0007)}.atlas-tutorial-board .atb-lesson-intro figcaption{margin-top:16px;font-size:14px;font-weight:650;color:#e5dcc5}.atlas-tutorial-board .atb-lesson-intro figcaption span{display:block;font-size:11px;font-weight:400;color:#8daab9;margin-top:5px}
+.atlas-tutorial-board .atb-lesson-intro footer{display:flex;justify-content:space-between;align-items:center;gap:20px;margin-top:28px}.atlas-tutorial-board .atb-lesson-start{display:flex;gap:12px;align-items:center;justify-content:center;background:#e4c78e;color:#112c3c;border:1px solid #efd9a8;border-radius:8px;padding:13px 20px;font-size:14px;font-weight:700}.atlas-tutorial-board .atb-lesson-start svg{width:18px;height:18px}
+@media(max-height:760px){.atlas-tutorial-board .atb-lesson-intro{padding-top:26px;padding-bottom:26px}.atlas-tutorial-board .atb-lesson-intro-copy>p{margin-bottom:16px}.atlas-tutorial-board .atb-lesson-intro .atb-lesson-purpose{gap:10px}.atlas-tutorial-board .atb-lesson-intro .atb-lesson-purpose>div{padding:10px 15px}.atlas-tutorial-board .atb-lesson-intro footer{margin-top:23px}.atlas-tutorial-board .atb-turn-start{justify-content:flex-start;gap:16px;padding-top:25px;padding-bottom:25px}.atlas-tutorial-board .atb-turn-start li{padding:16px;gap:12px}.atlas-tutorial-board .atb-turn-start li>b{font-size:50px}.atlas-tutorial-board .atb-turn-start .atb-main-phase{padding:13px}.atlas-tutorial-board .atb-turn-start footer{margin-top:0}}
+@media(max-width:760px){.atlas-tutorial-board .atb-lesson-intro{grid-template-columns:1fr;align-content:start;padding:25px}.atlas-tutorial-board .atb-lesson-intro figure{display:none}.atlas-tutorial-board .atb-lesson-purpose{grid-template-columns:1fr;gap:8px}.atlas-tutorial-board .atb-lesson-purpose>div{padding:9px 13px}}
+
+.atlas-tutorial-board .atb-splash-brand{position:absolute;right:22px;top:18px;z-index:3;display:flex;align-items:center;gap:7px;color:#aec5d1;font-size:12px;font-weight:650;letter-spacing:.025em;pointer-events:none}.atlas-tutorial-board .atb-splash-brand img{display:block;width:25px;height:25px;object-fit:contain}.atlas-tutorial-board .atb-splash-brand span{opacity:.8}
+@media(max-width:760px){.atlas-tutorial-board .atb-splash-brand{right:15px;top:12px;font-size:10px;gap:5px}.atlas-tutorial-board .atb-splash-brand img{width:20px;height:20px}}
+
+@media(min-height:761px){.atlas-tutorial-board .atb-turn-start{padding:clamp(25px,3.2cqw,52px);gap:clamp(14px,2cqh,24px)}.atlas-tutorial-board .atb-turn-start li{padding:clamp(16px,1.4cqw,24px);gap:14px}.atlas-tutorial-board .atb-turn-start li>b{font-size:clamp(45px,4cqw,64px)}}
+
+/* The tutorial uses the former chat space for readable card inspection. */
+.atlas-tutorial-board .atb-sidebar,.atlas-tutorial-board .atb-sidebar[data-preview="false"]{grid-template-rows:auto minmax(45px,10%) auto minmax(0,1fr) auto;gap:7px}
+.atlas-tutorial-board .atb-sidebar>header{min-height:43px}.atlas-tutorial-board .atb-chain{flex:none;overflow:visible;gap:5px;padding-bottom:7px}.atlas-tutorial-board .atb-chain>small,.atlas-tutorial-board .atb-inspection>small{font-size:9px;letter-spacing:.08em;color:#a3bdcb}.atlas-tutorial-board .atb-chain-items{max-height:100px;margin:2px 0}
+.atlas-tutorial-board .atb-inspection{display:flex;flex-direction:column;gap:7px;min-height:0;overflow:hidden}.atlas-tutorial-board .atb-inspection .atb-preview{padding:3px 2px 10px;scrollbar-width:thin;overscroll-behavior:contain}.atlas-tutorial-board .atb-inspection .atb-preview>img{max-height:none;width:100%;height:auto;aspect-ratio:744/1039;object-fit:contain}.atlas-tutorial-board .atb-inspection .atb-preview>strong{font-size:13px;margin-top:8px}.atlas-tutorial-board .atb-inspection .atb-preview>p{font-size:12px;line-height:1.55;margin-top:7px}
+.atlas-tutorial-board .atb-sidebar-actions{display:flex;gap:7px;border-top:1px solid #93b1c336;padding-top:6px}.atlas-tutorial-board .atb-sidebar-actions button{display:flex;align-items:center;justify-content:center;gap:5px;padding:5px 9px;font-size:11px;border:1px solid #7594aa66;border-radius:5px;background:#213c50;color:#c5dae5}.atlas-tutorial-board .atb-sidebar-actions svg{width:14px;height:14px}.atlas-tutorial-board .atb-sidebar-actions button:last-child{margin-left:auto}
+/* The table retains its Atlas geometry; persistent controls get readable floors. */
+.atlas-tutorial-board .atb-float{font-size:clamp(11px,.85cqw,14px);width:8%}.atlas-tutorial-board .atb-float small{font-size:10px}.atlas-tutorial-board .atb-zone-label{font-size:10px;color:#9eb5c7a8;letter-spacing:.06em}.atlas-tutorial-board .atb-field-control{font-size:10px;color:#b8ced7}.atlas-tutorial-board .atb-runes>small{font-size:10px}.atlas-tutorial-board .atb-turn-actions button{font-size:clamp(11px,.8cqw,13px);min-height:30px}.atlas-tutorial-board .atb-tools button{width:28px;height:28px;padding:5px}.atlas-tutorial-board .atb-tools svg{width:16px;height:16px}.atlas-tutorial-board .atb-sidebar header>div:first-child{padding-right:64px}.atlas-tutorial-board .atb-sidebar header span{font-size:11px}.atlas-tutorial-board .atb-sidebar header>small{font-size:10px}.atlas-tutorial-board .atb-log p{font-size:11px}.atlas-tutorial-board .atb-name{font-size:12px}.atlas-tutorial-board .atb-name small{font-size:10px}
+.atlas-tutorial-board .atb-sidebar,.atlas-tutorial-board .atb-sidebar[data-preview=false]{grid-template-rows:auto minmax(36px,64px) auto minmax(0,1fr) auto}.atlas-tutorial-board[data-decision=true] .atb-sidebar{grid-template-rows:auto minmax(25px,45px) auto auto minmax(0,1fr) auto}.atlas-tutorial-board .atb-accessible-actions{display:flex;flex-direction:column;gap:6px;padding-top:7px;border-top:1px solid #9ab8c23b}.atlas-tutorial-board .atb-visible-card-actions{display:flex;align-items:center;gap:7px;padding:8px;border:1px solid #9ab8c266;border-radius:5px;background:#234353;text-align:left;font-size:12px;min-height:40px}.atlas-tutorial-board .atb-visible-card-actions svg{width:17px;height:17px;flex:none}.atlas-tutorial-board .atb-visible-card-actions strong{display:block;font-size:10px;font-weight:400;line-height:1.45;color:#b8d2dd;max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.atlas-tutorial-board .atb-table-action-list{font-size:11px;line-height:1.45}.atlas-tutorial-board .atb-table-action-list summary{padding:8px 4px;cursor:pointer;color:#ddcca6}.atlas-tutorial-board .atb-table-action-list>div{display:grid;grid-template-columns:1fr 1fr;gap:5px;padding:4px 0;max-height:150px;overflow:auto}.atlas-tutorial-board .atb-table-action-list button{font-size:11px;line-height:1.4;min-height:36px;padding:6px;border:1px solid #7191a55c;border-radius:4px;background:#254858}.atlas-tutorial-board .atb-card-menu{font-size:13px}.atlas-tutorial-board .atb-card-menu button{min-height:36px}.atlas-tutorial-board .atb-card-menu button small{font-size:11px}
+.atlas-tutorial-board .atb-decision{padding:12px 9px;border:1px solid #d0ba8277;border-radius:7px;background:#2b414a}.atlas-tutorial-board .atb-decision>small{font-size:10px;letter-spacing:.08em;color:#edcf91}.atlas-tutorial-board .atb-decision h3{font-size:14px;line-height:1.45;margin:7px 0 11px}.atlas-tutorial-board .atb-decision>div{display:flex;flex-direction:column;gap:7px}.atlas-tutorial-board .atb-decision button{padding:9px;border:1px solid #9db7c075;border-radius:5px;background:#1a3341;text-align:left;font-size:12px;line-height:1.45;min-height:38px}.atlas-tutorial-board .atb-decision button:hover{border-color:#edcf91;background:#354a4d}.atlas-tutorial-board .atb-decision p{font-size:10px;line-height:1.5;color:#bad1dc;margin:9px 0 0}.atlas-tutorial-board .atb-decision p[role=status]{color:#f0d7a5}
+
+.atlas-tutorial-board[data-decision=true] .atb-sidebar{grid-template-rows:auto auto auto minmax(80px,1fr) auto}.atlas-tutorial-board[data-decision=true] .atb-log{display:none}.atlas-tutorial-board[data-decision=true] .atb-table-action-list{display:none}.atlas-tutorial-board .atb-decision{max-height:40cqh;overflow:auto;overscroll-behavior:contain}
+
+.atlas-tutorial-board[data-mode=explore] .atb-sidebar header>div:first-child{padding-right:0;flex-wrap:wrap}
+
+.atlas-tutorial-board .atb-inspection .atb-preview-battlefield>img{aspect-ratio:1039/744}
+
+.atlas-tutorial-board .atb-card[data-ready="false"] .atb-buff-counter{transform:rotate(-90deg)}
+.atlas-tutorial-board .atb-unit-values{display:flex;flex-direction:column;gap:3px;margin:0 0 8px;padding:8px;border:1px solid #adc9b788;border-radius:5px;background:#173a40;text-align:left;font-size:12px;line-height:1.4;color:#d7ebe7}.atlas-tutorial-board .atb-unit-values strong{color:#f5d79a;font-size:13px}
+.atb-position-context { border:1px solid #8d74b7; border-radius:12px; padding:12px 16px; margin:12px 0; background:#29213d; }
+.atb-position-context strong { color:#ead8ff; font-size:15px; }
+.atb-position-context p { margin:6px 0 !important; font-size:14px !important; }
+.atb-position-context small { display:block; color:#c7ccd8; font-size:12px; }
+.atb-position-context[data-kind="main-game"] { background:#152e39; border-color:#457b88; }
+
+/* A partly cropped hand card must not scroll the whole table when focused. */
+.atlas-tutorial-board .atb-table { overflow:clip; }
+
+/* Scoring history is independent for each player and does not indicate control. */
+.atlas-tutorial-board .atb-field-footer{position:absolute;bottom:0;left:0;right:0;min-height:25px;padding:3px 5px;display:flex;align-items:center;justify-content:space-between;gap:8px;z-index:6;pointer-events:none}
+.atlas-tutorial-board .atb-field-footer .atb-field-control{position:static;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;line-height:18px;letter-spacing:0}
+.atlas-tutorial-board .atb-scored-status{display:flex;flex:0 0 auto;align-items:center;gap:4px;font-size:10px;line-height:16px;white-space:nowrap;color:#b8cad2}
+.atlas-tutorial-board .atb-scored-label{margin-right:2px}
+.atlas-tutorial-board .atb-scored-chip{display:inline-flex;align-items:center;padding:1px 5px;border:1px solid #7494a655;border-radius:4px;background:#102736;color:#b6c5ce}
+.atlas-tutorial-board .atb-scored-chip b{display:inline-block;min-width:10px;text-align:center;font-size:11px;font-weight:700}
+.atlas-tutorial-board .atb-scored-chip[data-scored=true]{border-color:#e8c88b88;background:#3b382c;color:#ffe0a8}
+.atlas-tutorial-board .atb-battlefield[data-scoring-status=true] .atb-field-footer{background:#142b3cf2;border-top:1px solid #9ab8c322}
+.atlas-tutorial-board .atb-battlefield[data-scoring-status=true] .atb-field-side.atb-player{padding-bottom:29px}
+@container(max-width:1000px){.atlas-tutorial-board .atb-scored-time{display:none}.atlas-tutorial-board .atb-field-footer{gap:4px}.atlas-tutorial-board .atb-scored-chip{padding-inline:3px}}
+
+/* Cinematic classroom: the Atlas zones stay in place; reading has its own rail. */
+.atlas-tutorial-board{--atb-reader-width:clamp(210px,17vw,260px);--atb-gold:#dfc187;--atb-line:#dfc18728;--atb-dim:#91a1b2;color:#e5e9ee;background:#101c29;border:1px solid #dfc18728;border-radius:12px;box-shadow:0 14px 44px #03091233}
+.atlas-tutorial-board .atb-table{background:radial-gradient(ellipse at 48% 50%,#27384a55,transparent 70%),#142231}
+.atlas-tutorial-board[data-mode=tutorial] .atb-table{right:var(--atb-reader-width)}
+.atlas-tutorial-board[data-mode=tutorial] .atb-sidebar{width:var(--atb-reader-width);padding:12px;background:#0c1622;border-left:1px solid var(--atb-line);grid-template-rows:auto minmax(28px,40px) auto minmax(0,1fr) auto;gap:9px;overflow:auto;scrollbar-width:thin;overscroll-behavior:contain}
+.atlas-tutorial-board[data-mode=tutorial][data-decision=true] .atb-sidebar{grid-template-rows:auto auto auto minmax(95px,1fr) auto}
+.atlas-tutorial-board .atb-base,.atlas-tutorial-board .atb-battlefield{border-color:#8ea4b32c;background:#111d2a40}
+.atlas-tutorial-board .atb-hand{border-color:#8ea4b32c}
+.atlas-tutorial-board .atb-zone-label{color:#91a1b29c;letter-spacing:.08em;font-size:9px}
+.atlas-tutorial-board .atb-name{color:#b8c3ce}
+.atlas-tutorial-board .atb-sidebar>header{padding-bottom:7px;border-bottom:1px solid var(--atb-line);min-height:48px}
+.atlas-tutorial-board .atb-sidebar>header strong{font-size:13px;color:#f3e7cf}
+.atlas-tutorial-board .atb-sidebar>header>small{font-size:10px;color:#a6b0bd;line-height:1.4;text-transform:none}
+.atlas-tutorial-board .atb-tools button{background:#1b2939;border-color:#8297ab33}
+.atlas-tutorial-board .atb-log{border:0;background:transparent;padding:0 3px;opacity:.78;scrollbar-width:thin}
+.atlas-tutorial-board .atb-log p{font-size:10px;line-height:1.45;color:#a6b3bf}
+.atlas-tutorial-board .atb-chain{border-color:var(--atb-line);padding-bottom:8px}
+.atlas-tutorial-board .atb-chain>small,.atlas-tutorial-board .atb-reader-heading>small{font-size:9px;letter-spacing:.14em;font-weight:700;color:var(--atb-gold)}
+.atlas-tutorial-board .atb-chain-items{max-height:96px;scrollbar-width:thin}
+.atlas-tutorial-board .atb-chain-items li{border-color:#8ea4b32c;background:#172535}
+.atlas-tutorial-board .atb-chain-items li small{color:#bea46e}
+.atlas-tutorial-board .atb-chain-items li strong{font-size:11px;line-height:1.4}
+.atlas-tutorial-board .atb-resolve,.atlas-tutorial-board .atb-turn-actions button:not(:disabled){color:#b5c1cc;border:1px solid #8297ab40;background:#1c2b3b;font-weight:600;box-shadow:none}
+.atlas-tutorial-board .atb-resolve[data-guide-target=true],.atlas-tutorial-board .atb-approve,.atlas-tutorial-board .atb-turn-actions button[data-guide-target=true],.atlas-tutorial-board .atb-battlefield-actions button{color:#101c29;border:1px solid var(--atb-gold);background:var(--atb-gold);font-weight:700;box-shadow:0 3px 10px #03091233}
+.atlas-tutorial-board[data-mode=tutorial] .atb-switch-seat{display:none}
+.atlas-tutorial-board .atb-resolve:disabled{color:#8996a6;border-color:#7e91a52c;background:#1b2937;box-shadow:none;opacity:.7}
+.atlas-tutorial-board .atb-reader-heading{display:flex;align-items:center;justify-content:space-between;gap:8px;flex:none;min-height:24px}
+.atlas-tutorial-board .atb-reader-heading button{display:flex;gap:5px;align-items:center;padding:4px 0 4px 6px;background:transparent;border:0;color:#c8b68e;font-size:10px;cursor:pointer}
+.atlas-tutorial-board .atb-reader-heading button svg{width:12px;height:12px}
+.atlas-tutorial-board .atb-reader-heading button:disabled{opacity:.35;cursor:default}
+.atlas-tutorial-board .atb-inspection{gap:8px;min-height:100px}
+.atlas-tutorial-board .atb-inspection .atb-preview{padding:1px 2px 8px;scrollbar-color:#dfc18766 #101c29}
+.atlas-tutorial-board .atb-inspection .atb-preview>img{border-radius:8px;box-shadow:0 7px 18px #0005}
+.atlas-tutorial-board .atb-inspection .atb-preview>strong{font-size:13px;line-height:1.4;color:#e5dcc9}
+.atlas-tutorial-board .atb-inspection .atb-preview>p{font-size:12px;color:#bdc7d0}
+.atlas-tutorial-board .atb-inspect-empty{gap:12px;font-size:12px;line-height:1.65;padding:16px 8px;background:#132131;border:1px dashed #dfc18728;border-radius:8px;color:#94a5b7}
+.atlas-tutorial-board .atb-inspect-empty>strong{font-size:14px;font-weight:500;color:#d6dce3}
+.atlas-tutorial-board .atb-inspect-empty svg{width:25px;height:25px;color:#bda77e}
+.atlas-tutorial-board .atb-accessible-actions{border-color:var(--atb-line);gap:4px}
+.atlas-tutorial-board .atb-visible-card-actions{background:#182636;border-color:#8297ab33;font-size:11px;padding:6px 8px;min-height:36px}
+.atlas-tutorial-board .atb-visible-card-actions strong{color:#99a9b8;max-width:200px}
+.atlas-tutorial-board .atb-table-action-list summary{font-size:10px;padding:6px 3px;color:#a3afbd}
+.atlas-tutorial-board .atb-sidebar-actions{border-color:var(--atb-line)}
+.atlas-tutorial-board .atb-sidebar-actions button{background:#182636;border-color:#8297ab33;color:#aebcc9;padding:5px 8px;font-size:10px}
+.atlas-tutorial-board .atb-battlefield[data-scoring-status=true] .atb-field-footer{background:#101c29f2;border-color:#dfc18720}
+.atlas-tutorial-board .atb-scored-chip{background:#152434;border-color:#8297ab3a}
+.atlas-tutorial-board .atb-scored-chip[data-scored=true]{background:#3b3425;border-color:#dfc18770;color:#f3d79e}
+.atlas-tutorial-board .atb-guide-cue{background:#162535f5;border-color:#dfc187;color:#f1d69c;box-shadow:0 5px 18px #0004}
+.atlas-tutorial-board .atb-preview-battlefield>.atb-battlefield-art,.atlas-tutorial-board .atb-reader-expanded .atb-battlefield-art{position:relative;display:block;width:100%;aspect-ratio:1039/744;overflow:hidden;border-radius:7px}
+.atlas-tutorial-board .atb-preview-battlefield .atb-battlefield-art img,.atlas-tutorial-board .atb-reader-expanded .atb-battlefield-art img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}
+.atlas-tutorial-board .atb-preview-battlefield .atb-battlefield-art[data-portrait=true] img,.atlas-tutorial-board .atb-reader-expanded .atb-battlefield-art[data-portrait=true] img{inset:auto;left:50%;top:50%;width:calc(100% * 744 / 1039);height:auto;aspect-ratio:744/1039;max-width:none;max-height:none;transform:translate(-50%,-50%) rotate(90deg)}
+.atlas-tutorial-board .atb-reader-expanded{position:fixed;inset:0;margin:auto;box-sizing:border-box;width:min(420px,calc(100vw - 24px));max-width:calc(100vw - 24px);height:min(740px,calc(100dvh - 24px));max-height:calc(100dvh - 24px);display:flex;flex-direction:column;gap:14px;padding:17px;background:#0c1622;border:1px solid #dfc18780;border-radius:12px;box-shadow:0 16px 70px #000b;overflow:auto;overscroll-behavior:contain}
+.atlas-tutorial-board .atb-reader-expanded::backdrop{background:#030a13aa}
+.atlas-tutorial-board .atb-reader-expanded>header{display:flex;align-items:center;justify-content:space-between;gap:12px;flex:none}
+.atlas-tutorial-board .atb-reader-expanded>header>div{display:flex;flex-direction:column;gap:5px}
+.atlas-tutorial-board .atb-reader-expanded small{font-size:9px;letter-spacing:.15em;color:var(--atb-gold)}
+.atlas-tutorial-board .atb-reader-expanded strong{font-size:15px;color:#f1e8d6}
+.atlas-tutorial-board .atb-reader-expanded button{flex:none;border:1px solid #dfc18777;border-radius:6px;background:#1a2939;color:#e5d2ac;padding:8px 11px;font-size:12px}
+.atlas-tutorial-board .atb-reader-expanded button kbd{margin-left:4px;font-size:10px;opacity:.7}
+.atlas-tutorial-board .atb-reader-expanded>div{flex:1;min-height:0;display:flex;align-items:center;justify-content:center}
+.atlas-tutorial-board .atb-reader-expanded>div>img{width:100%;height:100%;object-fit:contain;border-radius:8px}
+.atlas-tutorial-board .atb-reader-expanded>p{flex:none;margin:0;color:#9dabb9;font-size:11px;line-height:1.55}
+
+/* A common visual rhythm for every lesson introduction. */
+.atlas-tutorial-board :is(.atb-lesson-intro,.atb-keyword-intro,.atb-mulligan-intro,.atb-turn-start,.atb-opening){background:radial-gradient(ellipse at 82% 34%,#dfc1870b,transparent 56%),linear-gradient(125deg,#142233,#0c1622);scrollbar-width:thin;scrollbar-color:#dfc18766 #101c29}
+.atlas-tutorial-board .atb-splash-brand{right:26px;top:20px;color:#e2cc9f;letter-spacing:.12em;font-size:10px;text-transform:uppercase}
+.atlas-tutorial-board .atb-splash-brand img{width:29px;height:29px}
+.atlas-tutorial-board :is(.atb-lesson-intro-copy,.atb-keyword-intro-copy)>small,.atlas-tutorial-board :is(.atb-mulligan-intro,.atb-turn-start) header>small{color:#dfc187;letter-spacing:.18em;font-size:10px}
+.atlas-tutorial-board :is(.atb-lesson-intro,.atb-keyword-intro,.atb-mulligan-intro,.atb-turn-start) h2{font-family:Georgia,"Times New Roman",serif;font-weight:500;letter-spacing:-.035em;color:#f1e8d6;text-wrap:balance}
+.atlas-tutorial-board :is(.atb-lesson-start,.atb-mulligan-start,.atb-keyword-start),.atlas-tutorial-board .atb-turn-start footer button:not(.atb-splash-back),.atlas-tutorial-board .atb-opening-footer>button{background:#dfc187;border-color:#dfc187;color:#101c29;border-radius:7px;font-size:14px;min-height:45px;padding:12px 21px;box-shadow:0 5px 18px #050a1140}
+.atlas-tutorial-board :is(.atb-lesson-start,.atb-mulligan-start,.atb-keyword-start):hover,.atlas-tutorial-board .atb-turn-start footer button:not(.atb-splash-back):hover{background:#efd4a4;border-color:#efd4a4}
+.atlas-tutorial-board .atb-splash-back,.atlas-tutorial-board .atb-turn-start footer .atb-splash-back{background:transparent;border-color:#8297ab33;color:#a8b3bf;font-size:12px;min-height:40px;padding:10px 15px;font-weight:500;box-shadow:none}
+.atlas-tutorial-board .atb-lesson-intro{grid-template-columns:minmax(0,1.5fr) minmax(260px,.9fr);gap:clamp(25px,5cqw,70px);padding:clamp(45px,6cqh,70px) clamp(30px,5cqw,75px);align-items:center}
+.atlas-tutorial-board .atb-lesson-intro h2{font-size:clamp(32px,3.7cqw,58px);margin:12px 0 16px}
+.atlas-tutorial-board .atb-lesson-intro-copy>p{font-size:clamp(13px,1.15cqw,16px);line-height:1.7;color:#b6c2cf;max-width:66ch;margin-bottom:22px}
+.atlas-tutorial-board .atb-lesson-intro .atb-lesson-purpose{grid-template-columns:repeat(3,minmax(0,1fr));gap:15px}
+.atlas-tutorial-board .atb-lesson-purpose>div,.atlas-tutorial-board .atb-lesson-intro .atb-lesson-purpose>div{padding:11px 0 0;border:0;border-top:1px solid #dfc18755;background:transparent;border-radius:0}
+.atlas-tutorial-board .atb-lesson-purpose dt{color:#dfc187;font-size:10px;letter-spacing:.04em;margin-bottom:8px}
+.atlas-tutorial-board .atb-lesson-purpose dd{color:#aebdca;font-size:12px;line-height:1.65}
+.atlas-tutorial-board .atb-position-context{padding:12px 15px;margin:22px 0 0;background:#1a2635;border-color:#dfc18724;border-radius:7px}
+.atlas-tutorial-board .atb-position-context[data-kind=main-game]{background:#152635;border-color:#8ba5b52d}
+.atlas-tutorial-board .atb-position-context strong{font-size:12px;font-weight:650;color:#e2c994}
+.atlas-tutorial-board .atb-position-context p{font-size:12px!important;line-height:1.6;color:#aab9c7}
+.atlas-tutorial-board .atb-position-context small{font-size:10px;line-height:1.5;color:#8396a8}
+.atlas-tutorial-board .atb-lesson-intro footer{margin-top:23px}
+.atlas-tutorial-board .atb-lesson-art{min-width:0;text-align:center;align-self:center}
+.atlas-tutorial-board .atb-lesson-art>div{display:flex;align-items:center;justify-content:center;min-height:270px;padding:18px 0}
+.atlas-tutorial-board .atb-lesson-art figure{position:relative;width:65%;flex:none;margin:0;transform:translateX(-8px) rotate(-8deg)}
+.atlas-tutorial-board .atb-lesson-art figure[data-featured=true]{z-index:2;transform:translateX(8px) rotate(-6deg)}
+.atlas-tutorial-board .atb-lesson-art figure+figure{margin-left:-34%;transform:translateY(-18px) rotate(9deg);opacity:.76}
+.atlas-tutorial-board .atb-lesson-art figure img{max-width:none;max-height:47cqh;filter:drop-shadow(0 18px 22px #0009)}
+.atlas-tutorial-board .atb-lesson-art figure figcaption{font-size:11px;line-height:1.4;margin-top:10px;color:#d6c5a5}
+.atlas-tutorial-board .atb-lesson-art figure+figure figcaption{visibility:hidden}
+.atlas-tutorial-board .atb-lesson-art>small{display:block;margin-top:22px;font-size:9px;letter-spacing:.16em;color:#8b9bad}
+.atlas-tutorial-board .atb-keyword-intro{grid-template-columns:minmax(240px,.85fr) minmax(340px,1.15fr);padding:clamp(45px,6cqh,70px) 7cqw;gap:6cqw}
+.atlas-tutorial-board .atb-keyword-intro figure{width:min(27cqw,43cqh,350px);transform:rotate(-4deg)}
+.atlas-tutorial-board .atb-keyword-intro figure img{box-shadow:0 20px 60px #0008}
+.atlas-tutorial-board .atb-keyword-intro h2{font-size:clamp(40px,4.7cqw,70px)}
+.atlas-tutorial-board .atb-keyword-definition{font-size:clamp(14px,1.2cqw,18px);line-height:1.7;color:#c6d0da}
+.atlas-tutorial-board .atb-keyword-preview{background:#1b2939;border-color:#dfc18740;border-radius:7px}
+.atlas-tutorial-board .atb-keyword-preview strong{color:#dfc187}
+.atlas-tutorial-board .atb-keyword-comparison>div{background:#162332;border-color:#dfc18728}
+.atlas-tutorial-board .atb-keyword-comparison dt{font-size:11px;color:#d8c49b}
+.atlas-tutorial-board .atb-keyword-comparison dd{color:#afbdca;font-size:12px;line-height:1.6}
+.atlas-tutorial-board .atb-keyword-intro-note{color:#8295a7;font-size:11px}
+.atlas-tutorial-board .atb-mulligan-intro,.atlas-tutorial-board .atb-turn-start{padding:45px clamp(30px,5cqw,75px);gap:20px}
+.atlas-tutorial-board .atb-mulligan-intro h2,.atlas-tutorial-board .atb-turn-start h2{font-size:clamp(32px,3.8cqw,54px)}
+.atlas-tutorial-board .atb-mulligan-rules{border-color:#dfc18733;background:#172433}
+.atlas-tutorial-board .atb-mulligan-rules b{color:#dfc187}
+.atlas-tutorial-board .atb-mulligan-sequence li,.atlas-tutorial-board .atb-turn-start li{background:#172535;border-color:#dfc18725;border-radius:9px;box-shadow:none}
+.atlas-tutorial-board .atb-mulligan-sequence li>b{font-size:15px;color:#eadcc1}
+.atlas-tutorial-board .atb-mulligan-sequence p{color:#adbdca;font-size:12px;line-height:1.65}
+.atlas-tutorial-board .atb-mulligan-why{background:#1b2939;border-color:#dfc187;border-radius:0 7px 7px 0}
+.atlas-tutorial-board .atb-mulligan-why>img{width:65px;transform:rotate(-4deg);box-shadow:0 5px 13px #0005}
+.atlas-tutorial-board .atb-mulligan-why p{font-size:12px;line-height:1.65;color:#b8c4ce}
+.atlas-tutorial-board .atb-turn-start ol{gap:15px}
+.atlas-tutorial-board .atb-turn-start li{padding:18px;gap:15px}
+.atlas-tutorial-board .atb-phase-art{display:flex;align-items:center;justify-content:space-between;height:100px;padding:2px 6px;overflow:hidden}
+.atlas-tutorial-board .atb-phase-art>b{font-family:Georgia,"Times New Roman",serif;font-size:68px;font-weight:400;line-height:1;color:#dfc187}
+.atlas-tutorial-board .atb-phase-art>img{height:90px;max-width:90px;object-fit:contain;transform:rotate(7deg);filter:drop-shadow(0 5px 7px #0007)}
+.atlas-tutorial-board [data-phase=A] .atb-phase-art>img{transform:rotate(-8deg)}
+.atlas-tutorial-board [data-phase=B] .atb-phase-art>img{max-width:110px;transform:none}
+.atlas-tutorial-board .atb-turn-start h3{font-size:20px;margin-bottom:10px;color:#e9ddc5}
+.atlas-tutorial-board .atb-turn-start li p{font-size:12px;line-height:1.7;color:#b2bfcb}
+.atlas-tutorial-board .atb-turn-start li svg{color:#bfaa81;width:18px;height:18px}
+.atlas-tutorial-board .atb-main-phase{padding:14px 20px;background:#182b32;border-color:#8aaba444}
+.atlas-tutorial-board .atb-main-phase strong{font-size:18px;color:#c9dfd9}
+.atlas-tutorial-board .atb-main-phase span{font-size:12px}
+.atlas-tutorial-board .atb-turn-start footer>span{font-size:12px;line-height:1.55}
+.atlas-tutorial-board .atb-opening-heading h2{font-family:Georgia,"Times New Roman",serif;color:#f1e8d6;font-weight:500}
+.atlas-tutorial-board .atb-opening-heading p,.atlas-tutorial-board .atb-opening-footer span{color:#adbdca}
+.atlas-tutorial-board .atb-opening{display:grid;grid-template-rows:auto minmax(0,1fr) auto;gap:18px;padding:clamp(20px,2.4cqw,34px)}
+.atlas-tutorial-board .atb-opening-heading{gap:20px}
+.atlas-tutorial-board .atb-opening-heading>div{min-width:0}
+.atlas-tutorial-board .atb-opening-heading>button{flex:none}
+.atlas-tutorial-board .atb-opening-hand{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));align-items:center;justify-items:center;gap:clamp(12px,1.8cqw,24px);padding:14px 6px 4px;min-height:0}
+.atlas-tutorial-board .atb-opening-choice{width:min(100%,max(110px,calc((100cqh - 340px) * 744 / 1039)));gap:7px;align-self:center}
+.atlas-tutorial-board .atb-opening-choice>strong{font-size:clamp(11px,1.05cqw,15px);line-height:1.35}
+.atlas-tutorial-board .atb-opening-choice>small{font-size:clamp(10px,.85cqw,12px);line-height:1.4}
+.atlas-tutorial-board .atb-opening-footer{width:100%;margin:0 auto;padding:15px 0 0;gap:16px;align-items:center}
+.atlas-tutorial-board .atb-opening-footer .atb-opening-deck{width:43px}
+.atlas-tutorial-board .atb-opening-footer>div:not(.atb-opening-deck){flex:1;min-width:0}
+.atlas-tutorial-board .atb-opening-footer strong{font-size:15px}
+.atlas-tutorial-board .atb-opening-footer>div>span{max-width:620px;font-size:12px;line-height:1.55}
+.atlas-tutorial-board .atb-opening-footer>button{flex:none;min-width:160px;padding:12px 17px;font-size:13px}
+@media(max-height:760px){.atlas-tutorial-board .atb-opening{gap:12px;padding-block:20px}.atlas-tutorial-board .atb-opening-heading h2{font-size:28px}.atlas-tutorial-board .atb-opening-heading p{font-size:12px;line-height:1.5}.atlas-tutorial-board .atb-opening-hand{padding-top:44px}.atlas-tutorial-board .atb-opening-footer{padding-top:12px}.atlas-tutorial-board .atb-opening-footer>div{gap:5px}}
+@container(max-height:540px){.atlas-tutorial-board .atb-opening{display:block;overflow:auto}.atlas-tutorial-board .atb-opening-hand{padding-block:56px 18px}.atlas-tutorial-board .atb-opening-choice{width:min(100%,150px)}}
+.atlas-tutorial-board .atb-setup-tray{background:#101c29f5;border-color:#dfc18766;box-shadow:0 10px 38px #0006}
+.atlas-tutorial-board .atb-setup-piece{background:#172535;border-color:#8297ab33}
+.atlas-tutorial-board .atb-setup-tray header strong{color:#e4c992}
+@media(max-height:760px){.atlas-tutorial-board .atb-lesson-intro{padding-block:42px;gap:35px}.atlas-tutorial-board .atb-lesson-intro h2{font-size:35px;margin:9px 0 12px}.atlas-tutorial-board .atb-lesson-intro-copy>p{font-size:13px;margin-bottom:16px}.atlas-tutorial-board .atb-position-context{margin-top:16px;padding:10px 13px}.atlas-tutorial-board .atb-lesson-intro footer{margin-top:17px}.atlas-tutorial-board .atb-keyword-intro{padding-block:42px}.atlas-tutorial-board .atb-mulligan-intro,.atlas-tutorial-board .atb-turn-start{padding-block:42px 24px;gap:13px}.atlas-tutorial-board .atb-phase-art{height:74px}.atlas-tutorial-board .atb-phase-art>b{font-size:52px}.atlas-tutorial-board .atb-phase-art>img{height:70px}.atlas-tutorial-board .atb-turn-start li{padding:13px;gap:9px}.atlas-tutorial-board .atb-mulligan-why>img{width:54px}}
+@media(max-width:900px){.atlas-tutorial-board .atb-lesson-intro{grid-template-columns:minmax(0,1.4fr) minmax(160px,.6fr);gap:25px;padding-inline:28px}.atlas-tutorial-board .atb-lesson-intro .atb-lesson-purpose{grid-template-columns:1fr;gap:10px}.atlas-tutorial-board .atb-lesson-purpose>div{padding-top:8px}.atlas-tutorial-board .atb-lesson-art figure{width:80%}.atlas-tutorial-board .atb-keyword-intro{grid-template-columns:minmax(170px,.7fr) minmax(260px,1.3fr);padding-inline:30px;gap:30px}.atlas-tutorial-board .atb-turn-start li{flex-direction:column}.atlas-tutorial-board .atb-turn-start ol{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(prefers-reduced-motion:no-preference){.atlas-tutorial-board .atb-lesson-art,.atlas-tutorial-board .atb-keyword-intro-art{animation:atb-cinematic-arrive .48s ease-out both}@keyframes atb-cinematic-arrive{from{opacity:0;translate:0 8px}to{opacity:1;translate:0 0}}}
+
+/* Payment and scoring explanations occupy the reading rail, never the table. */
+.atlas-tutorial-board :is(.atb-payment-guide,.atb-scoring-guide){flex:none;padding:9px;border:1px solid #dfc18735;border-radius:7px;background:#172636;color:#c3cfda}
+.atlas-tutorial-board :is(.atb-payment-guide,.atb-scoring-guide)>header{display:flex;flex-direction:column;gap:3px;margin-bottom:7px}
+.atlas-tutorial-board :is(.atb-payment-guide,.atb-scoring-guide)>header>small,.atlas-tutorial-board .atb-payment-label{font-size:8px;letter-spacing:.08em;font-weight:650;color:#bca87e}
+.atlas-tutorial-board :is(.atb-payment-guide,.atb-scoring-guide)>header>strong{font-size:11px;line-height:1.4;color:#eee1c6}
+.atlas-tutorial-board .atb-cost-symbols{display:flex;flex-wrap:wrap;align-items:center;gap:5px 7px;font-size:10px;line-height:1.4;margin-bottom:7px}
+.atlas-tutorial-board .atb-cost-symbols>span{display:flex;align-items:center;gap:4px}
+.atlas-tutorial-board .atb-cost-symbols>i{font-style:normal;color:#8ca2b5}
+.atlas-tutorial-board .atb-energy-symbol{display:grid;place-items:center;min-width:23px;height:23px;border:2px solid #c6a061;border-radius:50%;background:#eee6cf;color:#172535;font-size:14px;box-shadow:0 0 0 1px #080f18}
+.atlas-tutorial-board .atb-cost-symbols img{width:19px;height:27px;border-radius:3px;object-fit:contain}
+.atlas-tutorial-board .atb-payment-pools{display:flex;gap:5px;flex-wrap:wrap;margin-top:4px}
+.atlas-tutorial-board .atb-payment-pools>span{padding:4px 6px;border-radius:4px;background:#0f1c29;border:1px solid #8ea4b32b;font-size:10px;line-height:1.3;color:#94a9bb}
+.atlas-tutorial-board .atb-payment-pools>span>b{font-size:12px;color:#cfdae3}
+.atlas-tutorial-board .atb-payment-pools>span[data-ready=true]{background:#203a35;border-color:#6ba89955;color:#b8dacd}
+.atlas-tutorial-board .atb-payment-pools>span[data-ready=true]>b{color:#d3eddd}
+.atlas-tutorial-board .atb-rune-payment{display:flex;align-items:center;gap:7px;margin-top:8px;padding-top:7px;border-top:1px solid #8ea4b324}
+.atlas-tutorial-board .atb-rune-payment>img{width:24px;height:34px;border-radius:3px;object-fit:contain;flex:none}
+.atlas-tutorial-board .atb-rune-payment>img[data-gesture=exhaust]{transform:rotate(90deg);margin-inline:5px}
+.atlas-tutorial-board .atb-rune-payment>svg{width:13px;height:13px;color:#c9b584;flex:none}
+.atlas-tutorial-board .atb-rune-payment>span{display:flex;flex-direction:column;gap:3px}
+.atlas-tutorial-board .atb-rune-payment strong{font-size:11px;color:#e1cfac}
+.atlas-tutorial-board .atb-rune-payment small{font-size:9px;line-height:1.4;color:#a2b5c4}
+.atlas-tutorial-board .atb-cost-change{margin:4px 0 7px;font-size:10px;line-height:1.5;color:#d4bf99}
+.atlas-tutorial-board .atb-scoring-guide ol{display:grid;grid-template-columns:1fr 1.25fr 1fr;gap:5px;list-style:none;padding:0;margin:0}
+.atlas-tutorial-board .atb-scoring-guide li{position:relative;display:flex;flex-direction:column;justify-content:space-between;gap:5px;padding:6px 4px;min-height:49px;background:#101d2a;border:1px solid #8ea4b324;border-radius:4px;text-align:center}
+.atlas-tutorial-board .atb-scoring-guide li+li::before{content:"›";position:absolute;left:-5px;top:18px;color:#dfc187;font-size:13px}
+.atlas-tutorial-board .atb-scoring-guide li>small{font-size:7px;line-height:1.3;letter-spacing:.03em;color:#94a9bb}
+.atlas-tutorial-board .atb-scoring-guide li>strong{font-size:10px;line-height:1.3;color:#e3d4b4}
+.atlas-tutorial-board .atb-scoring-guide li:last-child>strong{font-size:14px;color:#e8d09d}
+.atlas-tutorial-board .atb-scoring-guide>p{font-size:10px;line-height:1.5;margin:7px 0 0;color:#a9bdcc}
+.atlas-tutorial-board .atb-scoring-guide[data-result=already-scored] li:last-child>strong{font-size:12px;color:#e8c98e}
+.atlas-tutorial-board .atb-opening-footer>button:disabled{background:#203142;border-color:#7991a43b;color:#a7b6c5;box-shadow:none;opacity:1;cursor:default}
+.atlas-tutorial-board .atb-inspection[data-teaching-context=payment] .atb-preview{display:flex;align-items:center;justify-content:center;overflow:hidden;padding:0;min-height:65px}
+.atlas-tutorial-board .atb-inspection[data-teaching-context=payment] .atb-preview>img{height:100%;width:auto;max-width:100%;aspect-ratio:auto;object-fit:contain}
+.atlas-tutorial-board .atb-inspection[data-teaching-context=payment] .atb-preview>:not(img){display:none}
+.atlas-tutorial-board .atb-inspection[data-teaching-context=scoring] .atb-preview-battlefield{display:flex;align-items:center;justify-content:center;overflow:hidden;padding:0;min-height:50px}
+.atlas-tutorial-board .atb-inspection[data-teaching-context=scoring] .atb-preview-battlefield>.atb-battlefield-art{height:100%;width:auto;max-width:100%;aspect-ratio:1039/744}
+.atlas-tutorial-board .atb-inspection[data-teaching-context=scoring] .atb-preview-battlefield>:not(.atb-battlefield-art){display:none}
+.atlas-tutorial-board[data-decision=true] .atb-inspection[data-teaching-context=scoring]{min-height:95px}
+.atlas-tutorial-board[data-decision=true] .atb-scoring-guide{padding:6px}
+.atlas-tutorial-board[data-decision=true] .atb-scoring-guide>header{margin-bottom:4px}
+.atlas-tutorial-board[data-decision=true] .atb-scoring-guide>header>strong,.atlas-tutorial-board[data-decision=true] .atb-scoring-guide li>small,.atlas-tutorial-board[data-decision=true] .atb-scoring-guide>p,.atlas-tutorial-board[data-decision=true] .atb-inspection[data-teaching-context=scoring] .atb-preview-battlefield{display:none}
+.atlas-tutorial-board[data-decision=true] .atb-scoring-guide li{min-height:24px;justify-content:center;padding:3px 2px}
+.atlas-tutorial-board[data-decision=true] .atb-scoring-guide li+li::before{top:4px}
+.atlas-tutorial-board[data-decision=true] .atb-scoring-guide li>strong{font-size:10px}
+@media(prefers-reduced-motion:no-preference){.atlas-tutorial-board .atb-scored-chip[data-scoring-result],.atlas-tutorial-board .atb-score-track[data-scoring-result] .is-current{animation:atb-score-emphasis .9s ease-out both}@keyframes atb-score-emphasis{0%{box-shadow:0 0 0 0 #dfc187bb}45%{box-shadow:0 0 0 5px #dfc18755}100%{box-shadow:0 0 0 0 #dfc18700}}}
+@container(max-height:580px){.atlas-tutorial-board .atb-inspection[data-teaching-context]{overflow:auto;min-height:80px}.atlas-tutorial-board .atb-inspection[data-teaching-context] .atb-preview{flex:0 0 auto;overflow:visible}.atlas-tutorial-board .atb-inspection[data-teaching-context] .atb-reader-heading{position:sticky;top:0;background:#0c1622;z-index:1}}

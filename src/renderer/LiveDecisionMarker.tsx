@@ -3,7 +3,14 @@ import { Flag, GripVertical } from "lucide-react";
 import { useOwnedPointerGesture } from "./useOwnedPointerGesture";
 import { DEFAULT_MARKER_POSITION, LIVE_DECISION_MARKER_POSITION_KEY, markerPixels, markerPositionAt, parseMarkerPosition, type MarkerBounds, type MarkerPosition } from "./liveDecisionMarkerPosition";
 
-export function LiveDecisionMarker({ onMark, hotkey }: { onMark: () => void; hotkey?: string }) {
+export function LiveDecisionMarker({ onMark }: { onMark: () => void }) {
+  const [hotkey, setHotkey] = useState("");
+  useEffect(() => {
+    let current = true;
+    const unsubscribe = window.riftlite.onDecisionShortcutChanged(label => { current = false; setHotkey(label); });
+    void window.riftlite.getDecisionShortcutLabel().then(label => { if (current) setHotkey(label); }).catch(() => undefined);
+    return () => { current = false; unsubscribe(); };
+  }, []);
   const button = useRef<HTMLButtonElement>(null);
   const [position, setPosition] = useState<MarkerPosition>(() => {
     try { return parseMarkerPosition(window.localStorage.getItem(LIVE_DECISION_MARKER_POSITION_KEY)); }
@@ -106,7 +113,7 @@ export function LiveDecisionMarker({ onMark, hotkey }: { onMark: () => void; hot
         if (suppressClick.current && event.detail !== 0) { suppressClick.current = false; event.preventDefault(); event.stopPropagation(); return; }
         onMark();
       }}
-      title={`Click to mark this decision${hotkey ? ` (${hotkey})` : ""}. Drag to move. Arrow keys reposition; Home resets the position.`}
+      title={`Click to mark this decision${hotkey ? ` (${hotkey})` : ""}. Drag to move. Use arrow keys to reposition or Home to reset.`}
       aria-label="Mark decision" aria-description="Drag to reposition, or use arrow keys while focused. Home resets the position. Enter or Space marks the decision.">
       <GripVertical size={13} className="enhanced-insights-marker-grip" aria-hidden="true" />
       <Flag size={15} aria-hidden="true" />Mark decision

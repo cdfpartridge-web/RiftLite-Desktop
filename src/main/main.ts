@@ -1,4 +1,7 @@
+import { discordSignInAvailability, LOCAL_PRODUCT_PREVIEW_ORIGIN } from "./services/discordSignInAvailability.js";
+import { decisionShortcutLabel } from "../shared/decisionShortcutLabel.js";
 import { loadAccountReplayLibrary } from "./services/accountReplayLibrary.js";
+import { assertReplayPayloadAvailable } from "./services/replayPayloadStore.js";
 import { app, BrowserWindow, clipboard, crashReporter, desktopCapturer, dialog, globalShortcut, ipcMain, Menu, nativeImage, safeStorage, screen, session as electronSession, shell, webContents as electronWebContents } from "electron";
 import { CrashDiagnostics } from "./services/crashDiagnostics.js";
 import type { NativeImage, OpenDialogOptions, SaveDialogOptions, WebContents } from "electron";
@@ -127,9 +130,11 @@ import {
   isAllowedGamePopupNavigation,
   RIFTLITE_RULES_WEBVIEW_PARTITION,
   RIFTLITE_TRAINING_WEBVIEW_PARTITION,
+  RIFTLITE_LOCAL_REPLAY_TEST_PARTITION,
   sameWebFrameIdentity,
   type EmbeddedWebviewPolicy
 } from "../shared/embeddedContentSecurity.js";
+import { localReplayTestFetch, localReplayTestRequestAllowed, localReplayTestRuntimeEnabled, localTestDesktopRequestAllowed } from "./services/localReplayTestIsolation.js";
 import {
   GAME_WEBVIEW_EDITABLE_FOCUS_IPC_CHANNEL,
   GAME_WEBVIEW_INTERACTION_DIAGNOSTIC_IPC_CHANNEL,
@@ -146,10 +151,13 @@ import { publicCommunitySyncEnabled } from "../shared/syncPolicy.js";
 import { normalizeReplayMp4VoiceVolume } from "../shared/replayMp4VoiceVolume.js";
 import {
   RawCaptureIngressLimiter,
+  rawCaptureIngressLoss,
+  validatedRawCaptureLossNotice,
   validatedCaptureEvent,
   validatedRawCaptureFrame,
   validatedTcgaResearchEvent
 } from "../shared/ipcPayloadSecurity.js";
+import { RawCaptureLossNoticeLimiter } from "../shared/rawCaptureLoss.js";
 import {
   TCGA_REPLAY_RESEARCH_BINDING,
   tcgaReplayResearchPageHookSource
@@ -322,6 +330,8 @@ const TCGA_MATCH_LOGGER_SEAT_CAPTURE_ENABLED = true;
 const ATLAS_GAME_PARTITION = GAME_WEBVIEW_PARTITIONS.atlas;
 const IS_PACKAGED_SMOKE_TEST = process.argv.includes("--riftlite-smoke-test");
 const SMOKE_PATHS = resolveRiftLiteSmokePaths(IS_PACKAGED_SMOKE_TEST, process.env);
+const IS_LOCAL_REPLAY_TEST = localReplayTestRuntimeEnabled(process.env.RIFTLITE_LOCAL_REPLAY_TEST, IS_PACKAGED_SMOKE_TEST, SMOKE_PATHS);
+if (IS_LOCAL_REPLAY_TEST) globalThis.fetch = localReplayTestFetch(globalThis.fetch.bind(globalThis));
 const UI_SNAPSHOT_PATH = SMOKE_PATHS?.snapshotPath ?? "";
 const UI_SNAPSHOT_SETUP_ACTION = IS_PACKAGED_SMOKE_TEST
   ? (process.env.RIFTLITE_UI_SNAPSHOT_SETUP_ACTION ?? process.env.RIFTLITE_UI_SNAPSHOT_TOUR_ACTION)?.trim().toLowerCase() ?? ""
@@ -471,6 +481,8 @@ const atlasDeckTrackerFrameDebugCounts = new Map<string, number>();
 const atlasFrameDeduper = new AtlasFrameDeduper();
 const atlasKnownOpponentHandTracker = new AtlasKnownOpponentHandTracker();
 const rawCaptureIngressLimiter = new RawCaptureIngressLimiter();
+const rawCaptureLossNoticeLimiter = new RawCaptureLossNoticeLimiter();
+const rawCaptureDebuggerLossLimiter = new RawCaptureLossNoticeLimiter();
 const replayFrameHashByPlatform = new Map<GamePlatform, { hash: string; capturedAt: number }>();
 const ensuredReplayFrameDirectories = new Set<string>();
 let replayFrameDirectoryCache: { path: string; expiresAt: number } | null = null;
@@ -497,11 +509,18 @@ function installSmokeNetworkIsolation(): void {
     electronSession.fromPartition(RIFTLITE_REPLAY_PARTITION),
     electronSession.fromPartition(RIFTLITE_RULES_WEBVIEW_PARTITION),
     electronSession.fromPartition(RIFTLITE_TRAINING_WEBVIEW_PARTITION),
+    ...(IS_LOCAL_REPLAY_TEST ? [electronSession.fromPartition(RIFTLITE_LOCAL_REPLAY_TEST_PARTITION)] : []),
     ...Object.values(GAME_WEBVIEW_PARTITIONS).map((partition) => electronSession.fromPartition(partition))
   ]);
   for (const targetSession of smokeSessions) {
+    let requestAllowed: typeof localTestDesktopRequestAllowed = riftLiteSmokeNetworkRequestAllowed;
+    if (IS_LOCAL_REPLAY_TEST && targetSession === electronSession.defaultSession) {
+      requestAllowed = localTestDesktopRequestAllowed;
+    } else if (IS_LOCAL_REPLAY_TEST && targetSession === electronSession.fromPartition(RIFTLITE_LOCAL_REPLAY_TEST_PARTITION)) {
+      requestAllowed = localReplayTestRequestAllowed;
+    }
     targetSession.webRequest.onBeforeRequest({ urls: ["<all_urls>"] }, (details, callback) => {
-      callback({ cancel: !riftLiteSmokeNetworkRequestAllowed(details.url) });
+      callback({ cancel: !requestAllowed(details.url, details.resourceType, details.method) });
     });
   }
 }
@@ -534,9 +553,11 @@ const accountCloudSyncQueue = new AccountCloudSyncQueue(
     if (!settings.accountCloudSyncEnabled || !settings.accountUid) {
       return;
     }
+    if (!await store.getPendingAccountCloudRevision(settings.accountUid)) return;
+    checkpointAutomaticMaintenance();
     try {
       await syncService.uploadAccountCloudSync(`${reason}. Account sync updated.`, {
-        automatic: true, checkpoint: checkpointAutomaticMaintenance
+        automatic: true, expectedAccountUid: settings.accountUid, checkpoint: checkpointAutomaticMaintenance
       });
     } catch (error) {
       if (error instanceof GameplayMaintenanceDeferredError) throw error;
@@ -645,7 +666,7 @@ function createStartupWindow(): BrowserWindow | null {
     height: 280,
     minWidth: 420,
     minHeight: 250,
-    title: RIFTLITE_BUILD_IDENTITY.appName,
+    title: IS_LOCAL_REPLAY_TEST ? "RiftLite — Local replay test" : RIFTLITE_BUILD_IDENTITY.appName,
     backgroundColor: "#0c101a",
     autoHideMenuBar: true,
     show: true,
@@ -1078,7 +1099,8 @@ function startAtlasPostgameCollection(): void {
         kind: "debug",
         capturedAt: new Date().toISOString(),
         url: "https://play.riftatlas.com/",
-        payload: { reason: "atlas-postgame-collection", stage: event.stage, outcome: event.outcome, attempt: event.attempt, ...(event.failureReason ? { failureReason: event.failureReason } : {}) }
+        payload: { reason: "atlas-postgame-collection", stage: event.stage, outcome: event.outcome, attempt: event.attempt,
+          ...(event.gameNumber ? { gameNumber: event.gameNumber } : {}), ...(event.failureReason ? { failureReason: event.failureReason } : {}) }
       }).catch(() => undefined);
     },
     query: async (target) => {
@@ -2778,7 +2800,15 @@ function installRawCaptureWebSocketTap(webContents: WebContents): void {
       ? payload.response as Record<string, unknown>
       : {};
     const raw = readDebugString(response.payloadData);
-    if (!raw || raw.length > 1_500_000 || !raw.trim().startsWith("{")) {
+    if (raw.length > 1_500_000) {
+      if (rawCaptureDebuggerLossLimiter.allow(webContents.id)) {
+        const loss = validatedRawCaptureLossNotice({ platform: "atlas", requestUrl, socketId: requestId,
+          ts: Date.now(), reason: "ingress-frame-too-large" });
+        if (loss) rawCaptureService.recordIngressLoss(loss);
+      }
+      return;
+    }
+    if (!raw || !raw.trim().startsWith("{")) {
       return;
     }
     const frame: RawCaptureAppendFramePayload = {
@@ -3810,8 +3840,13 @@ function unregisterReplayHotkeys(): void {
   }
 }
 
+function currentDecisionShortcutLabel(): string {
+  return decisionShortcutLabel(registeredReplayFlagHotkey, process.platform);
+}
+
 async function configureReplayHotkeys(): Promise<void> {
   unregisterReplayHotkeys();
+  mainWindow?.webContents.send("replay:decision-shortcut:changed", "");
   const settings = await store.getSettings();
   const shadowClipHotkey = settings.replayShadowClipHotkey?.trim();
   if (
@@ -3836,11 +3871,13 @@ async function configureReplayHotkeys(): Promise<void> {
       mainWindow?.webContents.send("replay:quick-flag-hotkey");
     });
     registeredReplayFlagHotkey = registered ? flagHotkey : "";
+    mainWindow?.webContents.send("replay:decision-shortcut:changed", currentDecisionShortcutLabel());
   }
 }
 
 async function openExternalResource(url: string): Promise<void> {
-  const parsed = new URL(url);
+  const parsed = new URL(IS_LOCAL_REPLAY_TEST && url === "https://www.riftlite.com/replays?scope=mine"
+    ? `${LOCAL_PRODUCT_PREVIEW_ORIGIN}/replays?scope=mine` : url);
   if (parsed.protocol !== "https:" && parsed.protocol !== "http:" && parsed.protocol !== "mailto:" && parsed.protocol !== "discord:") {
     throw new Error("Only web, Discord, and email links can be opened.");
   }
@@ -4661,6 +4698,7 @@ async function writeReplayBundleFile(filePath: string, bundle: Omit<RiftReplayBu
 }
 
 function replayForExport(replay: ReplayRecord): ReplayRecord {
+  assertReplayPayloadAvailable(replay);
   if (!replay.trim) {
     return sanitizeReplayForBundle(replay);
   }
@@ -4787,6 +4825,7 @@ async function exportReplayFlagsText(replayId: string): Promise<string> {
   if (!replay) {
     throw new Error("Replay not found.");
   }
+  assertReplayPayloadAvailable(replay);
   const match = matches.find((item) => item.id === replay.matchId) ?? replay.matchSnapshot;
   const search = replaySearchMetadata(replay, match);
   const flags = [...(replay.flags ?? [])].sort((a, b) => replayFlagExportSortValue(a) - replayFlagExportSortValue(b));
@@ -8209,7 +8248,7 @@ async function createWindow(): Promise<void> {
     height: bounds.height,
     minWidth: bounds.minWidth,
     minHeight: bounds.minHeight,
-    title: RIFTLITE_BUILD_IDENTITY.appName,
+    title: IS_LOCAL_REPLAY_TEST ? "RiftLite — Local replay test" : RIFTLITE_BUILD_IDENTITY.appName,
     icon,
     backgroundColor: "#0c101a",
     autoHideMenuBar: true,
@@ -8224,6 +8263,7 @@ async function createWindow(): Promise<void> {
     }
   });
   const createdMainWindow = mainWindow;
+  if (IS_LOCAL_REPLAY_TEST) createdMainWindow.on("page-title-updated", event => event.preventDefault());
   createdMainWindow.on("close", (event) => {
     crashDiagnostics?.record("main-window-close-requested", { exportActive: replayMp4ExportLifecycle.active });
     if (!replayMp4ExportLifecycle.active) {
@@ -8282,7 +8322,8 @@ async function createWindow(): Promise<void> {
     void logStartupIssue("app preload error", `${preloadPathValue}\n${formatStartupError(error)}`);
   });
   mainWindow.webContents.on("will-attach-webview", (event, webPreferences, params) => {
-    const policy = embeddedWebviewPolicy(params.src ?? "", params.partition ?? "", isDev);
+    const policy = embeddedWebviewPolicy(params.src ?? "", params.partition ?? "", isDev,
+      IS_LOCAL_REPLAY_TEST && app.getPath("userData") === SMOKE_PATHS?.userData);
     if (!policy) {
       event.preventDefault();
       return;
@@ -8307,6 +8348,21 @@ async function createWindow(): Promise<void> {
     const currentUrl = webContents.getURL();
     if (!policy || (currentUrl && currentUrl !== "about:blank" && !isAllowedEmbeddedNavigation(policy, currentUrl))) {
       webContents.close();
+      return;
+    }
+    if (policy.kind === "local-replay-test") {
+      webContents.session.setPermissionCheckHandler(() => false);
+      webContents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
+      webContents.session.setDisplayMediaRequestHandler((_request, callback) => {
+        createSingleUseDisplayMediaResponder(callback)(null);
+      });
+      webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+      const restrictLocalNavigation = (event: Electron.Event, url: string) => {
+        if (!isAllowedEmbeddedNavigation(policy, url)) event.preventDefault();
+      };
+      webContents.on("will-navigate", restrictLocalNavigation);
+      webContents.on("will-redirect", restrictLocalNavigation);
+      installFullscreenShortcut(webContents);
       return;
     }
     if (
@@ -8523,6 +8579,8 @@ async function createWindow(): Promise<void> {
       guestRecovery.dispose();
       atlasGuestRecoveryByGuest.delete(webContents.id);
       rawCaptureIngressLimiter.forget(webContents.id);
+      rawCaptureLossNoticeLimiter.forget(webContents.id);
+      rawCaptureDebuggerLossLimiter.forget(webContents.id);
       forgetGameWebContents(webContents);
       atlasAutomaticRecoverySafetyFence.forget(webContents.id);
       if (wasCurrentAtlasGuest && atlasKnownOpponentHandTracker.reset()) {
@@ -8741,7 +8799,10 @@ function registerIpc(): void {
         syncService.invalidateLinkedAccountAuth();
         await clearRiftLiteReplayEmbedCookies().catch(() => undefined);
       }
-      const saved = await store.saveSettings(patch);
+      const saved = await store.saveSettings(patch, { recordCloudEdit: true });
+      if (["replayCaptureEnabled", "replayKeyframesEnabled", "replayVideoEnabled"].some(key => Object.prototype.hasOwnProperty.call(patch, key))) {
+        capture.updateReplayCaptureSettings(saved);
+      }
       if (
         accountIdentityChanged ||
         Object.prototype.hasOwnProperty.call(patch, "rawCapture") ||
@@ -8800,7 +8861,7 @@ function registerIpc(): void {
     }
     const saved = await store.updateSettings((current) => ({
       rawCapture: rawCaptureSettingsForAccountUpdate(current, patch, expectedAccountUid)
-    }));
+    }), { recordCloudEdit: true });
     await configureTcgaWebReplayProductCapture();
     if (RIFTREPLAY_CAPTURE_FEATURE_ENABLED) {
       automaticMaintenance.request("pending-replays");
@@ -8815,7 +8876,7 @@ function registerIpc(): void {
     }
     const saved = await store.updateSettings((current) => ({
       rawCapture: rawCaptureSettingsForDiscordHubSelection(current, normalizedHubId, Boolean(selected))
-    }));
+    }), { recordCloudEdit: true });
     await configureTcgaWebReplayProductCapture();
     if (RIFTREPLAY_CAPTURE_FEATURE_ENABLED) {
       automaticMaintenance.request("pending-replays");
@@ -8904,6 +8965,11 @@ function registerIpc(): void {
     await rawCaptureService.sendAtlasHistoryToReplay(replay.id,match.atlasHistory);
   });
   handleTrustedAppIpc("matches:deleted", () => store.getDeletedMatches());
+  handleTrustedAppIpc("scorepad:import-phone-match", (_event, draft: MatchDraft) => enqueueEnhancedInsightsDataMutation(async () => {
+    const added = await store.importPhoneScorepadMatch(draft);
+    if (added) queueAccountCloudSync("Phone Scorepad match imported");
+    return added;
+  }));
   handleTrustedAppIpc("matches:save-draft", async (_event, draft: MatchDraft) => {
     return enqueueEnhancedInsightsDataMutation(async () => {
       const saved = await store.saveMatch(draft);
@@ -9125,6 +9191,7 @@ function registerIpc(): void {
   handleTrustedAppIpc("replays:get", () => store.getReplays());
   handleTrustedAppIpc("replays:deleted", () => store.getDeletedReplays());
   handleTrustedAppIpc("replays:save", (_event, replay: ReplayRecord) => saveReplayWithEnhancedInsightsDataMutation(replay));
+  handleTrustedAppIpc("replays:update-library-metadata", (_event, id, patch) => store.updateReplayLibraryMetadata(id, patch));
   handleTrustedAppIpc("replays:delete", (_event, id: string) => (
     enqueueEnhancedInsightsDataMutation(() => store.deleteReplay(id))
   ));
@@ -9189,6 +9256,9 @@ function registerIpc(): void {
   }));
   handleTrustedAppIpc("replay:embed:prepare", (_event, replayId: string) => prepareRiftLiteReplayEmbed(replayId));
   handleTrustedAppIpc("replay:embed:prepare-library", () => prepareRiftLiteReplayLibraryEmbed());
+  handleTrustedAppIpc("replay:local-test:capability", () => ({
+    enabled: IS_LOCAL_REPLAY_TEST && app.getPath("userData") === SMOKE_PATHS?.userData
+  }));
   handleTrustedAppIpc("replays:import", () => importReplayBundle());
   handleTrustedAppIpc("replays:import-folder", () => importReplayFolder());
   handleTrustedAppIpc("replays:open-folder", async () => {
@@ -9272,6 +9342,8 @@ function registerIpc(): void {
   handleTrustedAppIpc("teams:sync-enabled", () => capture.syncTeams());
   handleTrustedAppIpc("teams:sync-selected", (_event, matchIds: string[], teamIds: string[]) => capture.syncMatchesToTeams(matchIds, teamIds));
   handleTrustedAppIpc("teams:delete-match", (_event, teamId: string, matchId: string) => syncService.deleteTeamMatch(teamId, matchId));
+  handleTrustedAppIpc("replay:decision-shortcut:get", () => currentDecisionShortcutLabel());
+  handleTrustedAppIpc("account:discord-availability", () => discordSignInAvailability(IS_LOCAL_REPLAY_TEST));
   handleTrustedAppIpc("account:link:start", (event) => {
     assertTrustedAppIpcSender(event);
     return syncService.startAccountLink();
@@ -9785,16 +9857,25 @@ function registerIpc(): void {
     resetAtlasKnownOpponentHandForCaptureBoundary(event);
     void capture.handleEvent(event);
   });
+  ipcMain.on("raw-capture:loss", (event, value: unknown) => {
+    if (trustedGameIpcPlatform(event) !== "atlas" || !rawCaptureLossNoticeLimiter.allow(event.sender.id)) return;
+    const loss = validatedRawCaptureLossNotice(value);
+    if (loss) rawCaptureService.recordIngressLoss(loss);
+  });
   ipcMain.on("raw-capture:frame", (event, value: unknown) => {
-    if (
-      trustedGameIpcPlatform(event) !== "atlas" ||
-      !rawCaptureIngressLimiter.allow(event.sender.id, value)
-    ) {
+    if (trustedGameIpcPlatform(event) !== "atlas") return;
+    const rejection = rawCaptureIngressLimiter.check(event.sender.id, value);
+    if (rejection) {
+      const loss = rawCaptureIngressLoss(value, rejection);
+      if (loss) rawCaptureService.recordIngressLoss(loss);
       return;
     }
     const payload = validatedRawCaptureFrame(value);
     if (payload) {
       ingestAtlasRawFrame("game-preload", event.sender, payload, "atlas-preload-frame");
+    } else {
+      const loss = rawCaptureIngressLoss(value, "ingress-invalid-frame");
+      if (loss) rawCaptureService.recordIngressLoss(loss);
     }
   });
   let rendererFaultWindow = 0;
@@ -9881,6 +9962,7 @@ app.whenReady().then(async () => {
       !IS_PACKAGED_SMOKE_TEST
     );
     await runStartupStage("Loading local data", () => store.load());
+    await store.observeAccountCloudEdits(() => queueAccountCloudSync());
     await runStartupStage("Cleaning the replay session", () => (
       clearRiftLiteReplayEmbedCookies().catch((error) => {
         void logStartupIssue("replay embed cookie cleanup failed", error);
@@ -9919,7 +10001,8 @@ app.whenReady().then(async () => {
             window.webContents.send("replay:updated", replay);
           }
         },
-        join(app.getPath("userData"), "Raw Capture Staging")
+        join(app.getPath("userData"), "Raw Capture Staging"),
+        checkpointAutomaticMaintenance
       );
     });
     overlayServer = new OverlayServer(store, () => {

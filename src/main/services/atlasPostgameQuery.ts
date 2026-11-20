@@ -29,7 +29,8 @@ export type AtlasPostgameQueryResult = {
 
 export type AtlasPostgameQueryFailureReason =
   | "authentication" | "network" | "provider-unavailable" | "timeout" | "cancelled"
-  | "permission-or-identity" | "identity" | "format" | "incomplete" | "too-large" | "unknown";
+  | "permission-or-identity" | "identity" | "metadata-identity" | "ownership" | "account-changed"
+  | "missing-ending" | "format" | "incomplete" | "too-large" | "unknown";
 
 export class AtlasPostgameQueryError extends Error {
   readonly code = "atlas_postgame_query_failed";
@@ -40,17 +41,6 @@ export class AtlasPostgameQueryError extends Error {
 
 /** Only fixed categories leave this boundary; never log provider exception text. */
 export function atlasPostgameQueryFailureReason(error: unknown): AtlasPostgameQueryFailureReason {
-  const reasons: AtlasPostgameQueryFailureReason[] = ["authentication", "network", "provider-unavailable", "timeout", "cancelled", "permission-or-identity", "identity", "format", "incomplete", "too-large", "unknown"];
-  try {
-    if (error && typeof error === "object") {
-      const failure = error as { code?: unknown; failureReason?: unknown };
-      if (failure.code === "atlas_postgame_query_failed" && reasons.includes(failure.failureReason as AtlasPostgameQueryFailureReason)) return failure.failureReason as AtlasPostgameQueryFailureReason;
-    }
-  } catch { return "unknown"; }
-  let message: unknown;
-  try { message = typeof error === "string" ? error : error && typeof error === "object" ? (error as { message?: unknown }).message : undefined; }
-  catch { return "unknown"; }
-  if (typeof message !== "string") return "unknown";
   const known: Array<[AtlasPostgameQueryFailureReason, string[]]> = [
     ["authentication", ["Atlas sign-in is unavailable. Sign in to Atlas before collecting the replay.", "Sign in to Atlas before collecting the replay.", "Atlas account token is unavailable.", "Atlas account token is invalid."]],
     ["network", ["Failed to fetch", "fetch failed", "NetworkError when attempting to fetch resource."]],
@@ -58,12 +48,26 @@ export function atlasPostgameQueryFailureReason(error: unknown): AtlasPostgameQu
     ["timeout", ["Atlas replay collection timed out."]],
     ["cancelled", ["Atlas replay collection was cancelled because the game or account changed."]],
     ["permission-or-identity", ["Atlas returned a restricted or mismatched replay."]],
-    ["identity", ["Invalid completed Atlas game.", "Atlas replay does not match this completed duel.", "Atlas replay metadata did not match the completed game.", "The signed-in Atlas account does not own this replay.", "Atlas account changed during replay collection."]],
-    ["incomplete", ["Atlas replay completion could not be confirmed.", "Atlas replay has no completed ending."]],
+    ["identity", ["Invalid completed Atlas game.", "Atlas replay does not match this completed duel.", "Atlas returned a different game."]],
+    ["metadata-identity", ["Atlas replay metadata did not match the completed game."]],
+    ["ownership", ["The signed-in Atlas account does not own this replay."]],
+    ["account-changed", ["Atlas account changed during replay collection."]],
+    ["missing-ending", ["Atlas replay has no completed ending."]],
+    ["incomplete", ["Atlas replay completion could not be confirmed."]],
     ["too-large", ["Atlas replay response exceeded its safe size limit.", "Atlas replay exceeds safe expansion limits.", "Atlas replay exceeds safe import limits.", "Atlas replay is too large to attach safely.", "Atlas replay has too many entries.", "Atlas replay has too many nodes."]],
     ["format", ["Atlas replay has an invalid property.", "Atlas replay has an invalid root.", "Atlas replay has invalid nested data.", "Atlas replay has invalid nodes.", "Atlas replay has invalid references.", "Atlas replay response was empty.", "Atlas returned an invalid replay response.", "Atlas replay request unexpectedly redirected."]],
   ];
-  for (const [reason, messages] of known) if (messages.some(value => message === value || message === "Error: " + value)) return reason;
+  try {
+    const failure = error && typeof error === "object"
+      ? error as { code?: unknown; failureReason?: unknown; message?: unknown } : undefined;
+    if (failure?.code === "atlas_postgame_query_failed") {
+      return known.find(([reason]) => reason === failure.failureReason)?.[0] ?? "unknown";
+    }
+    const message = typeof error === "string" ? error : failure?.message;
+    for (const [reason, messages] of known) {
+      if (messages.some(value => message === value || message === "Error: " + value)) return reason;
+    }
+  } catch { return "unknown"; }
   return "unknown";
 }
 
@@ -219,7 +223,8 @@ async function queryAtlasPostgameInPage(target: AtlasPostgameQueryTarget): Promi
       && state.gameOutcome === undefined && state.gameHistoryEndedAt === undefined;
     const outcome = record(state.gameOutcome) ? state.gameOutcome : null;
     const winners = outcome && Array.isArray(outcome.winnerPlayerIds) ? outcome.winnerPlayerIds : null;
-    if (state.roomCode !== target.roomCode || state.createdAt !== target.roomCreatedAt || state.gameHistoryStartedAt !== target.gameHistoryStartedAt || (state.gameNumber ?? 1) !== target.gameNumber || state.gameVariant !== "duel" || !Array.isArray(state.players) || state.players.length !== 2 || (!archivedBo3Game && (!winners || winners.length !== 1))) throw new Error("Atlas replay does not match this completed duel.");
+    if (state.roomCode !== target.roomCode || state.createdAt !== target.roomCreatedAt || state.gameHistoryStartedAt !== target.gameHistoryStartedAt || (state.gameNumber ?? 1) !== target.gameNumber || state.gameVariant !== "duel" || !Array.isArray(state.players) || state.players.length !== 2) throw new Error("Atlas replay does not match this completed duel.");
+    if (!archivedBo3Game && (!winners || winners.length !== 1)) throw new Error("Atlas replay has no completed ending.");
     if (verifyCompletion) {
       // Atlas's ready metadata supplies finalFrameIndex, not completedAt. The
       // full export must independently prove completion for that exact frame.
@@ -301,6 +306,7 @@ async function queryAtlasPostgameInPage(target: AtlasPostgameQueryTarget): Promi
       if (kind === "state" && key === "bo3CompletedGames") return "completedGame[]";
       if (kind === "completedGame" && ["scoresByPlayerId", "actionClockMsByPlayerId"].includes(key)) return "scalarMap";
       if (kind === "player" && key === "board") return "board";
+      if (kind === "player" && key === "selectedBattlefield") return "card";
       if (kind === "chain" && key === "card") return "card";
       if (kind === "card" && key === "oriannaAnimation") return "animation";
       if (kind === "board" && key === "deckPeek") return "peek";
@@ -372,6 +378,9 @@ async function queryAtlasPostgameInPage(target: AtlasPostgameQueryTarget): Promi
         if ([202, 404, 409].includes(metadataResponse.status)) return { ...base, status: "pending" };
         if (metadataResponse.status === 410) return { ...base, status: "expired" };
         if (metadataResponse.status === 429 || metadataResponse.status >= 500) throw new Error("Atlas replay is temporarily unavailable. Retry collection later.");
+        // Authentication can expire between token issuance and replay retrieval.
+        // Keep the existing bounded retry window; a fresh pass reads auth again.
+        if (metadataResponse.status === 401) throw new Error("Atlas sign-in is unavailable. Sign in to Atlas before collecting the replay.");
         if (metadataResponse.status !== 200) return { ...base, status: "unavailable" };
         const metadata = metadataResponse.value;
         if (!record(metadata) || metadata.gameKey !== gameKey) throw new Error("Atlas replay metadata did not match the completed game.");
@@ -388,6 +397,7 @@ async function queryAtlasPostgameInPage(target: AtlasPostgameQueryTarget): Promi
         if ([202, 404, 409].includes(full.status)) return { ...base, status: "pending" };
         if (full.status === 410) return { ...base, status: "expired" };
         if (full.status === 429 || full.status >= 500) throw new Error("Atlas replay is temporarily unavailable. Retry collection later.");
+        if (full.status === 401) throw new Error("Atlas sign-in is unavailable. Sign in to Atlas before collecting the replay.");
         if (full.status !== 200) return { ...base, status: "unavailable" };
         check(); const replay = await safeReplay(full.value, verifyCompletion ? metadata.finalFrameIndex as number : undefined);
         const final = sessionIdentity(await auth("get-session")); check();

@@ -1,0 +1,98 @@
+.nph-course-intro {
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: clamp(20px, 3vw, 42px);
+  color: #edf4f8;
+  background: radial-gradient(ellipse at 85% 12%, #24565c40, transparent 58%), linear-gradient(135deg, #142c3b, #0b1c2a);
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+}
+.nph-course-intro *, .nph-course-intro *::before, .nph-course-intro *::after { box-sizing: border-box; }
+.nph-course-intro-inner { width: min(100%, 1080px); margin: auto; }
+.nph-course-intro-header { position: relative; padding-right: 110px; }
+.nph-course-intro-brand { position: absolute; top: 0; right: 0; display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 650; color: #bdcfd8; }
+.nph-course-intro-brand img { width: 29px; height: 29px; object-fit: contain; }
+.nph-course-intro-eyebrow { display: block; margin-bottom: 10px; color: #e4c18b; font-size: 10px; font-weight: 700; letter-spacing: .16em; line-height: 1.5; }
+.nph-course-intro h2 { margin: 0 0 12px; color: #f3e8d1; font-size: clamp(28px, 3vw, 40px); font-weight: 600; letter-spacing: -.025em; line-height: 1.15; }
+.nph-course-intro h2:focus { outline: none; }
+.nph-course-intro h3 { margin: 0; font-size: 16px; line-height: 1.35; font-weight: 650; }
+.nph-course-intro p { margin: 0; line-height: 1.6; }
+.nph-course-intro-preview { margin: 0 0 16px; color: #d4e0e9; font-size: 14px; }
+.nph-course-intro-preview summary { width: fit-content; padding: 6px 0; cursor: pointer; }
+.nph-course-intro-preview .nph-lesson-illustration { max-width: 540px; margin: 10px 0; }
+.nph-course-intro-header > p { max-width: 710px; color: #b6cbd6; font-size: 14px; }
+.nph-course-intro-route { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; padding: 0; margin: 24px 0; list-style: none; }
+.nph-course-intro-route li { position: relative; min-width: 0; padding: 17px 20px; border: 1px solid #a7c5d231; border-radius: 11px; background: #28445338; }
+.nph-course-intro-stage { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; color: #a7e5d4; }
+.nph-course-intro-stage > svg { width: 25px; height: 25px; stroke-width: 1.7; }
+.nph-course-intro-stage > span { color: #91abbc; font-size: 12px; letter-spacing: .1em; }
+.nph-course-intro-route h3 { color: #e4edf2; }
+.nph-course-intro-route p { margin-top: 7px; color: #adc3d0; font-size: 12px; }
+.nph-course-intro-route-arrow { position: absolute; top: calc(50% - 9px); right: -18px; width: 17px; height: 17px; color: #9bbac5; }
+.nph-course-intro-guidance { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(270px, 1fr); gap: 20px; align-items: start; }
+.nph-course-intro-guide { min-width: 0; padding: 19px 22px; border: 1px solid #b8a0df8a; border-radius: 11px; background: linear-gradient(135deg, #413356, #27263f); }
+.nph-course-intro-guide-label { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; color: #f1d9a0; }
+.nph-course-intro-guide-label > span { margin-left: auto; color: #d3c2ef; font-size: 9px; letter-spacing: .09em; }
+.nph-course-intro-guide > p { margin-top: 10px; color: #e1d7ed; font-size: 13px; }
+.nph-course-intro-guide > .nph-course-intro-guide-time { color: #c3b8d7; font-size: 12px; }
+.nph-course-intro-controls { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 16px 0 0; padding-top: 13px; border-top: 1px solid #c5afd42e; }
+.nph-course-intro-controls dt { display: flex; align-items: center; gap: 6px; color: #f0dfb9; font-size: 12px; font-weight: 650; }
+.nph-course-intro-controls dt svg { flex-shrink: 0; }
+.nph-course-intro-controls dd { margin: 5px 0 0; color: #c7bdd8; font-size: 11px; line-height: 1.45; }
+.nph-course-intro-pace { min-width: 0; padding: 4px 0; }
+.nph-course-intro-pace h3 { margin-bottom: 12px; color: #e4edf2; }
+.nph-course-intro-pace label { display: block; margin-bottom: 7px; color: #bed1db; font-size: 12px; font-weight: 550; }
+.nph-course-intro-pace select { display: block; width: 100%; min-height: 44px; border: 1px solid #a6c4d157; border-radius: 7px; padding: 10px 12px; background: #142b3a; color: #edf4f8; font: inherit; font-size: 13px; cursor: pointer; }
+.nph-course-intro-pace > .nph-course-intro-pace-detail { margin: 10px 0; min-height: 3.2em; color: #c3d5de; font-size: 12px; }
+.nph-course-intro-pace > small { display: block; color: #97b1c0; font-size: 11px; line-height: 1.6; }
+.nph-course-intro-pace > .nph-course-intro-warning { margin-top: 10px; padding: 9px 11px; border-left: 2px solid #e4c18b; background: #e4c18b0c; color: #f0d7ae; font-size: 12px; }
+.nph-course-intro-actions { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-top: 24px; padding-top: 18px; border-top: 1px solid #a7c5d22b; }
+.nph-course-intro-actions > button { display: inline-flex; align-items: center; justify-content: center; gap: 10px; min-height: 44px; max-width: 100%; padding: 11px 17px; border: 1px solid #a7c5d247; border-radius: 8px; font: inherit; font-size: 13px; font-weight: 600; line-height: 1.5; cursor: pointer; }
+.nph-course-intro-actions > .nph-course-intro-back { background: #91b6c608; color: #c6d8e2; }
+.nph-course-intro-actions > .nph-course-intro-back:hover { background: #91b6c61a; }
+.nph-course-intro-actions > .nph-course-intro-start { border-color: #ecd0a0; background: #e4c18b; color: #172b36; }
+.nph-course-intro-actions > .nph-course-intro-start:hover { background: #f1d5a9; }
+.nph-course-intro button:focus-visible, .nph-course-intro select:focus-visible { outline: 3px solid #a7e5d4; outline-offset: 4px; }
+@media (max-height: 760px) and (min-width: 901px) {
+  .nph-course-intro { padding: 20px 30px; }
+  .nph-course-intro h2 { font-size: 32px; margin-bottom: 9px; }
+  .nph-course-intro-route { margin: 18px 0; }
+  .nph-course-intro-route li { padding: 13px 18px; }
+  .nph-course-intro-stage { margin-bottom: 7px; }
+  .nph-course-intro-guide { padding: 16px 20px; }
+  .nph-course-intro-controls { margin-top: 13px; padding-top: 11px; }
+  .nph-course-intro-actions { margin-top: 18px; padding-top: 14px; }
+}
+@media (max-width: 900px) {
+  .nph-course-intro { padding: 24px; }
+  .nph-course-intro-guidance { grid-template-columns: 1fr; }
+  .nph-course-intro-pace > .nph-course-intro-pace-detail { min-height: 0; }
+}
+@media (max-width: 620px) {
+  .nph-course-intro { padding: 20px; }
+  .nph-course-intro-header { padding-right: 0; }
+  .nph-course-intro-brand { position: static; margin-bottom: 18px; }
+  .nph-course-intro-route { grid-template-columns: 1fr; gap: 10px; }
+  .nph-course-intro-route-arrow { display: none; }
+  .nph-course-intro-stage { float: right; gap: 12px; margin: 0 0 8px 12px; }
+  .nph-course-intro-route p { clear: both; }
+  .nph-course-intro-guide { padding: 17px; }
+  .nph-course-intro-guide-label > span { flex-basis: 100%; margin-left: 25px; }
+  .nph-course-intro-controls { gap: 9px; }
+  .nph-course-intro-actions > button { flex: 1 1 190px; }
+}
+
+/* The illustrated opening uses the same edges as the classroom. Keep prose at a reading measure. */
+.nph-course-intro .nph-course-intro-inner { width: 100%; max-width: none; }
+.nph-course-intro .nph-course-intro-header > p { max-width: 68ch; font-size: clamp(15px, 1.05vw, 19px); }
+.nph-course-intro .nph-course-intro-route p,
+.nph-course-intro .nph-course-intro-guide > p,
+.nph-course-intro .nph-course-intro-pace-detail { font-size: clamp(14px, .95vw, 17px); }
+.nph-course-intro .nph-course-intro-route h3,
+.nph-course-intro .nph-course-intro-guidance h3 { font-size: clamp(17px, 1.18vw, 22px); }
+.nph-course-intro .nph-course-intro-controls dd { font-size: clamp(12px, .85vw, 15px); }
+.nph-course-intro .nph-course-intro-preview .nph-lesson-illustration { max-width: min(100%, 780px); }

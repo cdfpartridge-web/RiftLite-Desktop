@@ -7,6 +7,9 @@ vi.mock("electron", () => ({
 }));
 
 import { FirebaseSyncService } from "../src/main/services/firebaseSync";
+import { AccountCloudSyncQueue } from "../src/main/services/accountCloudSyncQueue";
+import { HttpStatusError } from "../src/main/services/httpDeadline";
+import { ACCOUNT_CLOUD_MAX_DECODED_BYTES } from "../src/main/services/accountCloudBackupCodec";
 import { GameplayMaintenanceDeferredError } from "../src/main/services/gameplayMaintenanceScheduler";
 import type { RiftLiteStore } from "../src/main/services/store";
 import type { RiftLiteBackupFile, UserSettings } from "../src/shared/types";
@@ -233,8 +236,19 @@ function conflictApiPayload(id: string, current: ApiCloudManifest, legacy: ApiCl
 
 function harness(initialBackup?: RiftLiteBackupFile) {
   let settings = baseSettings();
+  let publicationReceipt = "";
   let exportedBackup = initialBackup ?? backup(settings);
   const store = {
+    getPendingAccountCloudRevision: vi.fn(async () => null),
+    acknowledgeAccountCloudRevision: vi.fn(async () => undefined),
+    readCloudPublicationReceipt: vi.fn(async () => publicationReceipt),
+    writeCloudPublicationReceipt: vi.fn(async (value: string, guard: () => boolean) => {
+      if (!guard()) throw new Error("Account changed");
+      publicationReceipt = value;
+    }),
+    discardCloudPublicationReceipt: vi.fn(async (value: string) => {
+      if (publicationReceipt === value) publicationReceipt = "";
+    }),
     getSettings: vi.fn(async () => settings),
     saveSettings: vi.fn(async (patch: Partial<UserSettings>) => {
       settings = { ...settings, ...patch };
@@ -280,7 +294,71 @@ function replaceFirestoreRequest(
   return request;
 }
 
+/** In-memory Firestore with actual immutable chunk reads and conditional commits. */
+function memoryCloud(service: FirebaseSyncService, initial: Record<string, unknown> | null = manifestDocument()) {
+  let current = initial;
+  let revision = 0;
+  const chunks = new Map<string, Record<string, unknown>>();
+  const state = {
+    chunks,
+    current: () => current,
+    onManifestWrite: async (_options: RequestOptions, commit: () => void): Promise<void> => { commit(); }
+  };
+  const request = replaceFirestoreRequest(service, async (path, _token, options) => {
+    if (path.endsWith("/manifest/current")) {
+      if (options.method === "GET") {
+        if (!current) throw new HttpStatusError("Firestore 404", 404);
+        return current;
+      }
+      if (options.method === "PATCH") {
+        const commit = () => {
+          const matches = options.precondition?.updateTime
+            ? current?.updateTime === options.precondition.updateTime
+            : options.precondition?.exists === false && current === null;
+          if (!matches) throw new HttpStatusError('Firestore 400: {"error":{"status":"FAILED_PRECONDITION"}}', 400);
+          current = { fields: options.body?.fields ?? {}, updateTime: `committed-${++revision}` };
+        };
+        await state.onManifestWrite(options, commit);
+        return current ?? {};
+      }
+    }
+    if (path.includes("/chunks/")) {
+      if (options.method === "PATCH") {
+        expect(chunks.has(path)).toBe(false);
+        chunks.set(path, { fields: options.body?.fields ?? {} });
+        return {};
+      }
+      if (options.method === "DELETE") { chunks.delete(path); return {}; }
+      if (options.method === "GET") {
+        const chunk = chunks.get(path);
+        if (!chunk) throw new HttpStatusError("Firestore 404: chunk missing", 404);
+        return chunk;
+      }
+    }
+    throw new Error(`Unexpected synthetic cloud request: ${options.method} ${path}`);
+  });
+  return { ...state, request, setManifestWriter: (writer: typeof state.onManifestWrite) => { state.onManifestWrite = writer; } };
+}
+
+function publicationTimeout(): Error {
+  return Object.assign(new Error("Firestore response timed out"), { name: "TimeoutError" });
+}
+
 describe("FirebaseSyncService account cloud sync", () => {
+  it("acknowledges the revision covered by a successful upload and rejects another account’s queued work", async () => {
+    const { service, store } = harness();
+    await store.saveSettings({ accountCloudSyncEnabled: true });
+    const cloud = memoryCloud(service, null);
+    vi.mocked(store.getPendingAccountCloudRevision).mockResolvedValue("revision-before-export");
+    await expect(service.uploadAccountCloudSync("Pending", { automatic: true, expectedAccountUid: "other" })).rejects.toThrow("account changed");
+    expect(cloud.request).not.toHaveBeenCalled();
+    cloud.setManifestWriter(async (_options, commit) => {
+      vi.mocked(store.getPendingAccountCloudRevision).mockResolvedValue("edit-during-upload");
+      commit();
+    });
+    await service.uploadAccountCloudSync("Pending", { automatic: true, expectedAccountUid: "account-1" });
+    expect(store.acknowledgeAccountCloudRevision).toHaveBeenCalledExactlyOnceWith("account-1", "revision-before-export");
+  });
   it("retries a transient account-link transport failure once", async () => {
     const { service } = harness();
     const request = vi.fn()
@@ -379,6 +457,392 @@ describe("FirebaseSyncService account cloud sync", () => {
     const manifestWrite = (request.mock.calls as Array<[string, string, RequestOptions]>)
       .find(([path, , options]) => options.method === "PATCH" && path.endsWith("/manifest/current"));
     expect(manifestWrite?.[2].precondition).toEqual({ exists: false });
+  });
+
+  it.each(["timeout", "network"])("confirms its exact committed publication after a lost %s response", async failure => {
+    const { service, store, getSettings } = harness();
+    await store.saveSettings({ accountCloudSyncEnabled: true, accountCloudSyncRemoteGenerationId: "generation-old" });
+    let currentManifest = manifestDocument();
+    const request = replaceFirestoreRequest(service, async (path, _token, options) => {
+      if (options.method === "GET") return currentManifest;
+      if (options.method === "PATCH" && path.endsWith("/manifest/current")) {
+        currentManifest = { fields: options.body?.fields ?? {}, updateTime: "2026-11-07T12:00:00.000Z" };
+        throw failure === "timeout" ? Object.assign(new Error("Firestore response timed out"), { name: "TimeoutError" }) : new TypeError("fetch failed");
+      }
+      return {};
+    });
+    const status = await service.uploadAccountCloudSync("Background update", { automatic: true });
+    const generation = (currentManifest.fields as Record<string, { stringValue: string }>).generation_id.stringValue;
+    expect(status).toMatchObject({ enabled: true, requiresUserChoice: false });
+    expect(getSettings()).toMatchObject({ accountCloudSyncRemoteGenerationId: generation, accountCloudSyncLastError: "" });
+    expect(request.mock.calls.filter(([path, , options]) => options.method === "PATCH" && path.endsWith("/manifest/current"))).toHaveLength(1);
+    expect(request.mock.calls.some(([path, , options]) => options.method === "DELETE" && path.includes(generation))).toBe(false);
+    expect(request.mock.calls.some(([path, , options]) => options.method === "DELETE" && path.includes("generation-old"))).toBe(true);
+  });
+
+  it("keeps candidate chunks when the original manifest commits after old-manifest confirmation reads", async () => {
+    const { service, store } = harness();
+    await store.saveSettings({ accountCloudSyncEnabled: true, accountCloudSyncRemoteGenerationId: "generation-old" });
+    const cloud = memoryCloud(service);
+    let delayedCommit!: () => void;
+    cloud.setManifestWriter(async (_options, commit) => { delayedCommit = commit; throw publicationTimeout(); });
+    await expect(service.uploadAccountCloudSync("Final edit", { automatic: true })).rejects.toMatchObject({ name: "TimeoutError" });
+    expect(cloud.chunks.size).toBe(1);
+    expect(cloud.request.mock.calls.some(([, , options]) => options.method === "DELETE")).toBe(false);
+    delayedCommit();
+    await expect(service.restoreAccountCloudSync()).resolves.toMatchObject({ hasRemoteBackup: true });
+    expect(store.restoreBackupData).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { existing: true, originalWins: false },
+    { existing: false, originalWins: false },
+    { existing: true, originalWins: true },
+    { existing: false, originalWins: true }
+  ])("retries the exact pending CAS before newer data (existing=$existing, original wins=$originalWins)", async ({ existing, originalWins }) => {
+    const { service, store, setBackup, getSettings } = harness();
+    await store.saveSettings({ accountCloudSyncEnabled: true, accountCloudSyncRemoteGenerationId: existing ? "generation-old" : "" });
+    const cloud = memoryCloud(service, existing ? manifestDocument() : null);
+    let delayedCommit!: () => void;
+    cloud.setManifestWriter(async (_options, commit) => { delayedCommit = commit; throw publicationTimeout(); });
+    await expect(service.uploadAccountCloudSync("First edit", { automatic: true })).rejects.toMatchObject({ name: "TimeoutError" });
+    const firstWrite = cloud.request.mock.calls.find(([path, , options]) => path.endsWith("/manifest/current") && options.method === "PATCH")![2];
+    const newer = backup(getSettings()); newer.settings.username = "Newer edit"; setBackup(newer);
+    let retry = true;
+    cloud.setManifestWriter(async (_options, commit) => {
+      if (retry && originalWins) delayedCommit();
+      retry = false;
+      commit();
+    });
+    await expect(service.uploadAccountCloudSync("Newer edit", { automatic: true })).resolves.toMatchObject({ enabled: true, requiresUserChoice: false });
+    const writes = cloud.request.mock.calls.filter(([path, , options]) => path.endsWith("/manifest/current") && options.method === "PATCH");
+    expect(writes).toHaveLength(3);
+    expect(writes[1][2]).toEqual(firstWrite);
+    expect(writes[2][2].precondition).toEqual({ updateTime: "committed-1" });
+    expect(() => delayedCommit()).toThrow("FAILED_PRECONDITION");
+    await service.restoreAccountCloudSync();
+    expect(vi.mocked(store.restoreBackupData).mock.calls[0][0].settings.username).toBe("Newer edit");
+    expect(cloud.chunks.size).toBe(1);
+  });
+
+  it("retains one candidate through repeated ambiguous retries instead of allocating newer generations", async () => {
+    const { service, store } = harness();
+    await store.saveSettings({ accountCloudSyncEnabled: true, accountCloudSyncRemoteGenerationId: "generation-old" });
+    const cloud = memoryCloud(service);
+    let delayedCommit!: () => void;
+    cloud.setManifestWriter(async (_options, commit) => { delayedCommit = commit; throw publicationTimeout(); });
+    await expect(service.uploadAccountCloudSync("Final edit", { automatic: true })).rejects.toMatchObject({ name: "TimeoutError" });
+    await expect(service.uploadAccountCloudSync("Retry", { automatic: true })).rejects.toMatchObject({ status: 503 });
+    await expect(service.uploadAccountCloudSync("Retry again", { automatic: true })).rejects.toMatchObject({ status: 503 });
+    expect(store.exportBackupData).toHaveBeenCalledOnce();
+    expect(cloud.chunks.size).toBe(1);
+    delayedCommit();
+    await service.restoreAccountCloudSync();
+    expect(store.restoreBackupData).toHaveBeenCalledOnce();
+  });
+
+  it.each([409, 412])("does not delete an ambiguous candidate after generic HTTP %i on retry", async status => {
+    const { service, store } = harness();
+    await store.saveSettings({ accountCloudSyncEnabled: true, accountCloudSyncRemoteGenerationId: "generation-old" });
+    const cloud = memoryCloud(service);
+    let delayedCommit!: () => void;
+    cloud.setManifestWriter(async (_options, commit) => { delayedCommit = commit; throw publicationTimeout(); });
+    await expect(service.uploadAccountCloudSync("Final edit", { automatic: true })).rejects.toMatchObject({ name: "TimeoutError" });
+    cloud.setManifestWriter(async () => { throw new HttpStatusError(`Firestore ${status}: {"error":{"status":"ABORTED"}}`, status); });
+    await expect(service.uploadAccountCloudSync("Retry", { automatic: true })).rejects.toMatchObject({ status: 503 });
+    expect(cloud.chunks.size).toBe(1);
+    delayedCommit();
+    await service.restoreAccountCloudSync();
+    expect(store.restoreBackupData).toHaveBeenCalledOnce();
+  });
+
+  it.each([409, 412, 403])("retains a sent candidate after an unproven initial HTTP %i failure", async status => {
+    const { service, store } = harness();
+    await store.saveSettings({ accountCloudSyncEnabled: true, accountCloudSyncRemoteGenerationId: "generation-old" });
+    const cloud = memoryCloud(service);
+    let delayedCommit!: () => void;
+    cloud.setManifestWriter(async (_options, commit) => {
+      delayedCommit = commit;
+      throw new HttpStatusError(`Firestore ${status}`, status);
+    });
+    await expect(service.uploadAccountCloudSync("Final edit", { automatic: true })).rejects.toMatchObject({ status: status === 403 ? 403 : 503 });
+    expect(cloud.chunks.size).toBe(1);
+    expect(cloud.request.mock.calls.some(([, , options]) => options.method === "DELETE")).toBe(false);
+    delayedCommit();
+    await service.restoreAccountCloudSync();
+    expect(store.restoreBackupData).toHaveBeenCalledOnce();
+  });
+
+  it("refuses to replace another device's revision while an old publication is pending", async () => {
+    const { service, store, getSettings } = harness();
+    await store.saveSettings({ accountCloudSyncEnabled: true, accountCloudSyncRemoteGenerationId: "generation-old" });
+    const cloud = memoryCloud(service);
+    let delayedCommit!: () => void;
+    cloud.setManifestWriter(async (_options, commit) => { delayedCommit = commit; throw publicationTimeout(); });
+    await expect(service.uploadAccountCloudSync("Final edit", { automatic: true })).rejects.toMatchObject({ name: "TimeoutError" });
+    Object.assign(cloud.current()!, manifestDocument({ generationId: "another-device", updateTime: "advanced-revision" }));
+    await expect(service.uploadAccountCloudSync("Retry", { automatic: true })).resolves.toMatchObject({ enabled: false, requiresUserChoice: true });
+    expect(cloud.request.mock.calls.filter(([path, , options]) => path.endsWith("/manifest/current") && options.method === "PATCH")).toHaveLength(1);
+    expect(() => delayedCommit()).toThrow("FAILED_PRECONDITION");
+    expect(getSettings().accountCloudSyncRemoteGenerationId).toBe("generation-old");
+  });
+
+  it("preserves pending publication proof when refreshing the same account rotates its token", async () => {
+    const { service, store } = harness();
+    await store.saveSettings({ accountCloudSyncEnabled: true, accountCloudSyncRemoteGenerationId: "generation-old" });
+    const cloud = memoryCloud(service);
+    cloud.setManifestWriter(async () => { throw publicationTimeout(); });
+    await expect(service.uploadAccountCloudSync("Final edit", { automatic: true })).rejects.toMatchObject({ name: "TimeoutError" });
+    Object.assign(service, { auth: null });
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
+      user_id: "account-1", id_token: "fresh-token", refresh_token: "rotated-token", expires_in: "3600"
+    })));
+    try {
+      cloud.setManifestWriter(async (_options, commit) => { commit(); });
+      await expect(service.uploadAccountCloudSync("Retry", { automatic: true })).resolves.toMatchObject({ enabled: true, requiresUserChoice: false });
+      const writes = cloud.request.mock.calls.filter(([path, , options]) => path.endsWith("/manifest/current") && options.method === "PATCH");
+      expect(writes).toHaveLength(3);
+      expect(writes[1][2]).toEqual(writes[0][2]);
+      expect(writes[1][1]).toBe("fresh-token");
+      await service.restoreAccountCloudSync();
+      expect(store.restoreBackupData).toHaveBeenCalledOnce();
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
+  it("keeps uncertain chunks without adopting the publication after an account switch", async () => {
+    const { service, store, getSettings } = harness();
+    await store.saveSettings({ accountCloudSyncEnabled: true, accountCloudSyncRemoteGenerationId: "generation-old" });
+    const cloud = memoryCloud(service);
+    let delayedCommit!: () => void;
+    cloud.setManifestWriter(async (_options, commit) => {
+      delayedCommit = commit;
+      service.invalidateLinkedAccountAuth();
+      await store.saveSettings({ accountUid: "account-2", firebaseRefreshToken: "refresh-2", accountCloudSyncRemoteGenerationId: "account-2-pin" });
+      throw publicationTimeout();
+    });
+    await expect(service.uploadAccountCloudSync("Final edit", { automatic: true })).rejects.toThrow("account changed");
+    delayedCommit();
+    expect(cloud.chunks.size).toBe(1);
+    expect(getSettings()).toMatchObject({ accountUid: "account-2", accountCloudSyncRemoteGenerationId: "account-2-pin" });
+    expect(cloud.request.mock.calls.some(([, , options]) => options.method === "DELETE")).toBe(false);
+    expect(store.restoreBackupData).not.toHaveBeenCalled();
+  });
+
+  it.each([408, 429, 503, 401, 403])("classifies actual token refresh HTTP %i through the cloud queue", async status => {
+    vi.useFakeTimers();
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response('{"error":"synthetic token failure"}', { status }))
+      .mockResolvedValue(new Response(JSON.stringify({ user_id: "account-1", id_token: "fresh-token", refresh_token: "rotated-token", expires_in: "3600" })));
+    try {
+      const { service, store } = harness();
+      await store.saveSettings({ accountCloudSyncEnabled: true, accountCloudSyncRemoteGenerationId: "generation-old" });
+      Object.assign(service, { auth: null });
+      const cloud = memoryCloud(service);
+      const errors = vi.fn();
+      const run = vi.fn(async (reason: string) => { await service.uploadAccountCloudSync(reason, { automatic: true }); });
+      const queue = new AccountCloudSyncQueue(run, errors, 20_000);
+      queue.queue("Last edit");
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(cloud.request).not.toHaveBeenCalled();
+      expect(errors).toHaveBeenCalledOnce();
+      if ([408, 429, 503].includes(status)) {
+        expect(errors.mock.calls[0][0].message).toContain("temporarily");
+        expect(errors.mock.calls[0][0].message).not.toContain("session expired");
+        await vi.advanceTimersByTimeAsync(30_000);
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+        expect(run).toHaveBeenCalledTimes(2);
+        expect(cloud.chunks.size).toBe(1);
+      } else {
+        expect(errors.mock.calls[0][0].message).toContain("session expired");
+        await vi.advanceTimersByTimeAsync(600_000);
+        expect(run).toHaveBeenCalledOnce();
+        expect(queue.takePendingReason()).toBe("");
+      }
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      fetchMock.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("confirms a retained own publication on the next pass and still uploads newer local changes", async () => {
+    const { service, store, setBackup, getSettings } = harness();
+    await store.saveSettings({ accountCloudSyncEnabled: true, accountCloudSyncRemoteGenerationId: "generation-old" });
+    let currentManifest = manifestDocument(), unavailable = false, writes = 0;
+    const request = replaceFirestoreRequest(service, async (path, _token, options) => {
+      if (options.method === "GET") {
+        if (unavailable) throw new TypeError("fetch failed");
+        return currentManifest;
+      }
+      if (options.method === "PATCH" && path.endsWith("/manifest/current")) {
+        currentManifest = { fields: options.body?.fields ?? {}, updateTime: `committed-${++writes}` };
+        if (writes === 1) {
+          unavailable = true;
+          throw Object.assign(new Error("Firestore response timed out"), { name: "TimeoutError" });
+        }
+      }
+      return {};
+    });
+    await expect(service.uploadAccountCloudSync("First mutation", { automatic: true })).rejects.toMatchObject({ name: "TimeoutError" });
+    const firstGeneration = (currentManifest.fields as Record<string, { stringValue: string }>).generation_id.stringValue;
+    expect(getSettings().accountCloudSyncRemoteGenerationId).toBe("generation-old");
+    const newer = backup(getSettings()); newer.settings.username = "Mutation after ambiguous commit"; setBackup(newer);
+    unavailable = false;
+    await expect(service.uploadAccountCloudSync("New mutation", { automatic: true })).resolves.toMatchObject({ enabled: true, requiresUserChoice: false });
+    expect(writes).toBe(2);
+    expect(getSettings().accountCloudSyncRemoteGenerationId).not.toBe(firstGeneration);
+    expect(store.exportBackupData).toHaveBeenCalledTimes(2);
+    const lastChunk = request.mock.calls.filter(([path, , options]) => options.method === "PATCH" && path.includes("/chunks/")).at(-1)!;
+    const payload = (lastChunk[2].body?.fields?.payload as { stringValue: string }).stringValue;
+    const decoded = JSON.parse(inflateRawSync(Buffer.from(payload, "base64")).toString("utf8"));
+    expect(decoded.settings.username).toBe("Mutation after ambiguous commit");
+  });
+
+  it("retains exact publication proof until the local generation pin is durably saved", async () => {
+    const { service, store, getSettings } = harness();
+    await store.saveSettings({ accountCloudSyncEnabled: true, accountCloudSyncRemoteGenerationId: "generation-old" });
+    let currentManifest = manifestDocument(), writes = 0;
+    replaceFirestoreRequest(service, async (path, _token, options) => {
+      if (options.method === "GET") return currentManifest;
+      if (options.method === "PATCH" && path.endsWith("/manifest/current")) {
+        currentManifest = { fields: options.body?.fields ?? {}, updateTime: `committed-${++writes}` };
+        if (writes === 1) {
+          vi.mocked(store.updateSettings).mockRejectedValueOnce(new Error("local settings write failed"));
+          throw Object.assign(new Error("Firestore response timed out"), { name: "TimeoutError" });
+        }
+      }
+      return {};
+    });
+    await expect(service.uploadAccountCloudSync("First mutation", { automatic: true })).rejects.toThrow("local settings write failed");
+    expect(getSettings().accountCloudSyncRemoteGenerationId).toBe("generation-old");
+    await expect(service.uploadAccountCloudSync("Retry after storage recovers", { automatic: true })).resolves.toMatchObject({ enabled: true, requiresUserChoice: false });
+    expect(writes).toBe(2);
+    expect(getSettings().accountCloudSyncRemoteGenerationId).not.toBe("generation-old");
+  });
+
+  it.each(["success", "timeout"])("recovers its own committed %s publication after a process restart", async outcome => {
+    const { service, store, getSettings } = harness();
+    await store.saveSettings({ accountCloudSyncEnabled: true, accountCloudSyncRemoteGenerationId: "generation-old" });
+    const cloud = memoryCloud(service);
+    cloud.setManifestWriter(async (_options, commit) => {
+      expect(JSON.parse(await store.readCloudPublicationReceipt()).accountUid).toBe("account-1");
+      commit();
+      vi.mocked(store.updateSettings).mockRejectedValueOnce(new Error("Local pin could not be saved"));
+      if (outcome === "timeout") throw publicationTimeout();
+    });
+    await expect(service.uploadAccountCloudSync("Edit", { automatic: true })).rejects.toThrow(/pin could not be saved/i);
+    expect(getSettings().accountCloudSyncRemoteGenerationId).toBe("generation-old");
+    const restarted = new FirebaseSyncService(store, () => null);
+    Object.assign(restarted, { auth: { uid: "account-1", idToken: "token", refreshToken: "refresh", expiresAt: Date.now() / 1000 + 3600 } });
+    replaceFirestoreRequest(restarted, cloud.request);
+    cloud.setManifestWriter(async (_options, commit) => commit());
+    await expect(restarted.getAccountCloudSyncStatus()).resolves.toMatchObject({ requiresUserChoice: false });
+    await expect(restarted.uploadAccountCloudSync("Resume", { automatic: true })).resolves.toMatchObject({
+      enabled: true, requiresUserChoice: false
+    });
+    expect(getSettings().accountCloudSyncRemoteGenerationId).not.toBe("generation-old");
+    expect(cloud.chunks.size).toBe(1);
+  });
+
+  it("allows enabling sync after the first backup committed but its local pin failed", async () => {
+    const { service, store } = harness();
+    const cloud = memoryCloud(service, null);
+    cloud.setManifestWriter(async (_options, commit) => {
+      commit();
+      vi.mocked(store.updateSettings).mockRejectedValueOnce(new Error("First pin failed"));
+    });
+    await expect(service.setAccountCloudSyncEnabled(true)).rejects.toThrow("First pin failed");
+    await expect(service.setAccountCloudSyncEnabled(true)).resolves.toMatchObject({ enabled: true, requiresUserChoice: false });
+    expect(cloud.chunks.size).toBe(1);
+  });
+
+  it.each(["version", "generation_id", "device_id", "device_name", "updated_at", "app_version", "checksum", "checksum_algorithm", "chunk_checksums", "chunk_count", "byte_size", "counts", "updateTime"])("does not adopt an ambiguous publication with mismatched %s", async field => {
+    const { service, store, getSettings } = harness();
+    await store.saveSettings({ accountCloudSyncEnabled: true, accountCloudSyncRemoteGenerationId: "generation-old" });
+    let currentManifest = manifestDocument();
+    const request = replaceFirestoreRequest(service, async (path, _token, options) => {
+      if (options.method === "GET") return currentManifest;
+      if (options.method === "PATCH" && path.endsWith("/manifest/current")) {
+        const fields = { ...options.body?.fields };
+        if (field === "chunk_checksums") fields[field] = stringArray(["b".repeat(64)]);
+        else if (field === "counts") fields[field] = countsValue(77);
+        else if (field === "version" || field === "chunk_count" || field === "byte_size") fields[field] = integerValue(99);
+        else if (field !== "updateTime") fields[field] = stringValue("different");
+        currentManifest = { fields, updateTime: field === "updateTime" ? "" : "committed-time" };
+        throw Object.assign(new Error("Firestore response timed out"), { name: "TimeoutError" });
+      }
+      return {};
+    });
+    await expect(service.uploadAccountCloudSync("Ambiguous commit", { automatic: true })).rejects.toMatchObject({ name: "TimeoutError" });
+    expect(getSettings().accountCloudSyncRemoteGenerationId).toBe("generation-old");
+    await expect(service.uploadAccountCloudSync("Retry", { automatic: true })).resolves.toMatchObject({ enabled: false, requiresUserChoice: true });
+    expect(request.mock.calls.filter(([path, , options]) => options.method === "PATCH" && path.endsWith("/manifest/current"))).toHaveLength(1);
+  });
+
+  it("does not adopt an own committed publication after its account changes during confirmation", async () => {
+    const { service, store, getSettings } = harness();
+    await store.saveSettings({ accountCloudSyncEnabled: true, accountCloudSyncRemoteGenerationId: "generation-old" });
+    let currentManifest = manifestDocument(), committed = false, switched = false;
+    replaceFirestoreRequest(service, async (path, _token, options) => {
+      if (options.method === "GET") {
+        if (committed && !switched) {
+          switched = true;
+          service.invalidateLinkedAccountAuth();
+          await store.saveSettings({ accountUid: "account-2", firebaseRefreshToken: "refresh-2", accountCloudSyncRemoteGenerationId: "other-account-pin" });
+        }
+        return currentManifest;
+      }
+      if (options.method === "PATCH" && path.endsWith("/manifest/current")) {
+        currentManifest = { fields: options.body?.fields ?? {}, updateTime: "committed-time" }; committed = true;
+        throw Object.assign(new Error("Firestore response timed out"), { name: "TimeoutError" });
+      }
+      return {};
+    });
+    await expect(service.uploadAccountCloudSync("Ambiguous commit", { automatic: true })).rejects.toThrow("account changed");
+    expect(getSettings()).toMatchObject({ accountUid: "account-2", accountCloudSyncRemoteGenerationId: "other-account-pin" });
+  });
+
+  it("does not let a retained ambiguous publication override a later restore generation choice", async () => {
+    const { service, store, getSettings } = harness();
+    await store.saveSettings({ accountCloudSyncEnabled: true, accountCloudSyncRemoteGenerationId: "generation-old" });
+    let currentManifest = manifestDocument(), unavailable = false;
+    const request = replaceFirestoreRequest(service, async (path, _token, options) => {
+      if (options.method === "GET") { if (unavailable) throw new TypeError("fetch failed"); return currentManifest; }
+      if (options.method === "PATCH" && path.endsWith("/manifest/current")) {
+        currentManifest = { fields: options.body?.fields ?? {}, updateTime: "committed-time" }; unavailable = true;
+        throw Object.assign(new Error("Firestore response timed out"), { name: "TimeoutError" });
+      }
+      return {};
+    });
+    await expect(service.uploadAccountCloudSync("Ambiguous commit", { automatic: true })).rejects.toMatchObject({ name: "TimeoutError" });
+    await store.saveSettings({ accountCloudSyncRemoteGenerationId: "restored-generation-choice" }); unavailable = false;
+    await expect(service.uploadAccountCloudSync("Retry", { automatic: true })).resolves.toMatchObject({ enabled: false, requiresUserChoice: true });
+    expect(getSettings().accountCloudSyncRemoteGenerationId).toBe("restored-generation-choice");
+    expect(request.mock.calls.filter(([path, , options]) => options.method === "PATCH" && path.endsWith("/manifest/current"))).toHaveLength(1);
+  });
+
+  it.each([true, false])("discards ambiguous publication intent only when the fenced restore succeeds=%s", async succeeded => {
+    const { service, store } = harness();
+    await store.saveSettings({ accountCloudSyncEnabled: true, accountCloudSyncRemoteGenerationId: "generation-old" });
+    let currentManifest = manifestDocument(), unavailable = false, writes = 0;
+    replaceFirestoreRequest(service, async (path, _token, options) => {
+      if (options.method === "GET") { if (unavailable) throw new TypeError("fetch failed"); return currentManifest; }
+      if (options.method === "PATCH" && path.endsWith("/manifest/current")) {
+        currentManifest = { fields: options.body?.fields ?? {}, updateTime: `committed-${++writes}` };
+        if (writes === 1) { unavailable = true; throw Object.assign(new Error("response timed out"), { name: "TimeoutError" }); }
+      }
+      return {};
+    });
+    await expect(service.uploadAccountCloudSync("Ambiguous commit", { automatic: true })).rejects.toMatchObject({ name: "TimeoutError" });
+    const restore = service.runWithAccountCloudRestoreFence(async () => { if (!succeeded) throw new Error("local restore failed"); });
+    if (succeeded) await restore;
+    else await expect(restore).rejects.toThrow("local restore failed");
+    unavailable = false;
+    await expect(service.uploadAccountCloudSync("Retry", { automatic: true })).resolves.toMatchObject({ enabled: !succeeded, requiresUserChoice: succeeded });
+    expect(writes).toBe(succeeded ? 1 : 2);
   });
 
   it("requests the replay-free export and keeps cloud data and consent redaction intact", async () => {
@@ -967,6 +1431,51 @@ describe("FirebaseSyncService account cloud sync", () => {
     expect(store.restoreBackupData).not.toHaveBeenCalled();
   });
 
+  it("rejects an excessive expansion without restoring or modifying either backup", async () => {
+    const { service, store, getSettings } = harness();
+    const compressed = deflateRawSync(Buffer.alloc(ACCOUNT_CLOUD_MAX_DECODED_BYTES + 1, 32)).toString("base64");
+    const manifest = manifestDocument({ generationId: "generation-oversized", payload: compressed });
+    const request = replaceFirestoreRequest(service, async (path, _token, options) => {
+      if (options.method === "GET" && path.endsWith("/manifest/current")) return manifest;
+      return { fields: { generation_id: stringValue("generation-oversized"), index: integerValue(0),
+        payload: stringValue(compressed), byte_size: integerValue(Buffer.byteLength(compressed)), checksum: stringValue(checksum(compressed)) } };
+    });
+    await expect(service.restoreAccountCloudSync()).rejects.toThrow("64 MiB decoded");
+    expect(store.restoreBackupData).not.toHaveBeenCalled();
+    expect(request.mock.calls.every(([, , options]) => options.method === "GET")).toBe(true);
+    expect(getSettings().accountCloudSyncRemoteGenerationId).toBe("");
+  });
+
+  it("rejects oversized publication before writing any chunks or changing the existing generation", async () => {
+    const value = backup({ ...baseSettings(), accountDisplayName: "x".repeat(ACCOUNT_CLOUD_MAX_DECODED_BYTES) });
+    const { service, getSettings } = harness(value);
+    const request = replaceFirestoreRequest(service, async () => manifestDocument());
+    await expect(service.uploadAccountCloudSync("Sync", { allowRemoteReplacement: true })).rejects.toThrow("64 MiB decoded");
+    expect(request.mock.calls.every(([, , options]) => options.method === "GET")).toBe(true);
+    expect(getSettings().accountCloudSyncRemoteGenerationId).toBe("");
+  });
+
+  it("cancels an active decoder when unlink starts and releases the restore lane", async () => {
+    const { service, store, getSettings } = harness();
+    const compressed = deflateRawSync(Buffer.from(JSON.stringify(backup(baseSettings())))).toString("base64");
+    const manifest = manifestDocument({ generationId: "generation-cancelled", payload: compressed });
+    replaceFirestoreRequest(service, async (path, _token, options) => {
+      if (options.method === "GET" && path.endsWith("/manifest/current")) return manifest;
+      return { fields: { generation_id: stringValue("generation-cancelled"), index: integerValue(0),
+        payload: stringValue(compressed), byte_size: integerValue(Buffer.byteLength(compressed)), checksum: stringValue(checksum(compressed)) } };
+    });
+    const pendingRestore = service.restoreAccountCloudSync();
+    const rejection = expect(pendingRestore).rejects.toThrow("cancelled");
+    const state = service as unknown as { accountCloudDecodeAbort: AbortController | null };
+    await vi.waitFor(() => expect(state.accountCloudDecodeAbort).not.toBeNull(), { interval: 1 });
+    const pendingUnlink = service.unlinkAccount();
+    await rejection;
+    await pendingUnlink;
+    expect(state.accountCloudDecodeAbort).toBeNull();
+    expect(store.restoreBackupData).not.toHaveBeenCalled();
+    expect(getSettings()).toMatchObject({ accountUid: "", accountCloudSyncEnabled: false });
+  });
+
   it("pins the restored generation as the new local sync base", async () => {
     const { service, store, getSettings } = harness();
     const cloudBackup = backup(baseSettings());
@@ -1312,7 +1821,7 @@ describe("FirebaseSyncService account cloud sync", () => {
     expect(result).toMatchObject({ conflictId, status: "resolved", choice: "restore-legacy" });
     expect(store.restoreBackupData).toHaveBeenCalledWith(
       expect.any(Object),
-      { preserveAccount: true, preserveReplays: true }
+      { preserveAccount: true, preserveReplays: true, fromAccountCloud: true }
     );
     expect(stagedFields).toMatchObject({
       payload: stringValue(compressed),

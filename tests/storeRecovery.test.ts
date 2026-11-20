@@ -1,4 +1,4 @@
-import { copyFile, mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -44,6 +44,26 @@ function savedReplay(id: string): ReplayRecord {
     events: []
   };
 }
+
+it("imports a phone log once and preserves its reviewed or deleted local record on redelivery", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "riftlite-scorepad-redelivery-"));
+  try {
+    const store = new RiftLiteStore(join(directory, "history.sqlite"), join(directory, "legacy.json"));
+    await store.load();
+    const draft: MatchDraft = { ...savedMatch("scorepad-phone-test-1"), status: "pending-review", source: "scorepad" };
+    const attempts = await Promise.all([store.importPhoneScorepadMatch(draft), store.importPhoneScorepadMatch(draft)]);
+    expect(attempts).toEqual([true, false]);
+    await store.saveMatch({ ...draft, status: "saved", notes: "My reviewed note" });
+    expect(await store.importPhoneScorepadMatch(draft)).toBe(false);
+    expect(await store.getMatches()).toMatchObject([{ status: "saved", notes: "My reviewed note" }]);
+    await store.deleteMatch(draft.id);
+    expect(await store.importPhoneScorepadMatch(draft)).toBe(false);
+    expect(await store.getMatches()).toEqual([]);
+    expect(await store.getDeletedMatches()).toMatchObject([{ id: draft.id, notes: "My reviewed note" }]);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 describe("RiftLiteStore database recovery", () => {
   it.each([
@@ -1064,6 +1084,32 @@ describe("RiftLiteStore database recovery", () => {
       expect(files.some((file) => /^riftlite-v06-startup-open-failed-backup-\d+\.sqlite$/i.test(file))).toBe(true);
       expect(files.some((file) => /^riftlite-startup-open-failed-\d+\.log$/i.test(file))).toBe(true);
     } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("halts startup if the preservation copy cannot be completed and keeps all original bytes", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "riftlite-startup-preservation-"));
+    try {
+      const dbPath = join(directory, "riftlite-v06.sqlite");
+      const legacyPath = join(directory, "legacy.json");
+      const seed = new RiftLiteStore(dbPath, legacyPath);
+      await seed.load();
+      await seed.saveMatch(savedMatch("keep-after-failed-backup"));
+      const before = await readFile(dbPath);
+      const stamp = 1770000000000;
+      vi.spyOn(Date, "now").mockReturnValue(stamp);
+      await mkdir(join(directory, `riftlite-v06-startup-open-failed-backup-${stamp}.sqlite`));
+      const store = new RiftLiteStore(dbPath, legacyPath);
+      vi.spyOn(store as unknown as { migrateSchema(): void }, "migrateSchema")
+        .mockImplementationOnce(() => { throw new Error("interrupted initialisation"); });
+      await expect(store.load()).rejects.toThrow("could not preserve the existing database");
+      await expect(store.saveMatch(savedMatch("must-not-write"))).rejects.toThrow("could not preserve");
+      expect(await readFile(dbPath)).toEqual(before);
+      const reopened = new RiftLiteStore(dbPath, legacyPath);
+      expect((await reopened.getMatches()).map(match => match.id)).toEqual(["keep-after-failed-backup"]);
+    } finally {
+      vi.restoreAllMocks();
       await rm(directory, { recursive: true, force: true });
     }
   });

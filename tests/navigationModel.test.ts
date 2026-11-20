@@ -25,14 +25,15 @@ describe("desktop navigation model", () => {
     }
   });
 
-  it("defines Home, Play and Insights followed by the three approved disclosures", () => {
+  it("places Learn Riftbound at the end of the primary navigation after the three disclosures", () => {
     expect(PRIMARY_NAVIGATION.map((entry) => [entry.kind, entry.id, entry.label])).toEqual([
       ["route", "home", "Home"],
       ["route", "play", "Play"],
       ["route", "insights", "Insights"],
       ["disclosure", "review", "Review"],
       ["disclosure", "prepare", "Prepare"],
-      ["disclosure", "community", "Community"]
+      ["disclosure", "community", "Community"],
+      ["route", "new-player", "Learn Riftbound"]
     ]);
   });
 
@@ -120,7 +121,7 @@ describe("desktop navigation model", () => {
   );
 
   it("does not assign primary routes or utilities to a disclosure", () => {
-    for (const view of ["home", "play", "insights", "stream", "recording-sharing", "account", "settings"] as const) {
+    for (const view of ["home", "new-player", "play", "insights", "stream", "recording-sharing", "account", "settings"] as const) {
       expect(owningNavigationDisclosure({ view })).toBeNull();
     }
   });

@@ -1,0 +1,27 @@
+/* Shared presentation tokens; the lesson model and saved course remain independent. */
+.new-player-hub, .nph-welcome-backdrop, .nph-course-intro, .atlas-board-explorer {
+  --nph-ink: #f4f0e9;
+  --nph-muted: #acbdc9;
+  --nph-gold: #dfc187;
+  --nph-mint: #a8d8cb;
+  --nph-line: #bacbd51f;
+  --nph-bg: #101c29;
+  --nph-surface: #192b3a;
+  --nph-guide: #c8afff;
+  color-scheme: dark;
+}
+.new-player-hub .nph-primary, .nph-welcome .nph-primary, .nph-course-intro .nph-primary {
+  background: var(--nph-gold);
+  color: #17232d;
+  border: 1px solid var(--nph-gold);
+  border-radius: 6px;
+  min-height: 44px;
+  font-weight: 700;
+  box-shadow: 0 4px 14px #030b1524;
+}
+.new-player-hub .nph-primary:hover:not(:disabled), .nph-welcome .nph-primary:hover:not(:disabled) { background: #f0d6a3; border-color: #f0d6a3; }
+.new-player-hub :is(button,input,select,summary):focus-visible, .nph-welcome :is(button,select):focus-visible { outline: 2px solid #f0d6a3; outline-offset: 4px; }
+.new-player-hub button:disabled { cursor: default; }
+@media (prefers-reduced-motion: reduce) {
+  .new-player-hub *, .nph-welcome-backdrop * { scroll-behavior: auto !important; }
+}

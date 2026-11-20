@@ -1,4 +1,5 @@
 import { GameplayMaintenanceDeferredError } from "./gameplayMaintenanceScheduler.js";
+import { isTransientRequestError } from "./httpDeadline.js";
 
 export type AccountCloudSyncRun = (reason: string) => Promise<void>;
 export type AccountCloudSyncErrorHandler = (error: unknown) => Promise<void> | void;
@@ -14,6 +15,8 @@ export class AccountCloudSyncQueue {
   private pendingReason = "";
   private followUpDue = false;
   private suspensionCount = 0;
+  private retryAttempt = 0;
+  private intentGeneration = 0;
 
   constructor(
     private readonly run: AccountCloudSyncRun,
@@ -24,6 +27,7 @@ export class AccountCloudSyncQueue {
 
   queue(reason = "Local data changed"): void {
     this.pendingReason = reason;
+    this.retryAttempt = 0;
     if (this.suspensionCount > 0) {
       return;
     }
@@ -67,6 +71,8 @@ export class AccountCloudSyncQueue {
     }
     this.pendingReason = "";
     this.followUpDue = false;
+    this.retryAttempt = 0;
+    this.intentGeneration += 1;
   }
 
   /**
@@ -103,7 +109,7 @@ export class AccountCloudSyncQueue {
     else void this.drain();
   }
 
-  private schedule(): void {
+  private schedule(delayMs = this.delayMs): void {
     if (this.suspensionCount > 0) {
       return;
     }
@@ -113,7 +119,7 @@ export class AccountCloudSyncQueue {
     this.timer = setTimeout(() => {
       this.timer = null;
       this.requestDrain();
-    }, this.delayMs);
+    }, delayMs);
   }
 
   private async drain(): Promise<void> {
@@ -130,20 +136,32 @@ export class AccountCloudSyncQueue {
     }
 
     const reason = this.pendingReason;
+    const generation = this.intentGeneration;
     this.pendingReason = "";
     const operation = Promise.resolve().then(() => this.run(reason));
     this.inFlight = operation;
     let deferred = false;
+    let retryDelayMs = 0;
     try {
       await operation;
+      this.retryAttempt = 0;
     } catch (error) {
       if (error instanceof GameplayMaintenanceDeferredError) {
         // A newly started game postpones work; it is neither a failed backup
         // nor permission to lose the mutation that requested this upload.
-        if (!this.pendingReason) this.pendingReason = reason;
+        if (!this.pendingReason && generation === this.intentGeneration) this.pendingReason = reason;
         deferred = true;
       } else {
-        await this.onError(error);
+        if (generation === this.intentGeneration && isTransientRequestError(error)) {
+          if (!this.pendingReason) this.pendingReason = reason;
+          // A single retained intent, with capped backoff, survives offline periods.
+          // Every attempt still goes through gameplay/account checks in run().
+          retryDelayMs = Math.max(this.delayMs, Math.min(5 * 60_000, 30_000 * 2 ** this.retryAttempt));
+          this.retryAttempt = Math.min(this.retryAttempt + 1, 4);
+        } else {
+          this.retryAttempt = 0;
+        }
+        try { await this.onError(error); } catch { /* Reporting cannot discard pending work. */ }
       }
     } finally {
       if (this.inFlight === operation) {
@@ -153,7 +171,10 @@ export class AccountCloudSyncQueue {
         this.followUpDue = false;
         return;
       }
-      if (deferred && this.pendingReason) {
+      if (retryDelayMs && this.pendingReason) {
+        this.followUpDue = false;
+        this.schedule(retryDelayMs);
+      } else if (deferred && this.pendingReason) {
         this.followUpDue = false;
         this.schedule();
       } else if (this.followUpDue && this.pendingReason) {

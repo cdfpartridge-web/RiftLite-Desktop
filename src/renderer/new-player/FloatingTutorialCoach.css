@@ -1,0 +1,71 @@
+.nph-floating-coach { position:absolute; z-index:28; width:350px; max-width:calc(100% - 32px); max-height:min(360px,calc(100% - 32px)); display:flex; flex-direction:column; border:1px solid #d9c49b99; border-radius:12px; background:linear-gradient(140deg,#1b3545fa,#0e2331fc); box-shadow:0 12px 45px #0009,0 0 0 4px #e4c18b0a; color:#e9f2f5; overflow:hidden; }
+.nph-floating-coach.is-collapsed { width:186px; }
+.nph-floating-toolbar { display:flex; justify-content:space-between; gap:8px; padding:5px 8px; border-bottom:1px solid #b0d2d224; background:#071b2480; flex-shrink:0; }
+.new-player-hub .nph-floating-toolbar button { display:flex; align-items:center; gap:8px; padding:5px; border:0; background:transparent; color:#c5b895; }
+.new-player-hub .nph-floating-toolbar .nph-guide-grip { flex:1; cursor:grab; touch-action:none; }
+.nph-guide-grip span { font-size:9px; letter-spacing:.9px; text-align:left; }
+.nph-floating-content { overflow:auto; overscroll-behavior:contain; scrollbar-width:thin; padding:17px 21px 18px; }
+.nph-floating-content progress { height:3px; margin-bottom:15px; }
+.nph-setup-format { margin:14px 0; padding-top:12px; border-top:1px solid #94abc64d; font-size:12px; line-height:1.6; color:#c5d6e0; }
+.nph-setup-format strong { color:#eee8db; }
+.nph-setup-format p { margin:4px 0 0; }
+.nph-floating-content h3 { margin:0 0 10px; font-size:19px; font-weight:600; line-height:1.35; letter-spacing:-.4px; }
+.nph-floating-content .nph-floating-instruction { margin:0 0 14px; font-size:13px; line-height:1.65; color:#bad0dc; }
+.nph-floating-move { display:flex; gap:10px; align-items:flex-start; padding:12px; border:1px solid #e4c18b35; border-radius:7px; background:#e4c18b08; color:#e4c18b; }
+.nph-floating-move svg { flex-shrink:0; margin-top:2px; }
+.nph-floating-move span { display:block; font-size:8px; letter-spacing:1.2px; margin-bottom:5px; }
+.nph-floating-move strong { display:block; font-size:12px; font-weight:550; line-height:1.5; color:#f4e6cb; }
+.nph-floating-actions { display:flex; gap:14px; align-items:center; flex-wrap:wrap; margin-top:10px; }
+.nph-floating-coach .nph-primary { min-height:36px; padding:7px 12px; }
+.nph-floating-coach .nph-feedback { margin:12px 0 0; }
+.nph-lesson-context { margin-top:12px; padding-top:10px; border-top:1px solid #a7c4cd20; font-size:10px; color:#91afbd; }
+.nph-lesson-context summary { cursor:pointer; }
+.nph-lesson-context p { font-size:11px; color:#a9c2ce; margin:8px 0 0; }
+.nph-practice-swap { display:block; font-size:10px; color:var(--nph-gold); margin:0 0 10px; }
+.nph-floating-complete>svg { color:var(--nph-mint); margin-bottom:12px; }
+.nph-floating-complete p { font-size:13px; color:#b3ccd7; margin:10px 0 16px; }
+.nph-guide-arrow { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; overflow:visible; z-index:27; filter:drop-shadow(0 2px 3px #000); }
+.nph-guide-arrow>path { fill:none; stroke:#f4d59c; stroke-width:2.5; stroke-linecap:round; }
+@media(max-width:900px) { .nph-floating-coach { width:305px; } .nph-floating-content { padding:13px 16px; } .nph-floating-content h3 { font-size:17px; } .nph-floating-content .nph-floating-instruction { font-size:12px; } }
+.nph-practice-context{margin:0 0 12px;padding:8px 10px;border-left:2px solid #7fb7bf;background:#80bdc00a}
+.nph-practice-context>strong{display:block;color:#b9e0df;font-size:10px;line-height:1.5;letter-spacing:.02em}
+.nph-practice-context>p{margin:5px 0 0;font-size:11px;line-height:1.6;color:#a5bdca}
+.nph-floating-move .nph-board-gesture{display:block;margin-top:7px;font-size:10px;line-height:1.6;color:#bacacb}
+
+.nph-floating-navigation{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:9px 12px;border-top:1px solid #a7c4cd2b;background:#0b202ddd;flex-shrink:0}
+.new-player-hub .nph-floating-navigation button{display:flex;align-items:center;gap:6px;min-height:32px;padding:6px 9px;border:1px solid #9bbec044;border-radius:5px;color:#c7dee5;background:#1b394a;font-size:11px}
+.new-player-hub .nph-floating-navigation button:disabled{opacity:.4;cursor:default}
+.new-player-hub .nph-floating-navigation .nph-guide-pause{color:#f2dcad;border-color:#d7bc7966;background:#433e2c55}
+.nph-floating-coach.is-collapsed .nph-floating-navigation{flex-wrap:wrap;padding:6px}
+.nph-guide-status{display:flex;flex-wrap:wrap;align-items:center;column-gap:7px;margin:0 0 11px;color:#c8e5df;font-size:10px;font-weight:650;letter-spacing:.03em}
+.nph-guide-status>span{width:6px;height:6px;border-radius:50%;background:#a1dacc;animation:nph-narration-pulse 2s ease-in-out infinite}
+.nph-guide-status>small{flex-basis:100%;margin:4px 0 0 13px;color:#99b8c4;font-size:10px;font-weight:400;letter-spacing:0}
+.nph-floating-coach[data-paused=true] .nph-guide-status>span{animation:none;background:#e2bd74}
+.nph-narration-title:focus{outline:none}
+@keyframes nph-narration-pulse{50%{opacity:.35}}
+@media(prefers-reduced-motion:reduce){.nph-guide-status>span{animation:none}}
+
+.new-player-hub .nph-floating-navigation .nph-guide-advance{color:#182d38;border-color:#e4c28d;background:#e4c28d;font-weight:650;justify-content:center;flex:1;max-width:135px;white-space:nowrap}
+.nph-floating-coach.is-collapsed .nph-floating-navigation .nph-guide-advance{order:3;max-width:none;flex-basis:100%}
+
+.nph-practice-decks{display:flex;flex-direction:column;gap:10px;margin-top:12px}.nph-practice-decks section{padding:9px;border:1px solid #9bbec02b;border-radius:5px;background:#102b3980}.nph-practice-decks strong{display:block;font-size:11px;font-weight:550;color:#c8dfe5}.nph-practice-decks span{display:block;margin-top:4px;font-size:9px;color:#dbbf8e}.nph-practice-decks p{font-size:10px;line-height:1.5}.nph-practice-decks .nph-text-button{margin-top:7px;font-size:10px;text-align:left}
+
+.nph-floating-coach.is-over-drawer{width:240px}.nph-floating-coach.is-over-drawer .nph-floating-content{display:none}
+
+/* Automatic narration stays in one recognisable place while the guide plays. */
+.nph-floating-coach[data-automatic=true]{height:min(450px,calc(100% - 32px));max-height:min(450px,calc(100% - 32px));border-color:#c4b3f2;background:linear-gradient(145deg,#343052fc,#211e39fc);box-shadow:0 12px 45px #0009,0 0 0 3px #b69be92b}
+.nph-floating-coach[data-automatic=true] .nph-floating-toolbar{background:#201c39}.nph-floating-coach[data-automatic=true] .nph-floating-toolbar button{color:#d4c4f2}.nph-floating-coach[data-automatic=true] .nph-floating-content{flex:1;min-height:0}.nph-floating-coach[data-automatic=true] .nph-floating-instruction{color:#ddd7ed}.nph-floating-coach[data-automatic=true] .nph-floating-navigation{background:#1a1831;border-top-color:#b9a5de55}
+.nph-floating-coach[data-automatic=true] .nph-guide-status{padding:10px 11px;border:1px solid #bda3e877;border-radius:7px;background:#58427066;color:#ffdf9c;font-size:12px;letter-spacing:.055em;line-height:1.4}.nph-guide-status>em{flex-basis:100%;font-style:normal;font-size:11px;letter-spacing:0;color:#e1d2f5;margin:4px 0 0 13px}.nph-floating-coach[data-automatic=true] .nph-guide-status>small{color:#c4b7da}.nph-floating-coach[data-automatic=true] .nph-guide-status>span{background:#edcc89}
+.nph-floating-coach[data-automatic=true].is-collapsed{height:auto}
+.nph-floating-coach[data-rules-event=true]{border-color:#91bfd1;background:linear-gradient(145deg,#254052fc,#162d3dfc);box-shadow:0 12px 45px #0009,0 0 0 3px #7bafc52b}
+.nph-floating-coach[data-rules-event=true] .nph-floating-toolbar,.nph-floating-coach[data-rules-event=true] .nph-floating-navigation{background:#142c3b;border-color:#91bfd155}
+.nph-floating-coach[data-rules-event=true] .nph-guide-status{border-color:#91bfd177;background:#3b677855;color:#d3eef4}
+.nph-floating-coach[data-rules-event=true] .nph-guide-status>em,.nph-floating-coach[data-rules-event=true] .nph-guide-status>small,.nph-floating-coach[data-rules-event=true] .nph-floating-instruction{color:#c3dce5}
+
+.nph-floating-coach[data-automatic=true] .nph-floating-content progress{display:none}
+
+.nph-practice-mission{margin:0 0 12px;padding:9px 11px;border-left:2px solid #92c9bb;background:#7fb9b00d}.nph-practice-mission strong{display:block;color:#a8dace;font-size:10px;letter-spacing:.08em}.nph-practice-mission span{display:block;margin-top:6px;color:#c1cddd;font-size:11px;line-height:1.5}.new-player-hub .nph-floating-navigation .nph-practice-help{color:#e9d8ae;border-color:#bbaa8055;font-size:11px}
+
+.nph-floating-coach[data-practice-hidden=true] .nph-floating-content progress{display:none}.nph-floating-coach[data-practice-hidden=true] .nph-floating-actions:empty{display:none}
+.nph-context-terms{border-top:1px solid #9ab9c333;margin-top:14px;padding-top:12px}.nph-context-terms>strong{display:block;font-size:12px;color:#cbdce3;margin-bottom:8px}.nph-context-terms>div{display:flex;flex-wrap:wrap;gap:6px}.new-player-hub .nph-context-terms>div button{font-size:11px;min-height:30px;border:1px solid #8ba7b65c;border-radius:5px;padding:5px 8px;background:#234152;color:#c5e0e7}.new-player-hub .nph-context-terms>div button[aria-pressed=true]{border-color:#e2c78c;color:#eed6a6;background:#5b503333}.nph-context-terms>.nph-text-button{font-size:11px;margin-top:8px}.nph-context-terms article{margin-top:10px;padding:12px;border-left:2px solid #b6d9d7;background:#091e2a99}.nph-context-terms h4{font-size:14px;margin:0 0 8px}.nph-context-terms article p{font-size:12px;line-height:1.6;margin:0 0 8px;color:#cadde5}.nph-context-terms article small{display:block;font-size:11px;line-height:1.5;color:#a8c5cf}.nph-concept-hint{padding:12px;border-left:2px solid #9ecfc1;background:#2b584429;margin-bottom:12px}.nph-concept-hint strong{font-size:12px;color:#b4dace}.nph-concept-hint p{font-size:13px;line-height:1.6;color:#c3d9dd;margin:6px 0 0}.nph-floating-move .nph-board-gesture{font-size:12px}.nph-guide-grip span{font-size:10px}.new-player-hub .nph-floating-toolbar button{min-height:30px}.new-player-hub .nph-floating-navigation button{min-height:36px;font-size:12px}
+.nph-narration-part { display:block; margin:10px 0 4px; color:#dfcbff; font-size:12px; font-weight:700; }

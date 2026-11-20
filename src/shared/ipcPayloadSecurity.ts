@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { gamePlatformForTrustedUrl } from "./embeddedContentSecurity.js";
 import type { CaptureEvent, GamePlatform, RawCaptureAppendFramePayload } from "./types.js";
+import type { RawCaptureIngressLoss, RawCaptureLossReason } from "./rawCaptureLoss.js";
+import { isDiscardedRawCapturePresence } from "./rawCaptureLoss.js";
 
 const MAX_CAPTURE_EVENT_BYTES = 2 * 1024 * 1024;
 const MAX_TCGA_RESEARCH_EVENT_BYTES = 4 * 1024 * 1024;
@@ -60,6 +62,22 @@ const RawCapturePayloadSchema = z.object({
   frame: RawCaptureFrameSchema
 }).strict();
 
+const RawCaptureLossNoticeSchema = z.object({
+  platform: z.literal("atlas"),
+  requestUrl: z.string().min(1).max(4096),
+  socketId: z.string().max(256).nullable(),
+  ts: z.number().int().min(0).max(8_640_000_000_000_000),
+  reason: z.literal("ingress-frame-too-large")
+}).strict();
+
+export function validatedRawCaptureLossNotice(value: unknown): RawCaptureIngressLoss | null {
+  const parsed = RawCaptureLossNoticeSchema.safeParse(value);
+  if (!parsed.success || !isAllowedAtlasSocketUrl(parsed.data.requestUrl)) return null;
+  const notice = parsed.data;
+  return { requestUrl: notice.requestUrl, socketId: notice.socketId || "ws-1",
+    loss: { version: 1, reasons: [notice.reason], droppedFrames: 1, firstAt: notice.ts, lastAt: notice.ts } };
+}
+
 function jsonByteLength(value: unknown): number {
   try {
     return Buffer.byteLength(JSON.stringify(value), "utf8");
@@ -92,7 +110,25 @@ function rawFrameByteLength(value: unknown): number {
     return 0;
   }
   const raw = (frame as { raw?: unknown }).raw;
-  return typeof raw === "string" ? Buffer.byteLength(raw, "utf8") : 0;
+  return typeof raw === "string" ? raw.length > MAX_RAW_FRAME_BYTES ? raw.length : Buffer.byteLength(raw, "utf8") : 0;
+}
+
+/** Read only bounded routing fields; never parse or retain a rejected raw body. */
+export function rawCaptureIngressLoss(value: unknown, reason: RawCaptureLossReason): RawCaptureIngressLoss | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const payload = value as RawCaptureAppendFramePayload;
+  const frame = payload.frame;
+  if (payload.platform !== "atlas" || typeof payload.requestUrl !== "string" || payload.requestUrl.length > 4096 ||
+    !isAllowedAtlasSocketUrl(payload.requestUrl) || !frame || typeof frame !== "object" || Array.isArray(frame) ||
+    (frame.dir !== "in" && frame.dir !== "out") || typeof frame.raw !== "string" || !frame.raw.length ||
+    !Number.isSafeInteger(frame.ts) || frame.ts < 0 || frame.ts > 8_640_000_000_000_000 ||
+    (frame.socketId != null && (typeof frame.socketId !== "string" || frame.socketId.length > 256))) return null;
+  // Presence packets are already explicitly excluded from replay history.
+  // Only exempt a small, parsed body; an oversized/invalid declaration or the
+  // untrusted frame.type hint cannot disguise potentially lost gameplay data.
+  if (["ingress-rate-limit", "capture-buffer-limit"].includes(reason) && isDiscardedRawCapturePresence(frame.raw)) return null;
+  return { requestUrl: payload.requestUrl, socketId: frame.socketId || "ws-1",
+    loss: { version: 1, reasons: [reason], droppedFrames: 1, firstAt: frame.ts, lastAt: frame.ts } };
 }
 
 function isBoundedRawJson(raw: string): boolean {
@@ -137,21 +173,24 @@ export class RawCaptureIngressLimiter {
   private readonly windows = new Map<number, { startedAt: number; frames: number; bytes: number }>();
 
   allow(senderId: number, value: unknown, now = Date.now()): boolean {
+    return this.check(senderId, value, now) === null;
+  }
+
+  check(senderId: number, value: unknown, now = Date.now()): RawCaptureLossReason | null {
     const bytes = rawFrameByteLength(value);
-    if (bytes < 1 || bytes > MAX_RAW_FRAME_BYTES) {
-      return false;
-    }
+    if (bytes < 1) return "ingress-invalid-frame";
+    if (bytes > MAX_RAW_FRAME_BYTES) return "ingress-frame-too-large";
     const previous = this.windows.get(senderId);
     const current = !previous || now - previous.startedAt >= RAW_CAPTURE_RATE_WINDOW_MS
       ? { startedAt: now, frames: 0, bytes: 0 }
       : previous;
     if (current.frames + 1 > RAW_CAPTURE_RATE_MAX_FRAMES || current.bytes + bytes > RAW_CAPTURE_RATE_MAX_BYTES) {
-      return false;
+      return "ingress-rate-limit";
     }
     current.frames += 1;
     current.bytes += bytes;
     this.windows.set(senderId, current);
-    return true;
+    return null;
   }
 
   forget(senderId: number): void {

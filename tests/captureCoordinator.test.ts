@@ -2040,13 +2040,24 @@ describe("CaptureCoordinator", () => {
     }, "2026-06-06T18:32:00.000Z", "atlas"));
     await coordinator.handleEvent(queueResult(3, "8", "6", "Confirm Game 3 Winner", "2026-06-06T18:32:05.000Z"));
 
+    // Atlas keeps the scored board active while the players confirm the winner.
+    await coordinator.handleEvent(event("match-snapshot", {
+      ...base,
+      reason: "snapshot-signature-changed",
+      score: score("8", "6")
+    }, "2026-06-06T18:32:05.120Z", "atlas"));
+    expect(saved).toHaveLength(0);
+    expect(coordinator.hasActiveCaptureSession("atlas")).toBe(true);
+    await coordinator.handleEvent(queueResult(3, "8", "6", "Confirm Game 3 Winner", "2026-06-06T18:32:10.000Z"));
+
     expect(saved).toHaveLength(0);
     expect(sent.filter((item) => item.channel === "match:draft")).toHaveLength(0);
 
-    await coordinator.handleEvent(atlasMatchComplete({
+    const terminal = atlasMatchComplete({
       ...base,
       score: score("8", "6")
-    }, "2026-06-06T18:32:10.000Z"));
+    }, "2026-06-06T18:32:19.000Z");
+    await coordinator.handleEvent({ ...terminal, payload: { ...terminal.payload, active: true } });
 
     expect(saved).toHaveLength(1);
     expect(saved[0]).toMatchObject({
@@ -2990,7 +3001,9 @@ describe("CaptureCoordinator", () => {
     }));
   });
 
-  it("does not seed a ghost match from the active result snapshot that releases a BO3 review", async () => {
+  it("waits for Atlas to confirm a BO3 and ignores subsequent terminal echoes", async ({ onTestFinished }) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    onTestFinished(() => { vi.useRealTimers(); });
     const { coordinator, saved, sent, diagnostics } = coordinatorHarness();
     const base = {
       active: true,
@@ -3073,9 +3086,10 @@ describe("CaptureCoordinator", () => {
       reason: "mutation"
     }, "2026-07-27T05:25:05.001Z", "atlas"));
 
-    expect(saved).toHaveLength(1);
-    expect(sent.filter((item) => item.channel === "match:draft")).toHaveLength(1);
-    expect(coordinator.hasActiveCaptureSession("atlas")).toBe(false);
+    await vi.advanceTimersByTimeAsync(46_000);
+    expect(saved).toHaveLength(0);
+    expect(sent.filter((item) => item.channel === "match:draft")).toHaveLength(0);
+    expect(coordinator.hasActiveCaptureSession("atlas")).toBe(true);
 
     const terminalResult = {
       ...base,
@@ -3089,13 +3103,16 @@ describe("CaptureCoordinator", () => {
     await coordinator.handleEvent(event(
       "match-end",
       terminalResult,
-      "2026-07-27T05:25:30.000Z",
+      "2026-07-27T05:25:55.000Z",
       "atlas"
     ));
+    expect(saved).toHaveLength(1);
+    expect(sent.filter((item) => item.channel === "match:draft")).toHaveLength(1);
+    expect(coordinator.hasActiveCaptureSession("atlas")).toBe(false);
     await coordinator.handleEvent(event("match-snapshot", {
       ...terminalResult,
       reason: "safety-heartbeat"
-    }, "2026-07-27T05:25:30.001Z", "atlas"));
+    }, "2026-07-27T05:25:55.001Z", "atlas"));
 
     await coordinator.handleEvent(event("match-start", {
       active: true,
@@ -3107,7 +3124,7 @@ describe("CaptureCoordinator", () => {
       opponentChampionCode: "VEN-196",
       roomCode: "NEXT1",
       score: score("0", "0")
-    }, "2026-07-27T05:25:45.000Z", "atlas"));
+    }, "2026-07-27T05:26:10.000Z", "atlas"));
 
     expect(saved).toHaveLength(1);
     expect(coordinator.hasActiveCaptureSession("atlas")).toBe(true);

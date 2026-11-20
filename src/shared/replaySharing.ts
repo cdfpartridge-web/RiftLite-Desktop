@@ -105,7 +105,7 @@ function replayUploadLaneEnabledForAccount(
   return atlasEnabled || tcgaEnabled;
 }
 
-function uploadLaneEnabledForAccount(
+export function uploadLaneEnabledForAccount(
   settings: RawCaptureSettings,
   platform: WebReplayUploadPlatform,
   accountUid: string

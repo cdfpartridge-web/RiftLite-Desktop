@@ -1,7 +1,9 @@
 import { app, type BrowserWindow } from "electron";
 import { createHash, randomUUID } from "node:crypto";
 import { hostname } from "node:os";
-import { deflateRawSync, inflateRawSync } from "node:zlib";
+import { fetchBufferedResponse, HttpStatusError, isTransientRequestError } from "./httpDeadline.js";
+import { deflateRawSync } from "node:zlib";
+import { ACCOUNT_CLOUD_MAX_ENCODED_BYTES, assertAccountCloudBackupSize, assertAccountCloudBackupStructure, decodeAccountCloudBackup } from "./accountCloudBackupCodec.js";
 import { normalizeLegendName } from "../../shared/legendNames.js";
 import {
   isGenericAccountDisplayName,
@@ -130,6 +132,13 @@ interface AccountCloudSyncManifest {
   updateTime: string;
 }
 
+interface CloudPublicationReceipt {
+  accountUid: string;
+  manifest: AccountCloudSyncManifest;
+  baseGenerationPin: string;
+  baseUpdateTime: string | null;
+}
+
 interface PinnedMatchSyncIdentity {
   generation: number;
   accountUid: string;
@@ -228,6 +237,7 @@ interface AccountCloudSyncUploadResult {
 
 interface AccountCloudSyncUploadOptions {
   automatic?: boolean;
+  expectedAccountUid?: string;
   allowRemoteReplacement?: boolean;
   /** Automatic work may defer before preparation or an atomic cloud commit. */
   checkpoint?: () => void;
@@ -272,7 +282,13 @@ export class FirebaseSyncService {
   private accountCloudMutationTail: Promise<void> = Promise.resolve();
   private accountCloudUploadRequests = 0;
   private accountCloudRestoreIntent = false;
+  private accountCloudDecodeAbort: AbortController | null = null;
   private activeAccountCloudRestoreFence: AccountCloudRestoreFence | null = null;
+  private publicationReceiptChecked = false;
+  private pendingAccountCloudPublication: (CloudPublicationReceipt & {
+    refreshToken: string;
+    authGeneration: number;
+  }) | null = null;
   private readonly matchSyncTails = new Map<string, Promise<void>>();
   private readonly privateHubWebReplayGrantRequests = new Map<string, Promise<PrivateHubWebReplayGrantOutcome>>();
   private communityMatchesCache: { key: string; expiresAt: number; matches: CommunityMatch[] } | null = null;
@@ -295,7 +311,10 @@ export class FirebaseSyncService {
   }
 
   invalidateLinkedAccountAuth(): void {
+    this.accountCloudDecodeAbort?.abort();
     this.linkedAccountAuthGeneration += 1;
+    this.publicationReceiptChecked = true;
+    this.pendingAccountCloudPublication = null;
     this.auth = null;
     this.accountConnectionStatusPromise = null;
     this.accountConnectionRepairPromise = null;
@@ -393,7 +412,12 @@ export class FirebaseSyncService {
       // including local .riftlitebackup replacement. Cloud restore methods
       // receiving this exact opaque fence run inside the existing lane rather
       // than attempting to acquire it again.
-      return await this.withAccountCloudMutation(() => operation(fence));
+      const result = await this.withAccountCloudMutation(() => operation(fence));
+      // A successful restore supersedes pre-restore publication intent even
+      // when its imported settings happen to retain the same generation pin.
+      this.pendingAccountCloudPublication = null;
+      this.publicationReceiptChecked = true;
+      return result;
     } finally {
       this.activeAccountCloudRestoreFence = null;
       this.accountCloudRestoreIntent = false;
@@ -1801,8 +1825,13 @@ export class FirebaseSyncService {
     const canonicalAccount = await this.getCanonicalAccountAuth(settings);
     settings = canonicalAccount.settings;
     const auth = canonicalAccount.auth;
+    const generation = this.linkedAccountAuthGeneration;
     const manifest = await this.readAccountCloudManifest(settings.accountUid, auth.idToken);
-    return this.accountCloudStatusFromManifest(settings, manifest);
+    const status = this.accountCloudStatusFromManifest(settings, manifest);
+    if (manifest && status.requiresUserChoice && await this.isConfirmedLocalPublication(settings, manifest, generation)) {
+      return { ...status, requiresUserChoice: false, message: "This device published the backup. Its local sync record will be confirmed on the next sync." };
+    }
+    return status;
   }
 
   async setAccountCloudSyncEnabled(enabled: boolean): Promise<AccountCloudSyncStatus> {
@@ -1833,6 +1862,18 @@ export class FirebaseSyncService {
     const authGeneration = this.linkedAccountAuthGeneration;
     const manifest = await this.readAccountCloudManifest(settings.accountUid, auth.idToken);
     if (manifest) {
+      if (await this.isConfirmedLocalPublication(settings, manifest, authGeneration)) {
+        settings = await this.updateLinkedAccountSettings(authGeneration, settings.accountUid,
+          "The linked account changed while confirming its backup.", current => {
+            if (current.accountCloudSyncRemoteGenerationId !== settings.accountCloudSyncRemoteGenerationId) {
+              throw new AccountCloudSyncConflictError();
+            }
+            return { accountCloudSyncEnabled: true, accountCloudSyncLastError: "",
+              accountCloudSyncRemoteGenerationId: manifest.generationId, accountCloudSyncLastSyncedAt: manifest.updatedAt };
+          }, settings.firebaseRefreshToken);
+        this.pendingAccountCloudPublication = null;
+        return this.accountCloudStatusFromManifest(settings, manifest, "Account sync enabled. This device’s previous upload was confirmed.");
+      }
       settings = await this.updateLinkedAccountSettings(
         authGeneration,
         settings.accountUid,
@@ -1899,6 +1940,9 @@ export class FirebaseSyncService {
     const checkpoint = options.automatic === true ? options.checkpoint : undefined;
     checkpoint?.();
     let settings = await this.store.getSettings();
+    if (options.expectedAccountUid && settings.accountUid !== options.expectedAccountUid) {
+      throw new LinkedAccountMismatchError("The linked RiftLite account changed before its queued backup started.");
+    }
     checkpoint?.();
     settings = await this.ensureAccountCloudDevice(settings);
     checkpoint?.();
@@ -1915,6 +1959,9 @@ export class FirebaseSyncService {
     const canonicalAccount = await this.getCanonicalAccountAuth(settings);
     checkpoint?.();
     settings = canonicalAccount.settings;
+    if (options.expectedAccountUid && settings.accountUid !== options.expectedAccountUid) {
+      throw new LinkedAccountMismatchError("The linked RiftLite account changed while preparing its queued backup.");
+    }
     const auth = canonicalAccount.auth;
     const authGeneration = this.linkedAccountAuthGeneration;
     const latestSettings = await this.store.getSettings();
@@ -1929,7 +1976,7 @@ export class FirebaseSyncService {
         "Account sync changed while a background update was waiting, so nothing was uploaded."
       );
     }
-    const oldManifest = await this.readAccountCloudManifest(settings.accountUid, auth.idToken);
+    let oldManifest = await this.readAccountCloudManifest(settings.accountUid, auth.idToken);
     checkpoint?.();
     const settingsAfterManifestRead = await this.store.getSettings();
     checkpoint?.();
@@ -1953,6 +2000,7 @@ export class FirebaseSyncService {
     const uploadBase = await this.prepareAccountCloudUploadBase(
       settings,
       oldManifest,
+      auth,
       authGeneration,
       options.allowRemoteReplacement === true
     );
@@ -1961,6 +2009,7 @@ export class FirebaseSyncService {
       return uploadBase.status;
     }
     settings = uploadBase.settings;
+    oldManifest = uploadBase.manifest;
     return (await this.uploadAccountCloudGeneration(settings, auth, oldManifest, message, checkpoint)).status;
   }
 
@@ -1985,7 +2034,7 @@ export class FirebaseSyncService {
     const manifest = await this.readAccountCloudManifest(settings.accountUid, auth.idToken);
     validateAccountCloudManifestForRestore(manifest);
     const safeUid = encodeURIComponent(settings.accountUid);
-    const decoded = await this.readAccountCloudBackup(manifest, async (index) => {
+    const decoded = await this.readAccountCloudBackup(manifest, authGeneration, async (index) => {
       const doc = await this.firestoreRequest(
         `accountSync/${safeUid}/chunks/${accountCloudChunkDocumentId(manifest.generationId, index)}`,
         auth.idToken,
@@ -2143,7 +2192,7 @@ export class FirebaseSyncService {
       if (manifest.chunkCount > ACCOUNT_CLOUD_SYNC_RECOVERY_MAX_CHUNKS) {
         throw new Error("This retained backup is too large to validate safely in one recovery. Contact RiftLite support so it can be recovered without risking the current backup.");
       }
-      const decoded = await this.readAccountCloudBackup(manifest, async (index) => {
+      const decoded = await this.readAccountCloudBackup(manifest, authGeneration, async (index) => {
         const query = new URLSearchParams({ legacyFingerprint: conflict.legacyFingerprint });
         const payload = await this.authenticatedWebsiteRequest(
           `/api/account/cloud-sync/conflicts/${encodeURIComponent(conflict.id)}/chunks/${index}?${query}`,
@@ -2374,12 +2423,19 @@ export class FirebaseSyncService {
 
   private async readAccountCloudBackup(
     manifest: AccountCloudSyncManifest,
+    decodeGeneration: number,
     readChunk: (index: number) => Promise<AccountCloudSyncChunk>
   ): Promise<AccountCloudSyncDecodedBackup> {
     validateAccountCloudManifestForRestore(manifest);
+    if (!this.isLinkedAccountAuthGenerationCurrent(decodeGeneration)) {
+      throw new LinkedAccountMismatchError("The linked RiftLite account changed while account data was being decoded.");
+    }
     const chunks: string[] = [];
     for (let index = 0; index < manifest.chunkCount; index += 1) {
       const chunk = await readChunk(index);
+      if (!this.isLinkedAccountAuthGenerationCurrent(decodeGeneration)) {
+        throw new LinkedAccountMismatchError("The linked RiftLite account changed while account data was being decoded.");
+      }
       const actualByteSize = Buffer.byteLength(chunk.payload, "utf8");
       if (chunk.index !== index) {
         throw new Error(`Account cloud backup chunk ${index + 1} has an invalid index.`);
@@ -2387,7 +2443,7 @@ export class FirebaseSyncService {
       if (!chunk.payload) {
         throw new Error(`Account cloud backup is missing chunk ${index + 1}.`);
       }
-      if (chunk.byteSize !== actualByteSize) {
+      if (chunk.byteSize !== actualByteSize || actualByteSize > ACCOUNT_CLOUD_SYNC_CHUNK_SIZE) {
         throw new Error(`Account cloud backup chunk ${index + 1} has an invalid size.`);
       }
       if (manifest.version === ACCOUNT_CLOUD_SYNC_VERSION) {
@@ -2410,15 +2466,20 @@ export class FirebaseSyncService {
       throw new Error("Account cloud backup failed its full checksum.");
     }
 
+    if (!this.isLinkedAccountAuthGenerationCurrent(decodeGeneration)) {
+      throw new LinkedAccountMismatchError("The linked RiftLite account changed while account data was being decoded.");
+    }
+    if (this.accountCloudDecodeAbort) throw new Error("Another account backup is already being decoded.");
+    const controller = new AbortController();
+    this.accountCloudDecodeAbort = controller;
     let backup: RiftLiteBackupFile;
     try {
-      const json = inflateRawSync(Buffer.from(compressed, "base64")).toString("utf8");
-      backup = JSON.parse(json) as RiftLiteBackupFile;
-    } catch {
-      throw new Error("Account cloud backup could not be decoded safely.");
+      backup = await decodeAccountCloudBackup(compressed, { signal: controller.signal });
+    } finally {
+      if (this.accountCloudDecodeAbort === controller) this.accountCloudDecodeAbort = null;
     }
-    if (!isAccountCloudBackupFile(backup)) {
-      throw new Error("Account cloud backup is not a supported RiftLite backup.");
+    if (!this.isLinkedAccountAuthGenerationCurrent(decodeGeneration)) {
+      throw new LinkedAccountMismatchError("The linked RiftLite account changed while account data was being decoded.");
     }
     if (!sameAccountCloudCounts(countAccountCloudBackup(backup), manifest.counts)) {
       throw new Error("Account cloud backup contents do not match its manifest.");
@@ -2446,28 +2507,102 @@ export class FirebaseSyncService {
         }
       }
     };
-    await this.store.restoreBackupData(safeBackup, { preserveAccount: true, preserveReplays: true });
+    await this.store.restoreBackupData(safeBackup, { preserveAccount: true, preserveReplays: true, fromAccountCloud: true });
+  }
+
+  private async recoverCloudPublication(settings: UserSettings, authGeneration: number): Promise<void> {
+    if (this.publicationReceiptChecked) return;
+    const raw = await this.store.readCloudPublicationReceipt();
+    await this.requireLinkedAccountIdentity(authGeneration, settings.accountUid,
+      "The linked account changed while resuming its previous cloud upload.", settings.firebaseRefreshToken);
+    if (this.publicationReceiptChecked) return;
+    this.publicationReceiptChecked = true;
+    const receipt = parseCloudPublicationReceipt(raw, settings);
+    if (receipt) {
+      this.pendingAccountCloudPublication = { ...receipt, authGeneration, refreshToken: settings.firebaseRefreshToken };
+    }
+  }
+
+  private async isConfirmedLocalPublication(settings: UserSettings, manifest: AccountCloudSyncManifest, generation: number): Promise<boolean> {
+    await this.recoverCloudPublication(settings, generation);
+    const pending = this.pendingAccountCloudPublication;
+    return !!pending && pending.authGeneration === generation && pending.accountUid === settings.accountUid &&
+      pending.baseGenerationPin === (settings.accountCloudSyncRemoteGenerationId ?? "").trim() &&
+      pending.refreshToken === settings.firebaseRefreshToken && accountCloudSyncManifestMatchesPublication(manifest, pending.manifest);
   }
 
   private async prepareAccountCloudUploadBase(
     settings: UserSettings,
     manifest: AccountCloudSyncManifest | null,
+    auth: AuthState,
     authGeneration: number,
     allowRemoteReplacement: boolean
-  ): Promise<{ settings: UserSettings; status?: AccountCloudSyncStatus }> {
+  ): Promise<{ settings: UserSettings; manifest: AccountCloudSyncManifest | null; status?: AccountCloudSyncStatus }> {
+    await this.recoverCloudPublication(settings, authGeneration);
+    const pending = this.pendingAccountCloudPublication;
+    if (pending) {
+      const sameContext = pending.authGeneration === authGeneration
+        && pending.accountUid === settings.accountUid
+        && pending.refreshToken === settings.firebaseRefreshToken
+        && pending.baseGenerationPin === (settings.accountCloudSyncRemoteGenerationId ?? "").trim();
+      if (!sameContext) {
+        this.pendingAccountCloudPublication = null;
+      } else {
+        if (!accountCloudSyncManifestMatchesPublication(manifest, pending.manifest)
+          && (manifest?.updateTime ?? null) === pending.baseUpdateTime) {
+          // An unchanged GET cannot prove that the original PATCH failed. Retry
+          // the exact candidate with the original CAS before publishing newer
+          // data; either request may commit, but both name the same kept chunks.
+          await this.requireLinkedAccountIdentity(authGeneration, settings.accountUid,
+            "The linked RiftLite account changed while its cloud publication was being confirmed.", settings.firebaseRefreshToken);
+          try {
+            await this.writeAccountCloudManifest(settings.accountUid, auth.idToken, pending.manifest, pending.baseUpdateTime);
+          } catch (error) {
+            if (!isFirestorePreconditionError(error) && !isTransientRequestError(error)) throw error;
+          }
+          manifest = await this.readAccountCloudManifest(settings.accountUid, auth.idToken);
+          await this.requireLinkedAccountIdentity(authGeneration, settings.accountUid,
+            "The linked RiftLite account changed while its cloud publication was being confirmed.", settings.firebaseRefreshToken);
+          if (!accountCloudSyncManifestMatchesPublication(manifest, pending.manifest)
+            && (manifest?.updateTime ?? null) === pending.baseUpdateTime) {
+            throw new HttpStatusError("The cloud backup publication is still being confirmed. Sync will retry.", 503);
+          }
+        }
+        if (accountCloudSyncManifestMatchesPublication(manifest, pending.manifest)) {
+          // Pin only this exact own publication, then include any newer local
+          // mutations in a fresh snapshot conditional on its confirmed revision.
+          settings = await this.updateLinkedAccountSettings(
+            authGeneration, settings.accountUid,
+            "The linked RiftLite account changed while its completed cloud publication was being confirmed.",
+            current => {
+              if ((current.accountCloudSyncRemoteGenerationId ?? "").trim() !== pending.baseGenerationPin) {
+                throw new AccountCloudSyncConflictError();
+              }
+              return {
+                accountCloudSyncLastSyncedAt: pending.manifest.updatedAt,
+                accountCloudSyncRemoteGenerationId: pending.manifest.generationId,
+                accountCloudSyncLastError: ""
+              };
+            },
+            pending.refreshToken
+          );
+          if (this.pendingAccountCloudPublication === pending) this.pendingAccountCloudPublication = null;
+        }
+      }
+    }
     if (allowRemoteReplacement) {
-      return { settings };
+      return { settings, manifest };
     }
 
     const pinnedGenerationId = (settings.accountCloudSyncRemoteGenerationId ?? "").trim();
     if (pinnedGenerationId && manifest && accountCloudSyncGenerationPin(manifest) === pinnedGenerationId) {
-      return { settings };
+      return { settings, manifest };
     }
     if (!pinnedGenerationId && !manifest) {
       // A device which has never observed a cloud generation may safely create
       // the first one. Once written, every subsequent upload is fenced by its
       // persisted generation id.
-      return { settings };
+      return { settings, manifest };
     }
     if (
       !pinnedGenerationId &&
@@ -2486,7 +2621,7 @@ export class FirebaseSyncService {
         () => ({ accountCloudSyncRemoteGenerationId: accountCloudSyncGenerationPin(manifest) }),
         settings.firebaseRefreshToken
       );
-      return { settings };
+      return { settings, manifest };
     }
 
     const conflictMessage = manifest
@@ -2504,6 +2639,7 @@ export class FirebaseSyncService {
     );
     return {
       settings: nextSettings,
+      manifest,
       status: this.accountCloudStatusFromManifest(nextSettings, manifest, conflictMessage)
     };
   }
@@ -2520,6 +2656,9 @@ export class FirebaseSyncService {
       throw new Error("RiftLite could not verify the current cloud manifest version, so the existing backup was not overwritten. Check cloud status and try again.");
     }
     checkpoint?.();
+    // Only this revision is guaranteed to be covered by the following backup.
+    // An edit while the backup is being built or uploaded gets a different one.
+    const coveredRevision = await this.store.getPendingAccountCloudRevision(settings.accountUid);
     const backup = await this.buildAccountCloudBackup(settings);
     checkpoint?.();
     if (checkpoint) {
@@ -2533,8 +2672,11 @@ export class FirebaseSyncService {
     }
     // After this checkpoint the generation's immutable chunks and conditional
     // manifest switch finish as one existing atomic publication sequence.
+    assertAccountCloudBackupStructure(backup);
     const json = JSON.stringify(backup);
+    assertAccountCloudBackupSize(json);
     const compressed = deflateRawSync(Buffer.from(json, "utf8")).toString("base64");
+    assertAccountCloudBackupSize(json, compressed);
     const chunks = chunkString(compressed, ACCOUNT_CLOUD_SYNC_CHUNK_SIZE);
     const updatedAt = new Date().toISOString();
     const generationId = randomUUID();
@@ -2556,6 +2698,15 @@ export class FirebaseSyncService {
     };
 
     const safeUid = encodeURIComponent(settings.accountUid);
+    let manifestPublicationStarted = false;
+    let receiptRecorded = false;
+    const receipt: CloudPublicationReceipt = {
+      manifest, accountUid: settings.accountUid,
+      baseGenerationPin: (settings.accountCloudSyncRemoteGenerationId ?? "").trim(),
+      baseUpdateTime: oldManifest?.updateTime ?? null
+    };
+    const pending = { ...receipt, refreshToken: settings.firebaseRefreshToken, authGeneration };
+    const receiptJson = JSON.stringify(receipt);
     try {
       const chunkWrites = await Promise.allSettled(chunks.map((chunk, index) =>
         this.firestoreRequest(
@@ -2589,35 +2740,58 @@ export class FirebaseSyncService {
         "The linked RiftLite account changed while account data was being synced.",
         settings.firebaseRefreshToken
       );
-      await this.firestoreRequest(`accountSync/${safeUid}/manifest/current`, auth.idToken, {
-        method: "PATCH",
-        precondition: oldManifest?.updateTime
-          ? { updateTime: oldManifest.updateTime }
-          : { exists: Boolean(oldManifest) },
-        body: {
-          fields: toFirestoreFields({
-            format: ACCOUNT_CLOUD_SYNC_FORMAT,
-            version: ACCOUNT_CLOUD_SYNC_VERSION,
-            updated_at: manifest.updatedAt,
-            device_id: manifest.deviceId,
-            device_name: manifest.deviceName,
-            app_version: manifest.appVersion,
-            generation_id: manifest.generationId,
-            chunk_count: manifest.chunkCount,
-            byte_size: manifest.byteSize,
-            checksum_algorithm: ACCOUNT_CLOUD_SYNC_CHECKSUM_ALGORITHM,
-            checksum: manifest.checksum,
-            chunk_checksums: manifest.chunkChecksums,
-            counts: manifest.counts
-          })
-        }
-      });
+      // Once this CAS is sent, it may commit even if the process exits before
+      // receiving the response or durably saving the new generation pin.
+      await this.store.writeCloudPublicationReceipt(receiptJson, () => this.isLinkedAccountAuthGenerationCurrent(authGeneration));
+      receiptRecorded = true;
+      await this.requireLinkedAccountIdentity(authGeneration, settings.accountUid,
+        "The linked RiftLite account changed before publishing its cloud backup.", settings.firebaseRefreshToken);
+      this.publicationReceiptChecked = true;
+      this.pendingAccountCloudPublication = pending;
+      manifestPublicationStarted = true;
+      await this.writeAccountCloudManifest(settings.accountUid, auth.idToken, manifest, oldManifest?.updateTime ?? null);
     } catch (error) {
-      await this.cleanupAccountCloudGeneration(settings.accountUid, auth.idToken, manifest).catch(() => undefined);
-      if (isFirestorePreconditionError(error)) {
-        throw new AccountCloudSyncConflictError();
+      let confirmed = false;
+      const publicationUncertain = manifestPublicationStarted && !isDefinitiveFirestorePreconditionFailure(error);
+      if (publicationUncertain) {
+        try {
+          await this.requireLinkedAccountIdentity(authGeneration, settings.accountUid,
+            "The linked RiftLite account changed while its completed cloud publication was being confirmed.", settings.firebaseRefreshToken);
+          const published = await this.readAccountCloudManifest(settings.accountUid, auth.idToken);
+          await this.requireLinkedAccountIdentity(authGeneration, settings.accountUid,
+            "The linked RiftLite account changed while its completed cloud publication was being confirmed.", settings.firebaseRefreshToken);
+          confirmed = accountCloudSyncManifestMatchesPublication(published, manifest);
+          if (confirmed) {
+            manifest.updateTime = published!.updateTime;
+          }
+        } catch (confirmationError) {
+          if (confirmationError instanceof LinkedAccountMismatchError) {
+            if (this.pendingAccountCloudPublication === pending) this.pendingAccountCloudPublication = null;
+            error = confirmationError;
+          }
+          // A temporary verification failure retains the exact publication
+          // for the next eligible queue pass; never guess that PATCH failed.
+        }
       }
-      throw error;
+      if (!confirmed) {
+        // A timed-out PATCH can still commit after every confirmation read.
+        // Keep its immutable chunks even if the account changes meanwhile.
+        if (!publicationUncertain) {
+          if (this.pendingAccountCloudPublication === pending) this.pendingAccountCloudPublication = null;
+          // Remove proof before deleting chunks, so restart cannot retry a CAS
+          // whose immutable data was deliberately cleaned up.
+          if (receiptRecorded) await this.store.discardCloudPublicationReceipt(receiptJson);
+          await this.cleanupAccountCloudGeneration(settings.accountUid, auth.idToken, manifest).catch(() => undefined);
+        }
+        if (publicationUncertain && isFirestorePreconditionError(error)) {
+          // A generic 409/412 is not proof that a previously sent CAS failed.
+          throw new HttpStatusError("The cloud backup publication is still being confirmed. Sync will retry.", 503);
+        }
+        if (isDefinitiveFirestorePreconditionFailure(error)) {
+          throw new AccountCloudSyncConflictError();
+        }
+        throw error;
+      }
     }
 
     const nextSettings = await this.updateLinkedAccountSettings(
@@ -2632,6 +2806,8 @@ export class FirebaseSyncService {
       }),
       settings.firebaseRefreshToken
     );
+    this.pendingAccountCloudPublication = null;
+    if (coveredRevision) await this.store.acknowledgeAccountCloudRevision(settings.accountUid, coveredRevision);
     if (oldManifest) {
       await this.cleanupAccountCloudGeneration(settings.accountUid, auth.idToken, oldManifest).catch(() => undefined);
     }
@@ -2639,6 +2815,33 @@ export class FirebaseSyncService {
       status: this.accountCloudStatusFromManifest(nextSettings, manifest, message),
       manifest
     };
+  }
+
+  private async writeAccountCloudManifest(
+    uid: string,
+    idToken: string,
+    manifest: AccountCloudSyncManifest,
+    baseUpdateTime: string | null
+  ): Promise<void> {
+    await this.firestoreRequest(`accountSync/${encodeURIComponent(uid)}/manifest/current`, idToken, {
+      method: "PATCH",
+      precondition: baseUpdateTime ? { updateTime: baseUpdateTime } : { exists: false },
+      body: { fields: toFirestoreFields({
+        format: ACCOUNT_CLOUD_SYNC_FORMAT,
+        version: ACCOUNT_CLOUD_SYNC_VERSION,
+        updated_at: manifest.updatedAt,
+        device_id: manifest.deviceId,
+        device_name: manifest.deviceName,
+        app_version: manifest.appVersion,
+        generation_id: manifest.generationId,
+        chunk_count: manifest.chunkCount,
+        byte_size: manifest.byteSize,
+        checksum_algorithm: ACCOUNT_CLOUD_SYNC_CHECKSUM_ALGORITHM,
+        checksum: manifest.checksum,
+        chunk_checksums: manifest.chunkChecksums,
+        counts: manifest.counts
+      }) }
+    });
   }
 
   async refreshLinkedAccountIdToken(requiredAccountUid = ""): Promise<string | null> {
@@ -3542,6 +3745,9 @@ export class FirebaseSyncService {
         if (this.isLinkedAccountAuthGenerationCurrent(authGeneration)) {
           this.auth = null;
         }
+        if (isTransientRequestError(error)) {
+          throw new Error("RiftLite could not refresh your account session temporarily. Check your connection and try again.", { cause: error });
+        }
         if (settings.accountUid && !allowAccountReconnect) {
           throw new Error("Your RiftLite account session expired. Reconnect it from the Account page.", { cause: error });
         }
@@ -3567,6 +3773,15 @@ export class FirebaseSyncService {
             }),
             expectedRefreshToken
           );
+          const pending = this.pendingAccountCloudPublication;
+          if (pending?.authGeneration === authGeneration
+            && refreshed.uid === expectedAccountUid
+            && pending.accountUid === expectedAccountUid
+            && pending.refreshToken === expectedRefreshToken) {
+            // A successful refresh of this same identity may rotate its token.
+            // Keep its exact pending publication eligible for reconciliation.
+            pending.refreshToken = refreshed.refreshToken;
+          }
         } catch (error) {
           if (this.isLinkedAccountAuthGenerationCurrent(authGeneration)) {
             this.auth = null;
@@ -3631,7 +3846,7 @@ export class FirebaseSyncService {
       }
     );
     if (!response.ok) {
-      throw new Error(`Firebase auth failed: ${response.status}`);
+      throw new HttpStatusError(`Firebase auth failed: ${response.status}`, response.status);
     }
     const payload = await response.json() as Record<string, string>;
     return {
@@ -3653,7 +3868,7 @@ export class FirebaseSyncService {
       }
     );
     if (!response.ok) {
-      throw new Error(`Firebase token refresh failed: ${response.status}`);
+      throw new HttpStatusError(`Firebase token refresh failed: ${response.status}`, response.status);
     }
     const payload = await response.json() as Record<string, string>;
     return {
@@ -3675,7 +3890,7 @@ export class FirebaseSyncService {
       }
     );
     if (!response.ok) {
-      throw new Error(`Firebase custom token sign-in failed: ${response.status}`);
+      throw new HttpStatusError(`Firebase custom token sign-in failed: ${response.status}`, response.status);
     }
     const payload = await response.json() as Record<string, string>;
     return {
@@ -3763,40 +3978,40 @@ export class FirebaseSyncService {
         url.searchParams.append("updateMask.fieldPaths", fieldPath);
       }
     }
-    const response = await fetch(url, {
+    const response = await fetchBufferedResponse(url, {
       method: options.method,
       headers: {
         "Authorization": `Bearer ${idToken}`,
         "Content-Type": "application/json"
       },
       body: options.method === "GET" || options.method === "DELETE" ? undefined : JSON.stringify(options.body)
-    });
+    }, { timeoutMs: 20_000, label: "Firestore request" });
     if (!response.ok) {
-      const details = (await response.text().catch(() => "")).replace(/\s+/g, " ").slice(0, 500);
-      throw new Error(`Firestore ${response.status}${details ? `: ${details}` : ""}`);
+      const details = response.bodyText.replace(/\s+/g, " ").slice(0, 500);
+      throw new HttpStatusError(`Firestore ${response.status}${details ? `: ${details}` : ""}`, response.status);
     }
     if (response.status === 204) {
       return {};
     }
-    const text = await response.text();
+    const text = response.bodyText;
     return text ? JSON.parse(text) as Record<string, unknown> : {};
   }
 
   private async firestoreRunQuery(path: string, idToken: string, structuredQuery: Record<string, unknown>): Promise<Array<Record<string, unknown>>> {
     const suffix = path ? `/${path}:runQuery` : ":runQuery";
     const url = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents${suffix}`;
-    const response = await fetch(url, {
+    const response = await fetchBufferedResponse(url, {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${idToken}`,
         "Content-Type": "application/json"
       },
       body: JSON.stringify(structuredQuery)
-    });
+    }, { timeoutMs: 20_000, label: "Firestore request" });
     if (!response.ok) {
-      throw new Error(`Firestore query ${response.status}`);
+      throw new HttpStatusError(`Firestore query ${response.status}`, response.status);
     }
-    const payload = await response.json() as Array<Record<string, unknown>>;
+    const payload = JSON.parse(response.bodyText) as Array<Record<string, unknown>>;
     return payload.map((item) => item.document).filter(isRecord);
   }
 
@@ -4051,6 +4266,14 @@ function normalizeAccountCloudSyncConflictManifest(
   if (readString(raw.format) !== ACCOUNT_CLOUD_SYNC_FORMAT) {
     throw new Error("The retained account backup manifest has an unrecognized format.");
   }
+  const manifest = parseAccountCloudSyncManifest(raw);
+  if (accountCloudSyncManifestFingerprint(manifest) !== expectedLegacyFingerprint) {
+    throw new Error("The retained account backup manifest does not match its summary.");
+  }
+  return manifest;
+}
+
+function parseAccountCloudSyncManifest(raw: Record<string, unknown>): AccountCloudSyncManifest {
   const manifest: AccountCloudSyncManifest = {
     version: readApiPositiveInteger(raw.version, "backup version"),
     updatedAt: readString(raw.updatedAt),
@@ -4069,10 +4292,25 @@ function normalizeAccountCloudSyncConflictManifest(
     updateTime: readString(raw.updateTime)
   };
   validateAccountCloudManifestForRestore(manifest);
-  if (accountCloudSyncManifestFingerprint(manifest) !== expectedLegacyFingerprint) {
-    throw new Error("The retained account backup manifest does not match its summary.");
-  }
   return manifest;
+}
+
+function parseCloudPublicationReceipt(raw: string, settings: UserSettings): CloudPublicationReceipt | null {
+  if (!raw) return null;
+  try {
+    const receipt: unknown = JSON.parse(raw);
+    if (!isRecord(receipt) || !isRecord(receipt.manifest) ||
+        receipt.accountUid !== settings.accountUid ||
+        receipt.baseGenerationPin !== (settings.accountCloudSyncRemoteGenerationId ?? "").trim() ||
+        (receipt.baseUpdateTime !== null && typeof receipt.baseUpdateTime !== "string")) return null;
+    const manifest = parseAccountCloudSyncManifest(receipt.manifest);
+    if (manifest.version !== ACCOUNT_CLOUD_SYNC_VERSION || manifest.deviceId !== settings.accountCloudSyncDeviceId) return null;
+    return { manifest, accountUid: settings.accountUid, baseGenerationPin: String(receipt.baseGenerationPin),
+      baseUpdateTime: receipt.baseUpdateTime };
+  } catch {
+    // An unreadable local receipt grants no authority to adopt a new generation.
+    return null;
+  }
 }
 
 function normalizeAccountCloudSyncConflictChunk(
@@ -4249,6 +4487,9 @@ function validateAccountCloudManifestForRestore(
   if (manifest.chunkCount < 1 || manifest.chunkCount > ACCOUNT_CLOUD_SYNC_MAX_CHUNKS) {
     throw new Error("Account cloud backup chunk count is invalid.");
   }
+  if (manifest.byteSize > ACCOUNT_CLOUD_MAX_ENCODED_BYTES || manifest.chunkCount > Math.ceil(ACCOUNT_CLOUD_MAX_ENCODED_BYTES / ACCOUNT_CLOUD_SYNC_CHUNK_SIZE)) {
+    throw new Error("Account cloud backup exceeds the supported 32 MiB encoded size. The local and cloud copies were left unchanged.");
+  }
   if (manifest.byteSize < 1 || manifest.byteSize > ACCOUNT_CLOUD_SYNC_CHUNK_SIZE * manifest.chunkCount) {
     throw new Error("Account cloud backup byte size is invalid.");
   }
@@ -4301,23 +4542,24 @@ function accountCloudSyncManifestMatchesRecovery(
     && sameAccountCloudCounts(live.counts, staged.counts);
 }
 
+/** Proof of our exact conditional publication after an ambiguous response. */
+function accountCloudSyncManifestMatchesPublication(
+  live: AccountCloudSyncManifest | null,
+  expected: AccountCloudSyncManifest
+): boolean {
+  return Boolean(live && live.updateTime
+    && accountCloudSyncManifestMatchesRecovery(live, expected)
+    && live.deviceId === expected.deviceId
+    && live.deviceName === expected.deviceName
+    && live.updatedAt === expected.updatedAt
+    && live.appVersion === expected.appVersion);
+}
+
 function sameAccountCloudCounts(left: AccountCloudSyncCounts, right: AccountCloudSyncCounts): boolean {
   return left.matches === right.matches
     && left.decks === right.decks
     && left.notebooks === right.notebooks
     && left.replays === right.replays;
-}
-
-function isAccountCloudBackupFile(value: unknown): value is RiftLiteBackupFile {
-  if (!isRecord(value) || value.format !== "riftlite.backup" || value.version !== 1 || !isRecord(value.settings)) {
-    return false;
-  }
-  return Array.isArray(value.matches)
-    && Array.isArray(value.deletedMatches)
-    && Array.isArray(value.decks)
-    && Array.isArray(value.notebooks)
-    && Array.isArray(value.replays)
-    && Array.isArray(value.deletedReplays);
 }
 
 function isDefinitiveWebsiteApiRejection(error: unknown): boolean {
@@ -4331,6 +4573,12 @@ function isFirestorePreconditionError(error: unknown): boolean {
   return error instanceof Error
     && (/Firestore (?:409|412)\b/.test(error.message)
       || /Firestore 400\b.*FAILED_PRECONDITION/i.test(error.message));
+}
+
+/** Only the explicit server condition rejection proves this initial PATCH failed. */
+function isDefinitiveFirestorePreconditionFailure(error: unknown): boolean {
+  return error instanceof Error
+    && /Firestore (?:400|409|412)\b.*"status"\s*:\s*"FAILED_PRECONDITION"/i.test(error.message);
 }
 
 function fromWebMatch(match: Record<string, unknown>, scope: CommunityMatch["scope"], hubId?: string): CommunityMatch {

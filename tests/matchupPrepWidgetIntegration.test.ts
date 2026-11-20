@@ -17,7 +17,9 @@ describe("Prep/Notes widget integration", () => {
   });
 
   it("gates the shared Atlas and TCGA play widget behind a default-on setting", () => {
-    expect(appSource).toContain("settings.matchupPrepWidgetEnabled && playActiveDeck && prepNotebook");
+    expect(appSource).toContain("settings.matchupPrepWidgetEnabled && playActiveDeck ?");
+    expect(appSource).toContain("notebook?.deckId === deck.id ? resolveDeckMatchupGuide");
+    expect(appSource).toContain("prepNotebook?.deckId !== next.deckId");
     expect(appSource).toContain("checked={settings.matchupPrepWidgetEnabled}");
     expect(appSource).toContain("onSave({ matchupPrepWidgetEnabled: event.target.checked })");
     expect(appSource).toContain("over both Atlas and TCGA");

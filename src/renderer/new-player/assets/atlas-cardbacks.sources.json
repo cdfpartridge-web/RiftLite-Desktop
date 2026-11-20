@@ -1,0 +1,9 @@
+{
+  "retrievedAt": "2026-11-11",
+  "sourceEvidence": "Public Atlas client output/atlas-replay-public-20261024/12pup7wp99y87.js module 533812 default card-back resolver. Both current URLs verified HTTP200/image/png on retrieval.",
+  "assets": [
+    {"file":"atlas-cardback-blue.png","url":"https://play.riftatlas.com/cardback-blue.png","sha256":"1fee21bf638b9cb875d520045183f855a9c167a879248d68134a51da75659270"},
+    {"file":"atlas-cardback-white.png","url":"https://play.riftatlas.com/cardback-white.png","sha256":"e60116d5a1e2eddb68dc0e7efe18ff95dbd4a499a08ade6e0cf4302573875e31"}
+  ],
+  "rights": "Unmodified public Riftbound card backs. Riot Games and RiftAtlas retain their respective rights."
+}

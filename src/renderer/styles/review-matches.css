@@ -65,6 +65,19 @@
 .review-matches .empty-state { padding: 45px 20px; border: 1px dashed var(--review-border); border-radius: 14px; color: var(--review-muted); background: #091622; }
 .review-matches .local-match-popup { border: 1px solid #35516b; border-radius: 18px; background: linear-gradient(150deg, #0d2032, #07111d 70%); box-shadow: 0 25px 90px #0009; }
 
+.review-shell-dialog.modal-backdrop {
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  border: 0;
+  color: inherit;
+  background: transparent;
+}
+.review-shell-dialog:not([open]) { display: none; }
+.review-shell-dialog::backdrop { background: rgb(5 7 10 / 72%); }
 .review-modal.review-modal-modern { display: block; width: min(980px, 100%); border-radius: 18px; background: linear-gradient(150deg, #0d2032, #07111d 70%); }
 .review-modal.review-modal-modern > header { padding: 22px 24px; align-items: flex-start; }
 .review-modal-modern > header h2 { font-size: 24px; letter-spacing: -.03em; }

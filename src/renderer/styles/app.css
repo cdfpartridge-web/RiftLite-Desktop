@@ -3272,29 +3272,9 @@
 }
 
 .modern-activity-summary p {
-  overflow: hidden;
   color: #8999ac;
-  font-size: 10px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.modern-activity-summary > span {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  color: #9aaabd;
-  font-size: 10px;
-  font-weight: 850;
-  white-space: nowrap;
-}
-
-.modern-activity-summary > span[data-tone="ready"] {
-  color: #38dfb4;
-}
-
-.modern-activity-summary > span[data-tone="attention"] {
-  color: #ffc164;
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .modern-sponsor {
@@ -4017,8 +3997,9 @@
     grid-template-columns: 26px minmax(0, 1fr);
   }
 
-  .modern-activity-summary > span {
+  .modern-activity-summary > button {
     grid-column: 2;
+    justify-self: start;
   }
 
   .modern-activity-head,
@@ -10189,12 +10170,21 @@ button.floating-resize-handle {
 
 .scorepad-card {
   gap: 14px;
+  min-width: 0;
+  margin: 0;
 }
 
 .scorepad-form-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(150px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr));
   gap: 10px;
+}
+
+.notebook-editor {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
 }
 
 .scorepad-form-grid label,
@@ -10215,7 +10205,7 @@ button.floating-resize-handle {
 }
 
 .scorepad-games.bo3 {
-  grid-template-columns: repeat(3, minmax(220px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 276px), 1fr));
 }
 
 .scorepad-game-card {
@@ -10229,7 +10219,23 @@ button.floating-resize-handle {
 
 .scorepad-score-row {
   display: grid;
-  grid-template-columns: 36px minmax(82px, 1fr) 36px 36px minmax(82px, 1fr) 36px;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 160px), 1fr));
+}
+
+.scorepad-score-side {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr) 38px;
+  align-items: end;
+  gap: 6px;
+}
+
+.scorepad-score-side[data-mode="quick"] {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.scorepad-score-side input {
+  min-width: 0;
+  width: 100%;
 }
 
 .scorepad-score-row .secondary {

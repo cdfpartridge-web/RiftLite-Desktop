@@ -3,6 +3,7 @@ import ts from "typescript";
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import type { AtlasPostgameQueryTarget, AtlasPostgameQueryResult } from "../src/main/services/atlasPostgameQuery";
+import { atlasPostgameQueryFailureReason } from "../src/main/services/atlasPostgameQuery";
 
 const compiled = ts.transpileModule(readFileSync(new URL("../src/main/services/atlasPostgameQuery.ts", import.meta.url), "utf8"), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
@@ -67,6 +68,36 @@ function harness(requestTarget: AtlasPostgameQueryTarget = target) {
 }
 
 describe("Atlas completed replay guest query", () => {
+  it("retains an allowlisted selected battlefield card without blocking collection or retaining extra data", async () => {
+    const h = harness(), payload = view();
+    Object.assign(payload.frames[0].state.players[0], { selectedBattlefield: {
+      id: "battlefield-a", name: "Minefield", cardCode: "TEST-FIELD", type: "Battlefield",
+      secret: "NO_STORE", accessToken: "NO_STORE", privateNotes: { nested: "NO_STORE" },
+    } });
+    h.setPayload(envelope(payload));
+    const result = await h.run();
+    expect(result.status).toBe("ready");
+    expect(decode(result.replay!).frames[0].state.players[0].selectedBattlefield).toEqual({
+      id: "battlefield-a", name: "Minefield", cardCode: "TEST-FIELD", type: "Battlefield",
+    });
+    expect(JSON.stringify(result.replay)).not.toContain("NO_STORE");
+  });
+  it("preserves the existing string selected battlefield representation", async () => {
+    const h = harness(), payload = view();
+    Object.assign(payload.frames[0].state.players[0], { selectedBattlefield: "Minefield" });
+    h.setPayload(envelope(payload));
+    const result = await h.run();
+    expect(result.status).toBe("ready");
+    expect(decode(result.replay!).frames[0].state.players[0].selectedBattlefield).toBe("Minefield");
+  });
+  it("still rejects arbitrary nested objects inside selected battlefield card fields", async () => {
+    const h = harness(), payload = view();
+    Object.assign(payload.frames[0].state.players[0], { selectedBattlefield: {
+      id: "battlefield-a", name: "Minefield", text: { arbitrary: "nested data" },
+    } });
+    h.setPayload(envelope(payload));
+    await expect(h.run()).rejects.toThrow("Atlas replay has invalid nested data.");
+  });
   const pendingCompletion = (expectedPageUrl = "https://play.riftatlas.com/lobby"): AtlasPostgameQueryTarget => ({
     ...target, gameHistoryEndedAt: undefined, completionCheck: "atlas", expectedPageUrl,
   });
@@ -164,6 +195,35 @@ describe("Atlas completed replay guest query", () => {
     h.metadata.finalFrameIndex = payload.frames.length - 1;
     return { h, input, payload, prefixLength: prefix.length };
   }
+  it.each(["missing-ending", "identity", "metadata-identity", "ownership", "account-changed"] as const)(
+    "preserves the specific deciding-game failure through the guest and main diagnostic boundaries: %s",
+    async reason => {
+      const { h, input, payload } = bo3Harness(pendingBo3(3));
+      if (reason === "missing-ending") {
+        for (const frame of payload.frames) {
+          delete (frame.state as Record<string, unknown>).gameOutcome;
+          Object.assign(frame.state, { winsByPlayerId: { "player-a": 1, "player-b": 1 } });
+        }
+      } else if (reason === "identity") {
+        payload.frames[1].state.roomCode = "DIFFERENT";
+      } else if (reason === "metadata-identity") {
+        h.metadata.gameKey = "DIFFERENT";
+      } else if (reason === "ownership") {
+        h.metadata.ownPlayerIds = ["another-player"];
+      } else {
+        const fetch = h.fetcher.getMockImplementation()!;
+        h.fetcher.mockImplementation(async (url, init) => {
+          const result = await fetch(url, init);
+          if (url.endsWith("/metadata")) h.changeSession();
+          return result;
+        });
+      }
+      h.setPayload(envelope(payload));
+      const guest = await vm.runInContext(exported.atlasPostgameQueryScript(input, true), h.context);
+      expect(guest).toEqual({ riftlitePostgameFailure: reason });
+      expect(atlasPostgameQueryFailureReason({ code: "atlas_postgame_query_failed", failureReason: guest.riftlitePostgameFailure })).toBe(reason);
+    },
+  );
   it.each([1, 2, 3])("retains the native setup prefix before exact gameplay starts in BO3 Game %i", async gameNumber => {
     const { h, input, payload, prefixLength } = setupPrefixHarness(gameNumber);
     h.setPayload(envelope(payload));
@@ -459,6 +519,17 @@ describe("Atlas completed replay guest query", () => {
       if (status === 404) expect((await h.run()).status).toBe("pending");
       else await expect(h.run()).rejects.toThrow("temporarily unavailable");
     }
+  });
+  it.each(["metadata", "full"])("keeps a temporary %s HTTP 401 retryable while preserving HTTP 403 denial", async stage => {
+    const h = harness(), base = h.fetcher.getMockImplementation()!;
+    const affected = stage === "metadata" ? `${api}/metadata` : api;
+    h.fetcher.mockImplementation(async (url, init) => url === affected ? response({}, 401) : base(url, init));
+    await expect(vm.runInContext(exported.atlasPostgameQueryScript(target, true), h.context))
+      .resolves.toEqual({ riftlitePostgameFailure: "authentication" });
+    h.fetcher.mockImplementation(async (url, init) => url === affected ? response({}, 403) : base(url, init));
+    expect((await h.run()).status).toBe("unavailable");
+    h.fetcher.mockImplementation(base);
+    expect((await h.run()).status).toBe("ready");
   });
   it("uses the observed same-origin auth fallback only for a network TypeError", async () => {
     const h = harness(); h.fetcher.mockRejectedValueOnce(new TypeError("Failed to fetch"));

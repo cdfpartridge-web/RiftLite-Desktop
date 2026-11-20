@@ -105,7 +105,7 @@ export class DeckService {
     if (id && !await this.store.getSavedDeck(id)) {
       throw new Error("Deck not found.");
     }
-    return this.store.saveSettings({ activeDeckId: id });
+    return this.store.saveSettings({ activeDeckId: id }, { recordCloudEdit: true });
   }
 
   async attachBestDeck(draft: MatchDraft, snapshot: Record<string, unknown>, settings: UserSettings): Promise<MatchDraft> {

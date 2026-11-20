@@ -1,4 +1,5 @@
 import { ipcRenderer } from "electron";
+import { RawCaptureLossNoticeLimiter } from "../shared/rawCaptureLoss.js";
 import { installAtlasRendererPerformanceMonitor } from "./atlasRendererPerformance.js";
 import { ATLAS_RENDERER_PERFORMANCE_IPC_CHANNEL } from "../shared/atlasRendererPerformance.js";
 import { battlefieldCodeFor, battlefieldImageFor, collectTcgaBattlefieldCandidates } from "./tcgaBattlefields.js";
@@ -299,6 +300,7 @@ let endedVisibleResultKey = "";
 let snapshotTimer: number | undefined;
 let eventCounter = 0;
 let rawCaptureSeq = 0;
+const rawCaptureLossNoticeLimiter = new RawCaptureLossNoticeLimiter();
 let rawCaptureSocketSeq = 1;
 let debugEnabled = false;
 let tcgaReplayResearchActive = false;
@@ -3371,7 +3373,14 @@ function installAtlasBattlefieldSeatBridge(): void {
 }
 
 function captureRawAtlasFrame(requestUrl: string, raw: string, dir: "in" | "out", socketId = ""): void {
-  if (platform !== "atlas" || !raw || raw.length > 1_500_000 || !isAtlasRawCaptureSocket(requestUrl)) {
+  if (platform !== "atlas" || !raw || !isAtlasRawCaptureSocket(requestUrl)) {
+    return;
+  }
+  if (raw.length > 1_500_000) {
+    if (requestUrl.length <= 4096 && socketId.length <= 256 && rawCaptureLossNoticeLimiter.allow(0)) {
+      ipcRenderer.send("raw-capture:loss", { platform, requestUrl, socketId: socketId || null,
+        ts: Date.now(), reason: "ingress-frame-too-large" });
+    }
     return;
   }
   const trimmed = raw.trim();

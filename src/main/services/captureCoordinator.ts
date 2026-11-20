@@ -1,6 +1,6 @@
 import { BrowserWindow, Notification } from "electron";
 import { randomUUID } from "node:crypto";
-import type { CaptureEvent, CaptureHealth, GamePlatform, MatchDraft, MatchGame, PrivateHubSyncResult, ReplayFlag, ReplayRecord, ReplayScreenshotFrame } from "../../shared/types.js";
+import type { CaptureEvent, CaptureHealth, GamePlatform, MatchDraft, MatchGame, PrivateHubSyncResult, ReplayFlag, ReplayRecord, ReplayScreenshotFrame, UserSettings } from "../../shared/types.js";
 import { replayWithIntelligence } from "../../shared/replayIntelligence.js";
 import { CaptureDiagnostics } from "./captureDiagnostics.js";
 import { DeckService } from "./deckService.js";
@@ -22,8 +22,11 @@ type ReplayFrameCapture = (platform: GamePlatform, label: string, capturedAt: st
 
 interface TimedReplayState {
   timer: ReturnType<typeof setInterval> | null;
+  enabled: boolean;
   frames: ReplayScreenshotFrame[];
   capturing: boolean;
+  pendingCapture: Promise<ReplayScreenshotFrame | null> | null;
+  finalized: boolean;
   tick: number;
   nextAllowedAt: number;
   slowCaptureStreak: number;
@@ -34,8 +37,10 @@ interface TimedReplayState {
   failedCaptures: number;
 }
 
+type TimedReplaySettings = Pick<UserSettings, "replayCaptureEnabled" | "replayKeyframesEnabled" | "replayVideoEnabled" | "replayFramePreset">;
+
 interface PendingAtlasReview {
-  timer: ReturnType<typeof setTimeout>;
+  timer?: ReturnType<typeof setTimeout>;
   endEvent: CaptureEvent;
   settings: Awaited<ReturnType<RiftLiteStore["getSettings"]>> | null;
 }
@@ -123,6 +128,7 @@ const REPLAY_FRAME_INTERVAL_MS_BY_PRESET = {
 const ATLAS_CONTINUATION_GRACE_MS = 45_000;
 const ATLAS_ROOT_SINGLE_GAME_SETTLE_MS = 8_000;
 const MAX_REPLAY_FRAMES = 600;
+const REPLAY_FRAME_FINALIZATION_TIMEOUT_MS = 2_500;
 const REPLAY_SLOW_CAPTURE_MS = 1_100;
 const REPLAY_FAST_CAPTURE_MS = 650;
 const REPLAY_SLOW_CAPTURE_COOLDOWN_MS = 5_000;
@@ -134,7 +140,7 @@ const RECENT_ATLAS_DRAFT_PUBLICATION_TTL_MS = 120_000;
 const HEALTH_EMIT_MIN_MS = 900;
 const FORCE_REVIEW_QUEUE_WAIT_MS = 5_000;
 
-function replayFrameIntervalMs(settings: Awaited<ReturnType<RiftLiteStore["getSettings"]>> | null): number {
+function replayFrameIntervalMs(settings: Pick<UserSettings, "replayFramePreset"> | null): number {
   const preset = settings?.replayFramePreset ?? "standard";
   return REPLAY_FRAME_INTERVAL_MS_BY_PRESET[preset] ?? REPLAY_FRAME_INTERVAL_MS_BY_PRESET.standard;
 }
@@ -174,6 +180,8 @@ export class CaptureCoordinator {
   private readonly deckService: DeckService;
   private readonly closingPlatforms = new Set<GamePlatform>();
   private readonly timedReplayState = new Map<GamePlatform, TimedReplayState>();
+  private readonly closingTimedReplayStates = new Set<TimedReplayState>();
+  private replayCaptureSettingsRevision = 0;
   private readonly recentEventIds = new Map<string, number>();
   private readonly platformEventQueues = new Map<GamePlatform, Promise<void>>();
   private readonly replayFinalizationByMatchId = new Map<string, Promise<void>>();
@@ -231,6 +239,20 @@ export class CaptureCoordinator {
     return Boolean(this.tracker.get(platform));
   }
 
+  /** Apply saved consent immediately, including while the event queue is busy. */
+  updateReplayCaptureSettings(settings: UserSettings): void {
+    this.replayCaptureSettingsRevision += 1;
+    for (const platform of this.timedReplayState.keys()) {
+      this.ensureTimedReplayCapture(platform, settings);
+    }
+    // A closing session can be draining an admitted frame outside the event queue.
+    // Its optional final screenshot must still honour the latest saved consent.
+    for (const state of this.closingTimedReplayStates) {
+      state.enabled = settings.replayCaptureEnabled !== false
+        && settings.replayKeyframesEnabled !== false && settings.replayVideoEnabled !== true;
+    }
+  }
+
   handleEvent(event: CaptureEvent): Promise<void> {
     // The game preload reports through both the direct guest IPC route and the
     // host renderer route. Deduplicate before queueing so a slow finalizer
@@ -267,6 +289,7 @@ export class CaptureCoordinator {
       )).catch(() => undefined);
       return;
     }
+    const replayCaptureSettingsRevision = this.replayCaptureSettingsRevision;
     const settings = await this.store.getSettings().catch(() => null);
     const trackedEvent = withConfiguredCaptureContext(event, settings?.username ?? "");
     if (this.shouldIgnoreAtlasNonGameEvent(trackedEvent)) {
@@ -372,7 +395,7 @@ export class CaptureCoordinator {
         : trackedEvent;
       this.emit("capture:event", compactCaptureEvent(rendererEvent));
     }
-    if (session && event.kind !== "capture-ready") {
+    if (session && event.kind !== "capture-ready" && replayCaptureSettingsRevision === this.replayCaptureSettingsRevision) {
       this.ensureTimedReplayCapture(trackedEvent.platform, settings);
     }
     if (
@@ -1013,6 +1036,7 @@ export class CaptureCoordinator {
     let replay: ReplayRecord | undefined;
     const shouldPersistLocalReplay = latest.keepReplay !== false && (
       prepared.settings?.replayCaptureEnabled !== false
+      || prepared.visualFrames.length > 0
       || latest.insightContext?.capturedWithEnhancedInsights === true
     );
     if (shouldPersistLocalReplay) {
@@ -1388,7 +1412,9 @@ export class CaptureCoordinator {
       status: "saved",
       updatedAt: new Date().toISOString()
     };
-    const result = await this.store.saveMatch(saved);
+    const result = saved.importedPlayNotes
+      ? await this.store.saveMatch(saved, true)
+      : await this.store.saveMatch(saved);
     const deferredFinalization = this.deferredReplayFinalizationByMatchId.get(draft.id);
     if (deferredFinalization && !options.deferReplayFinalization) {
       await this.persistPreparedReplayFinalization({
@@ -1804,7 +1830,15 @@ export class CaptureCoordinator {
       return false;
     }
     const pending = this.pendingAtlasReviews.get(event.platform);
-    if (!pending || !readPayloadBoolean(event.payload.active)) {
+    if (!pending) {
+      return false;
+    }
+    if (event.kind === "match-end" && readPayloadString(event.payload.atlasResultKind) === "match-terminal") {
+      clearTimeout(pending.timer);
+      this.pendingAtlasReviews.delete(event.platform);
+      return false;
+    }
+    if (!readPayloadBoolean(event.payload.active)) {
       return false;
     }
     if (this.isPendingAtlasContinuation(pending.endEvent, event)) {
@@ -1818,6 +1852,11 @@ export class CaptureCoordinator {
         lastEventAt: event.capturedAt
       };
       this.emitHealth(true);
+      return false;
+    }
+    // The scored board remains active underneath a winner prompt. A genuine
+    // new session goes through finalizeSessionBeforeRollover after this check.
+    if (isAtlasNumberedWinnerPrompt(pending.endEvent)) {
       return false;
     }
     await this.flushPendingAtlasReview(event.platform, "new-atlas-match-started", settings);
@@ -1837,7 +1876,9 @@ export class CaptureCoordinator {
     if (existing) {
       clearTimeout(existing.timer);
     }
-    const timer = setTimeout(() => {
+    // Players can take as long as they need to confirm a game. Only ambiguous
+    // exits need a grace period. A terminal event, landing or rollover settles a prompt.
+    const timer = isAtlasNumberedWinnerPrompt(endEvent) ? undefined : setTimeout(() => {
       void this.flushPendingAtlasReview(endEvent.platform, "atlas-continuation-timeout", settings).catch(() => undefined);
     }, ATLAS_CONTINUATION_GRACE_MS);
     this.pendingAtlasReviews.set(endEvent.platform, {
@@ -2361,22 +2402,35 @@ export class CaptureCoordinator {
 
   private ensureTimedReplayCapture(
     platform: GamePlatform,
-    settings: Awaited<ReturnType<RiftLiteStore["getSettings"]>> | null
+    settings: TimedReplaySettings | null
   ): void {
+    let state = this.timedReplayState.get(platform);
     if (
       (platform !== "atlas" && platform !== "tcga") ||
       !this.captureReplayFrame ||
+      !settings ||
       settings?.replayCaptureEnabled === false ||
       settings?.replayKeyframesEnabled === false ||
-      settings?.replayVideoEnabled === true ||
-      this.timedReplayState.has(platform)
+      settings?.replayVideoEnabled === true
     ) {
+      if (state) {
+        state.enabled = false;
+        if (state.timer) clearInterval(state.timer);
+        state.timer = null;
+      }
+      // Keep existing frames, including an already-admitted capture completing
+      // later, for normal finalization instead of orphaning their saved files.
       return;
     }
-    const state: TimedReplayState = {
+    if (state?.timer) return;
+    const resumed = Boolean(state);
+    state ??= {
       timer: null,
+      enabled: true,
       frames: [],
       capturing: false,
+      pendingCapture: null,
+      finalized: false,
       tick: 0,
       nextAllowedAt: 0,
       slowCaptureStreak: 0,
@@ -2386,13 +2440,14 @@ export class CaptureCoordinator {
       slowCaptures: 0,
       failedCaptures: 0
     };
+    state.enabled = true;
     this.timedReplayState.set(platform, state);
     const intervalMs = replayFrameIntervalMs(settings);
     state.timer = setInterval(() => {
       void this.captureTimedReplayFrame(platform);
     }, intervalMs);
     this.recordReplayCaptureDiagnostic(platform, {
-      reason: "replay-session-start",
+      reason: resumed ? "replay-session-resumed" : "replay-session-start",
       framePreset: settings?.replayFramePreset ?? "standard",
       intervalMs,
       maxFrames: MAX_REPLAY_FRAMES
@@ -2401,7 +2456,7 @@ export class CaptureCoordinator {
 
   private async captureTimedReplayFrame(platform: GamePlatform, label = "", force = false): Promise<void> {
     const state = this.timedReplayState.get(platform);
-    if (!state || state.capturing || !this.captureReplayFrame || state.frames.length >= MAX_REPLAY_FRAMES) {
+    if (!state || !state.enabled || state.capturing || !this.captureReplayFrame || state.frames.length >= MAX_REPLAY_FRAMES) {
       return;
     }
     const now = Date.now();
@@ -2425,15 +2480,15 @@ export class CaptureCoordinator {
       state.tick += 1;
       state.attemptedCaptures += 1;
       const capturedAt = new Date().toISOString();
-      const frame = await this.captureReplayFrame(
+      state.pendingCapture = this.captureReplayFrame(
         platform,
         label || `Replay frame ${state.tick}`,
         capturedAt,
         { force }
       );
+      const frame = await state.pendingCapture;
       if (frame) {
-        state.frames.push(frame);
-        frameCaptured = true;
+        frameCaptured = this.retainTimedReplayFrame(platform, state, frame, false);
       }
     } catch (error) {
       state.failedCaptures += 1;
@@ -2469,7 +2524,25 @@ export class CaptureCoordinator {
         errorMessage
       });
       state.capturing = false;
+      state.pendingCapture = null;
     }
+  }
+
+  private retainTimedReplayFrame(platform: GamePlatform, state: TimedReplayState, frame: ReplayScreenshotFrame, captureFinal: boolean): boolean {
+    if (state.finalized) {
+      // The capture callback owns the file path. Without a verified managed root,
+      // deleting a late result here could remove an unrelated/user-selected file.
+      // Preserve it locally and report the timeout outcome; never attach it to
+      // a new match or mutate the completed replay's returned frame collection.
+      this.recordReplayCaptureDiagnostic(platform, {
+        reason: "replay-frame-late-preserved", frameCaptured: true, captureFinal,
+        frameCount: state.frames.length,
+        message: "A screenshot admitted before finalization completed after its deadline. Its local file was preserved."
+      });
+      return false;
+    }
+    state.frames.push(frame);
+    return true;
   }
 
   private async stopTimedReplayCapture(platform: GamePlatform, captureFinal: boolean, capturedAt = new Date().toISOString()): Promise<ReplayScreenshotFrame[]> {
@@ -2482,17 +2555,25 @@ export class CaptureCoordinator {
       state.timer = null;
     }
     this.timedReplayState.delete(platform);
-    if (captureFinal && this.captureReplayFrame && state.frames.length < MAX_REPLAY_FRAMES) {
-      const startedAt = Date.now();
-      const finalFrame = await withTimeout(
-        this.captureReplayFrame(platform, "Final result", capturedAt, { force: true }),
-        2500,
-        null
-      );
-      if (finalFrame) {
-        state.frames.push(finalFrame);
+    this.closingTimedReplayStates.add(state);
+    const deadline = Date.now() + REPLAY_FRAME_FINALIZATION_TIMEOUT_MS;
+    try {
+      if (state.pendingCapture) {
+        await withTimeout(state.pendingCapture, Math.max(0, deadline - Date.now()), null);
       }
-      state.lastCaptureDurationMs = Date.now() - startedAt;
+      // Do not overlap a timed capture, exceed the total finalization deadline,
+      // or capture a new match that started while this session was draining.
+      if (captureFinal && state.enabled && !state.capturing && !this.timedReplayState.has(platform)
+        && Date.now() < deadline && this.captureReplayFrame && state.frames.length < MAX_REPLAY_FRAMES) {
+        const startedAt = Date.now();
+        const finalCapture = this.captureReplayFrame(platform, "Final result", capturedAt, { force: true })
+          .then(frame => { if (frame) this.retainTimedReplayFrame(platform, state, frame, true); });
+        await withTimeout(finalCapture, Math.max(0, deadline - Date.now()), undefined);
+        state.lastCaptureDurationMs = Date.now() - startedAt;
+      }
+    } finally {
+      state.finalized = true;
+      this.closingTimedReplayStates.delete(state);
     }
     this.recordReplayCaptureDiagnostic(platform, {
       reason: "replay-session-end",
@@ -3231,6 +3312,11 @@ function atlasBo3QueueText(event: CaptureEvent): string {
 
 function isAtlasConfirmWinnerText(event: CaptureEvent): boolean {
   return /(?:confirm|choose|select|report)\s+game\s+\d+\s+winner|(?:confirm|choose|select|report)\s+(?:the\s+)?winner\s+(?:for|of)\s+game\s+\d+|game\s+\d+.{0,48}(?:winner|choose|select|confirm|report)/i.test(atlasBo3QueueText(event));
+}
+
+function isAtlasNumberedWinnerPrompt(event: CaptureEvent): boolean {
+  return atlasConfirmGameNumber(event) > 0 &&
+    (readPayloadString(event.payload.atlasResultKind) === "game-result" || isAtlasConfirmWinnerText(event));
 }
 
 function buildMatchCapturePopupState(

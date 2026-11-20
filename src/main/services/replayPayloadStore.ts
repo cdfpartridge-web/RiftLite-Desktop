@@ -59,12 +59,19 @@ export interface PreparedReplayPayload {
   reference: ReplayPayloadReference;
 }
 
+export function assertReplayPayloadAvailable(replay: ReplayRecord): void {
+  if (replay.payloadUnavailable) {
+    throw new Error(`The recording data for "${replay.title}" could not be read. Reload the replay library and try again.`);
+  }
+}
+
 export class ReplayPayloadStore {
   private readonly activeTemporaryFiles = new Set<string>();
 
   constructor(private readonly directory: string) {}
 
   async prepare(replay: ReplayRecord): Promise<PreparedReplayPayload> {
+    assertReplayPayloadAvailable(replay);
     const document = replayPayloadDocument(replay);
     const expanded = Buffer.from(JSON.stringify(document), "utf8");
     if (expanded.byteLength > REPLAY_PAYLOAD_MAX_EXPANDED_BYTES) {

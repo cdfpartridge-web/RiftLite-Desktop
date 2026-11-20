@@ -32,6 +32,29 @@ function replay(id: string): ReplayRecord {
 }
 
 describe("RiftLiteStore backup projections", () => {
+  it("keeps the publication receipt local across restart and retires it with its generation pin", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "riftlite-publication-receipt-"));
+    const open = () => new RiftLiteStore(join(directory, "store.sqlite"), join(directory, "legacy.json"));
+    try {
+      const store = open();
+      await store.load();
+      await store.saveSettings({ accountUid: "fixture", accountCloudSyncDeviceId: "test-device" });
+      await store.writeCloudPublicationReceipt("local-receipt-one", () => true);
+      const restarted = open();
+      await restarted.load();
+      expect(await restarted.readCloudPublicationReceipt()).toBe("local-receipt-one");
+      expect(JSON.stringify(await restarted.exportBackupData())).not.toContain("local-receipt-one");
+      await restarted.discardCloudPublicationReceipt("older-receipt");
+      expect(await restarted.readCloudPublicationReceipt()).toBe("local-receipt-one");
+      await restarted.saveSettings({ accountCloudSyncRemoteGenerationId: "confirmed" });
+      expect(await restarted.readCloudPublicationReceipt()).toBe("");
+      await restarted.writeCloudPublicationReceipt("local-receipt-two", () => true);
+      await restarted.saveSettings({ accountUid: "another-account" });
+      expect(await restarted.readCloudPublicationReceipt()).toBe("");
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
   it("skips replay payloads for account exports and retains complete local backup round trips", async () => {
     const directory = await mkdtemp(join(tmpdir(), "riftlite-backup-projection-test-"));
     try {

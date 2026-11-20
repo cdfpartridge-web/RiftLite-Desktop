@@ -1,3 +1,4 @@
+import { importReviewPlayNotes } from "../shared/reviewPlayNotes";
 import { ReplayOnlinePlayer } from "./ReplayOnlinePlayer";
 import type { GameDetailsTarget } from "../shared/gameDetails";
 import { resolveGameDetails, gameDetailsDisplayMatch, cloudReplayForGameSegment, type GameDetailsTab } from "../shared/gameDetails";
@@ -6,10 +7,11 @@ import { GameDetailsNavigationContext } from "./GameDetailsNavigation";
 import { YourGroupsView } from "./YourGroupsView";
 import { mergeAccountReplayLibrary, type AccountReplayLibraryResult } from "../shared/accountReplayLibrary";
 import type { GameCloudReplay } from "../shared/gameReplayAssets";
-import { RecordingSharingPage } from "./RecordingSharingPage";
+import { RecordingSharingPage, type RecordingSettingsFocus } from "./RecordingSharingPage";
 import { RecordingVideoSettings } from "./RecordingVideoSettings";
 import { GameReplayAssets } from "./GameReplayAssets";
 import { PlayCaptureStatus } from "./PlayCaptureStatus";
+import { recordingForNextGame, replayUploadDescription } from "../shared/playCaptureReadiness";
 import { ReplayDiscordShareDialog } from "./ReplayDiscordShareDialog";
 import { CrashDiagnosticsPanel } from "./CrashDiagnosticsPanel";
 import { AccountDisclosure, AccountIdentityCard } from "./AccountOverview";
@@ -19,6 +21,7 @@ import { DateFilter } from "./DateFilter";
 import { StatSeasonFilter } from "./RadianceSeasonNotice";
 import { STAT_SEASONS, CURRENT_STAT_SEASON, isInStatSeason, statMatchTimestamp, type StatSeasonId } from "../shared/statSeasons";
 import { TeamInvitationInbox, TeamInvitationManager } from "./TeamInvitations";
+import { TeamSettingsSaveController } from "./teamSettingsSaveController";
 import { selectGroupTeams } from "../shared/yourGroups";
 import { DEFAULT_DATE_FILTER, dateFilterLabel, isInDateFilter, type DateFilterValue } from "../shared/dateFilter";
 import React, { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
@@ -179,6 +182,7 @@ import type {
   ReplayTeachingLayer,
   ReplayVoiceNote,
   ReplayRecord,
+  ReplayLibraryMetadataPatch,
   ReplayFolder,
   ReplayScreenshotFrame,
   ReplayTrimRange,
@@ -243,7 +247,8 @@ import {
 } from "../shared/accountSyncConfidence";
 import {
   activeDiscordReplayHubIds,
-  rawCaptureSettingsForPlatformUpload
+  rawCaptureSettingsForPlatformUpload,
+  uploadLaneEnabledForAccount
 } from "../shared/replaySharing";
 import { replayDeliveryErrorMessage, replayDeliveryStages, replayDeliverySummary, webReplayQueueItemCanBeKeptLocalOnly } from "../shared/replayDelivery";
 import {
@@ -423,7 +428,6 @@ import {
   initialFirstRunSetupState,
   parseFirstRunSetupState,
   serializeFirstRunSetupState,
-  shouldStartFirstRunSetup,
   type FirstRunSetupState,
   type FirstRunSetupStep
 } from "../shared/firstRunSetup";
@@ -446,6 +450,9 @@ import {
   type NavigationTarget
 } from "../shared/navigationModel";
 import { FirstRunSetup } from "./FirstRunSetup";
+import { NewPlayerHub } from "./new-player/NewPlayerHub";
+import { NewPlayerWelcome } from "./new-player/NewPlayerWelcome";
+import { NEW_PLAYER_WELCOME_KEY, newPlayerFirstRunEntry, parseNewPlayerWelcomeChoice, serializeNewPlayerWelcomeChoice, type NewPlayerWelcomeChoice } from "../shared/newPlayerWelcome";
 import { DeckImportDecision } from "./DeckImportDecision";
 import { DeckShareCardDialog, type DeckShareCardViewModel } from "./DeckShareCard";
 import { HomeDeckThemeIntro } from "./HomeDeckThemeIntro";
@@ -463,6 +470,7 @@ import { SideboardLabView } from "./SideboardLabView";
 import { OpeningLabComingSoon } from "./OpeningLabComingSoon";
 import { TrainingLabsIntro } from "./TrainingLabsIntro";
 import { resolveBundledReplayCardImage, RiftLiteReplayViewer } from "./RiftLiteReplayViewer";
+import { LocalReplayTestView, readLocalReplayTestCapability } from "./LocalReplayTestView";
 import { resolveDeckCardArtwork } from "./cardArtwork";
 import { CardArtworkImage } from "./CardArtworkImage";
 import { SettingsAccordionSection } from "./SettingsAccordionSection";
@@ -507,6 +515,8 @@ type MatchFocusTarget = {
   nonce: number;
 };
 type NavigationOptions = {
+  openLearningPath?: boolean;
+  recordingFocus?: RecordingSettingsFocus;
   groupsTab?: "teams" | "hubs" | "invitations";
   communityTab?: CommunityTab;
   deckFocus?: DeckFocusTarget;
@@ -590,13 +600,12 @@ const LAB_TRAINING_LEGEND_NAMES = new Set(LAB_TRAINING_LEGEND_NAME_BY_CANONICAL.
 const RELEASE_NOTES = {
   version: APP_VERSION_META,
   title: `RiftLite v${APP_VERSION_META}`,
-  intro: "Official Radiance stats, interactive replays first, and more control over your decks and recordings.",
+  intro: "Learn Riftbound at your own pace, then take what you learn into your next match.",
   items: [
-    "Radiance is now the default season for personal and community stats, starting 23 October at 13:11:27 UK time. Radiance pre-season and older results remain in the Season filter.",
-    "Interactive replays lead Quick setup and Review. Step through turns, search actions and review combat; game video is an optional extra.",
-    "Fresh installs capture interactive replay data with video and timed screenshots off. Your existing recording choices stay the same, and online uploads still require your choice.",
-    "Importing an identical deck now offers Update existing or Save as separate deck, so named copies can keep their own stats.",
-    "Video recordings now grow in local app storage and move to your chosen folder when complete, avoiding writes to a synced folder throughout the match."
+    "Open Learn Riftbound in the left menu for 40 guided lessons. Practise keywords, try an optional quiz or find a first deck.",
+    "Your path remembers your next lesson. You can revisit a completed lesson and come back to your place.",
+    "Review Atlas games with All cards when shared data is available. Each game in a best-of-three shows whether its data is ready.",
+    "Keep notes with the deck you were playing. If a save fails, your draft stays available to retry."
   ]
 };
 const RIOT_LEGAL_NOTICE = `RiftLite was created under Riot Games' "Legal Jibber Jabber" policy using assets owned by Riot Games. Riot Games does not endorse or sponsor this project.`;
@@ -2842,7 +2851,7 @@ const DAEMONXGG_SPOTLIGHT: CommunitySpotlight = {
     {
       id: "x",
       label: "X",
-      url: "https://x.com/DaemonXGG",
+      url: "https://x.com/DaemonXTCG",
       description: "DaemonXGG updates, community launch news, and Riftbound conversation.",
       icon: X,
       featured: true
@@ -3263,6 +3272,88 @@ const EMOETIONAL_SPOTLIGHT: CommunitySpotlight = {
   ]
 };
 
+const NACK_SPOTLIGHT: CommunitySpotlight = {
+  id: "nack",
+  name: "Nack",
+  kicker: "Creator spotlight",
+  location: "Riftbound creator",
+  description: "Riftbound videos, live streams and community conversation. Follow Nack for deck discussions, gameplay and pack openings, or join his Discord community to keep the conversation going.",
+  primaryCta: {
+    id: "youtube",
+    label: "Watch on YouTube",
+    url: "https://www.youtube.com/@nacktcg",
+    description: "Riftbound videos, deck discussions and gameplay.",
+    icon: Video,
+    featured: true
+  },
+  links: [
+    {
+      id: "youtube",
+      label: "YouTube",
+      url: "https://www.youtube.com/@nacktcg",
+      description: "Riftbound videos, deck discussions and pack openings.",
+      icon: Video,
+      featured: true
+    },
+    {
+      id: "twitch",
+      label: "Twitch",
+      url: "https://www.twitch.tv/nacktcg",
+      description: "Watch live streams and join the chat.",
+      icon: Radio,
+      featured: true
+    },
+    {
+      id: "discord",
+      label: "Discord",
+      url: "https://discord.gg/hzhGDhfgZr",
+      description: "Join Nack's community and talk Riftbound.",
+      icon: MessageCircle,
+      featured: true
+    },
+    {
+      id: "instagram",
+      label: "Instagram",
+      url: "https://www.instagram.com/nacktcg/",
+      description: "Photos, clips and updates from Nack.",
+      icon: Camera
+    },
+    {
+      id: "tiktok",
+      label: "TikTok",
+      url: "https://www.tiktok.com/@nacktcg",
+      description: "Short videos and community moments.",
+      icon: Video
+    },
+    {
+      id: "x",
+      label: "X",
+      url: "https://x.com/nacktcg",
+      description: "Follow Nack's updates and conversation.",
+      icon: X
+    }
+  ],
+  tags: ["Riftbound videos", "Live streams", "Community"],
+  highlights: [
+    { title: "Riftbound videos", text: "Explore deck discussions, gameplay and pack openings on YouTube." },
+    { title: "Live streams", text: "Watch Nack on Twitch and join the chat." },
+    { title: "Community conversation", text: "Meet other players in Nack's Discord community." },
+    { title: "Keep up with Nack", text: "Follow clips, photos and updates across his social channels." }
+  ],
+  assets: {
+    logo: "community/nack-profile.jpg",
+    banner: "community/nack-banner.jpg",
+    youtube: "community/nack-social.jpg",
+    twitch: "community/nack-profile.jpg",
+    tiktok: "community/nack-profile.jpg"
+  },
+  routes: [
+    { key: "youtube", title: "Riftbound videos", subtitle: "Watch on YouTube", linkId: "youtube" },
+    { key: "twitch", title: "Live streams", subtitle: "Watch on Twitch", linkId: "twitch" },
+    { key: "tiktok", title: "Short videos", subtitle: "Follow on TikTok", linkId: "tiktok" }
+  ]
+};
+
 const COMMUNITY_SPOTLIGHTS: CommunitySpotlight[] = [
   BMUCASTS_SPOTLIGHT,
   RIFTLAB_SPOTLIGHT,
@@ -3281,7 +3372,8 @@ const COMMUNITY_SPOTLIGHTS: CommunitySpotlight[] = [
   TRONISBAD_SPOTLIGHT,
   ZELONIUS_SPOTLIGHT,
   X0TCG_SPOTLIGHT,
-  EMOETIONAL_SPOTLIGHT
+  EMOETIONAL_SPOTLIGHT,
+  NACK_SPOTLIGHT
 ];
 
 interface CaptureNotice {
@@ -3299,6 +3391,7 @@ function App() {
   const [preloadUrl, setPreloadUrl] = useState("");
   const [logoUrl, setLogoUrl] = useState("");
   const [settings, setSettings] = useState<UserSettings | null>(null);
+  const [localReplayTestEnabled, setLocalReplayTestEnabled] = useState(false);
   const [health, setHealth] = useState<CaptureHealth>(DEFAULT_HEALTH);
   const [matches, setMatches] = useState<MatchDraft[]>([]);
   const [replays, setReplays] = useState<ReplayRecord[]>([]);
@@ -3312,6 +3405,7 @@ function App() {
   const [atlasKnownOpponentHandOpen, setAtlasKnownOpponentHandOpen] = useState(false);
   const [visionTrackerStatus, setVisionTrackerStatus] = useState<VisionDeckTrackerStatus | null>(null);
   const [prepNotebook, setPrepNotebook] = useState<DeckNotebook | null>(null);
+  const prepNotebookRevision = useRef(0);
   const [prepOpponentLegend, setPrepOpponentLegend] = useState("");
   const [prepSideboardHint, setPrepSideboardHint] = useState(false);
   const [battlefields, setBattlefields] = useState<BattlefieldOption[]>([]);
@@ -3340,13 +3434,17 @@ function App() {
   const [releaseNotesOpen, setReleaseNotesOpen] = useState(false);
   const [firstRunSetupState, setFirstRunSetupState] = useState<FirstRunSetupState | null>(null);
   const [firstRunSetupOpen, setFirstRunSetupOpen] = useState(false);
+  const [newPlayerWelcomeOpen, setNewPlayerWelcomeOpen] = useState(false);
+  const [learningPathVisit, setLearningPathVisit] = useState(0);
+  const firstRunModalOpen = firstRunSetupOpen || newPlayerWelcomeOpen;
   const firstRunSetupOpenRef = useRef(false);
-  firstRunSetupOpenRef.current = firstRunSetupOpen;
+  firstRunSetupOpenRef.current = firstRunModalOpen;
   const [homeThemeIntroState, setHomeThemeIntroState] = useState<HomeThemeIntroState | null>(null);
   const [trainingLabsIntroState, setTrainingLabsIntroState] = useState<TrainingLabsIntroState | null>(null);
   const [homeThemeIntroBusy, setHomeThemeIntroBusy] = useState(false);
   const [firstMatchOnboarding, setFirstMatchOnboarding] = useState<FirstMatchOnboardingState | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const sidebarToggleRef = useRef<HTMLButtonElement>(null);
   const [expandedNavGroup, setExpandedNavGroup] = useState<NavigationDisclosureId | null>(null);
   const [rulesSearchOpen, setRulesSearchOpen] = useState(false);
   const [activeView, setActiveView] = useState<ActiveView>("home");
@@ -3356,6 +3454,7 @@ function App() {
   const [activeCommunityTab, setActiveCommunityTab] = useState<CommunityTab>("community-decks");
   const [communityDeckLegendTarget, setCommunityDeckLegendTarget] = useState("");
   const [spotlightTargetId, setSpotlightTargetId] = useState("");
+  const [recordingFocus, setRecordingFocus] = useState<RecordingSettingsFocus>();
   const [deckFocusTarget, setDeckFocusTarget] = useState<DeckFocusTarget>("library");
   const [deckSelectionTarget, setDeckSelectionTarget] = useState("");
   const [matchFocusTarget, setMatchFocusTarget] = useState<MatchFocusTarget | null>(null);
@@ -3427,7 +3526,6 @@ function App() {
   const activeTestingSessionIdRef = useRef(activeTestingSessionId);
   const prepNotebookRef = useRef<DeckNotebook | null>(prepNotebook);
   const prepOpponentLegendRef = useRef("");
-  const consumedPrepNoteDraftIdsRef = useRef(new Set<string>());
   const replayVideoRef = useRef<ReplayVideoRuntime | null>(null);
   const replayShadowClipRef = useRef<ReplayShadowClipRuntime | null>(null);
   const pendingReplayVideoRef = useRef<PendingReplayVideoSegment | null>(null);
@@ -3642,7 +3740,9 @@ function App() {
 
   function openView(nextView: ActiveView, options?: NavigationOptions) {
     setGameDetailsTarget(null);
+    if (nextView === "new-player") setLearningPathVisit(visit => options?.openLearningPath ? visit + 1 : 0);
     if (nextView === "groups") setGroupsInitialTab(options?.groupsTab ?? "teams");
+    if (nextView === "recording-sharing") setRecordingFocus(options?.recordingFocus);
     if (options?.communityTab) {
       setActiveCommunityTab(options.communityTab);
       if (options.communityTab !== "community-decks" || options.communityDeckLegend === undefined) {
@@ -3716,8 +3816,16 @@ function App() {
     openView("decks", { deckFocus: focus });
   }
 
+  function closeCompactNavigation() {
+    if (!window.matchMedia("(max-width: 900px)").matches) return;
+    setSidebarCollapsed(true);
+    sidebarToggleRef.current?.focus({ preventScroll: true });
+  }
+
   function openNavigationTarget(target: NavigationTarget) {
+    closeCompactNavigation();
     openView(target.view, {
+      openLearningPath: target.view === "new-player",
       deckFocus: target.deckFocus,
       communityTab: target.communityTab
     });
@@ -3733,9 +3841,23 @@ function App() {
   }
 
   function startFirstRunSetup() {
+    persistNewPlayerChoice("setup");
+    setNewPlayerWelcomeOpen(false);
     persistFirstRunSetup(initialFirstRunSetupState());
     setReleaseNotesOpen(false);
     setFirstRunSetupOpen(true);
+  }
+
+  function persistNewPlayerChoice(choice: NewPlayerWelcomeChoice) {
+    try { window.localStorage.setItem(NEW_PLAYER_WELCOME_KEY, serializeNewPlayerWelcomeChoice(choice)); } catch { /* Learning remains available in this session. */ }
+  }
+
+  function deferFirstRunSetup(target: "new-player" | "home" = "new-player") {
+    persistNewPlayerChoice("learn");
+    setNewPlayerWelcomeOpen(false);
+    setFirstRunSetupOpen(false);
+    setReleaseNotesOpen(false);
+    openView(target);
   }
 
   function changeFirstRunSetupStep(step: FirstRunSetupStep) {
@@ -3995,13 +4117,18 @@ function App() {
     if (!settings || firstRunSetupInitializedRef.current) return;
     firstRunSetupInitializedRef.current = true;
     const stored = readFirstRunSetupState();
-    if (!shouldStartFirstRunSetup(settings, {
+    let welcomeChoice: NewPlayerWelcomeChoice | null = null;
+    try { welcomeChoice = parseNewPlayerWelcomeChoice(window.localStorage.getItem(NEW_PLAYER_WELCOME_KEY)); } catch { /* Storage may be unavailable. */ }
+    const entry = newPlayerFirstRunEntry(settings, {
       setupState: stored,
       legacyTourState: readLegacyTourState(),
       hasLocalData: Boolean(matches.length || decks.length || replays.length || deletedMatches.length || deletedReplays.length)
-    })) return;
-    persistFirstRunSetup(stored?.status === "active" ? stored : initialFirstRunSetupState());
+    }, welcomeChoice);
+    if (!entry) return;
     setReleaseNotesOpen(false);
+    if (entry === "new-player") { openView("new-player"); return; }
+    if (entry === "welcome") { setNewPlayerWelcomeOpen(true); return; }
+    persistFirstRunSetup(stored?.status === "active" ? stored : initialFirstRunSetupState());
     setFirstRunSetupOpen(true);
   }, [settings, matches, decks, replays, deletedMatches, deletedReplays]);
 
@@ -4470,7 +4597,7 @@ function App() {
   ]);
 
   useEffect(() => {
-    const hostInputBlocked = Boolean(reviewDraft || rulesSearchOpen || firstRunSetupOpen);
+    const hostInputBlocked = Boolean(reviewDraft || rulesSearchOpen || firstRunModalOpen);
     const hostInputWasBlocked = gameHostInputWasBlockedRef.current;
     gameHostInputWasBlockedRef.current = hostInputBlocked;
     if (!shouldRestoreGameWebviewFocus(
@@ -4487,7 +4614,7 @@ function App() {
       focusGameWebviewInput("atlas");
     }, delay));
     return () => timers.forEach((timer) => window.clearTimeout(timer));
-  }, [activePlatform, activeView, mountedGamePlatform, preloadUrl, reviewDraft, rulesSearchOpen, firstRunSetupOpen]);
+  }, [activePlatform, activeView, mountedGamePlatform, preloadUrl, reviewDraft, rulesSearchOpen, firstRunModalOpen]);
 
   useEffect(() => {
     if (!shouldFocusGameWebviewInput(
@@ -4495,7 +4622,7 @@ function App() {
       mountedGamePlatform,
       preloadUrl,
       activeView === "play",
-      Boolean(reviewDraft || rulesSearchOpen || firstRunSetupOpen)
+      Boolean(reviewDraft || rulesSearchOpen || firstRunModalOpen)
     )) {
       return;
     }
@@ -4542,7 +4669,7 @@ function App() {
       document.removeEventListener("visibilitychange", handleVisibilityChange);
       pendingTimers.forEach((timer) => window.clearTimeout(timer));
     };
-  }, [activePlatform, activeView, mountedGamePlatform, preloadUrl, reviewDraft, rulesSearchOpen, firstRunSetupOpen]);
+  }, [activePlatform, activeView, mountedGamePlatform, preloadUrl, reviewDraft, rulesSearchOpen, firstRunModalOpen]);
 
   useEffect(() => {
     if (!DECK_TRACKER_FEATURE_ENABLED) {
@@ -4569,26 +4696,28 @@ function App() {
   }, [activeView, activePlatform, settings?.activeDeckId, settings?.deckTrackerEnabled, settings?.deckTrackerAutoStart]);
 
   useEffect(() => {
+    const revision = ++prepNotebookRevision.current;
     if (!settings?.activeDeckId) {
       setPrepNotebook(null);
       return;
     }
+    const deckId = settings.activeDeckId;
     let cancelled = false;
-    void window.riftlite.getDeckNotebook(settings.activeDeckId)
+    void window.riftlite.getDeckNotebook(deckId)
       .then((notebook) => {
-        if (!cancelled) {
+        if (!cancelled && revision === prepNotebookRevision.current && notebook.deckId === deckId) {
           setPrepNotebook(notebook);
         }
       })
       .catch(() => {
-        if (!cancelled) {
+        if (!cancelled && revision === prepNotebookRevision.current) {
           setPrepNotebook(null);
         }
       });
     return () => {
       cancelled = true;
     };
-  }, [settings?.activeDeckId, decks, activeView]);
+  }, [settings?.activeDeckId, settings?.accountUid, decks, activeView]);
 
   useEffect(() => {
     function handleRefreshShortcut(event: KeyboardEvent) {
@@ -4685,7 +4814,8 @@ function App() {
       nextOverlay,
       nextDiagnosticsPath,
       nextDiagnosticsSummary,
-      nextUpdateStatus
+      nextUpdateStatus,
+      nextLocalReplayTestEnabled
     ] = await Promise.all([
       startupValue("capture health", window.riftlite.getCaptureHealth(), DEFAULT_HEALTH),
       startupValue<MatchDraft[]>("matches", window.riftlite.getMatches(), [], CRITICAL_LOCAL_STARTUP_VALUE_TIMEOUT_MS),
@@ -4699,7 +4829,8 @@ function App() {
       startupValue<OverlayInfo | null>("overlay info", window.riftlite.getOverlayInfo(), null),
       startupValue("diagnostics path", window.riftlite.getDiagnosticsPath(), ""),
       startupValue<CaptureDiagnosticsSummary | null>("diagnostics summary", window.riftlite.getDiagnosticsSummary(), null),
-      startupValue("update status", window.riftlite.getUpdateStatus(), DEFAULT_UPDATE_STATUS)
+      startupValue("update status", window.riftlite.getUpdateStatus(), DEFAULT_UPDATE_STATUS),
+      startupValue("local replay test capability", readLocalReplayTestCapability(window.riftlite), false)
     ]);
     let bootSettings = nextSettings;
     try {
@@ -4743,6 +4874,18 @@ function App() {
     activePlatformRef.current = bootPlatform;
     healthRef.current = nextHealth;
     settingsRef.current = bootSettings;
+    setLocalReplayTestEnabled(nextLocalReplayTestEnabled);
+    if (nextLocalReplayTestEnabled) {
+      // Only the main process can enable this isolated session. Do not persist setup completion.
+      firstRunSetupInitializedRef.current = true;
+      firstMatchOnboardingInitializedRef.current = true;
+      homeThemeIntroInitializedRef.current = true;
+      trainingLabsIntroInitializedRef.current = true;
+      setFirstRunSetupOpen(false);
+      setNewPlayerWelcomeOpen(false);
+      setReleaseNotesOpen(false);
+      setActiveView("web-replay");
+    }
     setActivePlatform(bootPlatform);
     setSettings(bootSettings);
     setHealth(nextHealth);
@@ -4764,10 +4907,10 @@ function App() {
         setReviewDraft((current) => current ?? prepareDraftForReview(pendingReview));
       }
     }
-    if (shouldShowReleaseNotes) {
+    if (shouldShowReleaseNotes && !nextLocalReplayTestEnabled) {
       setReleaseNotesOpen(true);
     }
-    if (RIFTLITE_BUILD_IDENTITY.updatesEnabled) {
+    if (RIFTLITE_BUILD_IDENTITY.updatesEnabled && !nextLocalReplayTestEnabled) {
       window.setTimeout(() => void checkForUpdates(true), 2500);
     }
   }
@@ -5091,62 +5234,8 @@ function App() {
 
   function appendMatchupPrepNotes(draft: MatchDraft): MatchDraft {
     const notebook = prepNotebookRef.current;
-    const settingsSnapshot = settingsRef.current;
-    if (!notebook || !settingsSnapshot?.activeDeckId) {
-      return draft;
-    }
-    const activeDeck = decksRef.current.find((deck) => deck.id === settingsSnapshot.activeDeckId);
-    if (!activeDeck) {
-      return draft;
-    }
-    const draftDeckKey = draft.deckSourceKey || draft.deckSourceId || "";
-    const activeKeys = new Set([activeDeck.id, activeDeck.sourceKey, activeDeck.sourceUrl].filter(Boolean));
-    if (draftDeckKey && !activeKeys.has(draftDeckKey) && draft.deckSourceUrl && draft.deckSourceUrl !== activeDeck.sourceUrl) {
-      return draft;
-    }
-    const opponentLegend = normalizeLegendName(draft.opponentChampion || prepOpponentLegendRef.current);
-    const resolved = resolveDeckMatchupGuide(notebook, opponentLegend);
-    const notes = resolved.guide.notes
-      .filter((note) => note.source === "play")
-      .map((note) => note.text.trim())
-      .filter(Boolean);
-    if (!notes.length) {
-      return draft;
-    }
-    const heading = `Matchup prep notes${opponentLegend ? ` vs ${opponentLegend}` : ""}:`;
-    if (draft.notes.includes(heading)) {
-      clearImportedPrepNotesOnce(draft.id, notebook);
-      return draft;
-    }
-    const block = [heading, ...notes.map((note) => `- ${note}`)].join("\n");
-    clearImportedPrepNotesOnce(draft.id, notebook);
-    return {
-      ...draft,
-      notes: [draft.notes.trim(), block].filter(Boolean).join("\n\n")
-    };
-  }
-
-  function clearImportedPrepNotesOnce(draftId: string, notebook: DeckNotebook) {
-    if (consumedPrepNoteDraftIdsRef.current.has(draftId)) {
-      return;
-    }
-    consumedPrepNoteDraftIdsRef.current.add(draftId);
-    const cleaned = deckNotebookWithoutPlayNotes(notebook);
-    if (cleaned === notebook) {
-      return;
-    }
-    prepNotebookRef.current = cleaned;
-    setPrepNotebook(cleaned);
-    const activeDeckId = settingsRef.current?.activeDeckId;
-    if (!activeDeckId) {
-      return;
-    }
-    void window.riftlite.saveDeckNotebook(activeDeckId, cleaned)
-      .then((saved) => {
-        prepNotebookRef.current = saved;
-        setPrepNotebook(saved);
-      })
-      .catch(() => undefined);
+    const deck = decksRef.current.find(deck => deck.id === settingsRef.current?.activeDeckId);
+    return notebook && deck ? importReviewPlayNotes(draft, notebook, deck, prepOpponentLegendRef.current) : draft;
   }
 
   function scheduleDiagnosticsRefresh(delayMs = 900, force = false) {
@@ -5434,11 +5523,6 @@ function App() {
     ]);
     setDecks(nextDecks);
     setSettings(nextSettings);
-    if (nextSettings.activeDeckId) {
-      void window.riftlite.getDeckNotebook(nextSettings.activeDeckId).then(setPrepNotebook).catch(() => setPrepNotebook(null));
-    } else {
-      setPrepNotebook(null);
-    }
     if (DECK_TRACKER_FEATURE_ENABLED) {
       void refreshDeckTrackerState();
     }
@@ -5506,11 +5590,15 @@ function App() {
   }
 
   async function savePrepNotebook(next: DeckNotebook) {
-    if (!playActiveDeck) {
-      return;
+    const accountUid = settingsRef.current?.accountUid;
+    if (settingsRef.current?.activeDeckId !== next.deckId || playActiveDeck?.id !== next.deckId || prepNotebook?.deckId !== next.deckId) {
+      throw new Error("The active deck changed.");
     }
-    const saved = await window.riftlite.saveDeckNotebook(playActiveDeck.id, next);
-    setPrepNotebook(saved);
+    const saved = await window.riftlite.saveDeckNotebook(next.deckId, next);
+    if (settingsRef.current?.activeDeckId === saved.deckId && settingsRef.current?.accountUid === accountUid) {
+      ++prepNotebookRevision.current;
+      setPrepNotebook(saved);
+    }
   }
 
   async function refreshReplays(focusReplayId = "") {
@@ -7587,6 +7675,7 @@ function App() {
 
   const viewTitle = {
     home: "Home",
+    "new-player": "Learn Riftbound",
     play: "Play",
     insights: "Insights",
     scorepad: "Scorepad",
@@ -7612,6 +7701,7 @@ function App() {
 
   const viewDescription = {
     home: "Your RiftLite launchpad for playing, reviewing, decks, community data, and social tools.",
+    "new-player": "Learn the rules, practise a guided game and find your first deck.",
     play: "Embedded capture is active automatically for TCGA and Atlas.",
     insights: "Explore your deck structure, observed card use, and matchup patterns. Replay Coach is currently being refined.",
     scorepad: "Score table games or quick-log event matches without sending them to public community stats.",
@@ -7645,6 +7735,7 @@ function App() {
     (updateStatus.state === "available" || updateStatus.state === "downloading" || updateStatus.state === "downloaded") &&
     updatePromptDismissedFor !== updatePromptKey;
   const showHomeThemeIntro = homeThemeIntroState?.status === "pending"
+    && !firstRunModalOpen
     && activeView === "home"
     && !settings.homeDeckThemeEnabled
     && trainingLabsIntroState?.status !== "pending"
@@ -7655,6 +7746,7 @@ function App() {
     && !atlasRecoverySuggested
     && !captureNotice;
   const showTrainingLabsIntro = trainingLabsIntroState?.status === "pending"
+    && !firstRunModalOpen
     && activeView === "home"
     && !releaseNotesOpen
     && firstRunSetupState?.status !== "active"
@@ -7712,7 +7804,7 @@ function App() {
       data-home-deck-theme={activeHomeDeckTheme?.id}
       style={homeDeckThemeStyle}
       onPointerDownCapture={() => {
-        if (activeViewRef.current === "play" && !firstRunSetupOpen) {
+        if (activeViewRef.current === "play" && !firstRunModalOpen) {
           void armReplayVideoSource(activePlatform, true);
         }
       }}
@@ -7720,14 +7812,18 @@ function App() {
       <button
         type="button"
         className="sidebar-float-toggle"
-        inert={firstRunSetupOpen}
+        ref={sidebarToggleRef}
+        aria-expanded={!sidebarCollapsed}
+        aria-controls="riftlite-sidebar"
+        inert={firstRunModalOpen}
         title={sidebarCollapsed ? "Show navigation" : "Hide navigation"}
         aria-label={sidebarCollapsed ? "Show navigation" : "Hide navigation"}
         onClick={() => setSidebarCollapsed((current) => !current)}
       >
         {sidebarCollapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}
       </button>
-      <aside className="sidebar" inert={firstRunSetupOpen} data-tour-target="navigation">
+      <aside className="sidebar" id="riftlite-sidebar" inert={firstRunModalOpen} data-tour-target="navigation"
+        onKeyDown={(event) => { if (event.key === "Escape" && !event.defaultPrevented) closeCompactNavigation(); }}>
         <div className="brand">
           {logoUrl ? <img src={logoUrl} alt="RiftLite" /> : <div className="brand-mark" />}
           <div>
@@ -7741,6 +7837,7 @@ function App() {
               return (
                 <NavButton
                   active={navOwner.kind === "primary" && navOwner.itemId === entry.id}
+                  itemId={entry.id}
                   title={entry.label}
                   onClick={() => openNavigationTarget(entry.target)}
                   icon={navigationIcon(entry.id)}
@@ -7761,7 +7858,7 @@ function App() {
                   aria-controls={`nav-submenu-${entry.id}`}
                   onClick={() => {
                     setExpandedNavGroup((current) => current === entry.id ? null : entry.id);
-                    if (entry.id === "review" && !active) openNavigationTarget(entry.defaultTarget);
+                    if (entry.id === "review" && !active) openView(entry.defaultTarget.view);
                   }}
                 >
                   {navigationIcon(entry.id)}<span>{entry.label}</span>
@@ -7816,7 +7913,7 @@ function App() {
         </div>
       </aside>
 
-      <section className="workspace" inert={firstRunSetupOpen}>
+      <section className="workspace" inert={firstRunModalOpen}>
         {firstRunSetupState?.status === "active" && !firstRunSetupOpen ? (
           <aside className="first-run-setup-return" aria-label="Quick setup in progress">
             <div><strong>Quick setup</strong><span>Finish here, then return to your setup. You can skip any step.</span></div>
@@ -7860,10 +7957,12 @@ function App() {
             </div>
           ) : null}
           {activeView === "play" ? <PlayCaptureStatus
-            webEnabled={webReplayPlatformEnabled(settings, activePlatform === "atlas" ? "atlas" : "tcga") && settings.rawCapture.enabled}
-            webCapturing={Boolean(webReplayDiagnostics?.activeCapture)}
-            videoEnabled={settings.replayCaptureEnabled && settings.replayVideoEnabled} {...playRecordingState}
-            microphoneEnabled={settings.replayMicAudioEnabled} onOpenSetup={() => openView("recording-sharing")} /> : null}
+            {...recordingForNextGame(settings, activePlatform, webReplayDiagnostics?.accountVerified)}
+            webCapturing={activePlatform === "atlas" && Boolean(webReplayDiagnostics?.activeCapture)}
+            {...playRecordingState}
+            onOpenSetup={(kind) => openView("recording-sharing", {
+              recordingFocus: kind === "web" ? (activePlatform === "sim" ? undefined : activePlatform) : kind
+            })} /> : null}
           <div className="top-actions" data-hidden={activeView !== "play"} data-tour-target="play" style={activeView === "home" ? { display: "none" } : undefined}>
             <button className="segmented" data-platform="tcga" onClick={() => void chooseGamePlatform("tcga")} data-active={activePlatform === "tcga"} title="Play on TCGA" aria-label="Play on TCGA">
               <Gamepad2 size={16} /> <span className="play-action-label">TCGA</span>
@@ -8021,7 +8120,7 @@ function App() {
               />
             ) : null}
             {enhancedInsightSessionActive ? (
-              <LiveDecisionMarker onMark={addReplayReviewFlagFromHotkey} hotkey={settings.replayQuickFlagHotkey} />
+              <LiveDecisionMarker onMark={addReplayReviewFlagFromHotkey} />
             ) : null}
           </div>
           {DECK_TRACKER_FEATURE_ENABLED && settings.deckTrackerEnabled ? (
@@ -8040,20 +8139,39 @@ function App() {
               communityMatches={communityMatches}
             />
           ) : null}
-          {settings.matchupPrepWidgetEnabled && playActiveDeck && prepNotebook ? (
+          {settings.matchupPrepWidgetEnabled && playActiveDeck ? (
             <MatchupPrepOverlay
+              key={settings.accountUid}
               deck={playActiveDeck}
               notebook={prepNotebook}
               opponentLegend={prepOpponentLegend}
               sideboardSuggested={prepSideboardHint}
-              onSave={(next) => void savePrepNotebook(next)}
+              onSave={savePrepNotebook}
             />
           ) : null}
         </section>
 
-        {activeView !== "play" ? (
+        {activeView === "new-player" ? <NewPlayerHub
+          key={learningPathVisit}
+          initialSection={learningPathVisit > 0 ? "overview" : undefined}
+          setupComplete={settings.firstRunComplete}
+          onOpenSetup={startFirstRunSetup}
+          onOpenPlay={() => { void chooseGamePlatform("atlas", true); }}
+          onOpenLibrary={() => openDecks("library")}
+          onOpenExternal={(url) => window.riftlite.openExternalResource(url)}
+          onCopyText={copyTextToClipboard}
+          onImportDeck={async (text, choice) => {
+            const result = await window.riftlite.importDeckText(text, choice);
+            if (result.status === "saved") setDecks(current => current.some(deck => deck.id === result.deck.id)
+              ? current.map(deck => deck.id === result.deck.id ? result.deck : deck)
+              : [result.deck, ...current]);
+            return result;
+          }}
+        /> : null}
+        {activeView !== "play" && activeView !== "new-player" ? (
           <DashboardView
             view={activeView}
+            localReplayTestEnabled={localReplayTestEnabled}
             groupsInitialTab={groupsInitialTab}
             onRefreshMemberships={refreshGroupMemberships}
             onOpenGameDetails={openGameDetails}
@@ -8091,6 +8209,7 @@ function App() {
             communityTab={activeCommunityTab}
             communityDeckLegendTarget={communityDeckLegendTarget}
             spotlightTargetId={spotlightTargetId}
+            recordingFocus={recordingFocus}
             matchFocusTarget={matchFocusTarget}
             onCommunityTabChange={(tab) => {
               setActiveCommunityTab(tab);
@@ -8160,7 +8279,7 @@ function App() {
         ) : null}
       </section>
 
-      {gameDetailsTarget && !firstRunSetupOpen ? <GameDetailsDialog
+      {gameDetailsTarget && !firstRunModalOpen ? <GameDetailsDialog
         key={`${gameDetailsTarget.kind}:${gameDetailsTarget.id}:${gameDetailsTarget.accountUid || "local"}`}
         target={gameDetailsTarget} matches={matches} replays={replays} settings={settings} decks={decks}
         onClose={() => setGameDetailsTarget(null)}
@@ -8171,11 +8290,11 @@ function App() {
         mp4ExportActive={Boolean(mp4ExportProgress && mp4ExportProgress.stage !== "completed" && mp4ExportProgress.stage !== "failed")}
       /> : null}
 
-      {RULES_SEARCH_FEATURE_VISIBLE && rulesSearchOpen && !firstRunSetupOpen ? (
+      {RULES_SEARCH_FEATURE_VISIBLE && rulesSearchOpen && !firstRunModalOpen ? (
         <RulesSearchDrawer onClose={() => setRulesSearchOpen(false)} />
       ) : null}
 
-          {reviewDraft && !firstRunSetupOpen ? (
+          {reviewDraft && !firstRunModalOpen ? (
             <MatchReviewModal
               key={reviewDraft.id}
               draft={reviewDraft}
@@ -8189,7 +8308,7 @@ function App() {
           onChange={setReviewDraft}
         />
       ) : null}
-      {showUpdatePrompt && !firstRunSetupOpen ? (
+      {showUpdatePrompt && !firstRunModalOpen ? (
         <UpdatePrompt
           status={updateStatus}
           onDownload={downloadUpdate}
@@ -8197,8 +8316,8 @@ function App() {
           onDismiss={() => setUpdatePromptDismissedFor(updatePromptKey)}
         />
       ) : null}
-      {releaseNotesOpen && !firstRunSetupOpen ? <ReleaseNotesModal onClose={() => void dismissReleaseNotes()} /> : null}
-      {mp4ExportProgress && !firstRunSetupOpen ? (
+      {releaseNotesOpen && !firstRunModalOpen ? <ReleaseNotesModal onClose={() => void dismissReleaseNotes()} /> : null}
+      {mp4ExportProgress && !firstRunModalOpen ? (
         <ReplayMp4ExportProgressDialog
           progress={mp4ExportProgress}
           onOpenFolder={() => void window.riftlite.revealLastReplayMp4Export().catch((error) => {
@@ -8207,6 +8326,11 @@ function App() {
           onDismiss={() => setMp4ExportProgress(null)}
         />
       ) : null}
+      {newPlayerWelcomeOpen ? <NewPlayerWelcome
+        onLearn={() => deferFirstRunSetup("new-player")}
+        onSetup={startFirstRunSetup}
+        onLater={() => deferFirstRunSetup("home")}
+      /> : null}
       {firstRunSetupOpen && firstRunSetupState ? (
         <FirstRunSetup
           settings={settings}
@@ -8234,7 +8358,7 @@ function App() {
           }}
           onStepChange={changeFirstRunSetupStep}
           onSave={saveSettings}
-          onOpenWebsite={() => window.riftlite.openExternalResource(RIFT_REPLAY_WEB_URL)}
+          onOpenWebsite={() => window.riftlite.openExternalResource(`${RIFT_REPLAY_WEB_URL}?scope=mine`)}
           onFinish={finishFirstRunSetup}
           onSkip={() => finishFirstRunSetup({ view: "home" }, true)}
         />
@@ -8256,7 +8380,7 @@ function App() {
             onDismiss={finishHomeThemeIntro}
           />
         ) : null}
-      {atlasRecoverySuggested && activePlatform === "atlas" && !firstRunSetupOpen ? (
+      {atlasRecoverySuggested && activePlatform === "atlas" && !firstRunModalOpen ? (
         <div className="atlas-recovery-prompt" role="alert" data-atlas-recovery-prompt>
           <AlertTriangle size={20} />
           <div>
@@ -8557,6 +8681,7 @@ function UpdatePrompt({ status, onDownload, onInstall, onDismiss }: {
 function navigationIcon(id: string): React.ReactNode {
   switch (id) {
     case "home": return <Home size={19} />;
+    case "new-player": return <BookOpen size={19} />;
     case "play": return <Play size={19} />;
     case "insights": return <Lightbulb size={19} />;
     case "review":
@@ -8653,6 +8778,7 @@ async function composeReplayRecorderStream(
 
 function NavButton({
   active,
+  itemId,
   title,
   icon,
   badge,
@@ -8663,6 +8789,7 @@ function NavButton({
   onClick
 }: {
   active: boolean;
+  itemId?: string;
   title: string;
   icon: React.ReactNode;
   badge?: number;
@@ -8676,7 +8803,9 @@ function NavButton({
     <button
       type="button"
       className={`nav-item ${active ? "active" : ""}`}
+      data-nav-id={itemId}
       title={title}
+      aria-current={active && !ariaHasPopup ? "page" : undefined}
       aria-controls={ariaControls}
       aria-expanded={ariaExpanded}
       aria-haspopup={ariaHasPopup}
@@ -9911,32 +10040,15 @@ function homeWebReplayStatus(
   if (totals.pending || diagnostics?.retryInProgress) {
     return { label: `${totals.pending || 1} uploading`, tone: "attention", configured: true };
   }
-  const platformConfigured = activePlatform === "atlas"
-    ? webReplayPlatformEnabled(settings, "atlas")
-    : activePlatform === "tcga"
-      ? webReplayPlatformEnabled(settings, "tcga")
-      : webReplayPlatformEnabled(settings, "atlas") || webReplayPlatformEnabled(settings, "tcga");
-  const anyLaneConfigured = settings.rawCapture.webReplayAutoUploadEnabled || settings.rawCapture.tcgaWebReplayAutoUploadEnabled;
-  const anyCurrentAccountLane = webReplayPlatformEnabled(settings, "atlas") || webReplayPlatformEnabled(settings, "tcga");
-  const verified = diagnostics?.accountVerified ?? hasVerifiedRiftLiteAccount(settings);
-  if (settings.accountUid && !verified) {
+  const { interactiveReplay } = recordingForNextGame(settings, activePlatform, diagnostics?.accountVerified);
+  if (interactiveReplay === "verify") {
     return { label: "Verify account", tone: "attention", configured: false };
   }
-  if (anyCurrentAccountLane && !settings.rawCapture.enabled) {
-    return { label: "Replay capture off", tone: "attention", configured: false };
-  }
-  if (diagnostics?.state === "error" || (diagnostics?.state === "blocked" && anyLaneConfigured)) {
-    return {
-      label: diagnostics.state === "blocked" ? "Upload blocked" : "Upload needs attention",
-      tone: "attention",
-      configured: false
-    };
-  }
-  if (platformConfigured && verified && settings.rawCapture.enabled) {
-    return { label: `${activePlatform === "atlas" ? "Atlas" : activePlatform === "tcga" ? "TCGA" : "Web"} upload ready`, tone: "ready", configured: true };
-  }
-  if (webReplayPlatformEnabled(settings, "atlas") || webReplayPlatformEnabled(settings, "tcga")) {
-    return { label: "Other platform ready", tone: "quiet", configured: true };
+  if (interactiveReplay === "upload") {
+    if (diagnostics?.state === "error" || diagnostics?.state === "blocked") {
+      return { label: "Check upload status", tone: "attention", configured: true };
+    }
+    return { label: `${activePlatform === "atlas" ? "Atlas" : "TCGA"} uploads enabled`, tone: "ready", configured: true };
   }
   return { label: "Web upload off", tone: "quiet", configured: false };
 }
@@ -10026,6 +10138,7 @@ function HomeView({
       }
     : null;
   const webReplayStatus = homeWebReplayStatus(settings, webReplayDiagnostics, settings.defaultGamePlatform);
+  const nextRecording = recordingForNextGame(settings, settings.defaultGamePlatform, webReplayDiagnostics?.accountVerified);
   const EmbedWebview = "webview" as unknown as React.ElementType;
   const featuredCreators = COMMUNITY_SPOTLIGHTS;
   const [featuredCreatorIndex, setFeaturedCreatorIndex] = useState(0);
@@ -10416,9 +10529,9 @@ function HomeView({
           <span className="modern-status-icon"><Layers size={20} /></span>
           <span><small>Active deck</small><strong>{activeDeck?.title || "Choose a deck"}</strong></span>
         </div>
-        <button type="button" className="modern-status-item modern-status-action" data-tone={webReplayStatus.tone} onClick={() => onNavigate(settings.rawCapture.enabled ? "replays" : "recording-sharing")}>
+        <button type="button" className="modern-status-item modern-status-action" data-tone={webReplayStatus.tone} onClick={() => webReplayStatus.configured ? onNavigate("replays") : onNavigate("recording-sharing", { recordingFocus: settings.defaultGamePlatform })}>
           <span className="modern-status-icon"><Cloud size={20} /></span>
-          <span><small>Web Replays</small><strong>{webReplayStatus.label}</strong></span>
+          <span><small>Replay uploads</small><strong>{webReplayStatus.label}</strong></span>
         </button>
       </section>
 
@@ -10567,14 +10680,11 @@ function HomeView({
           <article className="modern-panel modern-activity-summary">
             <Film size={20} />
             <div>
-              <h3>{replays.length ? "Replay & integration activity up to date" : "Replay capture is ready"}</h3>
-              <p>{replays.length
-                ? `${replays.length} replay${replays.length === 1 ? "" : "s"} available in your local library.`
-                : "Your replay library will populate automatically after capture."}</p>
+              <h3>Recording for your next {settings.defaultGamePlatform === "atlas" ? "Atlas" : "TCGA"} match</h3>
+              <p>On this device · Match timeline {nextRecording.localTimeline ? "on" : "off"} · Interactive replay data {nextRecording.interactiveReplay === "off" ? "off" : "on"} · Video {nextRecording.videoEnabled ? "on" : "off"} · Mic {nextRecording.microphoneEnabled ? "on" : "off"}</p>
+              <p>{replayUploadDescription[nextRecording.interactiveReplay]}</p>
             </div>
-            <span data-tone={captureStatus.tone === "ready" && webReplayStatus.tone === "ready" ? "ready" : webReplayStatus.tone}>
-              <Check size={15} /> {captureStatus.tone === "ready" && webReplayStatus.tone === "ready" ? "All systems operational" : webReplayStatus.label}
-            </span>
+            <button type="button" className="secondary" onClick={() => onNavigate("recording-sharing", { recordingFocus: settings.defaultGamePlatform })}>Recording settings</button>
           </article>
         </div>
 
@@ -10587,7 +10697,7 @@ function HomeView({
               Play on {settings.defaultGamePlatform === "atlas" ? "Atlas" : "TCGA"}
             </button>
             <div className="modern-play-readiness">
-              <span data-tone={captureStatus.tone}><Check size={14} /> {captureStatus.tone === "ready" ? "Capture ready" : captureStatus.label}</span>
+              <span data-tone={captureStatus.tone}><Check size={14} /> Match tracking · {captureStatus.label}</span>
               <span data-tone={settings.deckTrackerEnabled ? "ready" : "quiet"}><Check size={14} /> {settings.deckTrackerEnabled ? "Deck tracker ready" : "Deck tracker off"}</span>
             </div>
           </article>
@@ -12497,6 +12607,7 @@ function MatchupLabView({
 
 function DashboardView({
   view,
+  localReplayTestEnabled = false,
   groupsInitialTab,
   onRefreshMemberships,
   onOpenGameDetails,
@@ -12534,6 +12645,7 @@ function DashboardView({
   communityTab,
   communityDeckLegendTarget,
   spotlightTargetId,
+  recordingFocus,
   matchFocusTarget,
   onCommunityTabChange,
   deckFocusTarget,
@@ -12589,6 +12701,7 @@ function DashboardView({
   onDelete
 }: {
   view: ActiveView;
+  localReplayTestEnabled?: boolean;
   groupsInitialTab: "teams" | "hubs" | "invitations";
   onRefreshMemberships: () => Promise<void>;
   onOpenGameDetails: (target: GameDetailsTarget) => void;
@@ -12626,6 +12739,7 @@ function DashboardView({
   communityTab: CommunityTab;
   communityDeckLegendTarget: string;
   spotlightTargetId: string;
+  recordingFocus?: RecordingSettingsFocus;
   matchFocusTarget: MatchFocusTarget | null;
   onCommunityTabChange: (tab: CommunityTab) => void;
   deckFocusTarget: DeckFocusTarget;
@@ -12708,7 +12822,7 @@ function DashboardView({
     );
   }
   if (view === "scorepad") {
-    return <ScorepadView settings={settings} decks={decks} battlefields={battlefields} onSaveSettings={onSaveSettings} onMatchesChanged={onMatchesChanged} onReview={onReview} />;
+    return <ScorepadView key={settings.accountUid || "local"} settings={settings} decks={decks} battlefields={battlefields} onSaveSettings={onSaveSettings} onMatchesChanged={onMatchesChanged} onReview={onReview} />;
   }
   if (view === "matches") {
     return (
@@ -12777,7 +12891,7 @@ function DashboardView({
     return <DecksView decks={decks} matches={visibleMatches} settings={settings} focusTarget={deckFocusTarget} selectionTarget={deckSelectionTarget} onFocusChange={onDeckFocusChange} onDecksChanged={onDecksChanged} />;
   }
   if (view === "recording-sharing") {
-    return <RecordingSharingPage settings={settings} diagnostics={webReplayDiagnostics}
+    return <RecordingSharingPage settings={settings} diagnostics={webReplayDiagnostics} focusTarget={recordingFocus}
       replayControls={<WebReplayUploadCentre {...replayDeliveryControls} presentation="capture" />}
       videoControls={<RecordingVideoSettings settings={settings} onSave={onSaveSettings} onChooseReplayDirectory={onChooseReplayDirectory} onOpenReplayDirectory={onOpenReplayDirectory} />}
       advancedControls={<WebReplayUploadCentre {...replayDeliveryControls} />}
@@ -12809,6 +12923,7 @@ function DashboardView({
     );
   }
   if (view === "web-replay") {
+    if (localReplayTestEnabled) return <LocalReplayTestView enabled />;
     return RIFTLITE_WEB_REPLAY_FEATURE_VISIBLE ? (
       <EmbeddedRiftReplayView
         onOpenLibrary={() => onNavigate("replays")}
@@ -12952,12 +13067,7 @@ type LocalRiftReplayCardChip = {
 type WebReplayCentreTone = "ready" | "working" | "attention" | "off";
 
 function webReplayPlatformEnabled(settings: UserSettings, platform: "atlas" | "tcga"): boolean {
-  if (!settings.accountUid) return false;
-  return platform === "atlas"
-    ? settings.rawCapture.webReplayAutoUploadEnabled
-      && settings.rawCapture.webReplayAutoUploadAccountUid === settings.accountUid
-    : settings.rawCapture.tcgaWebReplayAutoUploadEnabled
-      && settings.rawCapture.tcgaWebReplayAutoUploadAccountUid === settings.accountUid;
+  return uploadLaneEnabledForAccount(settings.rawCapture, platform, String(settings.accountUid ?? "").trim());
 }
 
 function webReplayQueueTotals(diagnostics: WebReplayUploadDiagnostics | null) {
@@ -13288,10 +13398,10 @@ function WebReplayUploadCentre({
     <div className="review-web-panel" id="review-web-capture">
           <div className="review-web-panel-heading"><strong>Save new replays automatically</strong><p>Choose your platforms and the visibility of future replays. Existing online replays keep their current visibility.</p></div>
           <div className="web-replay-platform-grid">
-        <label className="web-replay-platform-card" data-enabled={atlasEnabled}>
+        <label className="web-replay-platform-card" data-enabled={atlasEnabled} data-recording-focus="atlas" tabIndex={-1}>
           <span>
             <strong>Rift Atlas</strong>
-            <small>Automatically save Atlas matches</small>
+            <small>{accountVerified || atlasEnabled ? "Automatically upload Atlas matches" : "Connect your account to enable Atlas uploads"}</small>
           </span>
           <input
             type="checkbox"
@@ -13300,10 +13410,10 @@ function WebReplayUploadCentre({
             onChange={(event) => void setPlatformUpload("atlas", event.target.checked)}
           />
         </label>
-        <label className="web-replay-platform-card" data-enabled={tcgaEnabled}>
+        <label className="web-replay-platform-card" data-enabled={tcgaEnabled} data-recording-focus="tcga" tabIndex={-1}>
           <span>
             <strong>TCGA</strong>
-            <small>Automatically save TCGA matches</small>
+            <small>{accountVerified || tcgaEnabled ? "Automatically save and upload TCGA matches" : "Connect your account to enable TCGA interactive replays"}</small>
           </span>
           <input
             type="checkbox"
@@ -14323,8 +14433,12 @@ function FindMatchPanel({ settings }: { settings: UserSettings }) {
   }
 
   async function copyCode(code: string) {
-    await window.riftlite.writeClipboardText(code);
-    setStatus(`Copied room code ${code}.`);
+    try {
+      await copyTextToClipboard(code);
+      setStatus(`Copied room code ${code}.`);
+    } catch {
+      setStatus(`Copy failed. Your room code is ${code}.`);
+    }
   }
 
   async function closeListing(id: string) {
@@ -14350,15 +14464,14 @@ function FindMatchPanel({ settings }: { settings: UserSettings }) {
     setStatus("Accepting listing...");
     try {
       const accepted = await window.riftlite.acceptLfgListing(listing.id);
-      await window.riftlite.writeClipboardText(listing.roomCode);
+      const copied = await copyTextToClipboard(listing.roomCode).then(() => true, () => false);
       setAcceptedByMe((current) => [accepted, ...current.filter((item) => item.id !== accepted.id)].slice(0, 4));
+      const roomStatus = copied ? `Room code ${listing.roomCode} copied.` : `Room code: ${listing.roomCode}.`;
       if (accepted.discordVoiceChannelId || accepted.discordInviteUrl) {
         const joinResult = await tryJoinDiscordVoice(accepted);
-        setStatus(joinResult.ok
-          ? `Accepted ${listing.displayName}'s room and copied ${listing.roomCode} to clipboard. Voice room opened.`
-          : `Accepted ${listing.displayName}'s room and copied ${listing.roomCode} to clipboard. ${joinResult.message}`);
+        setStatus(`Accepted ${listing.displayName}'s room. ${roomStatus} ${joinResult.ok ? "Voice room opened." : joinResult.message}`);
       } else {
-        setStatus(`Accepted ${listing.displayName}'s room. Room code ${listing.roomCode} copied to clipboard.`);
+        setStatus(`Accepted ${listing.displayName}'s room. ${roomStatus}`);
       }
       await refresh(false);
     } catch (error) {
@@ -14674,6 +14787,7 @@ function TeamsPanel({
   const [detail, setDetail] = useState<SocialTeamDetail | null>(null);
   const teamLoadRevision = useRef(0);
   const teamPanelMounted = useRef(true);
+  const teamSettingsSave = useMemo(() => new TeamSettingsSaveController(), []);
   const [teamTab, setTeamTab] = useState<"overview" | "stats" | "feed" | "members" | "applications" | "tools">("overview");
   const [messages, setMessages] = useState<SocialTeamMessage[]>([]);
   const [applications, setApplications] = useState<SocialTeamApplication[]>([]);
@@ -14710,14 +14824,15 @@ function TeamsPanel({
     metafy: ""
   });
 
-  async function refreshTeams(showStatus = true) {
+  async function refreshTeams(showStatus = true, current = () => teamPanelMounted.current) {
+    if (!current()) return;
     setBusy(true);
     try {
       const [allResult, mineResult] = await Promise.allSettled([
         window.riftlite.getSocialTeams(),
         window.riftlite.getSocialTeams({ mine: true })
       ]);
-      if (!teamPanelMounted.current) return;
+      if (!current()) return;
       const allTeams = allResult.status === "fulfilled" ? allResult.value : [];
       const myTeams = mineResult.status === "fulfilled" ? mineResult.value : [];
       setTeams(allTeams);
@@ -14729,9 +14844,9 @@ function TeamsPanel({
         setStatus(errors.length ? errors.join(" ") : "Teams refreshed.");
       }
     } catch (error) {
-      if (teamPanelMounted.current) setStatus(error instanceof Error ? error.message : "Could not refresh teams.");
+      if (current()) setStatus(error instanceof Error ? error.message : "Could not refresh teams.");
     } finally {
-      if (teamPanelMounted.current) setBusy(false);
+      if (current()) setBusy(false);
     }
   }
 
@@ -14886,19 +15001,24 @@ function TeamsPanel({
 
   async function saveTeamSettings() {
     if (!detail) return;
-    setBusy(true);
-    try {
-      const team = await window.riftlite.updateSocialTeam(detail.team.id, teamDraftPayload(editDraft));
-      const next = { ...detail, team };
-      setDetail(next);
-      setEditDraft(teamToEditDraft(team));
-      setStatus("Team profile updated.");
-      await refreshTeams(false);
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Could not update team.");
-    } finally {
-      setBusy(false);
-    }
+    const revision = teamLoadRevision.current;
+    await teamSettingsSave.save({
+      navigationRevision: revision,
+      isCurrent: () => teamPanelMounted.current && revision === teamLoadRevision.current,
+      teamId: detail.team.id,
+      draft: teamDraftPayload(editDraft),
+      expectedUpdatedAt: detail.team.updatedAt,
+      update: (teamId, patch) => window.riftlite.updateSocialTeam(teamId, patch),
+      started: () => setBusy(true),
+      saved: team => {
+        setDetail({ ...detail, team });
+        setEditDraft(teamToEditDraft(team));
+        setStatus("Team profile updated.");
+      },
+      refresh: current => refreshTeams(false, current),
+      failed: setStatus,
+      finished: () => setBusy(false)
+    });
   }
 
   async function updateMemberRole(member: SocialTeamMember, role: Exclude<SocialTeamRole, "owner">) {
@@ -15607,6 +15727,8 @@ export function AccountView({
   const [cloudConflictError, setCloudConflictError] = useState("");
   const [cloudBusy, setCloudBusy] = useState(false);
   const [linkSession, setLinkSession] = useState<AccountLinkSession | null>(null);
+  const [discordSignIn, setDiscordSignIn] = useState<"checking" | "available" | "unconfigured" | "offline">("checking");
+  const [providerCheck, setProviderCheck] = useState(0);
   const [linkProvider, setLinkProvider] = useState<AccountLinkProvider | null>(null);
   const [linkBusy, setLinkBusy] = useState(false);
   const [profileBusy, setProfileBusy] = useState(false);
@@ -15687,6 +15809,29 @@ export function AccountView({
   );
   const overview = accountOverview(accountState, connectionStatus);
   const showAccountSignInActions = overview.action === "sign-in";
+  useEffect(() => {
+    if (!showAccountSignInActions) return;
+    let generation = 0;
+    function checkAvailability() {
+      const request = ++generation;
+      void window.riftlite.getDiscordSignInAvailability().then(value => {
+        if (request === generation) setDiscordSignIn(value);
+      }).catch(() => { if (request === generation) setDiscordSignIn("offline"); });
+    }
+    checkAvailability();
+    window.addEventListener("online", checkAvailability);
+    window.addEventListener("focus", checkAvailability);
+    return () => {
+      generation++;
+      window.removeEventListener("online", checkAvailability);
+      window.removeEventListener("focus", checkAvailability);
+    };
+  }, [showAccountSignInActions, providerCheck]);
+  const discordAvailabilityMessage = discordSignIn === "available" ? "" : discordSignIn === "checking"
+    ? "Checking Discord sign-inâ€¦" : discordSignIn === "unconfigured" ? "Discord sign-in is unavailable on this website."
+    : "Could not reach the website to check Discord sign-in.";
+  const discordProviderHelp = discordAvailabilityMessage ? <p className="muted" role="status">{discordAvailabilityMessage}
+    {discordSignIn === "offline" ? <> <button type="button" className="text-button" onClick={() => { setDiscordSignIn("checking"); setProviderCheck(n => n + 1); }}>Check again</button></> : null}</p> : null;
 
   useEffect(() => {
     accountMountedRef.current = true;
@@ -15950,7 +16095,7 @@ export function AccountView({
   }, [linkSession]);
 
   async function startLink(provider: AccountLinkProvider) {
-    if (linkStartBusyRef.current || linkBusy || linkSession) return;
+    if (linkStartBusyRef.current || linkBusy || linkSession || (provider === "discord" && discordSignIn !== "available")) return;
     linkStartBusyRef.current = true;
     const attempt = ++linkAttemptRef.current;
     const startedUid = accountSettingsRef.current.accountUid;
@@ -16317,8 +16462,9 @@ export function AccountView({
         <div className="first-run-setup__account-actions">
           <button type="button" className="first-run-setup__button first-run-setup__button--secondary" disabled={linkBusy} onClick={() => void startLink("google")}><span className="account-google-mark" aria-hidden="true">G</span> Continue with Google</button>
           <button type="button" className="first-run-setup__button first-run-setup__button--secondary" disabled={linkBusy} onClick={() => void startLink("email")}><Mail size={16} /> Continue with email</button>
-          <button type="button" className="first-run-setup__button first-run-setup__button--secondary" disabled={linkBusy} onClick={() => void startLink("discord")}><MessageCircle size={16} /> Continue with Discord</button>
+          <button type="button" className="first-run-setup__button first-run-setup__button--secondary" disabled={linkBusy || discordSignIn !== "available"} onClick={() => void startLink("discord")}><MessageCircle size={16} /> Continue with Discord</button>
         </div>
+        {discordProviderHelp}
         <p className="first-run-setup__note">Sign in securely in your browser, then return to this setup. For an existing account, use its original sign-in method or an already linked Discord identity.</p>
       </> : null}
       {linkSession ? <div className="first-run-setup__account-status" role="status">
@@ -16360,7 +16506,7 @@ export function AccountView({
             <button type="button" className="secondary account-provider-button" disabled={linkBusy} onClick={() => void startLink("email")}>
               <Mail size={16} /> Continue with email
             </button>
-            <button type="button" className="secondary account-provider-button" disabled={linkBusy} onClick={() => void startLink("discord")}>
+            <button type="button" className="secondary account-provider-button" disabled={linkBusy || discordSignIn !== "available"} onClick={() => void startLink("discord")}>
               <MessageCircle size={16} /> Continue with Discord
             </button>
           </> : null}
@@ -16369,6 +16515,7 @@ export function AccountView({
           {overview.action === "troubleshooting" ? <button type="button" className="primary" onClick={() => openAccountSection("troubleshooting")}><Shield size={16} /> Review connection</button> : null}
           {accountReady && !showPostLinkWebReplayChoice ? <button type="button" className="secondary" onClick={onOpenWebReplays}><Film size={16} /> Recording &amp; sharing</button> : null}
         </div>
+        {showAccountSignInActions && discordProviderHelp}
         {showAccountSignInActions ? <p className="muted account-provider-help">Create an account with Google, email or Discord. To return to an existing account, use its original sign-in method or a Discord identity you already linked. Your profile handle is not a sign-in method.</p> : null}
         {linkSession ? (
           <div className="account-link-box account-link-waiting">
@@ -16755,7 +16902,7 @@ function SpotlightView({ initialSpotlightId = "" }: { initialSpotlightId?: strin
     link: spotlight.links.find((item) => item.id === route.linkId)
   }));
   const PrimaryIcon = spotlight.primaryCta.icon;
-  const allLinksLink = spotlight.links.find((link) => ["linktree", "website", "metafy"].includes(link.id)) ?? spotlight.primaryCta;
+  const allLinksLink = spotlight.links.find((link) => ["linktree", "website", "metafy"].includes(link.id));
 
   useEffect(() => {
     setSelectedId(communitySpotlightTarget(initialSpotlightId, spotlightIds));
@@ -16891,9 +17038,11 @@ function SpotlightView({ initialSpotlightId = "" }: { initialSpotlightId?: strin
             <button className="primary" onClick={() => openLink(spotlight.primaryCta, "primary-cta")}>
               <PrimaryIcon size={16} /> {spotlight.primaryCta.label}
             </button>
-            <button className="secondary" onClick={() => openLink(allLinksLink, "all-links")}>
-              <ExternalLink size={16} /> All links
-            </button>
+            {allLinksLink ? (
+              <button className="secondary" onClick={() => openLink(allLinksLink, "all-links")}>
+                <ExternalLink size={16} /> All links
+              </button>
+            ) : null}
           </div>
         </div>
       </section>
@@ -17269,27 +17418,52 @@ function ScorepadView({
   onMatchesChanged: () => Promise<void>;
   onReview: (draft: MatchDraft) => void;
 }) {
-  const [mode, setMode] = useState<"live" | "quick">("live");
-  const [format, setFormat] = useState<MatchDraft["format"]>("Bo1");
-  const [opponentName, setOpponentName] = useState("");
-  const [myChampion, setMyChampion] = useState("");
-  const [opponentChampion, setOpponentChampion] = useState("");
-  const [eventName, setEventName] = useState("");
-  const [roundName, setRoundName] = useState("");
-  const [notes, setNotes] = useState("");
-  const [deckId, setDeckId] = useState(settings.activeDeckId);
+  const storageKey = `riftlite.scorepad.draft.v1.${settings.accountUid || "local"}`;
+  const [initial] = useState(() => {
+    try { return JSON.parse(sessionStorage.getItem(storageKey) || "null") as Record<string, unknown> | null; }
+    catch { return null; }
+  });
+  const textField = (key: string, fallback = "") => typeof initial?.[key] === "string" ? initial[key] as string : fallback;
+  const [mode, setMode] = useState<"live" | "quick">(initial?.mode === "quick" ? "quick" : "live");
+  const [format, setFormat] = useState<MatchDraft["format"]>(initial?.format === "Bo3" ? "Bo3" : "Bo1");
+  const [opponentName, setOpponentName] = useState(textField("opponentName"));
+  const [myChampion, setMyChampion] = useState(textField("myChampion"));
+  const [opponentChampion, setOpponentChampion] = useState(textField("opponentChampion"));
+  const [eventName, setEventName] = useState(textField("eventName"));
+  const [roundName, setRoundName] = useState(textField("roundName"));
+  const [notes, setNotes] = useState(textField("notes"));
+  const [deckId, setDeckId] = useState(textField("deckId", settings.activeDeckId));
+  const [reviewBusy, setReviewBusy] = useState(false);
+  const [reviewError, setReviewError] = useState("");
   const [phoneStatus, setPhoneStatus] = useState("");
   const [phoneQrUrl, setPhoneQrUrl] = useState("");
   const [showPhoneQr, setShowPhoneQr] = useState(true);
-  const [games, setGames] = useState<MatchGame[]>([emptyScorepadGame(1)]);
+  const [phoneBusy, setPhoneBusy] = useState(false);
+  const phoneBusyRef = useRef(false);
+  const [selectedGameIndex, setSelectedGameIndex] = useState(0);
+  const [games, setGames] = useState<MatchGame[]>(() => {
+    const restored = Array.isArray(initial?.games) ? initial.games.slice(0, 3).map(readScorepadInboxGame).filter((game): game is MatchGame => !!game) : [];
+    return restored.length ? restored : [emptyScorepadGame(1)];
+  });
+  useEffect(() => {
+    try {
+      if (!opponentName && !myChampion && !opponentChampion && !eventName && !roundName && !notes &&
+        deckId === settings.activeDeckId && format === "Bo1" && mode === "live" && !games.some(hasScorepadGameData)) {
+        sessionStorage.removeItem(storageKey);
+      } else {
+        sessionStorage.setItem(storageKey, JSON.stringify({ mode, format, opponentName, myChampion, opponentChampion, eventName, roundName, notes, deckId, games }));
+      }
+    } catch { /* The current Scorepad stays usable when browser storage is full. */ }
+  }, [storageKey, mode, format, opponentName, myChampion, opponentChampion, eventName, roundName, notes, deckId, games, settings.activeDeckId]);
   const selectedDeck = decks.find((deck) => deck.id === deckId) ?? null;
   const visibleGames = format === "Bo3" ? ensureScorepadBo3Games(games) : [games[0] ?? emptyScorepadGame(1)];
   const summary = reviewMatchSummary(visibleGames, visibleGames[0]?.result ?? "Incomplete");
-  const activeGame = visibleGames[visibleGames.length - 1] ?? emptyScorepadGame(1);
+  const activeGame = visibleGames[Math.min(selectedGameIndex, visibleGames.length - 1)];
 
   function patchGame(index: number, patch: Partial<MatchGame>) {
+    setSelectedGameIndex(index);
     setGames((current) => {
-      const next = format === "Bo3" ? ensureScorepadBo3Games(current) : [current[0] ?? emptyScorepadGame(1)];
+      const next = format === "Bo3" ? ensureScorepadBo3Games(current) : [...current];
       next[index] = normalizeReviewGame({ ...next[index], ...patch, gameNumber: index + 1 });
       return next;
     });
@@ -17323,6 +17497,7 @@ function ScorepadView({
   }
 
   function resetScorepad() {
+    setSelectedGameIndex(0);
     setFormat("Bo1");
     setOpponentName("");
     setMyChampion("");
@@ -17334,7 +17509,8 @@ function ScorepadView({
     setGames([emptyScorepadGame(1)]);
   }
 
-  function openReview() {
+  async function openReview() {
+    if (reviewBusy) return;
     const selectedGames = format === "Bo3"
       ? visibleGames.filter((game, index) => index < 2 || hasScorepadGameData(game)).map((game, index) => normalizeReviewGame({ ...game, gameNumber: index + 1 }))
       : [normalizeReviewGame({ ...visibleGames[0], gameNumber: 1 })];
@@ -17373,7 +17549,19 @@ function ScorepadView({
         teams: {}
       }
     };
-    onReview(draft);
+    setReviewError("");
+    setReviewBusy(true);
+    try {
+      const saved = await window.riftlite.saveMatchDraft(draft);
+      try { sessionStorage.removeItem(storageKey); } catch { /* The match is already in local storage. */ }
+      resetScorepad();
+      onReview(saved);
+      void onMatchesChanged().catch(() => setReviewError("Match saved. Reopen Matches to refresh your history."));
+    } catch {
+      setReviewError("Could not save this match for review. Your scores and notes are still here. Try again.");
+    } finally {
+      setReviewBusy(false);
+    }
   }
 
   async function ensurePhoneLink() {
@@ -17395,8 +17583,12 @@ function ScorepadView({
   async function copyPhoneLink() {
     const link = await ensurePhoneLink();
     const url = scorepadPhoneUrl(link.deviceId, link.secret);
-    await navigator.clipboard.writeText(url).catch(() => undefined);
-    setPhoneStatus("Phone Scorepad link copied.");
+    try {
+      await copyTextToClipboard(url);
+      setPhoneStatus("Phone Scorepad link copied.");
+    } catch {
+      setPhoneStatus("Copy failed. Select the phone link above and copy it manually.");
+    }
   }
 
   async function createPhoneLink() {
@@ -17420,39 +17612,70 @@ function ScorepadView({
     const response = await fetch("https://www.riftlite.com/api/scorepad/inbox", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(link)
+      body: JSON.stringify(link),
+      signal: AbortSignal.timeout(15_000)
     });
     if (!response.ok) {
-      setPhoneStatus("Phone inbox was not available yet. Website API may not be deployed.");
+      setPhoneStatus("The phone inbox is unavailable. Try importing again.");
       return;
     }
     const payload = await response.json() as { entries?: Array<{ id: string; match: unknown }> };
-    const entries = payload.entries ?? [];
+    if (!Array.isArray(payload?.entries)) throw new Error("Invalid phone inbox response");
+    const entries = payload.entries;
     if (!entries.length) {
       setPhoneStatus("No phone Scorepad logs waiting.");
       return;
     }
-    const importedIds: string[] = [];
+    const storedIds: string[] = [];
     const importedDrafts: MatchDraft[] = [];
+    let saveFailed = false;
     for (const entry of entries) {
+      if (!entry || typeof entry.id !== "string" || !/^[a-z0-9-]{1,80}$/i.test(entry.id)) continue;
       const draft = scorepadInboxEntryToDraft(entry, settings, decks);
       if (!draft) {
         continue;
       }
-      await window.riftlite.saveMatchDraft(draft);
-      importedIds.push(entry.id);
-      importedDrafts.push(draft);
+      try {
+        if (await window.riftlite.importPhoneScorepadMatch(draft)) importedDrafts.push(draft);
+        storedIds.push(entry.id);
+      } catch {
+        saveFailed = true;
+        break;
+      }
     }
-    if (importedIds.length) {
-      await fetch("https://www.riftlite.com/api/scorepad/ack", {
+    let acknowledged = true;
+    if (storedIds.length) {
+      acknowledged = await fetch("https://www.riftlite.com/api/scorepad/ack", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...link, ids: importedIds })
-      }).catch(() => undefined);
+        body: JSON.stringify({ ...link, ids: storedIds }),
+        signal: AbortSignal.timeout(15_000)
+      }).then((reply) => reply.ok).catch(() => false);
+    }
+    if (importedDrafts.length) {
       await onMatchesChanged();
       onReview(importedDrafts[0]);
     }
-    setPhoneStatus(importedIds.length ? `Imported ${importedIds.length} phone Scorepad log${importedIds.length === 1 ? "" : "s"}. Opening the first review now.` : "No valid phone logs were ready to import.");
+    const message = importedDrafts.length
+      ? `Imported ${importedDrafts.length} phone Scorepad log${importedDrafts.length === 1 ? "" : "s"}.`
+      : storedIds.length ? "These phone logs have already been imported." : "";
+    const retry = saveFailed ? "Could not save all logs on this computer. Try importing again."
+      : !acknowledged ? "The phone inbox could not confirm delivery. You can safely retry." : "";
+    setPhoneStatus([message, retry].filter(Boolean).join(" ") || "No valid phone logs were ready to import.");
+  }
+
+  async function runPhoneAction(action: () => Promise<void>, failure: string) {
+    if (phoneBusyRef.current) return;
+    phoneBusyRef.current = true;
+    setPhoneBusy(true);
+    try {
+      await action();
+    } catch {
+      setPhoneStatus(failure);
+    } finally {
+      phoneBusyRef.current = false;
+      setPhoneBusy(false);
+    }
   }
 
   const phoneLinked = Boolean(settings.scorepadDeviceId && settings.scorepadDeviceSecret);
@@ -17502,13 +17725,13 @@ function ScorepadView({
       </section>
 
       <section className="scorepad-layout">
-        <div className="rail-card scorepad-card">
+        <fieldset className="rail-card scorepad-card" disabled={reviewBusy} aria-label="Scorepad match">
           <div className="filters-title">
             <h2>{mode === "live" ? "Live score" : "Quick log"}</h2>
             <span>{format === "Bo3" ? "Best of 3" : "Single game"}</span>
           </div>
           <div className="scorepad-form-grid">
-            <label>Format<select value={format} onChange={(event) => setFormat(event.target.value as MatchDraft["format"])}><option>Bo1</option><option>Bo3</option></select></label>
+            <label>Format<select value={format} onChange={(event) => setFormat(event.target.value as MatchDraft["format"])}><option value="Bo1">Best of one</option><option value="Bo3">Best of three</option></select></label>
             <label>Opponent<input value={opponentName} onChange={(event) => setOpponentName(event.target.value)} placeholder="Opponent name" /></label>
             <LegendInput label="My legend" value={myChampion || selectedDeck?.legend || ""} onChange={setMyChampion} placeholder={selectedDeck?.legend || "Search legends"} />
             <LegendInput label="Opponent legend" value={opponentChampion} onChange={setOpponentChampion} placeholder="Search legends" />
@@ -17528,13 +17751,17 @@ function ScorepadView({
                   <span>{scoreTextFromGame(game) || "0-0"}</span>
                 </div>
                 <label>Result<select value={game.result} onChange={(event) => patchGame(index, { result: event.target.value as MatchGame["result"] })}><option>Incomplete</option><option>Win</option><option>Loss</option><option>Draw</option></select></label>
-                <div className="scorepad-score-row">
-                  <button className="secondary" onClick={() => changeScore(index, "me", -1)}>-</button>
-                  <label>Me<input type="number" min="0" value={formatReviewScore(game.myPoints)} onChange={(event) => patchScore(index, "me", event.target.value)} /></label>
-                  <button className="secondary" onClick={() => changeScore(index, "me", 1)}><Plus size={14} /></button>
-                  <button className="secondary" onClick={() => changeScore(index, "opp", -1)}>-</button>
-                  <label>Opponent<input type="number" min="0" value={formatReviewScore(game.oppPoints)} onChange={(event) => patchScore(index, "opp", event.target.value)} /></label>
-                  <button className="secondary" onClick={() => changeScore(index, "opp", 1)}><Plus size={14} /></button>
+                <div className="scorepad-score-row" role="group" aria-label={`Game ${index + 1} points`}>
+                  {(["me", "opp"] as const).map((side) => {
+                    const label = side === "me" ? "Me" : "Opponent";
+                    const points = side === "me" ? game.myPoints : game.oppPoints;
+                    const player = side === "me" ? "your score" : "the opponent’s score";
+                    return <div className="scorepad-score-side" data-mode={mode} key={side}>
+                      {mode === "live" && <button className="secondary" aria-label={`Decrease ${player} in Game ${index + 1}`} disabled={!points} onClick={() => changeScore(index, side, -1)}>−</button>}
+                      <label>{label}<input type="number" min="0" value={formatReviewScore(points)} onChange={(event) => patchScore(index, side, event.target.value)} /></label>
+                      {mode === "live" && <button className="secondary" aria-label={`Increase ${player} in Game ${index + 1}`} onClick={() => changeScore(index, side, 1)}><Plus size={14} /></button>}
+                    </div>;
+                  })}
                 </div>
                 <label>Seat<select value={game.wentFirst ?? ""} onChange={(event) => patchGame(index, { wentFirst: normalizeWentFirst(event.target.value) })}><option value="">Unknown</option><option value="1st">Went 1st</option><option value="2nd">Went 2nd</option><option value="undecided">Undecided / no seat</option></select></label>
                 <BattlefieldInput strict label="My battlefield" value={game.myBattlefield ?? ""} options={battlefields} onChange={(value) => patchGame(index, { myBattlefield: value })} />
@@ -17547,15 +17774,16 @@ function ScorepadView({
           <div className="scorepad-actions">
             {format === "Bo3" && visibleGames.length < 3 ? <button className="secondary" onClick={addGame}><Plus size={16} /> Add game</button> : null}
             <button className="secondary" onClick={resetScorepad}><RotateCcw size={16} /> Reset</button>
-            <button className="primary" onClick={openReview}><Save size={16} /> Save to review</button>
+            <button className="primary" disabled={reviewBusy} onClick={() => void openReview()}><Save size={16} /> {reviewBusy ? "Saving…" : "Save to review"}</button>
           </div>
-        </div>
+          {reviewError && <p role="alert">{reviewError}</p>}
+        </fieldset>
 
         <aside className="scorepad-side">
           <section className="rail-card scorepad-summary-card">
             <h2>Current card</h2>
             <Metric label="Match record" value={summary.score || "Pending"} />
-            <Metric label="Active game" value={scoreTextFromGame(activeGame) || "0-0"} />
+            <Metric label={`Game ${activeGame.gameNumber} score`} value={scoreTextFromGame(activeGame) || "0-0"} />
             <Metric label="Source" value="Scorepad" />
             <p className="muted"><Shield size={14} /> Public community upload is disabled for Scorepad matches.</p>
           </section>
@@ -17582,16 +17810,16 @@ function ScorepadView({
                 ) : <p className="muted">Preparing QR code...</p>
               ) : <p className="muted">QR code hidden. Use Show QR or copy the link when you need to pair a phone.</p>
             ) : (
-              <button className="primary scorepad-qr-create" onClick={() => void createPhoneLink()}><Smartphone size={16} /> Create phone QR</button>
+              <button className="primary scorepad-qr-create" disabled={phoneBusy} onClick={() => void runPhoneAction(createPhoneLink, "Could not create a phone link. Try again.")}><Smartphone size={16} /> Create phone QR</button>
             )}
             {phoneLinked ? <input readOnly value={phoneUrl} aria-label="Phone Scorepad link" /> : null}
             <div className="scorepad-phone-actions">
-              <button className="secondary" onClick={() => void copyPhoneLink()}><Smartphone size={16} /> Copy link</button>
-              <button className="secondary" onClick={() => void pullPhoneLogs()}><FolderOpen size={16} /> Import phone logs</button>
-              {phoneLinked ? <button className="secondary" onClick={() => void resetPhoneLink()}>Reset link</button> : null}
+              <button className="secondary" disabled={phoneBusy} onClick={() => void runPhoneAction(copyPhoneLink, "Could not prepare the phone link. Try again.")}><Smartphone size={16} /> Copy link</button>
+              {phoneLinked && <button className="secondary" disabled={phoneBusy} onClick={() => void runPhoneAction(pullPhoneLogs, "Could not finish the phone import. Check your connection and try again.")}><FolderOpen size={16} /> Import phone logs</button>}
+              {phoneLinked && <button className="secondary" disabled={phoneBusy} onClick={() => void runPhoneAction(resetPhoneLink, "Could not reset the phone link. Try again.")}>Reset link</button>}
             </div>
             <span className="source-badge">Pair once, sync later</span>
-            {phoneStatus ? <p className="muted">{phoneStatus}</p> : null}
+            {phoneStatus ? <p className="muted" role="status">{phoneStatus}</p> : null}
           </section>
         </aside>
       </section>
@@ -19016,13 +19244,21 @@ function StreamView({
     void onSaveSettings({ overlayDisplay: { ...OVERLAY_PROFILE_PRESETS[nextProfile].options, showBranding: true } });
   }
 
+  async function copyOverlayText(text: string, success: string) {
+    try {
+      await copyTextToClipboard(text);
+      setOverlayActionStatus(success);
+    } catch {
+      setOverlayActionStatus("Copy failed. Select and copy the displayed URL or path.");
+    }
+  }
+
   async function copyOverlayUrl(url: string, label: string) {
     if (!url) {
       setOverlayActionStatus("Overlay server is still starting.");
       return;
     }
-    await navigator.clipboard.writeText(url).catch(() => undefined);
-    setOverlayActionStatus(`${label} OBS URL copied.`);
+    await copyOverlayText(url, `${label} OBS URL copied.`);
   }
 
   async function openOverlayUrl(url: string, label: string) {
@@ -19039,11 +19275,14 @@ function StreamView({
       setOverlayActionStatus("Text files are still being prepared.");
       return;
     }
-    await navigator.clipboard.writeText(path).catch(() => undefined);
-    setOverlayActionStatus(`${label} text path copied.`);
+    await copyOverlayText(path, `${label} text path copied.`);
   }
 
   async function copyOverlayKit() {
+    if (!landscapeUrl || !portraitUrl || !overlayInfo?.textDirectory || textOutputRows.some(row => !overlayInfo.textFiles?.[row.key])) {
+      setOverlayActionStatus("The overlay kit is still starting. Try again in a moment.");
+      return;
+    }
     const lines = [
       `Landscape OBS URL: ${landscapeUrl || "starting"}`,
       `Portrait OBS URL: ${portraitUrl || "starting"}`,
@@ -19051,8 +19290,7 @@ function StreamView({
       "",
       ...textOutputRows.map((row) => `${row.label}: ${overlayInfo?.textFiles?.[row.key] || "starting"}`)
     ];
-    await navigator.clipboard.writeText(lines.join("\n")).catch(() => undefined);
-    setOverlayActionStatus("Overlay URLs and text file paths copied.");
+    await copyOverlayText(lines.join("\n"), "Overlay URLs and text file paths copied.");
   }
 
   async function copySimReceiverUrl() {
@@ -19061,8 +19299,7 @@ function StreamView({
       setOverlayActionStatus("Simulator receiver is still starting.");
       return;
     }
-    await navigator.clipboard.writeText(url).catch(() => undefined);
-    setOverlayActionStatus("Simulator receiver URL copied.");
+    await copyOverlayText(url, "Simulator receiver URL copied.");
   }
 
   async function openTextOutputFolder() {
@@ -19173,7 +19410,7 @@ function StreamView({
               <button className="secondary" onClick={() => void openOverlayUrl(selectedOverlayUrl, profile.label)}><ExternalLink size={15} /> Open</button>
               <button className="secondary" onClick={() => void copyOverlayKit()}><ClipboardList size={15} /> Copy kit</button>
             </div>
-            {overlayActionStatus ? <p className="muted">{overlayActionStatus}</p> : null}
+            {overlayActionStatus ? <p className="muted" role="status">{overlayActionStatus}</p> : null}
           </section>
           <section className="rail-card overlay-obs-card">
             <h2>Simulator bridge</h2>
@@ -19389,8 +19626,7 @@ function sectionText(title: string, entries: Array<{ qty: number; name: string }
 
 async function copyTextToClipboard(text: string): Promise<void> {
   try {
-    await window.riftlite.writeClipboardText(text);
-    return;
+    if (await window.riftlite.writeClipboardText(text)) return;
   } catch {
     // Fall back for non-Electron test/browser contexts.
   }
@@ -19405,8 +19641,11 @@ async function copyTextToClipboard(text: string): Promise<void> {
   textarea.style.left = "-9999px";
   document.body.appendChild(textarea);
   textarea.select();
-  document.execCommand("copy");
-  textarea.remove();
+  try {
+    if (!document.execCommand("copy")) throw new Error("The text could not be copied to the clipboard.");
+  } finally {
+    textarea.remove();
+  }
 }
 
 function guideCardFromOption(option: DeckGuideCardOption): DeckGuideCardRef {
@@ -19771,7 +20010,11 @@ function DeckDetail({ deck, focusTarget, onFocusChange, matches, active, onSetAc
   const performance = useMemo(() => buildDeckPerformance(deck, datedMatches), [deck, datedMatches]);
   const [notebook, setNotebook] = useState<DeckNotebook>(() => emptyDeckNotebook(deck.id));
   const [notebookStatus, setNotebookStatus] = useState("");
-  const notebookPersistedRef = useRef(notebook);
+  const [loadedNotebookId, setLoadedNotebookId] = useState("");
+  const [notebookLoadFailed, setNotebookLoadFailed] = useState(false);
+  const [notebookLoadAttempt, setNotebookLoadAttempt] = useState(0);
+  const [notebookSaveFailed, setNotebookSaveFailed] = useState(false);
+  const pendingNotebookDrafts = useRef(new Map<string, DeckNotebook>());
   const notebookSaveSequenceRef = useRef(0);
   const affectedPrepPlans = useMemo(() => reviewDeckNotebook(deck, notebook).filter((report) => report.issues.length > 0).length, [deck, notebook]);
   const [titleDraft, setTitleDraft] = useState(deck.title);
@@ -19787,26 +20030,31 @@ function DeckDetail({ deck, focusTarget, onFocusChange, matches, active, onSetAc
   useEffect(() => {
     let cancelled = false;
     setNotebook(emptyDeckNotebook(deck.id));
-    notebookPersistedRef.current = emptyDeckNotebook(deck.id);
+    setLoadedNotebookId("");
+    setNotebookLoadFailed(false);
+    setNotebookSaveFailed(false);
     notebookSaveSequenceRef.current += 1;
     setNotebookStatus("Loading notebook...");
     void window.riftlite.getDeckNotebook(deck.id)
       .then((next) => {
         if (!cancelled) {
-          setNotebook(next);
-          notebookPersistedRef.current = next;
-          setNotebookStatus("");
+          const draft = pendingNotebookDrafts.current.get(deck.id);
+          setNotebook(draft ?? next);
+          setNotebookSaveFailed(Boolean(draft));
+          setLoadedNotebookId(deck.id);
+          setNotebookStatus(draft ? "Your notebook has unsaved changes." : "");
         }
       })
       .catch(() => {
         if (!cancelled) {
+          setNotebookLoadFailed(true);
           setNotebookStatus("Notebook could not be loaded.");
         }
       });
     return () => {
       cancelled = true;
     };
-  }, [deck.id]);
+  }, [deck.id, notebookLoadAttempt]);
 
   useEffect(() => {
     setTitleDraft(deck.title);
@@ -19814,12 +20062,15 @@ function DeckDetail({ deck, focusTarget, onFocusChange, matches, active, onSetAc
   }, [deck.id, deck.title]);
 
   async function saveNotebook(next: DeckNotebook) {
+    if (loadedNotebookId !== deck.id || next.deckId !== deck.id) return false;
     const sequence = ++notebookSaveSequenceRef.current;
+    pendingNotebookDrafts.current.set(deck.id, next);
+    setNotebookSaveFailed(false);
     setNotebook(next);
     setNotebookStatus("Saving...");
     try {
       const saved = await window.riftlite.saveDeckNotebook(deck.id, next);
-      if (notebookPersistedRef.current.deckId === saved.deckId) notebookPersistedRef.current = saved;
+      if (pendingNotebookDrafts.current.get(deck.id) === next) pendingNotebookDrafts.current.delete(deck.id);
       if (sequence === notebookSaveSequenceRef.current) {
         setNotebook(saved);
         setNotebookStatus("Saved");
@@ -19830,8 +20081,8 @@ function DeckDetail({ deck, focusTarget, onFocusChange, matches, active, onSetAc
       return true;
     } catch {
       if (sequence === notebookSaveSequenceRef.current) {
-        setNotebook(notebookPersistedRef.current);
-        setNotebookStatus("Notebook could not be saved. Your guide draft is still here; try again.");
+        setNotebookSaveFailed(true);
+        setNotebookStatus("Your notebook changes are still here. Saving failed.");
       }
       return false;
     }
@@ -19948,6 +20199,11 @@ function DeckDetail({ deck, focusTarget, onFocusChange, matches, active, onSetAc
       </div>
       {/* Keep the editor mounted so switching workspace panes preserves unsaved guide drafts. */}
       <div className="prepare-pane" id={`deck-notebook-${deck.id}`} hidden={focusTarget !== "prep" && focusTarget !== "notebook"}>
+        {loadedNotebookId !== deck.id && <div role="status">
+          {notebookLoadFailed ? <>Notebook could not be loaded. <button type="button" className="secondary" onClick={() => setNotebookLoadAttempt(attempt => attempt + 1)}>Retry loading</button></> : "Loading notebook…"}
+        </div>}
+        {notebookSaveFailed && loadedNotebookId === deck.id && <button type="button" className="secondary" onClick={() => void saveNotebook(notebook)}>Retry save</button>}
+        <fieldset className="notebook-editor" disabled={loadedNotebookId !== deck.id} hidden={loadedNotebookId !== deck.id}>
         <DeckNotebookPanel
           deck={deck}
           viewMode={focusTarget === "notebook" ? "notebook" : "prep"}
@@ -19959,6 +20215,7 @@ function DeckDetail({ deck, focusTarget, onFocusChange, matches, active, onSetAc
           onDecksChanged={onDecksChanged}
           onDeckImported={onDeckImported}
         />
+        </fieldset>
       </div>
       <div className="prepare-pane" id={`deck-performance-${deck.id}`} hidden={focusTarget !== "performance"}>
         <DeckPerformancePanel key={`${seasonFilter}:${JSON.stringify(dateFilter)}`} performance={performance} />
@@ -20887,44 +21144,20 @@ function deckMatchupGuideHasVisibleContent(guide: DeckMatchupGuide): boolean {
     || guide.notes.some((note) => note.text.trim().length > 0);
 }
 
-function deckNotebookWithoutPlayNotes(notebook: DeckNotebook): DeckNotebook {
-  let changed = false;
-  const cleanGuide = (guide: DeckMatchupGuide): DeckMatchupGuide => {
-    const notes = guide.notes.filter((note) => note.source !== "play");
-    if (notes.length === guide.notes.length) {
-      return guide;
-    }
-    changed = true;
-    return {
-      ...guide,
-      notes,
-      updatedAt: new Date().toISOString()
-    };
-  };
-  const defaultGuide = cleanGuide(notebook.defaultGuide);
-  const matchupGuides = notebook.matchupGuides.map(cleanGuide);
-  if (!changed) {
-    return notebook;
-  }
-  return {
-    ...notebook,
-    defaultGuide,
-    matchupGuides,
-    updatedAt: new Date().toISOString()
-  };
-}
-
 function MatchupPrepOverlay({ deck, notebook, opponentLegend, sideboardSuggested, onSave }: {
   deck: SavedDeck;
-  notebook: DeckNotebook;
+  notebook: DeckNotebook | null;
   opponentLegend: string;
   sideboardSuggested: boolean;
-  onSave: (notebook: DeckNotebook) => void;
+  onSave: (notebook: DeckNotebook) => Promise<void>;
 }) {
   const [open, setOpen] = useState(false);
   const [hidden, setHidden] = useState(() => readMatchupPrepHidden());
   const [tab, setTab] = useState<"mulligan" | "sideboard" | "battlefields" | "notes">(sideboardSuggested ? "sideboard" : "mulligan");
-  const [liveNote, setLiveNote] = useState("");
+  const [liveNotes, setLiveNotes] = useState<Record<string, string>>({});
+  const [noteErrorKey, setNoteErrorKey] = useState("");
+  const [savingNote, setSavingNote] = useState(false);
+  const noteInFlight = useRef(false);
   const [manualLegend, setManualLegend] = useState("");
   const [position, setPosition] = useState<FloatingPrepPosition>(() => readMatchupPrepPosition());
   const [size, setSize] = useState<FloatingPrepSize>(() => readMatchupPrepSize());
@@ -20950,8 +21183,9 @@ function MatchupPrepOverlay({ deck, notebook, opponentLegend, sideboardSuggested
   const suppressNextClickRef = useRef(false);
   const { start: startPointerGesture, cancel: cancelOwnedPointerGesture } = useOwnedPointerGesture();
   const targetLegend = manualLegend === "default" ? "" : normalizeLegendName(manualLegend || opponentLegend);
-  const resolved = useMemo(() => resolveDeckMatchupGuide(notebook, targetLegend), [notebook, targetLegend]);
-  const guide = resolved.guide;
+  const noteKey = JSON.stringify([deck.id, targetLegend]);
+  const liveNote = liveNotes[noteKey] ?? "";
+  const resolved = useMemo(() => notebook?.deckId === deck.id ? resolveDeckMatchupGuide(notebook, targetLegend) : null, [deck.id, notebook, targetLegend]);
 
   function cancelPointerGesture() {
     dragRef.current = null;
@@ -21163,9 +21397,9 @@ function MatchupPrepOverlay({ deck, notebook, opponentLegend, sideboardSuggested
     showPrep();
   }
 
-  function addLiveNote() {
+  async function addLiveNote() {
     const text = liveNote.trim();
-    if (!text) {
+    if (!text || !notebook || notebook.deckId !== deck.id || noteInFlight.current) {
       return;
     }
     const nextGuide = editableGuideForLegend(notebook, targetLegend || "default");
@@ -21175,12 +21409,27 @@ function MatchupPrepOverlay({ deck, notebook, opponentLegend, sideboardSuggested
       createdAt: new Date().toISOString(),
       source: "play"
     };
-    onSave({
-      ...notebook,
-      ...notebookWithGuide(notebook, { ...nextGuide, notes: [...nextGuide.notes, note], updatedAt: new Date().toISOString() }),
-      updatedAt: new Date().toISOString()
-    });
-    setLiveNote("");
+    noteInFlight.current = true;
+    setSavingNote(true);
+    setNoteErrorKey("");
+    try {
+      await onSave({
+        ...notebook,
+        ...notebookWithGuide(notebook, { ...nextGuide, notes: [...nextGuide.notes, note], updatedAt: new Date().toISOString() }),
+        updatedAt: new Date().toISOString()
+      });
+      setLiveNotes(current => {
+        if (current[noteKey] !== liveNote) return current;
+        const next = { ...current };
+        delete next[noteKey];
+        return next;
+      });
+    } catch {
+      setNoteErrorKey(noteKey);
+    } finally {
+      noteInFlight.current = false;
+      setSavingNote(false);
+    }
   }
 
   function hidePrep() {
@@ -21195,6 +21444,8 @@ function MatchupPrepOverlay({ deck, notebook, opponentLegend, sideboardSuggested
     setOpen(true);
   }
 
+  if (!resolved) return null;
+  const guide = resolved.guide;
   const hasAnyGuideContent = deckMatchupGuideHasVisibleContent(guide);
 
   if (hidden) {
@@ -21328,9 +21579,13 @@ function MatchupPrepOverlay({ deck, notebook, opponentLegend, sideboardSuggested
             {guide.notes.map((note) => <p className="guide-preview-note" key={note.id}>{note.text}</p>)}
             {!guide.notes.length ? <p className="muted">No matchup notes yet.</p> : null}
             <div className="inline-form">
-              <input value={liveNote} onChange={(event) => setLiveNote(event.target.value)} placeholder="Add a note for this match review..." />
-              <button type="button" className="secondary" disabled={!liveNote.trim()} onClick={addLiveNote}>Save</button>
+              <input aria-label="Live matchup note" value={liveNote} onChange={event => {
+                const value = event.currentTarget.value;
+                setLiveNotes(current => ({ ...current, [noteKey]: value }));
+              }} placeholder="Add a note for this match review..." />
+              <button type="button" className="secondary" disabled={!liveNote.trim() || savingNote} onClick={() => void addLiveNote()}>{savingNote ? "Saving…" : noteErrorKey === noteKey ? "Retry save" : "Save"}</button>
             </div>
+            {noteErrorKey === noteKey && <p role="status">Your note is still here. Saving failed.</p>}
           </div>
         ) : null}
         <button
@@ -21794,24 +22049,6 @@ function ReplayView({
     }
   }
 
-  async function saveReplay(replay: ReplayRecord, focusSavedReplay = true) {
-    setStatus("Saving replay...");
-    let saved: ReplayRecord;
-    try {
-      saved = await window.riftlite.saveReplay(replay);
-    } catch (error) {
-      setStatus(rendererErrorMessage(error, "Replay save failed."));
-      return false;
-    }
-    try {
-      await onReplaysChanged(focusSavedReplay ? saved.id : undefined);
-      setStatus("Replay saved.");
-    } catch (error) {
-      setStatus(rendererErrorMessage(error, "Replay saved, but the replay view could not refresh."));
-    }
-    return true;
-  }
-
   function toggleReplaySelection(replayId: string) {
     setSelectedReplayIds((current) => {
       const next = new Set(current);
@@ -21830,7 +22067,12 @@ function ReplayView({
   }
 
   async function toggleReplayFavourite(replay: ReplayRecord) {
-    await saveReplay({ ...replay, favourite: !replay.favourite }, false);
+    try {
+      await window.riftlite.updateReplayLibraryMetadata(replay.id, { favourite: !replay.favourite });
+      await onReplaysChanged();
+    } catch (error) {
+      setStatus(rendererErrorMessage(error, "Could not update this favourite."));
+    }
   }
 
   async function deleteSelectedReplays() {
@@ -21913,9 +22155,6 @@ function ReplayView({
     setStatus(`Removing ${folder.name}...`);
     try {
       const filedReplays = replays.filter((replay) => replay.folderId === folder.id);
-      for (const replay of filedReplays) {
-        await window.riftlite.saveReplay({ ...replay, folderId: undefined });
-      }
       await onSaveSettings({ replayFolders: replayFolders.filter((candidate) => candidate.id !== folder.id) });
       setFolderFilter("all");
       setEditingFolderId("");
@@ -22326,6 +22565,17 @@ function GameDetailsDialog({
     try { await window.riftlite.saveReplay(replay); await onReplaysChanged(); setStatus("Replay saved."); return true; }
     catch (error) { setStatus(rendererErrorMessage(error, "The replay could not be saved.")); return false; }
   }
+  async function saveReplayMetadata(id: string, patch: ReplayLibraryMetadataPatch) {
+    try {
+      await window.riftlite.updateReplayLibraryMetadata(id, patch);
+      await onReplaysChanged();
+      setStatus("Replay updated.");
+      return true;
+    } catch (error) {
+      setStatus(rendererErrorMessage(error, "The replay could not be updated."));
+      return false;
+    }
+  }
   async function uploadReplay() {
     if (!selectedReplay || uploading) return;
     setUploading(true); setStatus("Uploading interactive replay…");
@@ -22388,7 +22638,9 @@ function GameDetailsDialog({
         {replayModel ? <ReplayDetail key={replayModel.replay.id} embedded model={replayModel} settings={settings} replayFolders={settings.replayFolders ?? []}
           cloudReplay={cloudAsset} onWatchWebReplay={setOnlineUrl} onSetUp={() => navigate("recording-sharing")} onReview={reviewMatch} onOpenDelivery={() => navigate("replays")}
           focusSeekRequest={!seekConsumed && (target.timeMs !== undefined || target.evidenceId) ? { replayId: replayModel.replay.id, timeMs: target.timeMs, correctionEventId: target.evidenceId, token: 1 } : null} onFocusSeekConsumed={() => setSeekConsumed(true)}
-          onExport={setExportStart} onExportPresentationMp4={onExportReplayPresentationMp4} onSaveReplay={saveReplay} onDeleteReplay={() => setPendingDelete({ kind: "replay", id: replayModel.replay.id })} />
+          onExport={setExportStart} onExportPresentationMp4={onExportReplayPresentationMp4} onSaveReplay={saveReplay} onSaveReplayMetadata={saveReplayMetadata}
+          onRetryReplayLoad={() => void onReplaysChanged().catch(error => setStatus(rendererErrorMessage(error, "Could not reload the recording.")))}
+          onDeleteReplay={() => setPendingDelete({ kind: "replay", id: replayModel.replay.id })} />
           : !replayModel ? <>{assets}{!details.unavailableReason ? <p className="muted">Only the assets listed above are available for this game on this computer.</p> : <p className="game-details-unavailable">{details.unavailableReason}</p>}</> : null}</>,
       decks: tab === "decks" ? deckPanel : null,
       notes: <section className="game-details-section"><h3>Match notes</h3><p className="game-details-notes-text">{displayMatch?.notes || "No match notes have been saved for this game."}</p>{displayMatch?.flags ? <p><strong>Flags:</strong> {displayMatch.flags}</p> : null}{details.match ? <button className="secondary" onClick={reviewMatch}>Edit notes</button> : <p className="muted">Match notes can be edited on the computer with the saved match record.</p>}
@@ -23377,6 +23629,8 @@ function ReplayDetail({
   onExport,
   onExportPresentationMp4,
   onSaveReplay,
+  onSaveReplayMetadata,
+  onRetryReplayLoad,
   onDeleteReplay,
   onSetUp,
   onReview,
@@ -23393,6 +23647,8 @@ function ReplayDetail({
   onExport: (clipStartMs: number) => void;
   onExportPresentationMp4: (replayId: string, payload: ReplayPresentationRecordingPayload) => Promise<string>;
   onSaveReplay: (replay: ReplayRecord, focusSavedReplay?: boolean) => Promise<boolean>;
+  onSaveReplayMetadata: (id: string, patch: ReplayLibraryMetadataPatch) => Promise<boolean>;
+  onRetryReplayLoad: () => void;
   onDeleteReplay: () => void;
   onSetUp: () => void;
   onReview: () => void;
@@ -23995,7 +24251,7 @@ function ReplayDetail({
     if (!title) {
       return;
     }
-    const saved = await onSaveReplay({ ...model.replay, title });
+    const saved = await onSaveReplayMetadata(model.replay.id, { title });
     if (!saved) {
       return;
     }
@@ -24004,14 +24260,14 @@ function ReplayDetail({
   }
 
   async function moveReplayToFolder(folderId: string) {
-    await onSaveReplay({
-      ...model.replay,
-      folderId: replayFolders.some((folder) => folder.id === folderId) ? folderId : undefined
+    await onSaveReplayMetadata(model.replay.id, {
+      folderId: replayFolders.some((folder) => folder.id === folderId) ? folderId : null
     });
   }
 
   return (
     <div className={`replay-detail-stack ${embedded ? "game-details-embedded-replay" : ""} ${presentationMode ? "presentation-mode" : ""}`}>
+      {model.replay.payloadUnavailable && <div className="rail-card" role="alert"><p>The recording data could not be read. You can still rename or organise this replay.</p><button type="button" className="secondary" onClick={onRetryReplayLoad}>Retry loading recording</button></div>}
       <section className="rail-card replay-hero">
         <div>
           <span>{model.platformLabel} replay</span>
@@ -24053,7 +24309,7 @@ function ReplayDetail({
           <button
             type="button"
             className={`secondary replay-favourite-detail${model.replay.favourite ? " active" : ""}`}
-            onClick={() => void onSaveReplay({ ...model.replay, favourite: !model.replay.favourite })}
+            onClick={() => void onSaveReplayMetadata(model.replay.id, { favourite: !model.replay.favourite })}
           >
             <Star size={16} fill={model.replay.favourite ? "currentColor" : "none"} />
             {model.replay.favourite ? "Favourited" : "Favourite"}
@@ -32909,6 +33165,7 @@ function MatchReviewModal({ draft, decks, battlefields, previousFlags, enhancedI
   const [saveError, setSaveError] = useState("");
   const [seatErrorGames, setSeatErrorGames] = useState<number[]>([]);
   const [previousFlagChoice, setPreviousFlagChoice] = useState("");
+  const dialogRef = useRef<HTMLDialogElement>(null);
   const deleteCancelButtonRef = useRef<HTMLButtonElement | null>(null);
   const bo3GamesCacheRef = useRef<MatchGame[]>(draft.games.length > 1 ? ensureReviewGames(draft, "Bo3") : []);
   const draftRef = useRef(draft);
@@ -32919,6 +33176,31 @@ function MatchReviewModal({ draft, decks, battlefields, previousFlags, enhancedI
   const isScorepadDraft = draft.source === "scorepad" || draft.source === "manual";
   const isSavedDraft = draft.status === "saved";
   const editingSavedManualMatch = isScorepadDraft && isSavedDraft;
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    dialog?.showModal();
+    return () => {
+      dialog?.close();
+      if (previous?.isConnected) previous.focus({ preventScroll: true });
+    };
+  }, []);
+
+  function containTab(event: React.KeyboardEvent<HTMLDialogElement>) {
+    if (event.key !== "Tab") return;
+    const controls = Array.from(event.currentTarget.querySelectorAll<HTMLElement>(
+      'button:enabled, input:enabled, select:enabled, textarea:enabled, [href], summary, [tabindex="0"]'
+    )).filter(element => element.getClientRects().length > 0);
+    const first = controls[0], last = controls[controls.length - 1];
+    if (first && event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (last && !event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
 
   useEffect(() => {
     if (draft.format !== "Bo1" && draft.games.length > 1) {
@@ -33014,6 +33296,11 @@ function MatchReviewModal({ draft, decks, battlefields, previousFlags, enhancedI
     if (missingSeatGames.length) {
       setSeatErrorGames(missingSeatGames);
       setSaveError(seatRequirementMessage(missingSeatGames));
+      requestAnimationFrame(() => {
+        const field = dialogRef.current?.querySelector<HTMLSelectElement>(`[data-review-seat="${missingSeatGames[0]}"]`);
+        field?.focus({ preventScroll: true });
+        field?.closest("label")?.scrollIntoView({ block: "center" });
+      });
       setIsSaving(false);
       return;
     }
@@ -33314,8 +33601,9 @@ function MatchReviewModal({ draft, decks, battlefields, previousFlags, enhancedI
       : "Saving the result locally. Replay delivery and reporting will continue in the background.";
 
   return (
-    <div className="modal-backdrop">
-      <section className="review-modal review-workspace review-modal-modern" role="dialog" aria-modal="true" aria-labelledby="match-review-title">
+    <dialog ref={dialogRef} className="modal-backdrop review-shell-dialog" aria-labelledby="match-review-title" onKeyDown={containTab}
+      onCancel={event => { event.preventDefault(); if (deleteConfirmationOpen) setDeleteConfirmationOpen(false); else void reviewLater(); }}>
+      <section className="review-modal review-workspace review-modal-modern">
         <header>
           <div>
             <span className="review-kicker">Review / {isSavedDraft ? "Edit match" : "Save match"}</span>
@@ -33377,7 +33665,7 @@ function MatchReviewModal({ draft, decks, battlefields, previousFlags, enhancedI
           <div className="wide review-form-section-heading"><span>01</span><div><h3>Match & players</h3><p>Check the result and captured game details.</p></div></div>
           <label>Result<select value={draft.result} onChange={(event) => patchMatchResult(event.target.value as MatchDraft["result"])}><option>Win</option><option>Loss</option><option>Draw</option><option>Incomplete</option></select></label>
           <label>Format<select value={draft.format} onChange={(event) => patchFormat(event.target.value as MatchDraft["format"])}><option>Bo1</option><option>Bo3</option><option>Auto</option></select></label>
-          {!isMultiGameReview ? <label className={`review-field ${bo1SeatInvalid ? "field-invalid" : ""}`}>Seat<select value={primaryGame.wentFirst ?? ""} onChange={(event) => patchPrimaryGame({ wentFirst: normalizeWentFirst(event.target.value) })}><option value="">Unknown</option><option value="1st">Went 1st</option><option value="2nd">Went 2nd</option><option value="undecided">Undecided / no seat</option></select>{bo1SeatInvalid ? <small>Seat is required</small> : null}</label> : null}
+          {!isMultiGameReview ? <label className={`review-field ${bo1SeatInvalid ? "field-invalid" : ""}`}>Seat<select data-review-seat={1} aria-invalid={bo1SeatInvalid} aria-describedby={bo1SeatInvalid ? "review-seat-error-1" : undefined} value={primaryGame.wentFirst ?? ""} onChange={(event) => patchPrimaryGame({ wentFirst: normalizeWentFirst(event.target.value) })}><option value="">Unknown</option><option value="1st">Went 1st</option><option value="2nd">Went 2nd</option><option value="undecided">Undecided / no seat</option></select>{bo1SeatInvalid ? <small id="review-seat-error-1">Seat is required</small> : null}</label> : null}
           <label>Opponent<input value={draft.opponentName} onChange={(event) => patch({ opponentName: event.target.value })} /></label>
           {!isMultiGameReview ? <div className="score-input-group wide">
             <label>My score<input type="number" min="0" step="1" value={scoreValues.me} onChange={(event) => patchScore("me", event.target.value)} /></label>
@@ -33421,7 +33709,7 @@ function MatchReviewModal({ draft, decks, battlefields, previousFlags, enhancedI
                         <label>My score<input type="number" min="0" step="1" value={gameScore.me} onChange={(event) => patchGameScore(index, "me", event.target.value)} /></label>
                         <label>Opponent score<input type="number" min="0" step="1" value={gameScore.opp} onChange={(event) => patchGameScore(index, "opp", event.target.value)} /></label>
                       </div>
-                      <label className={`review-field ${seatErrorGames.includes(index + 1) ? "field-invalid" : ""}`}>Seat<select value={game.wentFirst ?? ""} onChange={(event) => patchGame(index, { wentFirst: normalizeWentFirst(event.target.value) })}><option value="">Unknown</option><option value="1st">Went 1st</option><option value="2nd">Went 2nd</option><option value="undecided">Undecided / no seat</option></select>{seatErrorGames.includes(index + 1) ? <small>Seat is required</small> : null}</label>
+                      <label className={`review-field ${seatErrorGames.includes(index + 1) ? "field-invalid" : ""}`}>Seat<select data-review-seat={index + 1} aria-invalid={seatErrorGames.includes(index + 1)} aria-describedby={seatErrorGames.includes(index + 1) ? `review-seat-error-${index + 1}` : undefined} value={game.wentFirst ?? ""} onChange={(event) => patchGame(index, { wentFirst: normalizeWentFirst(event.target.value) })}><option value="">Unknown</option><option value="1st">Went 1st</option><option value="2nd">Went 2nd</option><option value="undecided">Undecided / no seat</option></select>{seatErrorGames.includes(index + 1) ? <small id={`review-seat-error-${index + 1}`}>Seat is required</small> : null}</label>
                       <BattlefieldInput label="My battlefield" value={game.myBattlefield ?? ""} options={battlefields} onChange={(value) => patchGame(index, { myBattlefield: value }, index === 0 ? { myBattlefield: value } : {})} />
                       <BattlefieldInput label="Opponent battlefield" value={game.oppBattlefield ?? ""} options={battlefields} onChange={(value) => patchGame(index, { oppBattlefield: value }, index === 0 ? { opponentBattlefield: value } : {})} />
                       <ExtraBattlefieldToggles value={game.extraBattlefields} onChange={(value) => patchGame(index, { extraBattlefields: value })} />
@@ -33706,7 +33994,7 @@ function MatchReviewModal({ draft, decks, battlefields, previousFlags, enhancedI
           </>}
         </footer>
       </section>
-    </div>
+    </dialog>
   );
 }
 

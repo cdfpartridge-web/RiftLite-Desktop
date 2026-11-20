@@ -457,7 +457,7 @@ export class DeckTrackerService {
       ...(settings.deckTrackerPinnedCards ?? {}),
       [deckId]: [...new Set(cardKeys.map(normalizeDeckTrackerKey).filter(Boolean))]
     };
-    const saved = await this.store.saveSettings({ deckTrackerPinnedCards: pinned });
+    const saved = await this.store.saveSettings({ deckTrackerPinnedCards: pinned }, { recordCloudEdit: true });
     return this.getState(this.activePlatform === "none" ? undefined : this.activePlatform).then((state) => ({
       ...state,
       pinnedCards: saved.deckTrackerPinnedCards[deckId] ?? state.pinnedCards

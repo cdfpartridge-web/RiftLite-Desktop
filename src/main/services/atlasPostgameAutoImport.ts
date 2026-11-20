@@ -213,6 +213,7 @@ export type AtlasPostgameDiagnostic = {
   stage: "discovery" | "capture" | "query" | "attachment";
   outcome: "ready" | "attached" | "exists" | "pending" | "restricted" | "expired" | "unavailable" | "retry" | "exhausted";
   attempt: number;
+  gameNumber?: number;
   failureReason?: AtlasPostgameQueryFailureReason;
 };
 export class AtlasPostgameAutoImport {
@@ -230,9 +231,9 @@ export class AtlasPostgameAutoImport {
     report?: (captureSessionId: string, state: "attached" | "exists" | "waiting" | "unavailable") => void;
     diagnostic?: (event: AtlasPostgameDiagnostic) => void;
   }) {}
-  private diagnose(stage: AtlasPostgameDiagnostic["stage"], outcome: AtlasPostgameDiagnostic["outcome"], attempt: number, failureReason?: AtlasPostgameQueryFailureReason): void {
+  private diagnose(stage: AtlasPostgameDiagnostic["stage"], outcome: AtlasPostgameDiagnostic["outcome"], attempt: number, gameNumber?: number, failureReason?: AtlasPostgameQueryFailureReason): void {
     // Optional observability must not change collection or its retry budget.
-    try { this.deps.diagnostic?.({ stage, outcome, attempt, ...(failureReason ? { failureReason } : {}) }); } catch { /* Diagnostic sink unavailable. */ }
+    try { this.deps.diagnostic?.({ stage, outcome, attempt, ...(number(gameNumber) ? { gameNumber } : {}), ...(failureReason ? { failureReason } : {}) }); } catch { /* Diagnostic sink unavailable. */ }
   }
   dispose(): void { this.disposed = true; this.jobs.clear(); }
   private ready(): boolean { return !this.disposed && this.deps.ready(); }
@@ -328,13 +329,13 @@ export class AtlasPostgameAutoImport {
               if (!await this.current(capture)) { this.defer(attempt, now); return; }
               job.seriesConfirmed = true;
             }
-            attempt.done = true; this.diagnose("attachment", delivered, attempt.count); this.deps.report?.(capture.captureSessionId, delivered);
-          } else if (result.status === "pending") { this.retryGame(attempt, now); this.diagnose("query", "pending", attempt.count); this.deps.report?.(capture.captureSessionId, "waiting"); }
-          else { attempt.done = true; this.diagnose("query", result.status === "restricted" ? "restricted" : result.status === "expired" ? "expired" : "unavailable", attempt.count); this.deps.report?.(capture.captureSessionId, "unavailable"); }
+            attempt.done = true; this.diagnose("attachment", delivered, attempt.count, target.gameNumber); this.deps.report?.(capture.captureSessionId, delivered);
+          } else if (result.status === "pending") { this.retryGame(attempt, now); this.diagnose("query", "pending", attempt.count, target.gameNumber); this.deps.report?.(capture.captureSessionId, "waiting"); }
+          else { attempt.done = true; this.diagnose("query", result.status === "restricted" ? "restricted" : result.status === "expired" ? "expired" : "unavailable", attempt.count, target.gameNumber); this.deps.report?.(capture.captureSessionId, "unavailable"); }
         } catch (error) {
           if (!this.ready() || error instanceof AtlasPostgameDeferredError) { this.defer(attempt, now); return; }
           this.retryGame(attempt, now);
-          this.diagnose(stage, "retry", attempt.count, stage === "query" ? atlasPostgameQueryFailureReason(error) : undefined);
+          this.diagnose(stage, "retry", attempt.count, target.gameNumber, stage === "query" ? atlasPostgameQueryFailureReason(error) : undefined);
         }
       }
     }

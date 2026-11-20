@@ -48,6 +48,7 @@ const api: RiftLiteApi = {
   sendAtlasHistoryToReplay: (matchId) => ipcRenderer.invoke("matches:atlas-history:replay", matchId),
   getDeletedMatches: () => ipcRenderer.invoke("matches:deleted") as Promise<MatchDraft[]>,
   saveMatchDraft: (draft) => ipcRenderer.invoke("matches:save-draft", draft) as Promise<MatchDraft>,
+  importPhoneScorepadMatch: (draft) => ipcRenderer.invoke("scorepad:import-phone-match", draft) as Promise<boolean>,
   deferMatchReview: (draft) => ipcRenderer.invoke("matches:defer-review", draft) as Promise<MatchDraft>,
   confirmMatch: (draft) => ipcRenderer.invoke("matches:confirm", draft) as Promise<MatchDraft>,
   previewCombinedMatches: (matchIds) => ipcRenderer.invoke("matches:combine-preview", matchIds) as ReturnType<RiftLiteApi["previewCombinedMatches"]>,
@@ -95,6 +96,7 @@ const api: RiftLiteApi = {
   getReplays: () => ipcRenderer.invoke("replays:get") as Promise<ReplayRecord[]>,
   getDeletedReplays: () => ipcRenderer.invoke("replays:deleted") as Promise<ReplayRecord[]>,
   saveReplay: (replay) => ipcRenderer.invoke("replays:save", replay) as Promise<ReplayRecord>,
+  updateReplayLibraryMetadata: (id, patch) => ipcRenderer.invoke("replays:update-library-metadata", id, patch),
   deleteReplay: (id) => ipcRenderer.invoke("replays:delete", id) as Promise<void>,
   deleteReplays: (ids) => ipcRenderer.invoke("replays:delete-many", ids) as Promise<void>,
   restoreReplay: (id) => ipcRenderer.invoke("replays:restore", id) as Promise<ReplayRecord | null>,
@@ -118,6 +120,7 @@ const api: RiftLiteApi = {
   shareRawCaptureToDiscord: (replayId, hubIds) => ipcRenderer.invoke("raw-capture:share-discord", replayId, hubIds) as ReturnType<RiftLiteApi["shareRawCaptureToDiscord"]>,
   prepareReplayEmbed: (replayId) => ipcRenderer.invoke("replay:embed:prepare", replayId) as ReturnType<RiftLiteApi["prepareReplayEmbed"]>,
   prepareReplayLibraryEmbed: () => ipcRenderer.invoke("replay:embed:prepare-library") as ReturnType<RiftLiteApi["prepareReplayLibraryEmbed"]>,
+  getLocalReplayTestCapability: () => ipcRenderer.invoke("replay:local-test:capability") as ReturnType<RiftLiteApi["getLocalReplayTestCapability"]>,
   importReplayBundle: () => ipcRenderer.invoke("replays:import") as Promise<ReplayRecord | null>,
   importReplayFolder: () => ipcRenderer.invoke("replays:import-folder") as Promise<ReplayRecord[]>,
   openReplayFolder: () => ipcRenderer.invoke("replays:open-folder") as Promise<void>,
@@ -149,6 +152,7 @@ const api: RiftLiteApi = {
   syncTeams: () => ipcRenderer.invoke("teams:sync-enabled") as Promise<PrivateHubSyncResult>,
   syncMatchesToTeams: (matchIds, teamIds) => ipcRenderer.invoke("teams:sync-selected", matchIds, teamIds) as Promise<PrivateHubSyncResult>,
   deleteTeamMatch: (teamId, matchId) => ipcRenderer.invoke("teams:delete-match", teamId, matchId) as Promise<void>,
+  getDiscordSignInAvailability: () => ipcRenderer.invoke("account:discord-availability"),
   startAccountLink: () => ipcRenderer.invoke("account:link:start") as ReturnType<RiftLiteApi["startAccountLink"]>,
   getAccountLinkStatus: (sessionId) => ipcRenderer.invoke("account:link:status", sessionId) as ReturnType<RiftLiteApi["getAccountLinkStatus"]>,
   getAccountConnectionStatus: () => ipcRenderer.invoke("account:connection:status") as ReturnType<RiftLiteApi["getAccountConnectionStatus"]>,
@@ -297,6 +301,12 @@ const api: RiftLiteApi = {
     const listener = () => callback();
     ipcRenderer.on("replay:shadow-clip-hotkey", listener);
     return () => ipcRenderer.removeListener("replay:shadow-clip-hotkey", listener);
+  },
+  getDecisionShortcutLabel: () => ipcRenderer.invoke("replay:decision-shortcut:get"),
+  onDecisionShortcutChanged: (callback) => {
+    const listener = (_event: Electron.IpcRendererEvent, label: string) => callback(label);
+    ipcRenderer.on("replay:decision-shortcut:changed", listener);
+    return () => ipcRenderer.removeListener("replay:decision-shortcut:changed", listener);
   },
   onReplayQuickFlagHotkey: (callback) => {
     const listener = () => callback();

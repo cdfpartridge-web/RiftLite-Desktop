@@ -1,5 +1,6 @@
 export const ACTIVE_VIEWS = [
   "home",
+  "new-player",
   "play",
   "insights",
   "scorepad",
@@ -107,7 +108,8 @@ export const PRIMARY_NAVIGATION = [
   { kind: "route", id: "insights", label: "Insights", target: { view: "insights" } },
   NAVIGATION_DISCLOSURES.review,
   NAVIGATION_DISCLOSURES.prepare,
-  NAVIGATION_DISCLOSURES.community
+  NAVIGATION_DISCLOSURES.community,
+  { kind: "route", id: "new-player", label: "Learn Riftbound", target: { view: "new-player" } }
 ] as const satisfies readonly PrimaryNavigationEntry[];
 
 export const UTILITY_NAVIGATION_ITEMS = [
@@ -124,7 +126,7 @@ export interface NavigationContext {
 }
 
 export type NavigationOwner =
-  | { readonly kind: "primary"; readonly itemId: "home" | "play" | "insights" }
+  | { readonly kind: "primary"; readonly itemId: "home" | "new-player" | "play" | "insights" }
   | { readonly kind: "disclosure"; readonly disclosureId: NavigationDisclosureId; readonly itemId: string }
   | { readonly kind: "utility"; readonly itemId: "overlay" | "recording-sharing" | "account-integrations" | "settings" };
 
@@ -132,6 +134,8 @@ export function navigationOwner(context: NavigationContext): NavigationOwner {
   switch (context.view) {
     case "home":
       return { kind: "primary", itemId: "home" };
+    case "new-player":
+      return { kind: "primary", itemId: "new-player" };
     case "play":
       return { kind: "primary", itemId: "play" };
     case "insights":

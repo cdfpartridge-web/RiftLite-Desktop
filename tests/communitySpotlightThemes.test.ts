@@ -9,7 +9,7 @@ import {
 describe("community spotlight themes", () => {
   it("defines a theme for every spotlight and no unknown entries", () => {
     expect(Object.keys(COMMUNITY_SPOTLIGHT_THEMES).sort()).toEqual([...COMMUNITY_SPOTLIGHT_IDS].sort());
-    expect(COMMUNITY_SPOTLIGHT_IDS).toHaveLength(18);
+    expect(COMMUNITY_SPOTLIGHT_IDS).toHaveLength(19);
     expect(COMMUNITY_SPOTLIGHT_IDS.slice(0, 3)).toEqual(["bmucasts", "riftlab", "frodan"]);
   });
 

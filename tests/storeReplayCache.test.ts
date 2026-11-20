@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rename, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -41,14 +41,14 @@ function parentMatch(): MatchDraft {
   };
 }
 
-async function withStore(action: (store: RiftLiteStore) => Promise<void>): Promise<void> {
+async function withStore(action: (store: RiftLiteStore, directory: string) => Promise<void>): Promise<void> {
   const directory = await mkdtemp(join(tmpdir(), "riftlite-replay-cache-test-"));
   try {
     const store = new RiftLiteStore(join(directory, "store.sqlite"), join(directory, "legacy.json"));
     await store.load();
     await store.saveMatch(parentMatch());
     await store.saveReplay(replay());
-    await action(store);
+    await action(store, directory);
   } finally {
     vi.restoreAllMocks();
     await rm(directory, { recursive: true, force: true });
@@ -56,6 +56,57 @@ async function withStore(action: (store: RiftLiteStore) => Promise<void>): Promi
 }
 
 describe("RiftLiteStore replay cache consistency", () => {
+  it("preserves unreadable recording data through library edits and retries it on the next read", async () => withStore(async (store, directory) => {
+    const event = {
+      id: "opening", platform: "atlas" as const, kind: "state" as const,
+      capturedAt: replay().capturedAt, url: "https://play.riftatlas.com/game", payload: { turnText: "Turn 1" }
+    };
+    const folder = { id: "league", name: "League", createdAt: replay().capturedAt, updatedAt: replay().capturedAt };
+    await store.saveSettings({ replayFolders: [folder] });
+    await store.saveReplay({ ...replay(), folderId: "league", events: [event] });
+    const payloadDirectory = join(directory, "replay-payloads");
+    const [name] = await readdir(payloadDirectory);
+    const path = join(payloadDirectory, name);
+    const contents = await readFile(path);
+    await rename(path, path + ".held");
+    const [incomplete] = await store.getReplays();
+    expect(incomplete).toMatchObject({ payloadUnavailable: true, events: [] });
+    await expect(store.exportBackupData()).rejects.toThrow("could not be read");
+    await expect(store.updateReplay(incomplete.id, current => ({ ...current, flags: [] }))).rejects.toThrow();
+    await store.updateReplayLibraryMetadata(incomplete.id, { title: "League game", favourite: true });
+    await store.saveSettings({ replayFolders: [] });
+    await expect(store.updateReplayLibraryMetadata(incomplete.id, { folderId: "league" })).rejects.toThrow("folder no longer exists");
+    await rename(path + ".held", path);
+    await expect(store.saveReplay({ ...incomplete, folderId: undefined })).rejects.toThrow("could not be read");
+    for (const reader of [store, new RiftLiteStore(join(directory, "store.sqlite"), join(directory, "legacy.json"))]) {
+      const [restored] = await reader.getReplays();
+      expect(restored).toMatchObject({ title: "League game", favourite: true, events: [expect.objectContaining({ id: "opening" })] });
+      expect(restored.folderId).toBeUndefined();
+      expect(restored.payloadUnavailable).toBeUndefined();
+    }
+    expect(await readdir(payloadDirectory)).toEqual([name]);
+    expect(await readFile(path)).toEqual(contents);
+  }));
+
+  it("retries only the unavailable payload while reusing the other library entries", async () => withStore(async store => {
+    await store.saveReplay({ ...replay(), id: "other-replay" });
+    const payloads = payloadStore(store);
+    const hydrate = payloads.hydrate.bind(payloads);
+    let unavailable = true;
+    const spy = vi.spyOn(payloads, "hydrate").mockImplementation(async stored => {
+      if (stored.id === "cache-replay" && unavailable) throw new Error("recording temporarily unavailable");
+      return hydrate(stored);
+    });
+    const initial = await store.getReplays();
+    unavailable = false;
+    const recovered = await store.getReplays();
+    expect(spy.mock.calls.map(([entry]) => entry.id).sort()).toEqual(["cache-replay", "cache-replay", "other-replay"]);
+    expect(recovered.find(replay => replay.id === "other-replay")).toBe(initial.find(replay => replay.id === "other-replay"));
+    expect(recovered.find(replay => replay.id === "cache-replay")?.payloadUnavailable).toBeUndefined();
+    await store.getReplays();
+    expect(spy).toHaveBeenCalledTimes(3);
+  }));
+
   it.each(["save", "update", "active-update", "delete", "restore"] as const)(
     "keeps a completed %s visible after an older payload load finishes",
     async (operation) => withStore(async (store) => {

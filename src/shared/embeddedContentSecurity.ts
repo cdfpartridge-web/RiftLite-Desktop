@@ -6,15 +6,22 @@ import type { GamePlatform } from "./types.js";
 export type EmbeddedWebviewPolicy =
   | { kind: "game"; platform: GamePlatform }
   | { kind: "replay" }
+  | { kind: "local-replay-test" }
   | { kind: "rules" }
   | { kind: "training"; origin: string }
   | { kind: "home-video"; provider: "youtube"; mediaId: string }
   | { kind: "home-video"; provider: "twitch"; mediaId: string };
 
 export const RIFTLITE_REPLAY_WEBVIEW_PARTITION = "persist:riftlite-replay";
+export const RIFTLITE_LOCAL_REPLAY_TEST_PARTITION = "riftlite-local-replay-test";
+export const RIFTLITE_LOCAL_REPLAY_TEST_URL = "http://127.0.0.1:4227/";
 export const RIFTLITE_RULES_WEBVIEW_PARTITION = "riftlite-riftjudge";
 export const RIFTLITE_TRAINING_WEBVIEW_PARTITION = "riftlite-opening-lab";
 export const RIFTLITE_OPENING_LAB_URL = "https://www.riftlite.com/app/opening-lab";
+
+export function isAllowedLocalReplayTestNavigation(value: string): boolean {
+  return value === RIFTLITE_LOCAL_REPLAY_TEST_URL || value === `${RIFTLITE_LOCAL_REPLAY_TEST_URL}?embed=1`;
+}
 
 export function isAllowedOpeningLabUrl(value: string, allowLocal = false): boolean {
   const url = parsedUrl(value);
@@ -163,8 +170,12 @@ function isTrustedTwitchPlayerUrl(url: URL, mediaId: string): boolean {
 export function embeddedWebviewPolicy(
   src: string,
   partition: string,
-  allowSimulator = false
+  allowSimulator = false,
+  allowLocalReplayTest = false
 ): EmbeddedWebviewPolicy | null {
+  if (partition === RIFTLITE_LOCAL_REPLAY_TEST_PARTITION) {
+    return allowLocalReplayTest && isAllowedLocalReplayTestNavigation(src) ? { kind: "local-replay-test" } : null;
+  }
   if (partition === RIFTLITE_TRAINING_WEBVIEW_PARTITION) {
     return isAllowedOpeningLabUrl(src, allowSimulator) ? { kind: "training", origin: new URL(src).origin } : null;
   }
@@ -182,6 +193,7 @@ export function embeddedWebviewPolicy(
 }
 
 export function isAllowedEmbeddedNavigation(policy: EmbeddedWebviewPolicy, value: string): boolean {
+  if (policy.kind === "local-replay-test") return isAllowedLocalReplayTestNavigation(value);
   if (policy.kind === "training") {
     return isAllowedOpeningLabUrl(value, policy.origin !== "https://www.riftlite.com") && parsedUrl(value)?.origin === policy.origin;
   }
@@ -218,7 +230,7 @@ export function isAllowedEmbeddedPermission(
   permission: string,
   allowedPermissions: ReadonlySet<string>
 ): boolean {
-  if (policy.kind === "training") return false;
+  if (policy.kind === "training" || policy.kind === "local-replay-test") return false;
   return allowedPermissions.has(permission) && (
     isAllowedEmbeddedNavigation(policy, value) ||
     (policy.kind === "game" && policy.platform === "atlas" &&

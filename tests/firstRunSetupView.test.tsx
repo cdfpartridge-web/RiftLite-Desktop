@@ -159,7 +159,7 @@ describe("first install setup", () => {
     expect(html).toContain("Go to Home");
     expect(html).toContain("Online uploads off");
     expect(html).toContain("choose Save match");
-    expect(html).toContain("Visit RiftLite.com/replays");
+    expect(html).toContain("Open My replays");
     expect(html).toContain("Interactive replays, game walkthroughs and action search on the web");
     expect(html).not.toContain("Opening Turns Lab");
     expect(html).not.toContain("Replay Coach");

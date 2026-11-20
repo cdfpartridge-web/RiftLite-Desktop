@@ -1,0 +1,81 @@
+.nph-keyword-scenario { display:grid; grid-template-columns:minmax(0,1fr) 335px; height:100%; min-height:0; color:#e0edf3; background:#142c3e; font-family:Inter,"Segoe UI",sans-serif; }
+.nph-keyword-table { position:relative; min-height:0; overflow:auto; padding:27px 30px 65px; background:radial-gradient(ellipse at 50% 45%,#2b536b55,transparent 75%),repeating-linear-gradient(90deg,#203a4a22 0px,#203a4a22 1px,transparent 1px,transparent 3px),#182f43; }
+.nph-keyword-heading { display:flex; justify-content:space-between; align-items:flex-start; gap:20px; }
+.nph-keyword-heading h2 { font-size:36px; font-weight:600; letter-spacing:-1px; margin:7px 0 4px; }
+.nph-keyword-heading p { margin:0; font-size:15px; color:#bdd1dc; }
+.nph-keyword-situation { display:flex; align-items:center; gap:16px; flex-wrap:wrap; margin:22px 0 17px; }
+.nph-keyword-situation>span { display:flex; align-items:center; gap:8px; border:1px solid #e4c18b55; border-radius:5px; background:#e4c18b0a; color:#e4c18b; padding:7px 10px; font-size:11px; }
+.nph-keyword-situation>span.is-after { color:#a7e5d4; border-color:#a7e5d466; background:#a7e5d40a; }
+.nph-keyword-situation p { color:#8fb0c1; font-size:11px; margin:0; }
+.nph-keyword-resource-row { display:flex; gap:25px; flex-wrap:wrap; padding:12px 15px; border:1px solid #91b6cc35; border-radius:8px; background:#071a2666; margin-bottom:24px; }
+.nph-keyword-resources { display:flex; gap:18px; align-items:center; flex-wrap:wrap; }
+.nph-keyword-resources>strong { font-size:11px; color:#95b5c5; font-weight:550; }
+.nph-keyword-resources>span { display:flex; align-items:center; gap:7px; font-size:10px; color:#9eb9c7; }
+.nph-keyword-resources b { color:#eff5f7; font-size:17px; font-weight:600; }
+.nph-keyword-zones { display:flex; align-items:stretch; gap:18px; flex-wrap:wrap; min-height:350px; }
+.nph-keyword-zone { flex:1; min-width:205px; padding:15px; border:1px solid #9dbbd34d; border-radius:4px; background:#112b3b55; }
+.nph-keyword-zone.is-field { border-color:#d7c59466; background:#3f57472b; }
+.nph-keyword-zone>h3 { display:flex; align-items:center; gap:7px; margin:0 0 16px; color:#92b3c3; font-size:10px; text-transform:uppercase; letter-spacing:1px; font-weight:500; }
+.nph-keyword-cards { display:flex; flex-wrap:wrap; align-items:flex-start; justify-content:center; gap:18px; }
+.nph-keyword-card { margin:0; width:clamp(150px,14vw,205px); min-width:0; text-align:center; }
+.nph-keyword-card-owner { font-size:10px; margin:0 0 9px; color:#a7e5d4; }
+.nph-keyword-card[data-owner="opponent"] .nph-keyword-card-owner { color:#e5b5a6; }
+.new-player-hub .nph-keyword-art { display:block; position:relative; width:100%; padding:0; border:1px solid #9dbbd344; border-radius:8px; background:#071722; aspect-ratio:744/1039; box-shadow:0 5px 16px #0007; }
+.nph-keyword-art img { width:100%; height:100%; display:block; object-fit:contain; border-radius:inherit; }
+.nph-keyword-card[data-changed="true"] .nph-keyword-art { outline:2px solid #a7e5d4; outline-offset:4px; animation:nph-keyword-outcome .6s ease-out; }
+.nph-keyword-card figcaption>strong { display:block; font-size:12px; margin:12px 0 9px; line-height:1.45; }
+.nph-keyword-card-stats { display:flex; justify-content:center; flex-wrap:wrap; gap:6px; }
+.nph-keyword-card-stats>span { display:flex; align-items:center; gap:4px; padding:4px 6px; border-radius:4px; background:#062131; color:#b9d4df; font-size:10px; }
+.nph-keyword-card-stats .is-damage { background:#68373b; color:#ffe0d3; }
+.nph-keyword-card figcaption p { margin:10px 0 0; font-size:11px; line-height:1.55; color:#a8c4d0; }
+.nph-keyword-scene-note { display:flex; align-items:flex-start; gap:10px; margin:20px 0 0; padding:15px; border-left:2px solid #a7e5d4; color:#c1ddd9; background:#a7e5d409; font-size:13px; }
+.nph-keyword-scene-note svg { flex-shrink:0; margin-top:3px; }
+.nph-keyword-brand { display:flex; align-items:center; justify-content:center; gap:11px; padding-top:30px; opacity:.2; pointer-events:none; }
+.nph-keyword-brand img { width:28px; height:28px; object-fit:contain; }
+.nph-keyword-brand span { font-size:10px; letter-spacing:2px; }
+.nph-keyword-teacher { overflow:auto; padding:26px 24px; border-left:1px solid #94b9cb44; background:linear-gradient(145deg,#152c3c,#0b1e2c); }
+.nph-keyword-teacher>progress { margin-bottom:25px; }
+.nph-keyword-teacher h3 { font-size:23px; line-height:1.35; margin:12px 0 16px; font-weight:550; letter-spacing:-.6px; }
+.nph-keyword-teacher>p { font-size:14px; color:#bed2dc; line-height:1.75; }
+.nph-keyword-teacher>.nph-primary { width:100%; margin-top:19px; font-size:13px; }
+.nph-keyword-rule { display:flex; align-items:flex-start; gap:11px; padding:16px; margin-top:22px; background:#a7e5d409; border:1px solid #a7e5d433; border-radius:8px; }
+.nph-keyword-rule>svg { flex-shrink:0; color:#a7e5d4; }
+.nph-keyword-rule strong { font-size:12px; color:#a7e5d4; }
+.nph-keyword-rule p { margin:6px 0 0; color:#b5cece; font-size:12px; }
+.nph-keyword-teacher details { margin-top:22px; padding-top:16px; border-top:1px solid #9abacb25; color:#8dabbc; font-size:11px; }
+.nph-keyword-teacher details summary { cursor:pointer; }
+.nph-keyword-teacher details p { font-size:11px; }
+.nph-keyword-group-list { display:grid; gap:10px; margin-top:28px; }
+.nph-keyword-group-list>span { display:flex; align-items:center; gap:9px; color:#779bab; font-size:11px; }
+.nph-keyword-group-list>span[aria-current] { color:#e4c18b; }
+.nph-keyword-group-list>span[data-complete="true"] { color:#a7e5d4; }
+.nph-keyword-group-list>span>span { width:13px; text-align:center; font-size:9px; }
+.nph-keyword-inspector { position:absolute; z-index:60; pointer-events:none; right:355px; top:50%; transform:translateY(-50%); width:260px; max-height:85%; filter:drop-shadow(0 12px 24px #000b); }
+.nph-keyword-inspector img { display:block; width:100%; max-height:75vh; object-fit:contain; border-radius:12px; }
+@keyframes nph-keyword-outcome { from { box-shadow:0 0 24px #a7e5d488; } to { box-shadow:0 5px 16px #0007; } }
+@media(max-width:1050px) { .nph-keyword-scenario { grid-template-columns:minmax(0,1fr) 290px; } .nph-keyword-table { padding:22px 18px 40px; } .nph-keyword-teacher { padding:23px 18px; } .nph-keyword-zone { min-width:170px; padding:12px; } .nph-keyword-inspector { right:310px; width:220px; } }
+@media(max-width:760px) { .nph-keyword-scenario { grid-template-columns:minmax(0,1fr) 245px; } .nph-keyword-teacher h3 { font-size:19px; } .nph-keyword-teacher>p { font-size:12px; } .nph-keyword-card { width:150px; } .nph-keyword-heading h2 { font-size:28px; } .nph-keyword-heading p { font-size:12px; } .nph-keyword-inspector { right:260px; width:205px; } }
+@media(prefers-reduced-motion:reduce) { .nph-keyword-card[data-changed="true"] .nph-keyword-art { animation:none; } }
+.nph-keyword-scenario { display:block; position:relative; }
+.nph-keyword-table { height:100%; padding-right:390px; }
+.nph-keyword-teacher { position:absolute; z-index:30; right:18px; top:18px; width:335px; max-height:calc(100% - 36px); display:flex; flex-direction:column; padding:0; overflow:hidden; border:1px solid #d9c49b99; border-radius:12px; box-shadow:0 12px 45px #0009; }
+.nph-keyword-teacher.is-collapsed { width:175px; }
+.nph-keyword-coach-toolbar { display:flex; align-items:center; justify-content:space-between; padding:5px 8px; border-bottom:1px solid #a7c4cd22; background:#071b2480; }
+.new-player-hub .nph-keyword-coach-toolbar button { display:flex; align-items:center; gap:8px; padding:5px; border:0; background:none; color:#c5b895; }
+.nph-keyword-coach-toolbar button:first-child { flex:1; cursor:grab; touch-action:none; }
+.nph-keyword-coach-toolbar span { font-size:9px; letter-spacing:1px; }
+.nph-keyword-teacher-content { padding:22px; overflow:auto; scrollbar-width:thin; overscroll-behavior:contain; }
+.nph-keyword-teacher-content>progress { margin-bottom:22px; }
+.nph-keyword-teacher-content>p { font-size:14px; color:#bed2dc; line-height:1.75; }
+.nph-keyword-teacher-content>.nph-primary { width:100%; margin-top:19px; font-size:13px; }
+@media(max-width:1050px) { .nph-keyword-table { padding-right:330px; } .nph-keyword-teacher { width:290px; } .nph-keyword-teacher-content { padding:18px; } }
+@media(max-width:760px) { .nph-keyword-table { padding-right:280px; } .nph-keyword-teacher { width:245px; } .nph-keyword-teacher-content>p { font-size:12px; } }
+
+/* Retained legacy preview only; the course uses the interactive Atlas table. */
+.nph-keyword-scenario{background:#101c29;color:#e5e9ee}
+.nph-keyword-table{background:radial-gradient(ellipse at 50% 40%,#dfc18708,transparent 65%),#142231}
+.nph-keyword-heading h2{font-family:Georgia,"Times New Roman",serif;font-weight:500;color:#f1e8d6}
+.nph-keyword-heading p,.nph-keyword-teacher-content>p{color:#b8c5d0}
+.nph-keyword-teacher{background:#101c29;border-color:#dfc18755}
+.nph-keyword-resources>strong{color:#9cabb9}
+.nph-keyword-teacher-content>.nph-primary{background:#dfc187;border-color:#dfc187;color:#101c29}
