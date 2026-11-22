@@ -35,9 +35,9 @@ describe("Home launchpad", () => {
 
     expect(releaseNotesSource).toContain("version: APP_VERSION_META");
     expect(releaseNotesSource).toContain("Learn Riftbound");
-    expect(releaseNotesSource).toContain("Your path");
-    expect(releaseNotesSource).toContain("All cards");
-    expect(releaseNotesSource).toContain("notes");
+    expect(releaseNotesSource).toContain("10 Basics topics");
+    expect(releaseNotesSource).toContain("28 keywords");
+    expect(releaseNotesSource).toContain("Hidden cards");
     expect(releaseNotesSource).not.toContain("Search Rules");
     expect(releaseNotesSource).not.toContain("Deck Insights is now the default Insights view");
   });
