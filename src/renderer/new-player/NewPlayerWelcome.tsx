@@ -35,14 +35,14 @@ export function NewPlayerWelcome({ onLearn, onSetup, onLater }: {
     <section className="nph-welcome" role="dialog" aria-modal="true" aria-labelledby="nph-welcome-title" ref={dialogRef}>
       <NewPlayerCinematicArt cardId="OGN-255" className="nph-welcome-art" />
       <span className="nph-eyebrow"><Sparkles size={15} /> WELCOME TO RIFTLITE</span>
-      <h1 id="nph-welcome-title">Your first step into the Rift.</h1>
-      <p>Learn the game, or get your companion ready. You can come back to either whenever you like.</p>
+      <h1 id="nph-welcome-title">Where would you like to start?</h1>
+      <p>If you’re here to learn Riftbound, we can go straight to the table. If you already play, let’s get RiftLite ready for your next game.</p>
       <div className="nph-welcome-choices">
-        <button type="button" onClick={onLearn}><BookOpen size={28} /><strong>I’m new to Riftbound</strong><span>Start with the visual basics, then practise in the guided game. Creator guides and your first deck come next.</span><b>Start with the basics <ArrowRight size={17} /></b></button>
+        <button type="button" onClick={onLearn}><BookOpen size={28} /><strong>I’m new to Riftbound</strong><span>We’ll look at the cards first, then play a guided game together. Once you’ve tried an opening hand and a few fights, you can pick a deck you’d like to play yourself.</span><b>Start with the basics <ArrowRight size={17} /></b></button>
         <button type="button" onClick={onSetup}><Settings2 size={28} /><strong>Set up RiftLite</strong><span>Choose your player, account, replay preferences and deck.</span><b>Start setup <ArrowRight size={17} /></b></button>
       </div>
       <button type="button" className="nph-text-button" onClick={onLater}>Explore first — set up later</button>
-      <small>Learning needs no account. Your lesson progress stays on this device.</small>
+      <small>You can learn without an account, and your place saves on this device.</small>
     </section>
   </div>;
 }

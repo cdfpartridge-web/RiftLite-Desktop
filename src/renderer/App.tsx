@@ -600,12 +600,11 @@ const LAB_TRAINING_LEGEND_NAMES = new Set(LAB_TRAINING_LEGEND_NAME_BY_CANONICAL.
 const RELEASE_NOTES = {
   version: APP_VERSION_META,
   title: `RiftLite v${APP_VERSION_META}`,
-  intro: "Learn Riftbound at your own pace, then take what you learn into your next match.",
+  intro: "The Learn Riftbound guide now talks through the choices you see on the table, including why you might keep a card, leave runes ready or wait before playing a Reaction.",
   items: [
-    "Open Learn Riftbound in the left menu for 40 guided lessons. Practise keywords, try an optional quiz or find a first deck.",
-    "Your path remembers your next lesson. You can revisit a completed lesson and come back to your place.",
-    "Review Atlas games with All cards when shared data is available. Each game in a best-of-three shows whether its data is ready.",
-    "Keep notes with the deck you were playing. If a save fails, your draft stays available to retry."
+    "Start with the 10 Basics topics, or carry on from your saved step in the 40 guided lessons.",
+    "Try both routes in the decision lessons, practise 28 keywords and check your reasoning with 51 optional questions.",
+    "Select a spell directly on the chain, place Hidden cards at occupied battlefields and find the highlighted card or action more easily on smaller screens."
   ]
 };
 const RIOT_LEGAL_NOTICE = `RiftLite was created under Riot Games' "Legal Jibber Jabber" policy using assets owned by Riot Games. Riot Games does not endorse or sponsor this project.`;

@@ -62,7 +62,7 @@ export interface NewPlayerDeck {
 
 export const NEW_PLAYER_DECKS_REVIEWED_AT = "2026-11-11";
 export const NEW_PLAYER_DECKS_RULES_URL = "https://playriftbound.com/en-us/rules-hub/";
-export const NEW_PLAYER_DECK_SELECTION_NOTE = "Popular lists from Piltover Archive’s Trending page, checked 11 November 2026 and narrowed for learning. Popularity is not a tournament ranking; difficulty and teaching notes are RiftLite’s assessment. These are dated copies; source lists and legality can change.";
+export const NEW_PLAYER_DECK_SELECTION_NOTE = "We chose these from Piltover Archive’s Trending page on 11 November 2026, then added our own notes on how easy each one is to learn. Trending tells you a list is popular, and tournament results are a different measure. Check the source and event rules for changes since we saved it.";
 
 /** Announced 13 November; do not label these cards already banned before the effective date. */
 export const NEW_PLAYER_DECK_BAN_UPDATE = {
@@ -123,24 +123,24 @@ const CURATED_NEW_PLAYER_DECKS = [
     "title": "K'Sante — defend, then attack",
     "champion": "K'Sante",
     "difficulty": "Approachable",
-    "difficultyReason": "Start here if you enjoy keeping your units alive. Shield helps when they defend; spells can help you turn that survival into points.",
-    "summary": "Conquer a battlefield, protect your units, then hold it for more points.",
+    "difficultyReason": "If you enjoy keeping a unit alive through a fight it looked likely to lose, I’d start here. Shield helps it defend and your spells can keep it there to score.",
+    "summary": "Conquer with a unit you can protect, then make your opponent come and take that battlefield off you before Beginning.",
     "gamePlan": [
-      "Get an affordable unit onto the table, then move it to a battlefield you can conquer and later hold.",
-      "Use Shield and Ntofo Strikes to help units survive a fight. Your legend can then help you attack."
+      "Get an affordable unit onto the table, then look for somewhere it can conquer now and hold next turn.",
+      "Shield and Ntofo Strikes help your units survive, and your legend can help when you’re ready to attack."
     ],
     "mulligan": [
-      "Look for a unit you can play early, such as Mutated Mouser, Stalwart Poro or Scuttle Crab.",
-      "An early unit plus something useful for the next turn is a good start. Replace cards that leave you unable to make an early play; you do not have to return every expensive card."
+      "I’d look for a Mutated Mouser, Stalwart Poro or Scuttle Crab, because I want a unit I can actually play early.",
+      "If the early unit and a follow-up are already there, I’m happy to hang on to a more expensive card. If we have no play for the first turns, I’d send some back."
     ],
     "firstTurns": [
-      "First turn: play an affordable unit. A unit normally enters sideways, so plan to move it after it readies.",
-      "Next turn: check both battlefields. Move where the unit can score and is likely to survive.",
-      "Once you control a battlefield: count what a defensive spell needs before spending everything on another unit."
+      "Start with a unit you can afford. It normally comes in sideways, so plan to move it once it’s ready again.",
+      "When it’s ready, check both battlefields. Where can it score and still have a good chance of surviving?",
+      "Once you control somewhere, count the cost of a defensive spell before spending everything on another unit."
     ],
     "pitfalls": [
-      "Shield helps while defending. It does not automatically strengthen your own attack.",
-      "Your legend ability and spells still have costs. Count energy and matching power separately."
+      "Shield helps while defending, so leave that bonus out when counting up your own attack.",
+      "Your spells and legend ability still need paying for, so check the energy and the matching power separately."
     ],
     "domains": [
       "Body",
@@ -373,24 +373,24 @@ const CURATED_NEW_PLAYER_DECKS = [
     "title": "Jarvan IV — units with battlefield support",
     "champion": "Jarvan IV",
     "difficulty": "Some practice",
-    "difficultyReason": "Learn to put gear where your units will fight, then use your legend to help with movement.",
-    "summary": "Develop units, support their battlefield with gear, and move into places where you can score.",
+    "difficultyReason": "Try Jarvan if you enjoy planning where the next fight will be, because that’s where your gear can help and your legend can help you get the units there.",
+    "summary": "Pick a battlefield your units can reach, then put gear where it will actually help you score.",
     "gamePlan": [
-      "Play affordable units before relying on equipment to win a fight.",
-      "Deploy gear can support a battlefield. Check where your next unit wants to go before choosing that location."
+      "Get an affordable unit down first, because equipment in hand won’t win a fight by itself.",
+      "Before you Deploy gear, think where your unit wants to go next, that’s where you’ll want the support."
     ],
     "mulligan": [
-      "Look for an early unit such as Honest Broker or Pit Rookie, with gear you can afford later.",
-      "A hand full of gear needs units to benefit from it. Replace some of that gear if you have no early unit."
+      "Honest Broker or Pit Rookie gives you somewhere to start, and you can keep the gear you’ll be able to pay for later.",
+      "If all four are gear, who’s actually going to use it? I’d send some back to look for an early unit."
     ],
     "firstTurns": [
-      "First turn: put an affordable unit on the table.",
-      "Next turn: compare the battlefields and choose where your units could score. Check which gear would actually help there.",
-      "Before using your legend to move: count its cost and what you will have left to respond with."
+      "Start with a unit you can afford so there’ll be something on the table to support.",
+      "Next turn, compare the two battlefields and pick one your unit can score, then see which gear helps there.",
+      "Before using the legend to move, count what it costs and what that leaves if your opponent responds."
     ],
     "pitfalls": [
-      "Deploy gear can be lost when an opponent holds its battlefield. Think about whether you can protect that location.",
-      "Call to Glory can spend a buff. Check how much Might that unit will have after losing the buff."
+      "If they hold the battlefield, you could lose the gear you Deployed there, so can you protect it next turn?",
+      "Call to Glory can spend a buff, so check the unit’s Might again once that buff comes off."
     ],
     "domains": [
       "Body",
@@ -623,24 +623,24 @@ const CURATED_NEW_PLAYER_DECKS = [
     "title": "Mordekaiser — build with units and gear",
     "champion": "Mordekaiser",
     "difficulty": "Some practice",
-    "difficultyReason": "The plan uses units, gear and cards in your trash. Read each ability carefully so you know what it spends and what it gives you.",
-    "summary": "Build a battlefield presence, then use the cards and resources your abilities give you to keep playing units.",
+    "difficultyReason": "Mordekaiser gives you a reason to watch your trash as well as your gear and units, because several abilities spend cards to give you something back.",
+    "summary": "Put a unit in position to score, then look at what your other abilities give you to keep playing units.",
     "gamePlan": [
-      "Develop affordable units and gear. Cards in your trash can matter to your later abilities.",
-      "Use a spell to remove an important enemy, then move a surviving unit into position to score."
+      "Start with units and gear you can afford, and keep track of what ends up in the trash because it can help later.",
+      "If a spell takes the important enemy out of the fight, which surviving unit can you send in to score?"
     ],
     "mulligan": [
-      "Look for an early unit such as Honest Broker or Trifarian Captain, and a card you could use on a later turn.",
-      "A hand of expensive units and spells that only remove enemies may leave you with no early way to score. Replace enough to look for a useful opening."
+      "I’d keep an Honest Broker or Trifarian Captain for the early turns, with a card I can use once I’ve got going.",
+      "You can have plenty of ways to remove their units and still have nobody to score for you, so if the rest costs too much I’d swap for a cheaper start."
     ],
     "firstTurns": [
-      "First turn: play an affordable unit or another card that helps you develop a unit soon.",
-      "Next turn: look for a battlefield you can conquer. Decide which unit will do the scoring before spending resources elsewhere.",
-      "Before using your champion or legend: choose the cards you will discard or banish, and check what you give up."
+      "On turn one look for an affordable unit, or a card that gets you closer to playing one soon.",
+      "On the next turn, choose the battlefield and the unit that can take it before spending your resources somewhere else.",
+      "Which cards would you discard or banish for the champion or legend, and will you miss one of those later?"
     ],
     "pitfalls": [
-      "The power made by your legend can pay for units or gear, but not spells.",
-      "Hidden Blade kills a unit and gives its controller cards. Check who receives those cards and why that exchange helps you."
+      "The legend gives you power for units or gear, so you’ll need another way to pay for a spell.",
+      "Hidden Blade kills a unit and its controller draws, so check who’s getting those cards when you pick your target."
     ],
     "domains": [
       "Fury",
@@ -885,24 +885,24 @@ const CURATED_NEW_PLAYER_DECKS = [
     "title": "Kai'Sa — protect your units with spells",
     "champion": "Kai'Sa",
     "difficulty": "Some practice",
-    "difficultyReason": "A useful next deck once combat feels familiar. You will choose when to spend spells and when to save resources.",
-    "summary": "Keep a few useful units alive with spells, then use them to conquer and hold battlefields.",
+    "difficultyReason": "I’d try Kai’Sa once you’re comfortable reading a fight, because quite often the choice is whether to use a spell now or leave the runes open.",
+    "summary": "Get a few useful units down, then protect them with spells so they live long enough to conquer and hold.",
     "gamePlan": [
-      "Play an affordable unit, then use spells when they help that unit survive or score.",
-      "Look for a fight Kai’Sa can win. Drawing more cards gives you new options, but you still need to pay for them."
+      "Play a unit you can afford, then ask whether a spell would actually help it survive or help it score.",
+      "Find a fight Kai’Sa can win. Drawing cards gives you more choices, but you still need the resources to play what you draw."
     ],
     "mulligan": [
-      "Look for an early unit such as Watchful Sentry or Plundering Poro, with an affordable spell that supports your plan.",
-      "Replace expensive cards when they leave you without a useful early play. Keeping one later card can be fine if the rest of your hand works."
+      "Watchful Sentry or Plundering Poro gives you an early unit, especially if you’ve got a cheap spell to go with it.",
+      "If you’ve already got something for the early turns I’d keep a more expensive card for later, but if the whole hand has to wait I’d send some back."
     ],
     "firstTurns": [
-      "First turn: establish an affordable unit. You need a unit to conquer and hold a battlefield.",
-      "Next turn: inspect the enemy units and decide which fight your spells could change.",
-      "Before paying: check the legend’s spell-only power. Save the other resources needed for units and any optional costs."
+      "On turn one I’d prioritise a unit because I’ll need one on the table to conquer and hold.",
+      "On the following turn, check their units and look for a fight your spells could change.",
+      "Before paying, separate out the legend’s spell-only power and check what you’ll have left for units and optional costs."
     ],
     "pitfalls": [
-      "The legend’s resource pays for spells. It does not pay for units or their Accelerate costs.",
-      "A unit can be too costly to save. Check whether spending several spells here will actually help you score."
+      "The legend’s power is for spells, so a unit and its Accelerate cost both need resources from somewhere else.",
+      "Before spending a second or third spell to save a unit, ask what that unit’s actually going to score for you."
     ],
     "domains": [
       "Fury",
@@ -1117,24 +1117,24 @@ const CURATED_NEW_PLAYER_DECKS = [
     "title": "Kennen — reuse spells and keep moving",
     "champion": "Kennen",
     "difficulty": "Advanced",
-    "difficultyReason": "Try this after your first games. It asks you to track cards in the trash, movement and several separate payments.",
-    "summary": "Use specific abilities to play useful spells again, then move your units into fresh scoring opportunities.",
+    "difficultyReason": "I’d try Kennen after a few games because you’ll be tracking the trash, where each unit ends up and how you’re paying for the next play.",
+    "summary": "Use an ability that lets you play a spell again, then find another spot your units can move to and score.",
     "gamePlan": [
-      "Lightning Rush and your units help prepare cards in your trash for later abilities. Those cards are only usable when a rule permits it.",
-      "Conquer with Kennen to reuse a spell. Then look for another attack using movement and the Assault granted by your legend."
+      "Lightning Rush and your units can put useful cards into the trash, but you’ll need specific permission to play one from there.",
+      "Conquer with Kennen to reuse a spell, then see whether movement and the Assault from your legend can set up another attack."
     ],
     "mulligan": [
-      "Look for an early unit such as Traveling Merchant or Trifarian Captain, with something useful for the next turn.",
-      "A hand full of Rhasa and expensive responses can leave you waiting. Look for an affordable way to begin developing your position."
+      "I’d want an early Traveling Merchant or Trifarian Captain, with a card I can use the following turn.",
+      "Rhasa and expensive responses can leave us with a hand we like the look of and nothing to play, so I’d swap some for a chance at a cheaper start."
     ],
     "firstTurns": [
-      "First turn: develop an affordable unit and keep track of any cards that reach your trash.",
-      "Next turn: plan which battlefield your unit can conquer, then check which spell or movement ability could help.",
-      "Before using Ride the Wind: decide where the unit should finish and count the resources remaining for a response."
+      "Get an affordable unit onto the table and keep track of what reaches the trash.",
+      "Next turn, choose the battlefield your unit can take and check which spell or movement ability could help it get there.",
+      "Before Ride the Wind, decide where you want the unit to finish and how much you’ll have left to respond."
     ],
     "pitfalls": [
-      "Flow still has a cost. Follow the spell’s Flow text, including sending it to Banishment after use.",
-      "Assault applies while the unit is attacking, through the end of combat. Count energy and matching power before starting a sequence of plays."
+      "Flow still asks you to pay, so read the cost and remember the spell goes to Banishment after you use it this way.",
+      "Count Assault while the unit’s attacking through the end of combat, and check both energy and matching power before starting a run of plays."
     ],
     "domains": [
       "Order",

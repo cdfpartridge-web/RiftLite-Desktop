@@ -828,7 +828,7 @@ describe("guided new-player scenarios", () => {
     const inspected=advance(before);expect(inspected.board.cards).toEqual(before.board.cards);expect(inspected.board.players).toEqual(before.board.players);
     expect(getTutorialStep(inspected)?.expectedAction).toEqual({type:"predict",cardId:"player-OGN-096",choice:"recycle"});
     expect(applyTutorialAction(inspected,{type:"inspect",cardId:"player-OGN-096"}).board).toBe(inspected.board);
-    const chosen=advance(inspected);expect(chosen.board.players).toEqual(before.board.players);expect(chosen.board.cards.find(c=>c.instanceId==="player-OGN-096")?.annotation).toContain("recycled to the bottom");
+    const chosen=advance(inspected);expect(chosen.board.players).toEqual(before.board.players);expect(chosen.board.cards.find(c=>c.instanceId==="player-OGN-096")).toMatchObject({zone:"deck",faceDown:true,annotation:expect.stringContaining("recycled it to the bottom")});
   });
   it("shows Hidden's floating energy, friendly target and separate Deathknell draw",()=>{
     const hidden=afterStep("keyword-surprises","keyword-hidden-hide");expect(hidden.board.players.player.energy).toBe(1);expect(Object.values(hidden.board.players.player.power).reduce((a,b)=>a+(b??0),0)).toBe(0);

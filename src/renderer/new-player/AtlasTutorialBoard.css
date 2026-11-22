@@ -130,6 +130,9 @@
 .atlas-tutorial-board [data-guide-target="true"]{outline:3px solid #ffda79!important;outline-offset:5px;box-shadow:0 0 0 8px #ffda7924,0 0 25px #ffc84a66;animation:atb-guide-pulse 1.6s ease-in-out infinite;z-index:20}
 .atlas-tutorial-board .atb-guide-cue{position:absolute;max-width:260px;width:max-content;padding:7px 11px;border-radius:7px;border:1px solid #ffdb82;background:#172b37;color:#ffeab5;font:600 clamp(10px,.85cqw,14px)/1.3 Inter,"Segoe UI",sans-serif;letter-spacing:0;box-shadow:0 4px 15px #00101b80;pointer-events:none;text-align:center;white-space:normal;z-index:70}
 .atlas-tutorial-board .atb-field-side .atb-card[data-guide-target="true"]{z-index:25}
+.atlas-tutorial-board .atb-field-side{pointer-events:none}
+.atlas-tutorial-board .atb-field-side .atb-card{pointer-events:auto}
+.atlas-tutorial-board .atb-field-side:has(.atb-card[data-guide-target="true"]){z-index:4}
 .atlas-tutorial-board .atb-card[data-ready="false"][data-guide-target="true"]::after{transform:translateX(-50%) rotate(-90deg)}
 .atlas-tutorial-board .atb-turn-actions [data-guide-target="true"]::after,.atlas-tutorial-board .atb-resolve[data-guide-target="true"]::after{left:auto;right:calc(100% + 12px);bottom:0;transform:none;max-width:190px}
 @keyframes atb-guide-pulse{0%,100%{outline-color:#ffe7a7;box-shadow:0 0 0 7px #ffda7922,0 0 18px #ffc84a44}50%{outline-color:#ffc74b;box-shadow:0 0 0 11px #ffda7935,0 0 30px #ffc84a77}}
@@ -232,6 +235,9 @@
 .atlas-tutorial-board .atb-pile-card{display:flex;flex-direction:column;gap:7px;align-items:center;width:135px;text-align:center;font-size:12px}
 .atlas-tutorial-board .atb-pile-card>strong{font-size:12px;color:#e0ecf0}.atlas-tutorial-board .atb-pile-card>small{font-size:11px;line-height:1.5;color:#abc4cf}
 .atlas-tutorial-board .atb-pile-dialog .atb-pile-card .atb-card{width:110px;height:calc(110px * 1039 / 744);transform:none;margin:0}
+.atlas-tutorial-board .atb-pile-dialog{overflow-y:auto;overscroll-behavior:contain}
+.atlas-tutorial-board .atb-pile-dialog>header,.atlas-tutorial-board .atb-pile-dialog>p,.atlas-tutorial-board .atb-pile-dialog>div{flex:none}
+.atlas-tutorial-board .atb-pile-dialog>div{overflow:visible}
 .atlas-tutorial-board .atb-deck-check-note{margin:0 0 18px;border-left:2px solid #dfc88a;padding-left:12px;color:#e4d7b0;font-size:13px;line-height:1.6}
 .atlas-tutorial-board .atb-preview .atb-preview-annotation{border-left:2px solid #dfc88a;padding:6px 8px;background:#2d4149;color:#f0ddb0;font-size:12px;line-height:1.6}
 .atlas-tutorial-board .atb-preview[role="button"]{cursor:crosshair}
@@ -403,6 +409,11 @@
 .atlas-tutorial-board .atb-chain-items li{border-color:#8ea4b32c;background:#172535}
 .atlas-tutorial-board .atb-chain-items li small{color:#bea46e}
 .atlas-tutorial-board .atb-chain-items li strong{font-size:11px;line-height:1.4}
+.atlas-tutorial-board .atb-chain-items .atb-chain-spell{padding:0;border:0}
+.atlas-tutorial-board .atb-chain-spell button{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;min-height:44px;padding:6px 8px;border:1px solid #718697;border-radius:4px;background:#1b2d3b;text-align:left}
+.atlas-tutorial-board .atb-chain-spell button:hover,.atlas-tutorial-board .atb-chain-spell button:focus-visible{background:#294052;border-color:var(--atb-gold)}
+.atlas-tutorial-board .atb-chain-spell button:focus-visible,.atlas-tutorial-board .atb-chain-spell button[data-guide-target=true]{outline-offset:-3px}
+.atlas-tutorial-board .atb-chain-verb{flex:none;color:#f0d59b;font-size:11px;font-weight:650}
 .atlas-tutorial-board .atb-resolve,.atlas-tutorial-board .atb-turn-actions button:not(:disabled){color:#b5c1cc;border:1px solid #8297ab40;background:#1c2b3b;font-weight:600;box-shadow:none}
 .atlas-tutorial-board .atb-resolve[data-guide-target=true],.atlas-tutorial-board .atb-approve,.atlas-tutorial-board .atb-turn-actions button[data-guide-target=true],.atlas-tutorial-board .atb-battlefield-actions button{color:#101c29;border:1px solid var(--atb-gold);background:var(--atb-gold);font-weight:700;box-shadow:0 3px 10px #03091233}
 .atlas-tutorial-board[data-mode=tutorial] .atb-switch-seat{display:none}

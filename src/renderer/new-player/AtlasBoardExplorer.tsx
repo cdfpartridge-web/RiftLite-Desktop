@@ -4,17 +4,17 @@ import { AtlasTutorialBoard } from "./AtlasTutorialBoard";
 import "./AtlasBoardExplorer.css";
 
 const ZONES = [
-  { id: "hand", name: "Your hand", x: 42, y: 84, text: "Your cards wait here until you play them. Your opponent sees their backs, not their faces. Read a card’s cost before deciding whether to play it or save it for later." },
-  { id: "base", name: "Base", x: 50, y: 65, text: "Your home area. Units normally enter exhausted here, or at a battlefield you control if its rules allow it. Once ready, a unit can move from base to a battlefield to contest control." },
-  { id: "battlefields", name: "Battlefields", x: 42, y: 34, text: "The two shared battlefields are where you contest control and score for conquering or holding. Each player brings one in this game. You can conquer either battlefield, including the one your opponent brought." },
-  { id: "runes", name: "Runes", x: 23, y: 65, text: "Your runes pay for cards. Exhaust one for one energy. Recycle one to its deck for one power of its domain, even if it is exhausted. Recycling alone makes no energy; the rune leaves the table until you channel it again." },
-  { id: "rune-deck", name: "Rune deck", x: 13, y: 84, text: "The separate 12-rune deck. During Channel, you bring ready runes from here onto the table. They help pay for cards; they do not join the cards you draw into your hand." },
-  { id: "deck", name: "Main deck", x: 73, y: 84, text: "Draw your cards from this deck into your hand. In Constructed, it has exactly 40 cards, including your chosen champion. Setting that champion aside leaves 39 cards before the opening draw." },
-  { id: "legend", name: "Legend", x: 70, y: 65, text: "Your legend stays face up in its own zone. Its domains—the coloured card groups—decide which cards your deck can use. Its printed abilities can help your plan. It is not the champion unit you pay to play." },
-  { id: "champion", name: "Chosen champion", x: 77, y: 65, text: "Your chosen champion is a unit from your main deck that shares a champion tag with your legend. It starts face up here, separate from your opening hand. Pay its printed cost to play it; this space does not supply another copy." },
-  { id: "trash", name: "Trash", x: 79, y: 84, text: "Killed units, used spells and discarded cards go to the trash, face up. Both players can inspect it. These cards have left play, but a card effect may let you use one again." },
-  { id: "score", name: "Score", x: 4, y: 47, text: "Your score is on the left; your opponent’s is on the right. First to 8 wins. Conquering and holding earn points. The final point from conquering has an extra requirement, which the guided game demonstrates." },
-  { id: "chain", name: "Chain and log", x: 92, y: 36, text: "The right sidebar shows the game log, chain and card previews. The chain holds spells and abilities waiting to happen. Players can respond before they resolve, and the newest waiting item resolves first." },
+  { id: "hand", name: "Your hand", x: 42, y: 84, text: "Your opponent can see how many cards you’re holding, but only you can see what they are. I’d start by looking at what each one costs, so you know what you could play now and what you might want to save." },
+  { id: "base", name: "Base", x: 50, y: 65, text: "Think of base as the place your units can start from. A unit usually enters exhausted, then once it’s ready you can move it out to a battlefield. You can also play it straight to a battlefield you control if that battlefield allows it." },
+  { id: "battlefields", name: "Battlefields", x: 42, y: 34, text: "You each brought one of these battlefields, but you can conquer either of them. What matters for scoring is who takes control and who can hold onto it through the other player’s turn." },
+  { id: "runes", name: "Runes", x: 23, y: 65, text: "If you need 1 energy, you can exhaust a basic rune and leave it on the table. If you need 1 power of its domain, recycle it to the bottom of the rune deck, even if it’s already exhausted. Recycling by itself gives you the power, so if you want the energy as well, exhaust it first." },
+  { id: "rune-deck", name: "Rune deck", x: 13, y: 84, text: "Your 12 runes have a deck of their own. When you channel, the runes come from here straight onto the table ready to use, so they’re separate from the cards you draw into your hand." },
+  { id: "deck", name: "Main deck", x: 73, y: 84, text: "This is where you draw from. Your Constructed main deck has 40 cards including your chosen champion, so once you set that champion aside you’ve got 39 left before you draw your opening hand." },
+  { id: "legend", name: "Legend", x: 70, y: 65, text: "Your legend stays face up here, and the domains shown on it tell you which colours of cards you can put in your deck. Have a look at its abilities too, they’re one reason you might pick this legend to build around." },
+  { id: "champion", name: "Chosen champion", x: 77, y: 65, text: "You chose this unit from your main deck because it shares a champion tag with your legend. It waits here face up, so even before you look at your opening hand you know you can play this copy when you can pay for it. Once it leaves, the space stays empty." },
+  { id: "trash", name: "Trash", x: 79, y: 84, text: "If a unit dies, a spell finishes or you discard a card, this is where you’ll usually find it. Both players can look through either trash, which comes in handy when an effect lets you use a card from there again." },
+  { id: "score", name: "Score", x: 4, y: 47, text: "Your points are on the left and your opponent’s are on the right, with 8 as the target. You score by conquering or holding battlefields, and in the guided game we’ll see what extra work it takes to earn point 8 by conquering." },
+  { id: "chain", name: "Chain and log", x: 92, y: 36, text: "Look here when someone plays a spell. The chain shows which spells and abilities are waiting, so you can see what you’re responding to and which one will resolve first, starting with the newest. The log and the card reader are here as well." },
 ] as const;
 
 /** Same renderer as the guided game, with all gameplay dispatch disabled. */
@@ -88,12 +88,13 @@ export function AtlasBoardExplorer() {
       closePopup();
     }
   }}>
-    <p className="abe-intro">Click a numbered area to read about it on the board. Use Previous and Next to look around, or close the popup to inspect cards. Exploring changes no game actions or lesson progress.</p>
+    <p className="abe-intro">Pick a number to look around the board, then use Previous or Next to move between the areas. You can close the explanation to read a card, and your lesson will still be where you left it.</p>
     <div className="abe-frame" ref={frameRef} data-explore-zone={open ? zone.id : undefined}>
       <AtlasTutorialBoard state={state} mode="explore" onAction={() => undefined} />
       <div className="abe-pins" role="group" aria-label="Board areas">{ZONES.map((item, index) => <button
         type="button" key={item.id} ref={element => { pinRefs.current[index] = element; }}
-        style={{ left: `${item.x}%`, top: `${item.y}%` }}
+        data-board-area={item.id}
+        style={{ left: `clamp(16px, ${item.x}%, calc(100% - 16px))`, top: `${item.y}%` }}
         aria-label={`Explore ${item.name}`} title={item.name} aria-haspopup="dialog"
         aria-expanded={open && selected === index} aria-controls={open && selected === index ? popupId : undefined}
         onClick={() => openZone(index)}><b>{index + 1}</b><span>{item.name}</span></button>)}</div>

@@ -36,7 +36,7 @@ export function NewPlayerDeckHandoff({ deck, readiness, onOpenExternal }: {
       {readiness.affectedCards.length > 0 && <ul aria-label="Cards affected by the announced bans">{readiness.affectedCards.map(card => <li key={card.name}>{card.quantity} × {card.name}</li>)}</ul>}
       <details><summary>Check the format and region</summary>
         <p>{NEW_PLAYER_DECK_BAN_UPDATE.regionalNote}</p>
-        <p>This is the saved Piltover Archive list, reviewed on 11 November. Announcement checked on 14 November 2026. The author’s page may now contain a newer version.</p>
+        <p>We saved this Piltover Archive list on 11 November and checked the announcement on 14 November 2026. It’s worth checking the author’s page for any changes since then.</p>
         <button type="button" className="nph-text-button" onClick={() => void onOpenExternal(NEW_PLAYER_DECK_BAN_UPDATE.sourceUrl)}>Official ban announcement <ExternalLink size={12} /></button>
       </details>
     </div>

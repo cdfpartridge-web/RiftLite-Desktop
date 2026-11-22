@@ -19,9 +19,9 @@ export interface NewPlayerCourseIntroProps {
 }
 
 const PACE_DETAILS: Record<GuideNarrationMode, string> = {
-  automatic: "Each short explanation and result stays for 6 seconds. Use Next to move on sooner. Your own actions wait for you.",
-  reading: "Each explanation and result stays for at least 10 seconds, with more time when there is more to read.",
-  manual: "Read each explanation, choose Next move to watch the action, then read what changed. Everything waits for you."
+  automatic: "You’ve got 6 seconds for each guide explanation and result. Choose Next if you’re ready sooner, and take as long as you like on your own moves.",
+  reading: "You’ll get at least 10 seconds for each explanation and result, and longer for a bigger bit of text.",
+  manual: "Choose Next move when you’re ready to see it happen, then take as long as you like to read what changed."
 };
 
 export function NewPlayerCourseIntro({ tutorial, narrationMode, onNarrationMode, paceWarning, onStart, onBack }: NewPlayerCourseIntroProps) {
@@ -35,14 +35,14 @@ export function NewPlayerCourseIntro({ tutorial, narrationMode, onNarrationMode,
         <NewPlayerCinematicArt cardId="OGN-255" className="nph-course-intro-art" />
         <div className="nph-course-intro-brand"><img src={riftLiteLogo} alt="" /><span>RiftLite</span></div>
         <span className="nph-course-intro-eyebrow">WELCOME TO YOUR GUIDED GAME</span>
-        <h2 id={`${id}-heading`} ref={heading} tabIndex={-1}>Let’s build your first game.</h2>
-        <p>You’ll play Ahri against the guide’s Orianna. Your aim is to reach eight points by conquering and holding battlefields. Start with an empty table so you can learn where each piece goes and what it does.</p>
+        <h2 id={`${id}-heading`} ref={heading} tabIndex={-1}>Ready to play your first game?</h2>
+        <p>You’ve got Ahri and I’ll take you through the game against Orianna. We’re trying to get to eight points by conquering and holding battlefields, so let’s start with an empty table and put the pieces down together.</p>
       </header>
 
       <ol className="nph-course-intro-route" aria-label="Your course in three stages">
-        <li><span className="nph-course-intro-stage"><Layers3 aria-hidden="true" /><span>01</span></span><h3>Build your board</h3><p>Find your base, then place your legend, chosen champion, battlefield and two decks.</p><ArrowRight className="nph-course-intro-route-arrow" aria-hidden="true" /></li>
-        <li><span className="nph-course-intro-stage"><Hand aria-hidden="true" /><span>02</span></span><h3>Choose your opening hand</h3><p>Learn what a mulligan means, why you might replace a card, and how to get ready for your first turn.</p><ArrowRight className="nph-course-intro-route-arrow" aria-hidden="true" /></li>
-        <li><span className="nph-course-intro-stage"><BookOpen aria-hidden="true" /><span>03</span></span><h3>Play and practise</h3><p>Work towards your first win, then try new decisions and explore the keywords.</p></li>
+        <li><span className="nph-course-intro-stage"><Layers3 aria-hidden="true" /><span>01</span></span><h3>Build your board</h3><p>Find your base first, then we’ll lay out the legend, chosen champion, battlefield and both decks.</p><ArrowRight className="nph-course-intro-route-arrow" aria-hidden="true" /></li>
+        <li><span className="nph-course-intro-stage"><Hand aria-hidden="true" /><span>02</span></span><h3>Choose your opening hand</h3><p>Look through your opening four and decide what you can play early, then we’ll try swapping a card before turn one.</p><ArrowRight className="nph-course-intro-route-arrow" aria-hidden="true" /></li>
+        <li><span className="nph-course-intro-stage"><BookOpen aria-hidden="true" /><span>03</span></span><h3>Play and practise</h3><p>Play through to the winning point, then try a different decision or a keyword you’ve been wondering about.</p></li>
       </ol>
 
       <details className="nph-course-intro-preview">
@@ -53,9 +53,9 @@ export function NewPlayerCourseIntro({ tutorial, narrationMode, onNarrationMode,
       <div className="nph-course-intro-guidance">
         <section className="nph-course-intro-guide" aria-labelledby={`${id}-guide`}>
           <div className="nph-course-intro-guide-label"><Sparkles size={17} aria-hidden="true" /><h3 id={`${id}-guide`}>Guide’s move</h3><span>PURPLE GUIDE BOX</span></div>
-          <p>The guide plays the opponent’s actions. The purple box explains what it is about to do. Your own actions wait for you.</p>
-          <p>Online simulators often handle turn-start steps automatically. Here, you ready your cards, check Beginning, channel runes and draw so you learn the sequence. Automatic game effects are explained separately as game rules.</p>
-          <p className="nph-course-intro-guide-time">Automatic gives you 6 seconds to read before each guide move. You can choose a different pace here.</p>
+          <p>When it’s Orianna’s move, the purple box will tell you what the guide is about to do. When it’s your move, the board waits for you.</p>
+          <p>If you’ve played online, a simulator may have started your turns for you. Here you’ll ready your cards, check Beginning, channel runes and draw yourself, so you’ll know the order when you sit down at a table. When the game rules do something automatically, we’ll flag that separately.</p>
+          <p className="nph-course-intro-guide-time">On Automatic you’ve got 6 seconds to read before each guide move, or you can pick a different pace below.</p>
           <dl className="nph-course-intro-controls">
             <div><dt><ArrowRight size={15} aria-hidden="true" />Next move</dt><dd>Advance without waiting</dd></div>
             <div><dt><Pause size={15} aria-hidden="true" />Pause</dt><dd>Stop automatic moves</dd></div>

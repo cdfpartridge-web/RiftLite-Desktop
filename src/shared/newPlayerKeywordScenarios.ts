@@ -495,228 +495,228 @@ function position(cards: KeywordScenarioCard[], player: KeywordScenarioPlayer = 
 export const NEW_PLAYER_KEYWORD_SCENARIOS: KeywordScenario[] = [
   {
     id: 'keyword-accelerate', keyword: 'Accelerate', groupId: "keyword-combat", title: 'Pay extra to enter ready',
-    definition: "As you play a unit with Accelerate, you can pay 1 extra energy and 1 extra power so it enters ready. Use matching power for a single-domain unit such as this Fury Rearguard. A unit with several domains or none can use power of any domain.",
-    instruction: "We want to reach the empty battlefield this turn. Legion Rearguard has Accelerate on its card, so we can pay extra to have it enter ready. Pay 3 energy and 1 Fury power in total; then it will be able to move. Units without this permission cannot buy ready entry.",
+    definition: "When you play a unit with Accelerate, you can pay 1 extra energy and 1 extra power to have it enter ready. A single-domain unit needs matching power, while a unit with several domains or none can use any domain for that power.",
+    instruction: "There’s an empty battlefield we could take this turn, if we can get somebody there. Rearguard would usually come in sideways, so I’d pay for Accelerate as I play it, 3 energy and 1 Fury power altogether, then it’s ready to move straight away.",
     actionLabel: 'Pay 3 energy + 1 Fury power',
     before: position([card('OGN-010', 'hand', { might: 2 })], { energy: 3, power: 1, handCount: 1 }, 'Your Main Phase, with an empty chain. Your available power is Fury.'),
     after: position([card('OGN-010', 'base', { might: 2, ready: true, annotation: 'Entered ready: Accelerate was paid.' })], { energy: 0, power: 0, handCount: 0 }),
-    explanation: "The extra payment let Rearguard move and earn a point by conquering on the turn it was played. Moving turned it sideways, so it cannot keep moving for free. Accelerate is only an option on a card that has it, and you choose it while playing that card. It cannot ready a unit already on the board.", rulesReference: 'Core Rules 143.4, 805; Radiance FAQ, 26 October 2026',
+    explanation: "That extra payment bought us a point this turn, because Rearguard got to move and conquer before our opponent could take the empty battlefield. It’s sideways now from moving, and we can’t pay again to ready it. Accelerate is a choice you make as you play a unit that actually has it.", rulesReference: 'Core Rules 143.4, 805; Radiance FAQ, 26 October 2026',
   },
   {
     id: 'keyword-action', keyword: 'Action', groupId: "keyword-timing", title: 'Act in a showdown',
-    definition: "Action lets you play this card during a showdown: the chance to make plays before a battlefield is settled. It must be your chance to act, with no spell or ability waiting on the chain.",
-    instruction: "Our 2-Might Rearguard would lose to the 4-Might Hopeful. Before combat damage happens, the showdown gives us a chance to help it. We have focus, meaning it is our chance to make a play. Play Cleave on Rearguard to give it 3 extra Might while attacking, enough to win and survive.", actionLabel: 'Play Cleave for 1 energy',
+    definition: "If you have focus in a showdown and the chain is empty, an Action card gives you a play you can make before the battlefield is settled. You can also play it in your own open Main phase.",
+    instruction: "Rearguard’s got 2 Might and their Hopeful’s got 4, so if we let the fight go ahead as it is, we lose our unit. Move in and, when you have focus in the showdown, play Cleave on Rearguard. The extra 3 Might while it’s attacking will get it past Hopeful.", actionLabel: 'Play Cleave for 1 energy',
     before: position([card('OGN-004', 'hand'), card('OGN-010', 'base', { might: 2, ready: true, annotation: 'Ready to move; Cleave can be played now or saved for the showdown.' }), card('OGN-096', 'battlefield-left', { owner: 'opponent', might: 1, annotation: 'Defender' })], { energy: 1, handCount: 1 }, 'Your Main phase: the chain is empty. Read Cleave before moving to the battlefield.'),
     after: position([card('OGN-004', 'trash'), card('OGN-010', 'battlefield-left', { might: 5, annotation: 'Attacker: 2 base + Assault 3.' }), card('OGN-096', 'battlefield-left', { owner: 'opponent', might: 1 })], { energy: 0, handCount: 0 }, 'Both players pass on the spell. Cleave resolves; combat damage has not happened yet.'),
-    explanation: "Cleave changed the fight before damage: Rearguard reached 5 Might, survived the enemy's 4 damage, and conquered the battlefield. Action allows this showdown play on either player's turn. It does not let you respond while another effect is waiting on the chain; that needs Reaction. You can also play an Action card during your own normal Main phase.", rulesReference: 'Core Rules 806, 807',
+    explanation: "Rearguard hit for 5 and took 4 back, so it survived to conquer. Cleave’s Action let us play it in an open showdown, even one on the other player’s turn. If they’d already put a spell or ability on the chain, we’d need Reaction to answer it.", rulesReference: 'Core Rules 806, 807',
   },
   {
     id: 'keyword-reaction', keyword: 'Reaction', groupId: "keyword-timing", title: 'Respond before a spell resolves',
-    definition: "Reaction lets you act when you have priority, your chance to play. You can start a play in your own open Main phase or when you have focus in an open showdown. You can also answer a waiting spell or ability. Your response resolves first once both players pass.",
-    instruction: "The enemy's Cleave is waiting to make its attacker 5 Might. Our Guardian is only 4 while defending, so it needs help to survive. We have priority, our chance to respond. Play Discipline on Guardian now: its 2 extra Might will take effect before Cleave because the newest waiting effect happens first.", actionLabel: 'React with Discipline',
+    definition: "Reaction lets you answer a spell or ability when you have priority, which means it’s your chance to act. You can also play a Reaction on an empty chain in your open Main phase or when you have focus in an open showdown.",
+    instruction: "Have a look at Cleave on the chain. If it resolves, their attacker will go up to 5 Might, and our Guardian’s only got 4 while defending. Play Discipline on Guardian now, because it’ll resolve before Cleave once both players pass, and it gives us another card as well as the extra 2 Might.", actionLabel: 'React with Discipline',
     before: position([card('OGN-058', 'hand'), card('OGN-096', 'battlefield-left', { might: 1 }), card('OGN-004', 'chain', { owner: 'opponent', annotation: 'Targets the opponent’s attacker; waiting to resolve.' }), card('OGN-010', 'battlefield-left', { owner: 'opponent', might: 2, annotation: 'Attacker' })], { energy: 2, handCount: 2 }, 'You have priority on the chain.'),
     after: position([card('OGN-058', 'trash'), card('OGN-045', 'hand', { annotation: 'Drawn by Discipline; can respond to the still-waiting Cleave.' }), card('OGN-096', 'battlefield-left', { might: 3, annotation: '+2 Might this turn from Discipline.' }), card('OGN-004', 'chain', { owner: 'opponent', annotation: 'Still waiting below Discipline.' }), card('OGN-010', 'battlefield-left', { owner: 'opponent', might: 2 })], { energy: 0, handCount: 2 }, 'Discipline resolves first: +2 Might and draw Defy. Cleave is still waiting, with a fresh chance to respond.'),
-    explanation: "Discipline strengthened Guardian and drew Defy. Cleave was still waiting, so we had another chance to respond with the card just drawn. Defy countered it: Cleave went to Trash without giving its bonus, and its cost was not refunded. Guardian fought the 2-Might attacker, and you retained control of the battlefield. Defending successfully does not immediately score a point; holding is checked in your next Beginning phase. You could pass in a real game; this exercise used Defy to show the fresh response window.", rulesReference: 'Core Rules 359, 813',
+    explanation: "The card Discipline drew was Defy, and Cleave was still waiting, so we could pass or use that new card to counter it. Defy sent Cleave to the trash, its cost stayed spent, and Guardian only had to fight a 2-Might attacker. We’ve kept the battlefield, so the next point to look for is holding in our Beginning phase.", rulesReference: 'Core Rules 359, 813',
   },
   {
     id: 'keyword-ganking', keyword: 'Ganking', groupId: "keyword-equipment", title: 'Move between battlefields',
-    definition: "A ready unit with Ganking can use its normal move to go directly from one battlefield to another. A normal move turns the unit sideways.",
-    instruction: "Vi has already helped score the left battlefield this turn; it cannot score for us again this turn. Move her directly to the enemy's right battlefield to fight for another point. Ganking allows this direct route. Without it, her normal move would have to return her to base first.", actionLabel: 'Move Vi to the right battlefield',
+    definition: "A ready unit with Ganking can make a standard move straight from one battlefield to another, exhausting to move just as it would if it were coming from base.",
+    instruction: "Vi’s already earned us a holding point on the left, so what would keeping her there do for our score this turn? We can’t score the left again, but Ganking gives her a route straight across to contest the right, provided we leave her ready to move.", actionLabel: 'Move Vi to the right battlefield',
     before: position([card('OGN-036', 'battlefield-left', { might: 3, ready: false }), card('OGN-096', 'battlefield-right', { might: 1, ready: true }), card('OGN-004', 'trash', { instanceId: 'vi-cost-one', annotation: 'First used card available to recycle for Vi’s ability.' }), card('OGN-004', 'trash', { instanceId: 'vi-cost-two', annotation: 'Second used card available for a second activation.' })], { score: 1 }, 'Your turn starts. Awaken Vi, score holding in Beginning, then Channel and Draw before making Main-phase plays.'),
     after: position([card('OGN-036', 'battlefield-right', { might: 5, annotation: 'Two resolved ability uses give +2 Might this turn; exhausted for the move.' }), card('OGN-096', 'battlefield-right', { might: 1, ready: true }), card('OGN-004', 'deck', { instanceId: 'vi-cost-one', annotation: 'Recycled from Trash to pay the first ability cost.' }), card('OGN-004', 'deck', { instanceId: 'vi-cost-two', annotation: 'Recycled from Trash to pay the second ability cost.' })], { score: 2 }, 'You scored for holding the left battlefield. Vi used her ability twice during Main, then moved across to fight for the other battlefield.'),
-    explanation: "Awaken made Vi ready, and holding earned a point before Main. In Main we used her ability twice, each time paying a different Trash card and resolving a separate chain. It has no exhaust cost or once-per-turn limit, so she stayed ready to move. Ganking then let her move directly to the other battlefield and conquer it for another point. Her +2 Might lasts this turn; it does not end with combat.", rulesReference: 'Core Rules 144–145, 377, 381.1, 810',
+    explanation: "Vi readied in Awaken and held for a point in Beginning. In Main we used her ability twice, paying with a different card from the trash and letting each chain resolve. There’s no exhaust cost or once-per-turn limit on that ability, so she could still move across and conquer for a second point, and her +2 Might lasts through the rest of the turn.", rulesReference: 'Core Rules 144–145, 377, 381.1, 810',
   },
   {
     id: 'keyword-ambush', keyword: 'Ambush', groupId: "keyword-combat", title: 'Bring help into a fight',
-    definition: "Ambush lets you play this unit as a Reaction directly to a battlefield containing one of your units. You can bring help while a spell or ability is still waiting.",
-    instruction: "Our Sentry cannot win this fight alone. The enemy's Discipline is waiting to strengthen its defender. Play Inferna to the same battlefield now: Ambush allows this response because our Sentry is already there, even though we do not control the battlefield. Inferna adds enough fighting strength to change the result.", actionLabel: 'Ambush with Inferna for 2 energy',
+    definition: "Ambush lets you play this unit as a Reaction straight to a battlefield where you already have a friendly unit, even with a spell or ability waiting on the chain.",
+    instruction: "Their Discipline is waiting to make the defending Sentry stronger, and our Sentry won’t win that fight alone. We’ve got a unit there, though, so play Inferna at that battlefield while Discipline’s still waiting. That’s the part Ambush allows, even though the battlefield belongs to them.", actionLabel: 'Ambush with Inferna for 2 energy',
     before: position([card('UNL-002', 'hand', { might: 1 }), card('OGN-096', 'battlefield-left', { might: 1, annotation: 'Your attacker is already here.' }), card('OGN-012', 'battlefield-left', { owner: 'opponent', might: 4, ready: true, annotation: 'Defender; opponent controls this battlefield.' })], { energy: 2, handCount: 1 }, 'This battlefield has no rule forbidding unit plays.'),
     after: position([card('UNL-002', 'battlefield-left', { might: 3, annotation: 'Entered exhausted; joins your attack. 1 base + Assault 2.' }), card('OGN-096', 'battlefield-left', { might: 1 }), card('OGN-012', 'battlefield-left', { owner: 'opponent', might: 4, ready: true })], { energy: 0, handCount: 0 }, 'Inferna resolves and joins your side of this combat. Combat damage is still ahead.'),
-    explanation: "Inferna entered sideways immediately; exhausted units still fight. The enemy's waiting Discipline happened separately afterwards. Our two units then dealt 4 damage together. Inferna died, but the original Sentry survived to conquer the battlefield. Ambush needs a friendly unit at its destination, not control of that battlefield. It cannot override a battlefield rule that forbids playing units there.", rulesReference: 'Core Rules 143.4, 465, 822',
+    explanation: "Inferna came in exhausted and could fight straight away, then their Discipline resolved. Our two units dealt 4 together and Inferna died, leaving our Sentry to conquer. The friendly unit already there made Ambush legal, though a battlefield that forbids playing units there would still stop it.", rulesReference: 'Core Rules 143.4, 465, 822',
   },
   {
     id: 'keyword-assault', keyword: 'Assault', groupId: "keyword-combat", title: 'More Might when attacking',
-    definition: "Assault adds to a unit's Might while it is attacking. Might is its fighting strength: the damage it deals in combat and the damage needed to kill it.",
-    instruction: "Both Petty Officers have 5 Might printed on their cards. Normally they would kill each other. Move ours into the enemy's battlefield to attack. Its Assault adds 1 Might while attacking, taking it to 6 so it can beat the defender and survive the 5 damage coming back.", actionLabel: 'Attack with Petty Officer',
+    definition: "A unit with Assault gets extra Might while it’s attacking. That changes both how much combat damage it deals and how much damage it takes to kill it.",
+    instruction: "Both Petty Officers have 5 Might printed on them, so at first glance this looks like we’ll trade units. Move ours in and look again, because Assault gives the attacking Officer 1 extra Might, enough to survive the 5 coming back.", actionLabel: 'Attack with Petty Officer',
     before: position([card('OGN-215', 'base', { might: 5, ready: true }), card('OGN-012', 'battlefield-left', { owner: 'opponent', might: 4, ready: true })]),
     after: position([card('OGN-215', 'battlefield-left', { might: 6, annotation: 'Attacker: 5 base + Assault 1.' }), card('OGN-012', 'battlefield-left', { owner: 'opponent', might: 4, ready: true })], {}, 'The combat showdown has begun. No damage has been dealt yet.'),
-    explanation: "Your attacker survived and scored because Assault made it 6 Might during the fight. Assault with no number means Assault 1. Its bonus applies automatically, without a chain item. Keep the bonus through conquering and resolving any resulting waiting effects. Only then does combat end and Petty Officer return to printed 5 Might. Clearing damage does not end the bonus early.", rulesReference: 'Core Rules 468.1–468.7, 807',
+    explanation: "Our Officer got to 6 Might and survived to score. If the card just says Assault, read it as Assault 1, and apply it as soon as the unit’s attacking, with nothing to resolve on the chain. It keeps that Might through damage cleanup, conquering and any resulting effects, then goes back to 5 when combat ends.", rulesReference: 'Core Rules 468.1–468.7, 807',
   },
   {
     id: 'keyword-shield', keyword: 'Shield', groupId: "keyword-growth", title: 'More Might when defending',
-    definition: "Shield adds to a unit's Might while it is defending a battlefield. It makes the defender hit harder and need more damage to be killed.",
-    instruction: "Both Guardians have 3 Might printed on their cards. End your turn so the guide can attack our battlefield. Our Guardian will be the defender, so its Shield adds 1 Might. Watch it become 4: that is enough to survive the attack and retain control of the battlefield.", actionLabel: 'End turn and let the guide attack',
+    definition: "A unit with Shield gains Might while it’s defending, so it can hit harder as well as survive a bigger hit back.",
+    instruction: "Look at the two Guardians, they’ve each got 3 Might before the fight. End the turn and let the guide come to us, because ours gets Shield while defending. Watch which Guardian goes up to 4 when the fight starts.", actionLabel: 'End turn and let the guide attack',
     before: position([card('OGN-054', 'battlefield-left', { might: 3, ready: true }), card('OGN-012', 'base', { owner: 'opponent', might: 4, ready: true })]),
     after: position([card('OGN-054', 'battlefield-left', { might: 4, ready: true, annotation: 'Defender: 3 base + Shield 1.' }), card('OGN-012', 'battlefield-left', { owner: 'opponent', might: 4, annotation: 'Attacker' })], {}, 'Combat has started; the showdown happens before damage.'),
-    explanation: "Our Guardian dealt 4 damage and survived the attacker's 3. Shield is extra Might, not a separate barrier that absorbs a hit. It applies automatically. Keep the bonus through the combat result, conquering if any, and the resulting waiting effects. When combat finally ends, Guardian returns to 3 Might. A successful defence retains control without immediately scoring. Holding is checked in your next Beginning phase.", rulesReference: 'Core Rules 468.1–468.7, 814',
+    explanation: "Our Guardian took the full 3 damage and dealt 4 back, because Shield added Might rather than absorbing damage. The bonus applies automatically and lasts through the combat result and any resulting effects, then Guardian goes back to 3. We kept control, so if we still have it at our next Beginning check, we can score for holding.", rulesReference: 'Core Rules 468.1–468.7, 814',
   },
   {
     id: 'keyword-tank', keyword: 'Tank', groupId: "keyword-new-tools", title: 'Assign lethal to the Tank first',
-    definition: "When assigning combat damage, give enemy Tank units enough damage to kill them before putting damage on their allies without Tank. That amount is called lethal damage.",
-    instruction: "Our attacker has 4 damage to divide between the enemy Guardian and Sentry. Guardian has Tank and 4 Might while defending. It needs all 4 damage before Sentry can receive any, so the smaller Sentry is protected. Watch the assignment first; damage has not happened yet.", actionLabel: 'Assign all 4 to the Tank',
+    definition: "When you assign combat damage, enemy units with Tank have to receive lethal damage before you can assign any to their allies without Tank. Lethal means enough damage to kill the unit.",
+    instruction: "Our attacker’s got 4 damage and there’s a little Sentry we’d like to reach, but Guardian has Tank and it’s got 4 Might while defending. Assign the whole 4 to Guardian first, then see how much we’ve got left for Sentry.", actionLabel: 'Assign all 4 to the Tank',
     before: position([card('OGN-012', 'battlefield-left', { might: 4, annotation: 'Attacker: 4 damage to assign.' }), card('OGN-054', 'battlefield-left', { owner: 'opponent', might: 4, annotation: 'Tank; defending with Shield.' }), card('OGN-096', 'battlefield-left', { owner: 'opponent', might: 1 })], {}, 'The showdown has ended. We are only showing the assignment step.'),
     after: position([card('OGN-012', 'battlefield-left', { might: 4 }), card('OGN-054', 'battlefield-left', { owner: 'opponent', might: 4, annotation: '4 assigned: lethal. Damage not dealt yet.' }), card('OGN-096', 'battlefield-left', { owner: 'opponent', might: 1, annotation: '0 assigned: no damage remains.' })]),
-    explanation: "We must assign all 4 damage to Guardian because Tank requires enough to kill it before reaching Sentry. Both sides then deal their damage at the same time; the defender does not get to hit first just because it has Tank. Guardian and our attacker die, while Sentry survives, so the defending player retains control of the battlefield. Defending does not immediately score a holding point. Assignment chooses where damage will go; dealing damage is the next step.", rulesReference: 'Core Rules 467, 815',
+    explanation: "Guardian needed all 4 to receive lethal, so Sentry took none. Once that assignment was made, both sides dealt damage together, killing Guardian and our attacker. Their Sentry survived, so they kept the battlefield and can check for holding on their own turn.", rulesReference: 'Core Rules 467, 815',
   },
   {
     id: 'keyword-backline', keyword: 'Backline', groupId: "keyword-combat", title: 'Reach the Backline last',
-    definition: "When assigning combat damage, give the enemy's other units enough damage to kill them before reaching its Backline units. That amount is called lethal damage.",
-    instruction: "Our attacker has 4 damage to divide. The enemy's 1-Might Sentry must receive enough to kill it before we can reach Promoter, which has Backline. Assign 1 to Sentry, then the remaining 3 to Promoter. This removes both defenders while following the protection rule.", actionLabel: 'Assign 1 to Sentry, then 3',
+    definition: "When you assign combat damage to enemy units, you reach their Backline units after you’ve assigned lethal damage to the other units. Lethal means enough damage to kill them.",
+    instruction: "We’ve got 4 damage to assign, and their Promoter’s got Backline. Give Sentry the 1 it takes to kill it first, then put the remaining 3 on Promoter, the last unit in line.", actionLabel: 'Assign 1 to Sentry, then 3',
     before: position([card('OGN-012', 'battlefield-left', { might: 4 }), card('OGN-096', 'battlefield-left', { owner: 'opponent', might: 1 }), card('UNL-043', 'battlefield-left', { owner: 'opponent', might: 2, annotation: 'Backline' })], {}, 'Combat damage assignment; no damage has been dealt yet.'),
     after: position([card('OGN-012', 'battlefield-left', { might: 4 }), card('OGN-096', 'battlefield-left', { owner: 'opponent', might: 1, annotation: '1 assigned first: lethal.' }), card('UNL-043', 'battlefield-left', { owner: 'opponent', might: 2, annotation: '3 assigned last: all remaining damage.' })]),
-    explanation: "Sentry must receive its lethal 1 first. Promoter is the last unit in the assignment order, so all 3 remaining damage goes there, including the extra. Both sides deal damage together: our 4-Might attacker survives their combined 3. Backline protects the combat assignment order; it does not stop a spell choosing that unit as a target.", rulesReference: 'Core Rules 467, 826',
+    explanation: "Promoter took all 3 that were left, even though 2 would have killed it. Both defenders still dealt their combined 3 damage, which our 4-Might attacker survived. Backline changes the order for assigning combat damage, so a spell that can legally target Promoter can still choose it.", rulesReference: 'Core Rules 467, 826',
   },
   {
     id: 'keyword-deflect', keyword: 'Deflect', groupId: "keyword-surprises", title: 'Budget for the targeting cost',
-    definition: "An opponent must pay extra power when their spell or ability chooses this card as a target. A target is the specific card or object an effect is aimed at.",
-    instruction: "We want Hidden Blade to remove the enemy Pouty Poro. Poro has Deflect, so choosing it as our target costs extra: pay Hidden Blade's 2 energy and 1 Order power, plus 1 more power of any domain. Prepare that extra power before trying to play the spell.", actionLabel: 'Pay the cost including Deflect',
+    definition: "If your opponent wants to target this card with a spell or ability, they have to pay extra power. Targeting means their effect actually chooses this card.",
+    instruction: "Hidden Blade costs 2 energy and 1 Order power, but have a look at the Pouty Poro we want to target. It has Deflect, so before we play Blade we need another 1 power, and that extra power can be from any domain.", actionLabel: 'Pay the cost including Deflect',
     before: position([card('OGN-213', 'hand'), card('OGN-013', 'battlefield-left', { owner: 'opponent', might: 2, ready: true })], { energy: 2, power: 2 }, 'Your Main Phase, empty chain. Available power: 1 Order and 1 of any domain.'),
     after: position([card('OGN-213', 'chain', { annotation: 'Target chosen and costs paid; waiting for responses.' }), card('OGN-013', 'battlefield-left', { owner: 'opponent', might: 2, ready: true })], { energy: 0, power: 0 }, 'We stop before the spell resolves. The Poro has not been killed yet.'),
-    explanation: "The extra payment let us target and remove Poro. Deflect adds a cost; it does not reduce damage or cancel a spell after it is paid for. It does not protect against combat damage, or effects that never choose Poro as a target. Without enough power for the extra cost, we could not make this play.", rulesReference: 'Core Rules 809',
+    explanation: "We could target Poro because we’d set aside enough for its Deflect payment, then Blade could resolve and remove it normally. Deflect doesn’t reduce damage, so it won’t help against combat, and an effect that never chooses Poro as a target doesn’t owe that extra power.", rulesReference: 'Core Rules 809',
   },
   {
     id: 'keyword-disarm', keyword: 'Disarm', groupId: "keyword-surprises", title: 'Reduce an enemy’s Might on attack',
-    definition: "When this unit attacks, Disarm creates an ability that can lower an enemy unit's Might at the same battlefield for this turn. That ability waits on the chain and can be responded to.",
-    instruction: "Our Chronomancer and the enemy Hopeful both have 4 Might, so they would normally kill each other. Attack with Chronomancer to create its Disarm 2 ability. We will aim it at Hopeful, then give both players a chance to respond before it lowers Hopeful to 2 Might.", actionLabel: 'Resolve Disarm 2',
+    definition: "When this unit attacks, Disarm puts an ability on the chain that can lower an enemy unit’s Might at that battlefield for the turn. Both players get a chance to respond to it.",
+    instruction: "Our Chronomancer and their Hopeful each have 4 Might, which usually means losing both. Attack with Chronomancer and choose Hopeful for Disarm 2, then give both players their chance to respond. If the ability resolves, Hopeful will only hit for 2.", actionLabel: 'Resolve Disarm 2',
     before: position([card('RAD-050', 'battlefield-left', { might: 4, annotation: 'Attacker; play-time Predict has already resolved.' }), card('OGN-012', 'battlefield-left', { owner: 'opponent', might: 4, ready: true })], {}, 'The attack trigger is on the chain. Both players pass on it.'),
     after: position([card('RAD-050', 'battlefield-left', { might: 4 }), card('OGN-012', 'battlefield-left', { owner: 'opponent', might: 2, ready: true, annotation: '4 base − 2 this turn.' })]),
-    explanation: "After both players passed, Disarm lowered Hopeful's Might before combat damage. Chronomancer survived the weaker return hit and conquered the battlefield. Disarm with no number means 1. It reduces Might for the turn; it does not turn a unit sideways or remove its Equipment. Unlike Assault or Shield, this attack-triggered ability waits on the chain and allows Reactions.", rulesReference: 'Core Rules 831',
+    explanation: "Once we’d both passed, Hopeful lost 2 Might for the turn, so Chronomancer survived the hit back and conquered. Disarm on its own means Disarm 1, and it’s the Might that changes, so the unit keeps its Equipment and its readiness. Unlike Assault or Shield, this attack ability goes on the chain.", rulesReference: 'Core Rules 831',
   },
   {
     id: 'keyword-hidden', keyword: 'Hidden', groupId: "keyword-equipment", title: 'Use a card prepared on an earlier turn',
-    definition: "Pay 1 power to prepare this card facedown at a battlefield you control. From a later turn, you may play it there as a Reaction without paying its normal base cost.",
-    instruction: "We will prepare Hidden Blade now so it can help on a later turn. The guide will pay for Discipline before moving its strengthened Sentry into the attack. When the hidden card becomes usable, we will target that friendly Sentry to draw extra cards before losing the battlefield. Then we will explicitly reset: the guide moves to the other battlefield, which the hidden card cannot reach.", actionLabel: 'Reveal and play Hidden Blade',
+    definition: "You can pay 1 power to hide this card facedown at a battlefield you control. On a later turn you can play it there as a Reaction, skipping its normal base cost.",
+    instruction: "Hide Blade at our battlefield now. On the next turn the guide will pay for Discipline and send in a stronger Sentry, and if we’re going to lose ours anyway, I’d use Blade on our own Sentry to draw cards. Then we’ll go back and try their attack on the other battlefield to see what Blade can reach.", actionLabel: 'Reveal and play Hidden Blade',
     before: position([card('OGN-213', 'hidden', { faceDown: true, hiddenAt: 'battlefield-left', annotation: 'Your facedown card, hidden on a previous turn.' }), card('OGN-096', 'battlefield-left', { might: 1 }), card('OGN-096', 'battlefield-left', { owner: 'opponent', might: 3, annotation: 'Printed 1 + Discipline 2 this turn.' }), card('OGN-058', 'hand', { owner: 'opponent' })], { energy: 0, power: 0 }, 'You still control this contested battlefield. No extra costs apply.', { handCount: 3 }),
     after: position([card('OGN-213', 'hidden', { faceDown: true, hiddenAt: 'battlefield-left' }), card('OGN-096', 'battlefield-left', { might: 1 }), card('OGN-096', 'battlefield-right', { owner: 'opponent', might: 3, annotation: 'Separate reset example: Discipline resolved before moving here.' }), card('OGN-058', 'trash', { owner: 'opponent' })], { energy: 0, power: 0 }, 'Separate reset example: the guide chose the other battlefield. Blade remains hidden beside your Sentry.', { handCount: 4 }),
-    explanation: "In the first position, Hidden Blade drew two cards because we chose our own Sentry. Sentry's separate Deathknell then drew one more. Hiding had to happen on an earlier turn, at a battlefield we controlled with no other facedown card. Playing from Hidden ignores the base cost, but extra costs still apply and targets normally stay at that battlefield. The reset showed the limit: Blade on the left cannot choose a unit on the right. It can still choose a friendly unit on the left. If we lose control while a card is still hidden, cleanup sends it to Trash.", rulesReference: 'Core Rules 811',
+    explanation: "Blade gave us two cards for killing our own Sentry, then Sentry’s Deathknell drew one more. We’d hidden Blade on an earlier turn in our battlefield’s empty facedown space, so we could skip its base cost, although any extra costs still apply. When the attack went right, Blade on the left could still choose our Sentry on the left, but couldn’t reach across. If we lose control with Blade still hidden, it goes to the trash in cleanup.", rulesReference: 'Core Rules 811',
   },
   {
     id: 'keyword-deathknell', keyword: 'Deathknell', groupId: "keyword-combat", title: 'Get the effect when a unit dies',
-    definition: "When this card is killed, its Deathknell ability is put on the chain. Players can respond before that ability does what its text says.",
-    instruction: "Our Sentry is too small to survive this fight. Watch it die, then look for its Deathknell on the chain. That ability will draw us a replacement card after both players have had a chance to respond, so losing the unit still gives us something for our next turn.", actionLabel: 'Resolve Sentry’s Deathknell',
+    definition: "When a card with Deathknell is killed, its ability goes on the chain. Both players can respond before you follow the instructions after Deathknell.",
+    instruction: "Our Sentry can’t survive this fight, so watch what happens after it goes to the trash. Its Deathknell should still be on the chain, and if we both pass, we’ll draw a card even though we’ve lost the unit.", actionLabel: 'Resolve Sentry’s Deathknell',
     before: position([card('OGN-096', 'trash', { annotation: 'Just died; Deathknell is waiting on the chain.' })], { handCount: 2 }),
     after: position([card('OGN-096', 'trash', { annotation: 'Deathknell resolved; the unit stays in the trash.' })], { handCount: 3 }),
-    explanation: "Sentry went to Trash, the pile for used or destroyed cards, and its Deathknell drew a card for its controller. The draw happened when the separate ability resolved, not at the instant Sentry died. Returning a unit to hand or base is not killing it, so that alone would not activate Deathknell.", rulesReference: 'Core Rules 808',
+    explanation: "Sentry was already in the trash when its Deathknell resolved and its controller drew the card. If somebody had returned Sentry to hand or base instead, that wouldn’t have killed it, so we wouldn’t have got the Deathknell.", rulesReference: 'Core Rules 808',
   },
   {
     id: 'keyword-temporary', keyword: 'Temporary', groupId: "keyword-new-tools", title: 'Check before holding',
-    definition: "At the start of its controller's Beginning phase, Temporary creates an ability that kills this card. This happens before checking for holding points.",
-    instruction: "Sprite is our only unit on this battlefield. It helped you control the battlefield, but it is Temporary, so we cannot rely on it for a holding point next turn. Start Awaken, then watch its Beginning ability happen before the holding check. Players still get a chance to react to that ability.", actionLabel: 'Resolve Temporary before scoring',
+    definition: "At the start of its controller’s Beginning phase, a card with Temporary triggers an ability that kills it before holding is checked. Players can respond to that ability.",
+    instruction: "Sprite’s the only unit we’ve got at this battlefield, so would you count on it for a holding point? Start the turn and watch the order, because after Awaken its Temporary ability goes on the chain in Beginning, before we check who holds.", actionLabel: 'Resolve Temporary before scoring',
     before: position([card('UNL-T07', 'battlefield-left', { might: 3, ready: true, annotation: 'Your only unit here.' })], { score: 6 }, 'Awaken has finished; Beginning is starting.'),
     after: position([], { score: 6 }, 'The Sprite dies, and its token ceases to exist after leaving the board. You have no unit here, so there is no holding point.'),
-    explanation: "Temporary killed Sprite before holding was checked, leaving no unit to retain control and score. Sprite is a token: a unit created by an effect rather than a card from the deck. A token stops existing after it leaves the board. Temporary units can help conquer a battlefield now. If their Temporary ability resolves and no other unit remains, you cannot score for holding at that Beginning check.", rulesReference: 'Core Rules 315, 816',
+    explanation: "By the time we checked for holding, Sprite had died and we had nobody left to hold the battlefield. Sprite’s a token, a unit an effect made, so it stops existing when it leaves the board. A Temporary unit can help conquer now, but if you’re counting on a point next turn I’d want another unit there too.", rulesReference: 'Core Rules 315, 816',
   },
   {
     id: 'keyword-vision', keyword: 'Vision', groupId: "keyword-new-tools", title: 'Check your next draw',
-    definition: "When you play this card, Vision creates an ability to Predict: privately look at your deck's top card, then keep it there or put it on the bottom.",
-    instruction: "Play Mystic Poro to put a unit on the board and check what we would draw next. Its Vision will show another small Sentry on top. We will move that card to the bottom because this example wants a larger attacker for a later fight. Keeping it on top would also be allowed.", actionLabel: 'Play Poro and recycle the top card',
+    definition: "When you play a card with Vision, its ability lets you Predict. Have a private look at the top card of your main deck and choose whether to leave it there or put it on the bottom.",
+    instruction: "Play Mystic Poro and have a look at what we’re due to draw next. It’s another Sentry, and we’ve already got a small unit, so I’d put this one on the bottom and look for a bigger attacker. You could keep it on top if it suited your hand.", actionLabel: 'Play Poro and recycle the top card',
     before: position([card('OGN-171', 'hand', { might: 2 })], { energy: 2, handCount: 1 }),
     after: position([card('OGN-171', 'base', { might: 2 }), card('OGN-096', 'deck', { annotation: 'Recycled to the bottom after you inspected it.' })], { energy: 0, handCount: 0 }, 'The inspected card is shown for this demonstration. Your opponent does not get to see it.'),
-    explanation: "Predict changed the next draw without drawing anything itself. Moving the duplicate Sentry to the bottom let our next ordinary draw reach Mysterious Chronomancer, a larger attacker with Disarm. Only we saw the inspected card. Vision is the ability created by playing Poro; Predict is the look-and-choose action that ability performs when it resolves.", rulesReference: 'Core Rules 817; Predict game action',
+    explanation: "Only we saw the card when Poro’s Vision resolved, and Predict let us leave it on top or move it to the bottom. Putting Sentry on the bottom meant our next actual draw was Mysterious Chronomancer, a bigger attacker with Disarm. We had to wait for that draw to get it into our hand.", rulesReference: 'Core Rules 817; Predict game action',
   },
   {
     id: 'keyword-equip', keyword: 'Equip', groupId: "keyword-equipment", title: 'Attach gear already on your board',
-    definition: "Pay an Equipment card's Equip cost to attach it to one of your units. The attached gear then helps that unit in the way its text describes.",
-    instruction: "Our Long Sword is already on the board, but it is not helping anyone yet. Use its Equip ability and choose Rearguard to give that unit 2 extra Might. Pay the sword's 1 Fury power Equip cost. This is a separate ability, so we are not paying its original play cost again.", actionLabel: 'Equip Long Sword',
+    definition: "Equipment already on your board has an Equip cost you can pay to attach it to one of your units, which then gets whatever benefit the Equipment describes.",
+    instruction: "We’ve already paid to play Long Sword, but it’s sitting in base and both Rearguards are still on 2 Might. Pay the sword’s Equip cost of 1 Fury power and choose our Rearguard, because the extra 2 Might will turn that trade into a fight we can win.", actionLabel: 'Equip Long Sword',
     before: position([card('SFD-022', 'base', { ready: true, annotation: 'Already played; unattached.' }), card('OGN-010', 'base', { might: 2, ready: true })], { power: 1 }, 'Your Main Phase, empty chain. Your available power is Fury.'),
     after: position([card('SFD-022', 'base', { ready: true, annotation: 'Attached to Legion Rearguard.' }), card('OGN-010', 'base', { might: 4, ready: true, annotation: '2 base + 2 from Long Sword.' })], { power: 0 }),
-    explanation: "The sword turned a 2-against-2 fight into a win for our 4-Might Rearguard. Equip waited on the chain before attaching, giving players a chance to respond. Attaching did not turn Rearguard sideways. The sword moved with its unit and kept giving 2 extra Might after the fight. Playing gear and attaching gear are separate actions with separate costs.", rulesReference: 'Core Rules 716–719, 818',
+    explanation: "Equip went on the chain first, so either player could respond before the sword attached. Our Rearguard stayed ready, moved with its sword and fought at 4 Might against their 2. It keeps the bonus after combat for as long as the sword stays attached.", rulesReference: 'Core Rules 716–719, 818',
   },
   {
     id: 'keyword-quick-draw', keyword: 'Quick-Draw', groupId: "keyword-growth", title: 'Play and attach in a response window',
-    definition: "This Equipment can be played as a Reaction. Playing it also creates an ability to attach it to one of your units without paying an Equip cost.",
-    instruction: "Our 1-Might Sentry is already being attacked by a 2-Might unit. Play Long Sword now to help it survive. Quick-Draw allows this response. Pay the normal play cost, 2 energy and 1 Fury power; the sword enters the base, then its separate attachment ability will give Sentry 2 extra Might.", actionLabel: 'Play Long Sword with Quick-Draw',
+    definition: "You can play this Equipment as a Reaction, and when you play it you get a separate ability that can attach it to your unit without paying its Equip cost.",
+    instruction: "Their 2-Might Rearguard’s already attacking our 1-Might Sentry, so an ordinary Equip would be too late. Play Long Sword with Quick-Draw for 2 energy and 1 Fury power. It goes to base, then its ability can attach it to Sentry in time for this fight.", actionLabel: 'Play Long Sword with Quick-Draw',
     before: position([card('SFD-022', 'hand'), card('OGN-096', 'battlefield-left', { might: 1 }), card('OGN-012', 'battlefield-left', { owner: 'opponent', might: 4, annotation: 'Attacker' })], { energy: 2, power: 1, handCount: 1 }, 'You have priority. Available power is Fury; your Sentry is defending.'),
     after: position([card('SFD-022', 'battlefield-left', { ready: true, annotation: 'Attached to Watchful Sentry after its play trigger resolves.' }), card('OGN-096', 'battlefield-left', { might: 3, annotation: '1 base + 2 from Long Sword.' }), card('OGN-012', 'battlefield-left', { owner: 'opponent', might: 4, annotation: 'Attacker' })], { energy: 0, power: 0, handCount: 0 }),
-    explanation: "Sentry reached 3 Might before damage and survived with its sword. You retained control of the battlefield; holding is checked in your next Beginning phase. The gear entered immediately, but its attachment waited on the chain and could be responded to. Quick-Draw did not charge an extra Equip cost. Using the sword's ordinary Equip ability later still follows that ability's normal timing.", rulesReference: 'Core Rules 818, 819',
+    explanation: "The sword went straight into base, but the attachment went on the chain, so the opponent could respond before Sentry got the extra 2 Might. We didn’t need another power for Equip, and at 3 Might Sentry survived to keep the battlefield for our next holding check. If you Equip again later, the usual Equip timing still applies.", rulesReference: 'Core Rules 818, 819',
   },
   {
     id: 'keyword-weaponmaster', keyword: 'Weaponmaster', groupId: "keyword-new-tools", title: 'Use the discounted attachment',
-    definition: "When you play this unit, Weaponmaster creates an ability to attach Equipment you already control to it. Pay that Equipment's Equip cost with a discount of 1 power.",
-    instruction: "Play Armed Assailant so we can give it the Long Sword already in our base. Weaponmaster reduces the sword's 1-power Equip cost to zero, saving a resource. Assailant still enters sideways; we will wait until its next turn before moving the stronger unit into a fight.", actionLabel: 'Play Assailant and attach the sword',
+    definition: "When you play this unit, Weaponmaster can attach Equipment you already control to it. Take 1 power off that Equipment’s Equip cost and pay whatever’s left.",
+    instruction: "We’ve got Long Sword in base, so I’d play Armed Assailant and give it that sword. Weaponmaster knocks 1 power off a cost of 1 power, which makes this attachment free, though Assailant still comes in sideways and needs to ready before it can move.", actionLabel: 'Play Assailant and attach the sword',
     before: position([card('SFD-002', 'hand', { might: 6 }), card('SFD-022', 'base', { ready: true, annotation: 'Unattached Equipment you already control.' })], { energy: 6, power: 1, handCount: 1 }, 'Your Main Phase, empty chain. The 1 available power is Fury.'),
     after: position([card('SFD-002', 'base', { might: 8, annotation: 'Entered exhausted; 6 base + 2 from Long Sword.' }), card('SFD-022', 'base', { ready: true, annotation: 'Attached through Weaponmaster; no extra Equip payment.' })], { energy: 0, power: 0, handCount: 0 }),
-    explanation: "The free attachment made Assailant 8 Might instead of 6, enough to survive the later fight. It had to wait for Awaken, the step that readies units, before moving. Weaponmaster discounts 1 power, not every possible cost: any energy or remaining power in the Equip cost would still need paying. The Equipment must already be yours and attaches to the Weaponmaster unit.", rulesReference: 'Core Rules 821',
+    explanation: "That sword took Assailant from 6 to 8 Might, enough to survive the fight once Awaken had readied it on our next turn. We got a free attachment here because the sword’s Equip cost was exactly 1 power, so if another Equipment had energy or more power in its cost, we’d still owe the rest.", rulesReference: 'Core Rules 821',
   },
   {
     id: 'keyword-unique', keyword: 'Unique', groupId: "keyword-new-tools", title: 'Keep one copy when building',
-    definition: "When building your deck, you may include only one card with this name. Unique is a deck-building rule, not an extra action during a game.",
-    instruction: "Before playing, we need a legal deck. This proposed Ornn deck has 41 Main Deck cards including its chosen champion, with two Forgefire Capes. Cape has Unique, so only one is allowed. Remove the extra copy to leave 40 cards and fix the duplicate.", actionLabel: 'Remove the second copy',
+    definition: "When you build your deck, Unique means you can include one copy of a card with that name. You check it on the decklist before you play.",
+    instruction: "Have a look through this Ornn list, it’s got 41 main-deck cards including the chosen champion. Both Forgefire Capes fit Ornn’s deck, but Cape has Unique, so take one copy out and check the count again.", actionLabel: 'Remove the second copy',
     before: position([card('SFD-190', 'deck', { instanceId: 'cape-first', annotation: 'First copy in the proposed deck.' }), card('SFD-190', 'deck', { instanceId: 'cape-second', annotation: 'Second copy: not allowed by Unique.' })], {}, 'Assume all the deck’s other restrictions are satisfied.'),
     after: position([card('SFD-190', 'deck', { instanceId: 'cape-first', annotation: 'One copy: satisfies Unique.' })], {}, 'The extra copy is removed from this draft, not sent to an in-game trash.'),
-    explanation: "The extra Cape was removed from the proposed deck, not killed or put into an in-game Trash pile. Unique limits copies in deck building; it does not itself limit how many could be on the board. Signature cards, cards tied to a particular champion, also follow their separate deck-building limit. We kept one legal Cape in Ornn's deck.", rulesReference: 'Core Rules 825',
+    explanation: "We’ve got a legal 40-card list with one Cape, and the spare copy is out of the deck, so nothing went to the trash during a game. Unique limits copies on the list even if you’d only put one into play, and you still check the separate Signature limit for cards tied to a champion.", rulesReference: 'Core Rules 825',
   },
   {
     id: 'keyword-legion', keyword: 'Legion', groupId: "keyword-growth", title: 'Play another card first',
-    definition: "The text after Legion applies if you have already played another card this turn. Each Legion card tells you its own benefit.",
-    instruction: "We have 4 energy to spend, but these units normally cost 6 together. Play the 2-energy Rearguard first. That makes Hopeful's Legion condition true, reducing Hopeful from 4 energy to 2. This order lets us put both units on the board this turn.", actionLabel: 'Play Hopeful for 2 energy',
+    definition: "Look at whether you’ve played another card this turn. If you have, you get the Legion text on this card, and the card tells you what the benefit is.",
+    instruction: "Four energy won’t normally buy a 2-energy Rearguard and a 4-energy Hopeful, so which one would you play first? Start with Rearguard, because playing it turns on Hopeful’s Legion discount, leaving you exactly the 2 energy you need for Hopeful.", actionLabel: 'Play Hopeful for 2 energy',
     before: position([card('OGN-010', 'base', { might: 2, annotation: 'Played earlier this turn without Accelerate.' }), card('OGN-012', 'hand', { might: 4 })], { energy: 2, handCount: 1 }),
     after: position([card('OGN-010', 'base', { might: 2 }), card('OGN-012', 'base', { might: 4, annotation: 'Legion active: paid 2 energy; entered exhausted.' })], { energy: 0, handCount: 0 }),
-    explanation: "Rearguard first, then Hopeful, gave us two units for 4 energy. Legion is a condition to check, not always the same discount; read the words after it on each card. Hiding a card or using a legend's ability does not count as playing another card. At the start of a new turn, you need to meet the condition again.", rulesReference: 'Core Rules 727, 812',
+    explanation: "The order let us get both units out for 4 energy, because we’d already played Rearguard when we checked Hopeful’s Legion. Other Legion cards can do something different, and hiding a card or using a legend ability doesn’t count as playing one. Check again from scratch on the next turn.", rulesReference: 'Core Rules 727, 812',
   },
   {
     id: 'keyword-hunt', keyword: 'Hunt', groupId: "keyword-equipment", title: 'Earn XP when this unit scores',
-    definition: "When this unit conquers or holds a battlefield, Hunt creates an ability that gives its controller XP, meaning experience points. XP is separate from the points needed to win the game.",
-    instruction: "Scorchclaw is about to conquer this battlefield. Record the point for conquering first, then respond to and resolve its Hunt 2 ability. The 2 XP will take us from 1 to 3, enough to switch on Scorchclaw's Level 3 bonus. The game point and the XP are two different rewards.", actionLabel: 'Conquer and gain 2 XP',
+    definition: "When this unit conquers or holds, its Hunt ability gives you experience points, usually written XP. Keep those separate from the points on the scoreboard.",
+    instruction: "Scorchclaw’s about to conquer, so take the game point first, then handle the Hunt 2 ability on the chain. We’ve already got 1 XP, and getting 2 more will bring us up to the 3 we need for Scorchclaw’s Level ability.", actionLabel: 'Conquer and gain 2 XP',
     before: position([card('UNL-016', 'battlefield-left', { might: 3, annotation: 'Showdown finishing; this battlefield has not scored for you this turn.' })], { score: 2, xp: 0 }),
     after: position([card('UNL-016', 'battlefield-left', { might: 3 })], { score: 3, xp: 2 }, 'Conquering gives 1 point; Hunt gives 2 XP after its trigger resolves.'),
-    explanation: "Conquering added one game point; Hunt then added two experience points. Reaching 3 XP turned on Scorchclaw's extra Might. It did not ready the unit already on the board: an 'enters ready' rule only applies when it enters. Hunt without a number gives 1 XP, and triggers when this unit conquers or holds, not another unit scoring elsewhere.", rulesReference: 'Core Rules 728–733, 823',
+    explanation: "We got one point towards winning, then two XP from Hunt, which turned on Scorchclaw’s extra Might. It was already on the board, so gaining Level didn’t make it enter ready all over again. Hunt with no number gives 1 XP, and it’s this unit that has to conquer or hold to earn it.", rulesReference: 'Core Rules 728–733, 823',
   },
   {
     id: 'keyword-level', keyword: 'Level', groupId: "keyword-growth", title: 'Have enough experience points',
-    definition: "The text after Level applies while you have at least that much XP, or experience points. You check your XP total; you do not spend it.",
-    instruction: "This practice position starts with 3 XP already earned. Play Scorchclaw now: its Level 3 text lets it enter ready with 4 Might instead of entering sideways with 3. That gives us a unit we can move straight away to conquer an empty battlefield. Our XP stays at 3.", actionLabel: 'Play Scorchclaw at Level 3',
+    definition: "The number after Level tells you how much XP you need for that text to apply. You just check the total you’ve earned, so you keep the XP when you use the benefit.",
+    instruction: "We’ve already earned 3 XP here, so what changes if we play Scorchclaw now? Its Level 3 text means it comes in ready at 4 Might, and I’d use that to move straight onto the empty battlefield rather than wait another turn.", actionLabel: 'Play Scorchclaw at Level 3',
     before: position([card('UNL-016', 'hand', { might: 3, annotation: 'Printed Might 3; Level 3 condition is met.' })], { energy: 3, power: 1, xp: 3, handCount: 1 }, 'Your available power is Fury.'),
     after: position([card('UNL-016', 'base', { might: 4, ready: true, annotation: 'Level 3: +1 Might and enters ready.' })], { energy: 0, power: 0, xp: 3, handCount: 0 }),
-    explanation: "Having enough XP let Scorchclaw move on the turn it entered and earn a point by conquering. Its Hunt then earned more XP separately. Level does not spend XP. If your XP falls below the required total, an ongoing bonus stops applying. Reaching Level later does not repeat an entry effect for a unit already on the board.", rulesReference: 'Core Rules 727, 824',
+    explanation: "Scorchclaw got to conquer the turn we played it and then earned more XP through Hunt. We kept the 3 XP we started with, although an ongoing bonus would switch off if our total fell below its Level. If you only reach Level after a unit’s on the table, you don’t repeat what happens when it enters.", rulesReference: 'Core Rules 727, 824',
   },
   {
     id: 'keyword-empower', keyword: 'Empower', groupId: "keyword-surprises", title: 'Pay to become Empowered',
-    definition: "Pay this ability's cost to give the card the Empowered status. That switches on the abilities written after Empowered on that card.",
-    instruction: "Our Sandspinner needs its attack bonus to survive an evenly matched fight. Use Empower to switch that bonus on. Its printed cost is 5 energy, but this card reduces it by 3 while we control at most four runes. Pay 2 energy; the ability must resolve before the bonus is active.", actionLabel: 'Empower Sandspinner for 2 energy',
+    definition: "You can activate Empower by paying its cost, and once that ability resolves the card becomes Empowered. That’s when you start using its Empowered text.",
+    instruction: "Sandspinner’s printed Empower cost is 5 energy, but count our runes before paying it. We control four or fewer, so this card knocks 3 off its own cost and we only owe 2. Pay that and let the ability resolve, because we’re going to need the attack bonus in this fight.", actionLabel: 'Empower Sandspinner for 2 energy',
     before: position([card('VEN-001', 'base', { might: 6, ready: true, annotation: 'Not Empowered. You control exactly four runes.' })], { energy: 2 }, 'Your Main Phase, empty chain. The four runes remain under your control even if exhausted.'),
     after: position([card('VEN-001', 'base', { might: 6, ready: true, annotation: 'Empowered: Deflect and Assault 2 are now active.' })], { energy: 0 }),
-    explanation: "Empower switched on Sandspinner's Assault 2, letting it attack at 8 Might and survive the enemy's 6 damage. The unit stayed upright because this ability did not ask us to exhaust it. Empowered is a status, not a generic extra Might counter. You normally cannot use Empower again while the card is already Empowered.", rulesReference: 'Core Rules 442, 827',
+    explanation: "Sandspinner stayed upright because Empower only asked us for energy. Once it was Empowered it had Assault 2, so it attacked for 8 and survived the 6 coming back. That benefit comes from Sandspinner’s own text, and you normally can’t use Empower again while the card is already Empowered.", rulesReference: 'Core Rules 442, 827',
   },
   {
     id: 'keyword-empowered', keyword: 'Empowered', groupId: "keyword-surprises", title: 'Use the text switched on by Empowered',
-    definition: "The text after Empowered works while this card has that status. The Empower ability is one way to gain the status; the benefits depend on the card.",
-    instruction: "This Sandspinner is already Empowered, so its printed text now gives it Assault 2. Move it to attack the 6-Might defender. Its own printed 6 becomes 8 while attacking, enough to survive this fight. We are using the benefit already switched on, not paying to Empower it again.", actionLabel: 'Attack with Empowered Sandspinner',
+    definition: "If a card is Empowered, the text marked Empowered is active. One way to get that status is to pay for its Empower ability, and each card tells you what benefit it gets.",
+    instruction: "This Sandspinner’s already Empowered, so we can use the Assault 2 on its card without paying for Empower again. Move it in against the 6-Might defender and check its Might as it attacks, because that’s when our printed 6 goes up to 8.", actionLabel: 'Attack with Empowered Sandspinner',
     before: position([card('VEN-001', 'base', { might: 6, ready: true, annotation: 'Empowered: Deflect and Assault 2 active.' }), card('OGN-012', 'battlefield-left', { owner: 'opponent', might: 4, ready: true })]),
     after: position([card('VEN-001', 'battlefield-left', { might: 8, annotation: 'Empowered attacker: 6 base + Assault 2; Deflect active.' }), card('OGN-012', 'battlefield-left', { owner: 'opponent', might: 4, ready: true })]),
-    explanation: "The attack bonus changed a fight where both units would die into a surviving attacker and a point. Sandspinner stays Empowered after combat, but Assault's extra Might only applies while attacking. If it loses the Empowered status, the abilities granted by that text stop applying. Empower names the ability; Empowered names the resulting status.", rulesReference: 'Core Rules 727, 828',
+    explanation: "At 6 against 6 we’d have lost both units, but the extra Might left Sandspinner alive to conquer. When the attack is over it loses the Assault bonus and stays Empowered, so it can get the bonus the next time it attacks. Losing the Empowered status itself would switch off that printed text.", rulesReference: 'Core Rules 727, 828',
   },
   {
     id: 'keyword-repeat', keyword: 'Repeat', groupId: "keyword-growth", title: 'Pay once more for a second effect',
-    definition: "While playing this spell, you may pay its Repeat cost to do its instructions one extra time when it resolves. Each Repeat cost can be paid once.",
-    instruction: "One Blood Rush would make our Rearguard 4 Might, so it would still die fighting the 4-Might defender. Pay the extra 1 energy for Repeat, 2 energy in total, and choose Rearguard for both effects. Doing the instructions twice gives it enough attack strength to survive and conquer the battlefield.", actionLabel: 'Pay 2 energy and repeat Blood Rush',
+    definition: "As you play the spell, you can pay its Repeat cost once to do the instructions one extra time when it resolves. Each Repeat cost on a card can be paid once.",
+    instruction: "One Blood Rush gets our Rearguard to 4 Might, which would leave both units dead. I’d spend the extra 1 energy for Repeat, making 2 energy altogether, and choose Rearguard both times so it’s big enough to survive the hit back.", actionLabel: 'Pay 2 energy and repeat Blood Rush',
     before: position([card('SFD-003', 'hand', { annotation: 'Current errata: Assault lasts this turn.' }), card('OGN-010', 'battlefield-left', { might: 2, annotation: 'Attacker' }), card('OGN-012', 'battlefield-left', { owner: 'opponent', might: 4, ready: true })], { energy: 2, handCount: 1 }, 'You have focus and the showdown chain is empty.'),
     after: position([card('SFD-003', 'trash'), card('OGN-010', 'battlefield-left', { might: 6, annotation: '2 base + Assault 2 + Assault 2 = 6 as an attacker.' }), card('OGN-012', 'battlefield-left', { owner: 'opponent', might: 4, ready: true })], { energy: 0, handCount: 0 }, 'The one chain item resolves its instructions twice.'),
-    explanation: "Blood Rush gave Assault 2 twice, making Rearguard 6 Might while attacking. One use would have left both units dead; Repeat left us a survivor and a point. Only one spell went on the chain, and its instructions happened twice when it resolved. Repeat did not count as playing a second card. These Assault bonuses last only this turn.", rulesReference: 'Core Rules 807, 820; Spiritforged Errata, Blood Rush',
+    explanation: "We played one spell, and when it resolved we got Assault 2 twice, taking Rearguard all the way to 6 Might while attacking. It survived the 4 damage and conquered. Those bonuses last this turn, and repeating the instructions still counts as playing just one card.", rulesReference: 'Core Rules 807, 820; Spiritforged Errata, Blood Rush',
   },
   {
     id: 'keyword-flow', keyword: 'Flow', groupId: "keyword-equipment", title: 'Use a spell from your trash',
-    definition: "Flow lets you play this spell from Trash, the used-card pile, by paying its Flow cost. Afterwards it goes to banishment, a separate out-of-play area.",
-    instruction: "Dredge Up is in Trash because it has already been used. We want another card in hand, so pay its 2-energy Flow cost to use it again. Do this during our Main phase while no effect is waiting on the chain. Flow changes where we play it from, not when we may play it.", actionLabel: 'Play Dredge Up with Flow',
+    definition: "A spell with Flow can be played from your trash by paying its Flow cost, then it goes to banishment once it’s finished. Banishment is a separate area outside play.",
+    instruction: "Dredge Up’s already in the trash, but I’d quite like another card in hand and we’ve got 2 energy for its Flow cost. Play it from there during our open Main phase, because Flow gives us somewhere else to play it from and we still need its usual timing.", actionLabel: 'Play Dredge Up with Flow',
     before: position([card('VEN-049', 'trash')], { energy: 2, handCount: 2 }),
     after: position([card('VEN-049', 'banishment', { annotation: 'Banished after resolving from Flow.' })], { energy: 0, handCount: 3 }),
-    explanation: "Dredge Up drew a useful extra card, then went to banishment instead of returning to Trash. That stops us using Flow on it repeatedly from the same pile. Flow does not give Action or Reaction permission: this card still needs its normal play timing. A spell without a rule such as Flow cannot simply be played from Trash.", rulesReference: 'Core Rules 829',
+    explanation: "Dredge Up drew us a card and went to banishment, so there’s no Dredge Up left in the trash to play a third time. Flow let us use it from that pile, but it didn’t give it Action or Reaction, and a spell needs permission like this to be played from the trash.", rulesReference: 'Core Rules 829',
   },
   {
     id: 'keyword-deploy', keyword: 'Deploy', groupId: "keyword-surprises", title: 'Put gear at a battlefield',
-    definition: "This gear must be played directly to a battlefield, including one the opponent controls. It is killed if an opponent later holds that battlefield.",
-    instruction: "Our Hopeful needs extra Might to survive attacking the enemy Hopeful. Play Banner of Conquest at that enemy battlefield first. Deploy allows that location even though we do not control it. Its attack bonus will help our unit when it arrives; the Banner by itself cannot conquer.", actionLabel: 'Deploy Banner of Conquest',
+    definition: "Gear with Deploy goes straight to a battlefield, even one your opponent controls. If an opponent later holds that battlefield, the gear is killed.",
+    instruction: "Our Hopeful’s about to fight their Hopeful, and at 4 Might each we’d lose ours. Play Banner of Conquest at their battlefield first. Deploy lets us put the Banner there, so our unit can pick up the attack bonus when it arrives.", actionLabel: 'Deploy Banner of Conquest',
     before: position([card('RAD-002', 'hand'), card('OGN-012', 'battlefield-left', { owner: 'opponent', might: 4, ready: true })], { energy: 1, power: 1, handCount: 1 }, 'Your Main Phase, empty chain. Your available power is Fury.'),
     after: position([card('RAD-002', 'battlefield-left', { ready: true, annotation: 'Your gear; the opponent still controls the battlefield.' }), card('OGN-012', 'battlefield-left', { owner: 'opponent', might: 4, ready: true })], { energy: 0, power: 0, handCount: 0 }),
-    explanation: "Banner gave our arriving Hopeful Assault 1, turning a 4-against-4 fight into a surviving 5-Might attacker and a point. Deploy gear goes to a battlefield, never the base. You still need a unit to conquer. If the opponent later holds this battlefield during their Beginning phase, the Banner is killed.", rulesReference: 'Core Rules 830',
+    explanation: "The Banner gave our arriving Hopeful Assault 1, so it attacked for 5 and survived their 4 damage to conquer. We needed the unit there to take the battlefield, because the Banner couldn’t do it on its own. Deploy gear goes to a battlefield, and if the opponent later holds it in Beginning, the Banner dies.", rulesReference: 'Core Rules 830',
   },
   {
     id: 'keyword-show-off', keyword: 'Show Off', groupId: "keyword-new-tools", title: 'Show a card without spending it',
-    definition: "When playing this card, you may show the kind of card it asks for from your hand, or choose a matching friendly card on the board. Follow the card's exact requirement.",
-    instruction: "We want Roar to deal enough damage to remove the enemy 4-Might Hopeful. Show our own 4-Might Hopeful from hand to set Roar's damage to 4. Our shown unit stays in hand, so we can still play it later; we are only showing its strength to power this spell's effect.", actionLabel: 'Show Hopeful and resolve Roar',
+    definition: "Read what the card wants you to show off. You can reveal a matching card from your hand or choose a matching friendly card on the board as you play it.",
+    instruction: "Roar needs to deal 4 damage to kill their Hopeful, and we’ve got a Hopeful with 4 Might in hand. Show ours as you play Roar and see where it ends up, because we’re going to want that unit for a later turn.", actionLabel: 'Show Hopeful and resolve Roar',
     before: position([card('RAD-082', 'hand'), card('OGN-012', 'hand', { might: 4, annotation: 'The card you will reveal.' }), card('OGN-010', 'battlefield-left', { owner: 'opponent', might: 2, ready: true })], { energy: 4, power: 2, handCount: 2 }, 'Your Main Phase, empty chain. Both available power are Body.'),
     after: position([card('RAD-082', 'trash'), card('OGN-012', 'hand', { might: 4, annotation: 'Shown to the opponent, but still in your hand.' }), card('OGN-010', 'trash', { owner: 'opponent', annotation: 'Killed by 4 damage.' })], { energy: 0, power: 0, handCount: 1 }),
-    explanation: "Roar recorded the shown 4 Might and used it to kill the enemy. Our Hopeful stayed in hand. Showing off is not playing, discarding, or spending the revealed card. Later changes to that unit do not change the number already recorded for this Roar. Other Show Off cards may ask for something different, so read their own text.", rulesReference: 'Core Rules 832; Radiance Patch Notes',
+    explanation: "Roar recorded the 4 Might we showed and dealt 4 to their Hopeful, while ours stayed in hand ready to play later. Showing the card didn’t play or discard it, and changing its Might afterwards wouldn’t change the number Roar already recorded. Another Show Off card may ask you to show something different.", rulesReference: 'Core Rules 832; Radiance Patch Notes',
   },
 ];
 
@@ -724,7 +724,7 @@ export const NEW_PLAYER_KEYWORD_GROUPS: KeywordScenarioGroup[] = [
   {
     "id": "keyword-timing",
     "title": "Action and Reaction",
-    "description": "Start with when you can play: Action, then Reaction.",
+    "description": "Try Cleave before combat damage, then see what changes when you’ve got a Reaction and there’s already a spell waiting.",
     "minutes": 8,
     "scenarioIds": [
       "keyword-action",
@@ -734,7 +734,7 @@ export const NEW_PLAYER_KEYWORD_GROUPS: KeywordScenarioGroup[] = [
   {
     "id": "keyword-combat",
     "title": "Accelerate to Deathknell",
-    "description": "Accelerate, Ambush, Assault, Backline and Deathknell, one example at a time.",
+    "description": "Reach a battlefield with Accelerate, bring in help with Ambush, then see how Assault, Backline and Deathknell change a fight and what you keep.",
     "minutes": 10,
     "scenarioIds": [
       "keyword-accelerate",
@@ -747,7 +747,7 @@ export const NEW_PLAYER_KEYWORD_GROUPS: KeywordScenarioGroup[] = [
   {
     "id": "keyword-surprises",
     "title": "Deflect to Empowered",
-    "description": "Deflect, Deploy, Disarm, Empower and Empowered: costs, attack effects and abilities to switch on.",
+    "description": "Work out what it costs to get past Deflect, where to Deploy your Banner, and what Disarm or an Empowered attacker can do to the fight.",
     "minutes": 7,
     "scenarioIds": [
       "keyword-deflect",
@@ -760,7 +760,7 @@ export const NEW_PLAYER_KEYWORD_GROUPS: KeywordScenarioGroup[] = [
   {
     "id": "keyword-equipment",
     "title": "Equip to Hunt",
-    "description": "Equip, Flow, Ganking, Hidden and Hunt: use your cards in new ways.",
+    "description": "Try attaching Equipment, playing a spell from the trash and moving straight between battlefields, then set up a Hidden card and earn XP with Hunt.",
     "minutes": 7,
     "scenarioIds": [
       "keyword-equip",
@@ -773,7 +773,7 @@ export const NEW_PLAYER_KEYWORD_GROUPS: KeywordScenarioGroup[] = [
   {
     "id": "keyword-growth",
     "title": "Legion to Shield",
-    "description": "Legion, Level, Quick-Draw, Repeat and Shield: set up benefits and use them in a fight.",
+    "description": "See why the order matters for Legion, what 3 XP gets you with Level, and how Quick-Draw, Repeat and Shield can change a fight.",
     "minutes": 8,
     "scenarioIds": [
       "keyword-legion",
@@ -786,7 +786,7 @@ export const NEW_PLAYER_KEYWORD_GROUPS: KeywordScenarioGroup[] = [
   {
     "id": "keyword-new-tools",
     "title": "Show Off to Weaponmaster",
-    "description": "Show Off, Tank, Temporary, Unique, Vision and Weaponmaster complete the alphabet.",
+    "description": "Try Show Off from hand, assign damage to a Tank and see whether a Temporary token can hold, then check a Unique decklist, your next draw and a Weaponmaster attachment.",
     "minutes": 7,
     "scenarioIds": [
       "keyword-show-off",
@@ -1182,26 +1182,26 @@ const addEnemy = (s:KeywordScenario, id:string, might:number, zone='battlefield-
   nativePositions[s.id]=[{controllers:['opponent',null]}, {controllers:['opponent',null]}];
 };
 const finishFight = (s:KeywordScenario, source:string, enemy:string, damage:number, returned:number, conquer=true, field:TutorialBattlefieldId='battlefield-left') => {
-  s.followThrough={...s.followThrough,combat:{sourceIds:[source],targetAssignments:[{cardId:enemy,amount:damage,order:1,label:`Your side assigns ${damage}.`}],returnAssignments:[{cardId:source,amount:returned,order:1,label:`The opposing side assigns ${returned}.`}],explanation:'Might is each unit’s fighting strength. These counters show where the damage will go; it has not happened yet. Both sides will deal their damage at the same time when you resolve, so a killed unit still deals its assigned damage.'},...(conquer?{conquer:field}:{})};
+  s.followThrough={...s.followThrough,combat:{sourceIds:[source],targetAssignments:[{cardId:enemy,amount:damage,order:1,label:`Your side assigns ${damage}.`}],returnAssignments:[{cardId:source,amount:returned,order:1,label:`The opposing side assigns ${returned}.`}],explanation:'Have a look at the damage on each side before you resolve it. The counters show who’s going to take the hit, and both sides deal the damage together, so even a unit that dies still gets its damage in.'},...(conquer?{conquer:field}:{})};
 };
 {
   const s=scenarioFor('Assault');replaceCard(s,'OGN-012','OGN-215','opponent',5);
   
   finishFight(s,'player-OGN-215','opponent-OGN-215',6,5);
-  s.objective={goal:'Win an otherwise even fight and conquer the battlefield.',without:'At 5 against 5, both units would die.',with:'Your attacker is 6: it kills the defender, survives 5 damage, then conquers.'};
+  s.objective={goal:'Attack with the Officer that can survive this fight.',without:'Two Officers hitting each other for 5 would both die.',with:'Ours attacks for 6, so it kills their Officer and survives the 5 coming back.'};
   
 }
 {
   const s=scenarioFor('Shield');replaceCard(s,'OGN-012','OGN-054','opponent',3);
   
   finishFight(s,'player-OGN-054','opponent-OGN-054',4,3,false);
-  s.objective={goal:'Defend your battlefield and retain control through an evenly matched attack.',without:'Two 3-Might units would kill each other.',with:'Your defender becomes 4, survives the attacker’s 3, and retains control for a later holding check.'};
+  s.objective={goal:'Keep Guardian on its battlefield through the attack.',without:'At 3 Might each, neither Guardian would survive.',with:'Ours defends at 4, enough to keep the battlefield and give us a chance to hold next turn.'};
   
 }
 {
   const s=scenarioFor('Action');replaceCard(s,'OGN-096','OGN-012','opponent',4);
   finishFight(s,'player-OGN-010','opponent-OGN-012',5,4);
-  s.objective={goal:'Strengthen your attacker before damage so it can survive and conquer.',without:'Your 2-Might Rearguard cannot beat a 4-Might Hopeful.',with:'Action lets Cleave resolve in the showdown: 5 beats 4 and survives.'};
+  s.objective={goal:'Get Rearguard through a fight it would normally lose.',without:'At 2 Might, it won’t survive a hit from their 4-Might Hopeful.',with:'Play Cleave in the open showdown and it’ll attack at 5, enough to conquer and stay alive.'};
   
 }
 {
@@ -1210,7 +1210,7 @@ const finishFight = (s:KeywordScenario, source:string, enemy:string, damage:numb
   nativeActions[s.id]={type:'play',cardId:'player-OGN-058',targetId:'player-OGN-054'};
   
   finishFight(s,'player-OGN-054','opponent-OGN-010',6,2,false);
-  s.objective={goal:'Help your defender, then use the card you draw before the older spell happens.',without:'An unanswered Cleave would make the enemy attacker 5 Might.',with:'Discipline strengthens Guardian and draws Defy. A fresh response window lets Defy counter the still-waiting Cleave.'};
+  s.objective={goal:'Try using a card you’ve just drawn while their spell is still waiting.',without:'If Cleave resolves, their attacker will have 5 Might.',with:'Discipline strengthens Guardian and draws Defy, then there’s a chance to use that Defy before Cleave resolves.'};
   
 }
 {
@@ -1220,27 +1220,27 @@ const finishFight = (s:KeywordScenario, source:string, enemy:string, damage:numb
   s.before.player.score=1;s.after.player.score=2;
   finishFight(s,'player-OGN-036','opponent-OGN-010',5,2,true,'battlefield-right');
   
-  s.objective={goal:'Ready Vi, earn a holding point, then prepare her to conquer the other battlefield.',without:'A unit without Ganking must return to base before its next normal move can reach another battlefield.',with:'Use Vi’s ability twice in your open Main phase, paying a Trash card each time. She stays ready to Gank across and earn another point.'};
+  s.objective={goal:'Hold one battlefield with Vi, then see if she can take the other.',without:'A standard move usually takes a unit back to base before it can reach the other battlefield.',with:'Use Vi’s ability twice in your open Main phase, paying with a different trash card each time. She stays ready to go straight across and fight for another point.'};
   
 }
 {
   const s=scenarioFor('Accelerate');s.followThrough={move:{cardId:'player-OGN-010',destination:'battlefield-left'},conquer:'battlefield-left'};
-  s.objective={goal:'Conquer an empty battlefield on the turn you play a unit.',without:'An exhausted Rearguard would have to wait for Awaken before moving.',with:'Paying Accelerate lets it enter ready, move now and conquer for a point.'};
+  s.objective={goal:'Take the empty battlefield before they get there.',without:'Rearguard usually enters exhausted, so it would have to wait for Awaken before it could move.',with:'Pay for Accelerate as you play it and it comes in ready, so it can move and score this turn.'};
   
 }
 {
   const s=scenarioFor('Equip');addEnemy(s,'OGN-010',2);s.followThrough={move:{cardId:'player-OGN-010',destination:'battlefield-left'}};finishFight(s,'player-OGN-010','opponent-OGN-010',4,2);
-  s.objective={goal:'Turn equal 2-Might units into a fight your unit survives.',without:'The two Rearguards would kill each other.',with:'Equip gives yours +2. It moves with its sword, survives and conquers the battlefield.'};
+  s.objective={goal:'Give your Rearguard the better of a 2-Might fight.',without:'If both Rearguards go in at 2 Might, we lose both of them.',with:'Long Sword adds 2 to ours, then moves with it, so ours survives to conquer.'};
   
 }
 {
   const s=scenarioFor('Quick-Draw');replaceCard(s,'OGN-012','OGN-010','opponent',2);finishFight(s,'player-OGN-096','opponent-OGN-010',3,2,false);
-  s.objective={goal:'Save a small defender when the attack has already started.',without:'Your 1-Might Sentry would die to the 2-Might Rearguard.',with:'Quick-Draw plays and attaches the sword during the showdown. Sentry becomes 3 and survives, so you retain control for a later holding check.'};
+  s.objective={goal:'Help Sentry now that the attack’s already under way.',without:'Their 2-Might Rearguard has enough damage to kill our 1-Might Sentry.',with:'Bring in the sword during the showdown. Once it attaches, Sentry’s got 3 Might and can keep the battlefield for a holding check.'};
   
 }
 {
   const s=scenarioFor('Weaponmaster');addEnemy(s,'SFD-002',6);s.followThrough={waitForNextTurn:true,move:{cardId:'player-SFD-002',destination:'battlefield-left'}};finishFight(s,'player-SFD-002','opponent-SFD-002',8,6);
-  s.objective={goal:'Give your new unit a sword without another power payment, then win its next attack.',without:'Two 6-Might Assailants without Equipment would kill each other.',with:'Weaponmaster attaches the existing sword for zero. Next turn your 8-Might attacker survives and conquers the battlefield.'};
+  s.objective={goal:'Give Assailant the sword you’ve already paid to play.',without:'With both Assailants at 6 Might, attacking would cost us ours too.',with:'Weaponmaster covers the sword’s 1-power Equip cost. When ours readies next turn it can attack for 8 and survive to conquer.'};
   
 }
 for(const keyword of ['Empower','Empowered']){
@@ -1248,51 +1248,51 @@ for(const keyword of ['Empower','Empowered']){
   if(keyword==='Empower'){addEnemy(s,'SFD-002',6);s.followThrough={move:{cardId:'player-VEN-001',destination:'battlefield-left'}};}
   else replaceCard(s,'OGN-012','SFD-002','opponent',6);
   finishFight(s,'player-VEN-001','opponent-SFD-002',8,6);
-  s.objective={goal:'Switch on the attack bonus and beat an equal-sized defender.',without:'At printed 6 against 6, both units would die.',with:'Empowered text grants Assault 2: your 8-Might attacker survives 6 damage and conquers.'};
+  s.objective={goal:'Attack the 6-Might defender and keep Sandspinner alive.',without:'With 6 printed Might on each unit, they’d take each other out.',with:'Once Sandspinner’s Empowered, its Assault 2 gets it to 8 while attacking, enough to survive and conquer.'};
   
 }
 {
   const s=scenarioFor('Disarm');finishFight(s,'player-RAD-050','opponent-OGN-012',4,2);
-  s.objective={goal:'Win a fight between units with the same printed Might.',without:'Your 4-Might Chronomancer and the 4-Might Hopeful would kill each other.',with:'The attack trigger reduces Hopeful to 2. Chronomancer survives and conquers the battlefield.'};
+  s.objective={goal:'Find a way for Chronomancer to win an even fight.',without:'Both units have 4 Might printed, enough to kill each other.',with:'The attack triggers Disarm 2, so Hopeful only hits back for 2 and Chronomancer survives to conquer.'};
   
 }
 {
   const s=scenarioFor('Repeat');finishFight(s,'player-OGN-010','opponent-OGN-012',6,4);
-  s.objective={goal:'Keep your attacker alive while conquering the battlefield.',without:'One Blood Rush gives 4 Might: your Rearguard and the 4-Might defender would kill each other.',with:'Paying Repeat gives two Assault 2 effects: at 6 your attacker survives and conquers the battlefield.'};
+  s.objective={goal:'Give Rearguard enough Might to come out of this fight alive.',without:'One Blood Rush brings it up to 4, which would only trade with their 4-Might defender.',with:'Pay Repeat to get Assault 2 twice, and Rearguard can attack for 6 and survive to conquer.'};
   
 }
 {
   const s=scenarioFor('Level');s.followThrough={move:{cardId:'player-UNL-016',destination:'battlefield-left'},conquer:'battlefield-left'};
-  s.objective={goal:'Use earned experience points to play a ready unit and conquer a battlefield now.',without:'Below Level 3, Scorchclaw would enter exhausted at 3 Might.',with:'At 3 XP it enters ready at 4, moves immediately and conquers the battlefield. XP is not spent.'};
+  s.objective={goal:'Use your 3 XP to get onto the battlefield this turn.',without:'If we were below Level 3, Scorchclaw would enter exhausted with 3 Might.',with:'It comes in ready with 4 Might, so we can move straight away and still keep the XP we earned.'};
   
 }
 {
   const s=scenarioFor('Hunt');s.before.player.xp=1;s.after.player.xp=3;s.after.cards[0].might=4;
-  s.objective={goal:'Score with Scorchclaw to earn enough experience points for its Level ability.',without:'Your existing 1 XP is below Level 3, so Scorchclaw has 3 Might.',with:'Conquering scores a point; the separate Hunt 2 trigger brings you to 3 XP and activates +1 Might.'};
+  s.objective={goal:'See what a point for Scorchclaw does to your XP.',without:'We’ve got 1 XP, so Scorchclaw is below Level 3 and still has 3 Might.',with:'Conquer for a point and then resolve Hunt 2. That takes us to 3 XP and gives Scorchclaw its extra Might.'};
   
 }
 {
   const s=scenarioFor('Deploy');for(const snap of [s.before,s.after])snap.cards.push(card('OGN-012','base',{might:4,ready:true}));
   s.followThrough={move:{cardId:'player-OGN-012',destination:'battlefield-left'}};finishFight(s,'player-OGN-012','opponent-OGN-012',5,4);
-  s.objective={goal:'Prepare an enemy battlefield so your next attacker can conquer it.',without:'The two 4-Might Hopefuls would kill each other.',with:'Deploy puts the Banner at the enemy battlefield first. Your arriving Hopeful gains Assault 1, survives and conquers the battlefield.'};
+  s.objective={goal:'Get the Banner in place before you send Hopeful in.',without:'Both Hopefuls have 4 Might, so ordinarily you’d lose yours as well.',with:'Deploy the Banner at their battlefield first, and the Assault 1 it gives your attacker will get it through the fight.'};
   
 }
 {
   const s=scenarioFor('Show Off');replaceCard(s,'OGN-010','OGN-012','opponent',4);nativeActions[s.id]={type:'play',cardId:'player-RAD-082',targetId:'opponent-OGN-012'};
-  s.objective={goal:'Remove a 4-Might enemy without spending the unit you reveal.',without:'The revealed Hopeful is still only a card in hand; it cannot deal combat damage from there.',with:'Show Off records its 4 Might for Roar. The spell kills the enemy while Hopeful stays available to play later.'};
+  s.objective={goal:'Use the Might on a card in your hand to remove their Hopeful.',without:'Our Hopeful can’t fight from hand, so its printed 4 Might isn’t doing us much good there on its own.',with:'Show it for Roar and the spell records that 4 as its damage, enough to kill their Hopeful while ours stays in hand.'};
   
 }
 const remainingObjectives:Record<string,[string,string,string]>={
-  Tank:['Protect the smaller ally behind the Tank.','Without Tank, the attacker could choose lethal on Sentry first.','Tank requires all 4 damage on Guardian. Sentry survives and the defending side retains control of the battlefield until a later holding check.'],
-  Backline:['Finish a fight while respecting the protected unit’s order.','Promoter cannot be selected for lethal first while its ordinary ally remains unassigned.','Allocate 1 to Sentry before the remaining 3 to Promoter; your attacker survives and can conquer.'],
-  Deflect:['Budget enough power to remove a protected threat.','The ordinary spell cost is insufficient when targeting this enemy.','Pay the extra power, remove Pouty Poro and leave its battlefield empty.'],
-  Hidden:['Use a local hidden response, then compare an attack at the other battlefield.','After a paid Discipline, the enemy Sentry has 3 Might against your Sentry’s 1.','Blade can turn your local Sentry into extra cards. It cannot target the enemy if the guide instead moves to the other battlefield.'],
-  Deathknell:['Draw a replacement after your small unit loses a fight.','An ordinary defender would die without drawing a card to replace it.','The Sentry dies, but its separate ability draws a replacement card.'],
-  Temporary:['Check whether a token can really hold next turn.','If you still control this battlefield at the Beginning holding check, you normally score a point.','Temporary kills this token before holding, so the apparently safe point is unavailable.'],
-  Vision:['Look for a stronger next draw after playing your small unit.','Leaving another small Sentry on top would give you another small unit on your next draw.','Predict moves that duplicate to the bottom; your next draw reaches Mysterious Chronomancer, a larger unit whose Disarm can help win a future attack.'],
-  Unique:['Turn a proposed 41-card draft into a legal 40-card main deck.','The extra Forgefire Cape violates Unique even though its domains and Signature match Ornn.','Remove only the extra copy; the complete listed deck now has one Cape and 40 cards including its chosen champion.'],
-  Legion:['Play two units with only four available energy.','Their ordinary costs total 6: Rearguard 2 plus Hopeful 4.','Play Rearguard first; Hopeful’s Legion reduces its cost to 2, so you can afford both this turn.'],
-  Flow:['Get another useful card from a spell you have already used.','A normal spell in the trash cannot simply be played again.','Flow lets you spend 2 energy to draw a new card, then puts Dredge Up in banishment so it cannot be used from Trash again.'],
+  Tank:['See which defender survives behind Guardian.','Given the choice, the attacker could assign 1 lethal damage to Sentry first.','Guardian needs all 4 damage, so the attacker can’t reach Sentry. The defender keeps the battlefield for a later holding check.'],
+  Backline:['See whether your attacker can reach the unit at the back.','Promoter has Backline, so it can’t take the first hit while Sentry still needs lethal damage.','Assign 1 to Sentry and all 3 left over to Promoter, then your attacker survives their damage and can conquer.'],
+  Deflect:['Work out what it really costs to remove Pouty Poro.','If we only pay what’s printed on Hidden Blade, we haven’t paid enough to choose Poro.','Leave an extra power for Deflect and Blade can remove Poro, which leaves the battlefield empty.'],
+  Hidden:['Try Blade with the fight here, then with the fight at the other battlefield.','Their Discipline makes their Sentry 3 Might, and ours has only 1.','Blade can turn our Sentry into extra cards here, but if the guide moves to the other battlefield we can’t use it to target the unit over there.'],
+  Deathknell:['See what Sentry leaves you when it dies.','We’ll lose the fight and a defender without a draw ability would leave us a card down.','Sentry still dies, but its ability stays on the chain and draws us a replacement once it resolves.'],
+  Temporary:['Work out whether Sprite will still be here when you score.','If we still controlled the battlefield at the holding check, we’d get a point.','Sprite dies to Temporary before we check for holding, and it was our last unit there.'],
+  Vision:['Use Poro to look for a bigger unit for next turn.','If we leave Sentry on top, that’s another small unit coming into our hand.','Move it to the bottom with Predict and our next draw is Chronomancer, whose Disarm can help it survive an attack.'],
+  Unique:['Get this Ornn list down to a legal 40 cards.','The domains fit and Forgefire Cape is Ornn’s Signature, but the extra Cape breaks Unique.','Take one Cape out and you’ve got 40 main-deck cards including the chosen champion, with one legal copy of Cape.'],
+  Legion:['Get both of these units onto the table with 4 energy.','Rearguard costs 2 and Hopeful usually costs 4, so we’d need 6.','If Rearguard comes out first, Legion brings Hopeful down to 2 and we can afford them both.'],
+  Flow:['Get a draw out of Dredge Up after you’ve used it once.','You usually can’t play a spell that’s sitting in your trash.','Pay 2 energy for Flow to draw again, then Dredge Up goes to banishment, so the spell’s no longer in the trash.'],
 };
 for(const [keyword,[goal,without,withEffect]] of Object.entries(remainingObjectives))scenarioFor(keyword).objective={goal,without,with:withEffect};
 
@@ -1317,7 +1317,7 @@ for (const scenario of NEW_PLAYER_KEYWORD_SCENARIOS) {
   }
   if (scenario.id==='keyword-tank'||scenario.id==='keyword-backline') {
     const tank=scenario.id==='keyword-tank';
-    scenario.combatDemonstration={sourceIds:['player-OGN-012'],targetAssignments:tank?[{cardId:'opponent-OGN-054',amount:4,order:1,label:'Tank receives all 4; nothing remains for Sentry.'}]:[{cardId:'opponent-OGN-096',amount:1,order:1,label:'First, 1 lethal damage to the non-Backline Sentry.'},{cardId:'opponent-UNL-043',amount:3,order:2,label:'Then all remaining 3 to the Backline Promoter.'}],returnAssignments:[{cardId:'player-OGN-012',amount:tank?5:3,order:1,label:'The defenders assign their combined Might back.'}],explanation:scenario.explanation};
+    scenario.combatDemonstration={sourceIds:['player-OGN-012'],targetAssignments:tank?[{cardId:'opponent-OGN-054',amount:4,order:1,label:'Guardian takes all 4, so there’s none left for Sentry.'}]:[{cardId:'opponent-OGN-096',amount:1,order:1,label:'Start with Sentry, it only needs 1 for lethal.'},{cardId:'opponent-UNL-043',amount:3,order:2,label:'Promoter is last, so it gets all 3 that are left.'}],returnAssignments:[{cardId:'player-OGN-012',amount:tank?5:3,order:1,label:'Add the defenders’ Might together for the damage coming back.'}],explanation:scenario.explanation};
   }
 }
 
@@ -1345,8 +1345,8 @@ for (const scenario of NEW_PLAYER_KEYWORD_SCENARIOS) {
 
 {
  const s=scenarioFor('Ambush');
- s.objective={goal:'Bring enough damage to win a fight that your small attacker would lose.',without:'After Discipline, the 3-Might defender defeats your 1-Might Sentry.',with:'Inferna adds 3 attacking Might immediately. Together your units deal 4, remove the defender and leave Sentry to conquer.'};
- s.followThrough={combat:{sourceIds:['player-OGN-096','player-UNL-002'],targetAssignments:[{cardId:'opponent-OGN-096',amount:4,order:1}],returnAssignments:[{cardId:'player-UNL-002',amount:3,order:1,label:'The guide assigns its 3 to Inferna; your Sentry survives.'}],explanation:'Your side has 4 Might against the defender’s 3. Damage is simultaneous. Inferna and the enemy Sentry will die; your original Sentry remains.'},deathknells:['opponent-OGN-096'],conquer:'battlefield-left'};
+ s.objective={goal:'Bring in help after the fight’s already started.',without:'Their Discipline would leave our 1-Might Sentry facing a 3-Might defender.',with:'Inferna adds 3 Might to the attack, so together they can deal 4 and leave Sentry alive to conquer.'};
+ s.followThrough={combat:{sourceIds:['player-OGN-096','player-UNL-002'],targetAssignments:[{cardId:'opponent-OGN-096',amount:4,order:1}],returnAssignments:[{cardId:'player-UNL-002',amount:3,order:1,label:'Their 3 goes to Inferna, so your Sentry gets through.'}],explanation:'You’ve got 4 going their way and 3 coming back at Inferna, all dealt together. That kills Inferna and their Sentry, leaving your original Sentry there to conquer.'},deathknells:['opponent-OGN-096'],conquer:'battlefield-left'};
  
  const backline=scenarioFor('Backline');backline.followThrough={conquer:'battlefield-left'};
 }

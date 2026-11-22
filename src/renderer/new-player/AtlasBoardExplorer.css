@@ -1,4 +1,4 @@
-.atlas-board-explorer{width:100%;min-width:0;color:#dce9ef}
+.atlas-board-explorer{width:100%;min-width:0;color:#dce9ef;container:board-tour / inline-size}
 .atlas-board-explorer .abe-intro{font-size:13px;color:#9eb7c7;line-height:1.6;margin:0 0 14px}
 .atlas-board-explorer .abe-frame{position:relative;width:100%;height:clamp(390px,min(47vw,calc(100dvh - 290px)),660px);min-width:0;isolation:isolate}
 .atlas-board-explorer .atlas-tutorial-board{height:100%;min-height:0;border-radius:10px;--atb-card-width:min(6.15cqw,11.2cqh)}
@@ -9,6 +9,12 @@
 .atlas-board-explorer .abe-pins button span{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 .atlas-board-explorer .abe-pins button[aria-expanded="true"]{border-color:#ffe09a;background:#203848;box-shadow:0 0 0 4px #ffe09a40}
 .atlas-board-explorer .abe-pins button[aria-expanded="true"] b{background:#efd08d;color:#142a37}
+/* The two pairs on the right share a row on the table. Stagger the pins
+   when their 32px hit areas would overlap on a narrow board. */
+@container board-tour (max-width: 540px){
+  .abe-pins [data-board-area="deck"],.abe-pins [data-board-area="legend"]{margin-top:-17px}
+  .abe-pins [data-board-area="trash"],.abe-pins [data-board-area="champion"]{margin-top:17px}
+}
 .atlas-board-explorer .abe-popup{position:absolute;z-index:48;width:min(350px,calc(100% - 24px));box-sizing:border-box;overflow:auto;overscroll-behavior:contain;background:#142c3efc;border:1px solid #e5c887;border-radius:12px;padding:16px;box-shadow:0 12px 38px #0009;color:#dce9ef}
 .atlas-board-explorer .abe-popup-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
 .atlas-board-explorer .abe-popup-count{display:block;font-size:11px;letter-spacing:.03em;color:#e5c887}

@@ -59,7 +59,7 @@ export function getStepTeachingVisual(state: TutorialState, step: TutorialStep):
   const base = {card, back: source && !card ? 'main' as const : undefined};
   const zone = (value?: TutorialZone) => value ? TEACHING_ZONE_LABELS[value] : 'The table';
   switch (action.type) {
-    case 'inspect': return { ...base, from: card ? card.name : 'Highlighted space', to: 'Read, then click', kind: 'read', gesture: 'Click when you have finished reading.' };
+    case 'inspect': return { ...base, from: card ? card.name : 'Highlighted space', to: 'Read, then click', kind: 'read', gesture: card?.zone === 'chain' ? `Select ${card.name} in the Chain list to inspect it.` : 'Click when you have finished reading.' };
     case 'exhaust': return {...base, from: automatic ? `${owner} ready rune` : 'Ready rune', to: '+1 energy · rune stays', kind: 'turn', gesture: automatic ? 'Watch the rune turn sideways.' : 'Tap or click the highlighted rune.'};
     case 'recycle': return {...base, from: source?.ready ? 'Ready rune' : 'Exhausted rune', to: `${card?.domain ?? 'Matching'} power · rune returns`, kind: 'resource', gesture: 'Select the rune, then choose Recycle in Card actions.'};
     case 'play': return {...base, from: zone(source?.zone), to: action.destination ? zone(action.destination) : card?.type === 'spell' ? 'Chain' : 'Base', kind: action.destination === 'chain' || card?.type === 'spell' ? 'chain' : 'move', gesture: automatic ? `Watch ${side === 'opponent' ? 'the guide’s' : 'your'} card enter play.` : action.destination?.startsWith('battlefield-') ? 'Select the card, then the highlighted battlefield.' : action.targetId ? 'Select the card, then its highlighted target.' : 'Click the highlighted card to play it.'};

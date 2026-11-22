@@ -49,7 +49,7 @@ export function guideNarrationPages(instruction: string): string[] {
 export function guideMoveOutcome(before: TutorialBoard, after: TutorialBoard): string[] {
   const changes: string[] = [];
   const sideName = (side: "player" | "opponent") => side === "player" ? "Your" : "The guide’s";
-  if (before.turnPlayer !== after.turnPlayer) changes.push(after.turnPlayer === "player" ? "It is now your turn." : "It is now the guide’s turn.");
+  if (before.turnPlayer !== after.turnPlayer) changes.push(after.turnPlayer === "player" ? "It’s your turn now." : "It’s the guide’s turn now.");
   for (const side of ["player", "opponent"] as const) {
     const old = before.players[side], next = after.players[side];
     const newCards = after.cards.filter(card => card.owner === side && !before.cards.some(previous => previous.instanceId === card.instanceId));
@@ -77,9 +77,9 @@ export function guideMoveOutcome(before: TutorialBoard, after: TutorialBoard): s
     if (!concealed && old.damage !== card.damage) changes.push(`${name} now has ${card.damage} marked damage.`);
   }
   if (before.chain.length !== after.chain.length) changes.push(after.chain.length ? `${after.chain.length} ${after.chain.length === 1 ? "item is" : "items are"} waiting on the chain.` : "The chain is now empty.");
-  if (!changes.length && before.priority !== after.priority) changes.push(after.priority === "player" ? "You now have priority: your chance to act or pass." : after.priority === "opponent" ? "The guide now has priority: its chance to act or pass." : "That response window has finished.");
+  if (!changes.length && before.priority !== after.priority) changes.push(after.priority === "player" ? "You’ve got priority now, so you can act or pass." : after.priority === "opponent" ? "The guide has priority now, so it can act or pass." : "That response window has finished.");
   if (!changes.length && before.phase !== after.phase) changes.push(`The game is now in ${after.phase}.`);
-  return guideNarrationPages(changes.join(" ") || "That step has finished. Look at the table before continuing.");
+  return guideNarrationPages(changes.join(" ") || "That move’s finished, so take a look at the table before you carry on.");
 }
 
 /** Cancellation and a fresh-state guard both matter when navigating or rewinding. */
