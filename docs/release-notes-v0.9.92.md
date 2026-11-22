@@ -1,4 +1,4 @@
-# RiftLite v0.9.91
+# RiftLite v0.9.92
 
 - Learn Riftbound now talks you through the choices on the table, from which opening cards to keep to when you might leave runes ready for a Reaction. The 10 Basics topics, 40 guided lessons, keyword practice, optional quiz and deck guides all use the revised explanations.
 - Carry on from your saved lesson, or revisit a decision to see how the other play works out.
