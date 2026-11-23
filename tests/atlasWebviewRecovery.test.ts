@@ -189,7 +189,6 @@ describe("Atlas embedded-browser recovery", () => {
         "localstorage",
         "serviceworkers",
         "cachestorage",
-        "websql",
         "shadercache"
       ]
     });

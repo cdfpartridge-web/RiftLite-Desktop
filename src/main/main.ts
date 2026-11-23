@@ -134,7 +134,7 @@ import {
   sameWebFrameIdentity,
   type EmbeddedWebviewPolicy
 } from "../shared/embeddedContentSecurity.js";
-import { localReplayTestFetch, localReplayTestRequestAllowed, localReplayTestRuntimeEnabled, localTestDesktopRequestAllowed } from "./services/localReplayTestIsolation.js";
+import { isolatedTestRuntimeEnabled, localReplayTestFetch, localReplayTestRequestAllowed, localTestDesktopRequestAllowed } from "./services/localReplayTestIsolation.js";
 import {
   GAME_WEBVIEW_EDITABLE_FOCUS_IPC_CHANNEL,
   GAME_WEBVIEW_INTERACTION_DIAGNOSTIC_IPC_CHANNEL,
@@ -330,8 +330,11 @@ const TCGA_MATCH_LOGGER_SEAT_CAPTURE_ENABLED = true;
 const ATLAS_GAME_PARTITION = GAME_WEBVIEW_PARTITIONS.atlas;
 const IS_PACKAGED_SMOKE_TEST = process.argv.includes("--riftlite-smoke-test");
 const SMOKE_PATHS = resolveRiftLiteSmokePaths(IS_PACKAGED_SMOKE_TEST, process.env);
-const IS_LOCAL_REPLAY_TEST = localReplayTestRuntimeEnabled(process.env.RIFTLITE_LOCAL_REPLAY_TEST, IS_PACKAGED_SMOKE_TEST, SMOKE_PATHS);
-if (IS_LOCAL_REPLAY_TEST) globalThis.fetch = localReplayTestFetch(globalThis.fetch.bind(globalThis));
+const IS_LOCAL_REPLAY_TEST = isolatedTestRuntimeEnabled(process.env.RIFTLITE_LOCAL_REPLAY_TEST, IS_PACKAGED_SMOKE_TEST, SMOKE_PATHS);
+const IS_LOCAL_ATLAS_PLAY = isolatedTestRuntimeEnabled(process.env.RIFTLITE_LOCAL_ATLAS_PLAY, IS_PACKAGED_SMOKE_TEST, SMOKE_PATHS);
+if (IS_LOCAL_REPLAY_TEST || IS_LOCAL_ATLAS_PLAY) globalThis.fetch = localReplayTestFetch(globalThis.fetch.bind(globalThis));
+const desktopWindowTitle = IS_LOCAL_ATLAS_PLAY ? "RiftLite — Local Atlas test"
+  : IS_LOCAL_REPLAY_TEST ? "RiftLite — Local replay test" : RIFTLITE_BUILD_IDENTITY.appName;
 const UI_SNAPSHOT_PATH = SMOKE_PATHS?.snapshotPath ?? "";
 const UI_SNAPSHOT_SETUP_ACTION = IS_PACKAGED_SMOKE_TEST
   ? (process.env.RIFTLITE_UI_SNAPSHOT_SETUP_ACTION ?? process.env.RIFTLITE_UI_SNAPSHOT_TOUR_ACTION)?.trim().toLowerCase() ?? ""
@@ -513,6 +516,9 @@ function installSmokeNetworkIsolation(): void {
     ...Object.values(GAME_WEBVIEW_PARTITIONS).map((partition) => electronSession.fromPartition(partition))
   ]);
   for (const targetSession of smokeSessions) {
+    // Manual Atlas tests need the game's normal network and sign-in policies.
+    // The desktop, replay uploads and other guests retain their isolation.
+    if (IS_LOCAL_ATLAS_PLAY && targetSession === electronSession.fromPartition(ATLAS_GAME_PARTITION)) continue;
     let requestAllowed: typeof localTestDesktopRequestAllowed = riftLiteSmokeNetworkRequestAllowed;
     if (IS_LOCAL_REPLAY_TEST && targetSession === electronSession.defaultSession) {
       requestAllowed = localTestDesktopRequestAllowed;
@@ -666,7 +672,7 @@ function createStartupWindow(): BrowserWindow | null {
     height: 280,
     minWidth: 420,
     minHeight: 250,
-    title: IS_LOCAL_REPLAY_TEST ? "RiftLite — Local replay test" : RIFTLITE_BUILD_IDENTITY.appName,
+    title: desktopWindowTitle,
     backgroundColor: "#0c101a",
     autoHideMenuBar: true,
     show: true,
@@ -6522,7 +6528,6 @@ async function exportDeckPrepPdf(deckId: string, notebookOverride?: DeckNotebook
       printBackground: true,
       pageSize: "A4",
       margins: {
-        marginType: "custom",
         top: 0.35,
         bottom: 0.35,
         left: 0.3,
@@ -8248,7 +8253,7 @@ async function createWindow(): Promise<void> {
     height: bounds.height,
     minWidth: bounds.minWidth,
     minHeight: bounds.minHeight,
-    title: IS_LOCAL_REPLAY_TEST ? "RiftLite — Local replay test" : RIFTLITE_BUILD_IDENTITY.appName,
+    title: desktopWindowTitle,
     icon,
     backgroundColor: "#0c101a",
     autoHideMenuBar: true,
@@ -8263,7 +8268,7 @@ async function createWindow(): Promise<void> {
     }
   });
   const createdMainWindow = mainWindow;
-  if (IS_LOCAL_REPLAY_TEST) createdMainWindow.on("page-title-updated", event => event.preventDefault());
+  if (IS_LOCAL_REPLAY_TEST || IS_LOCAL_ATLAS_PLAY) createdMainWindow.on("page-title-updated", event => event.preventDefault());
   createdMainWindow.on("close", (event) => {
     crashDiagnostics?.record("main-window-close-requested", { exportActive: replayMp4ExportLifecycle.active });
     if (!replayMp4ExportLifecycle.active) {

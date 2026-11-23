@@ -600,11 +600,10 @@ const LAB_TRAINING_LEGEND_NAMES = new Set(LAB_TRAINING_LEGEND_NAME_BY_CANONICAL.
 const RELEASE_NOTES = {
   version: APP_VERSION_META,
   title: `RiftLite v${APP_VERSION_META}`,
-  intro: "The Learn Riftbound guide now talks through the choices you see on the table, including why you might keep a card, leave runes ready or wait before playing a Reaction.",
+  intro: "Playing on Atlas inside RiftLite should feel smoother, especially when several cards are in play during a Showdown.",
   items: [
-    "Start with the 10 Basics topics, or carry on from your saved step in the 40 guided lessons.",
-    "Try both routes in the decision lessons, practise 28 keywords and check your reasoning with 51 optional questions.",
-    "Select a spell directly on the chain, place Hidden cards at occupied battlefields and find the highlighted card or action more easily on smaller screens."
+    "The desktop app uses a newer browser engine to draw the board and respond to card clicks.",
+    "Your existing matches, replays and recording settings carry over with the update."
   ]
 };
 const RIOT_LEGAL_NOTICE = `RiftLite was created under Riot Games' "Legal Jibber Jabber" policy using assets owned by Riot Games. Riot Games does not endorse or sponsor this project.`;

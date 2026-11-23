@@ -22,6 +22,8 @@ const snapshotPath = join(smokeRoot, "artifacts", "home.png");
 const readinessPath = `${snapshotPath}.json`;
 const smokeEnvironment = { ...process.env };
 for (const key of [
+  "RIFTLITE_LOCAL_ATLAS_PLAY",
+  "RIFTLITE_LOCAL_REPLAY_TEST",
   "RIFTLITE_SMOKE_ROOT_PATH",
   "RIFTLITE_SMOKE_USER_DATA_PATH",
   "RIFTLITE_UI_DEV_USER_DATA_PATH",

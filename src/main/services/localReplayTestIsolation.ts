@@ -3,14 +3,14 @@ import { LOCAL_ACCOUNT_PROVIDERS_URL } from "./discordSignInAvailability.js";
 import { riftLiteSmokeNetworkRequestAllowed, type RiftLiteSmokePaths } from "./smokeIsolation.js";
 
 /** Local preview opt-in must never silently fall back to the user's profile. */
-export function localReplayTestRuntimeEnabled(
+export function isolatedTestRuntimeEnabled(
   requested: string | undefined,
   smokeMode: boolean,
   smokePaths: RiftLiteSmokePaths | null
 ): boolean {
   if (requested !== "1") return false;
   if (!smokeMode || !smokePaths) {
-    throw new Error("Local replay testing requires --riftlite-smoke-test and an explicit isolated RIFTLITE_SMOKE_ROOT_PATH.");
+    throw new Error("Local testing requires --riftlite-smoke-test and an explicit isolated RIFTLITE_SMOKE_ROOT_PATH.");
   }
   return true;
 }

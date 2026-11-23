@@ -88,7 +88,6 @@ export type AtlasWebviewStorageType =
   | "localstorage"
   | "serviceworkers"
   | "cachestorage"
-  | "websql"
   | "shadercache";
 
 export interface AtlasWebviewCleanupResult {
@@ -137,7 +136,6 @@ export async function clearAtlasWebviewSiteData(
     "localstorage",
     "serviceworkers",
     "cachestorage",
-    "websql",
     "shadercache"
   ];
   await cleanupStage(result, "atlas-site-data", () => session.clearStorageData({

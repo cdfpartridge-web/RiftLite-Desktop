@@ -6,19 +6,19 @@ import {
   RIFTLITE_LOCAL_REPLAY_TEST_PARTITION, RIFTLITE_LOCAL_REPLAY_TEST_URL,
 } from "../src/shared/embeddedContentSecurity.js";
 import {
-  localReplayTestFetch, localReplayTestRequestAllowed, localReplayTestRuntimeEnabled, localTestDesktopRequestAllowed,
+  localReplayTestFetch, localReplayTestRequestAllowed, isolatedTestRuntimeEnabled, localTestDesktopRequestAllowed,
 } from "../src/main/services/localReplayTestIsolation.js";
 import { resolveRiftLiteSmokePaths, riftLiteSmokeNetworkRequestAllowed } from "../src/main/services/smokeIsolation.js";
 
 describe("explicit isolated local replay test", () => {
   const paths = resolveRiftLiteSmokePaths(true, { RIFTLITE_SMOKE_ROOT_PATH: resolve("output/local-replay-test-security") });
   it("requires both explicit opt-in and validated isolated smoke paths", () => {
-    expect(localReplayTestRuntimeEnabled(undefined, false, null)).toBe(false);
-    expect(localReplayTestRuntimeEnabled("true", true, paths)).toBe(false);
-    expect(localReplayTestRuntimeEnabled(undefined, true, paths)).toBe(false);
-    expect(localReplayTestRuntimeEnabled("1", true, paths)).toBe(true);
-    expect(() => localReplayTestRuntimeEnabled("1", false, paths)).toThrow(/isolated/);
-    expect(() => localReplayTestRuntimeEnabled("1", true, null)).toThrow(/isolated/);
+    expect(isolatedTestRuntimeEnabled(undefined, false, null)).toBe(false);
+    expect(isolatedTestRuntimeEnabled("true", true, paths)).toBe(false);
+    expect(isolatedTestRuntimeEnabled(undefined, true, paths)).toBe(false);
+    expect(isolatedTestRuntimeEnabled("1", true, paths)).toBe(true);
+    expect(() => isolatedTestRuntimeEnabled("1", false, paths)).toThrow(/isolated/);
+    expect(() => isolatedTestRuntimeEnabled("1", true, null)).toThrow(/isolated/);
   });
   it("cannot be enabled by the normal simulator/dev allowance or the hosted replay partition", () => {
     expect(embeddedWebviewPolicy(RIFTLITE_LOCAL_REPLAY_TEST_URL, RIFTLITE_LOCAL_REPLAY_TEST_PARTITION)).toBeNull();
